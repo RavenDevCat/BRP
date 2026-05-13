@@ -1,0 +1,9 @@
+tunnel: YOUR_TUNNEL_ID
+credentials-file: /Users/developer/.cloudflared/YOUR_TUNNEL_ID.json
+
+ingress:
+  - hostname: client.example.com
+    service: http://127.0.0.1:8501
+  - hostname: brp.example.com
+    service: http://127.0.0.1:8001
+  - service: http_status:404

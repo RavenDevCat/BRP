@@ -418,4 +418,6 @@ def main(host: str = "127.0.0.1", port: int = 8001) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    host = os.environ.get("BRP_BACKEND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    raw_port = os.environ.get("BRP_BACKEND_PORT", "8001").strip() or "8001"
+    main(host=host, port=int(raw_port))

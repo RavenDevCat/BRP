@@ -6,4 +6,14 @@ ingress:
     service: http://127.0.0.1:8501
   - hostname: brp.ravenapis.com
     service: http://127.0.0.1:8001
+  - hostname: osrm-shanghai.ravenapis.com
+    service: http://127.0.0.1:5002
+  - hostname: osrm-beijing.ravenapis.com
+    service: http://127.0.0.1:5003
+  - hostname: osrm-suzhou.ravenapis.com
+    service: http://127.0.0.1:5004
+  - hostname: osrm-xian.ravenapis.com
+    service: http://127.0.0.1:5005
+  - hostname: osrm-south-korea.ravenapis.com
+    service: http://127.0.0.1:5006
   - service: http_status:404

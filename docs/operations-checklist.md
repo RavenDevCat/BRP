@@ -29,6 +29,18 @@ Expected ports:
 - `5005` Xian
 - `5006` South Korea
 
+To expose the Docker OSRM ports to Tailscale, bind them to all interfaces or to the Tailscale IP explicitly:
+
+```bash
+OSRM_BIND_HOST=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+```
+
+or
+
+```bash
+OSRM_BIND_HOST=<TAILSCALE_IP> /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+```
+
 ### 2. Start backend
 
 ```bash
@@ -40,6 +52,13 @@ Expected port:
 
 - `8001`
 
+To expose the backend to Tailscale:
+
+```bash
+source /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/export_osrm_env.sh
+BRP_BACKEND_HOST=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_backend.sh
+```
+
 ### 3. Start client
 
 ```bash
@@ -49,6 +68,12 @@ Expected port:
 Expected port:
 
 - `8501`
+
+To expose the client to Tailscale:
+
+```bash
+STREAMLIT_SERVER_ADDRESS=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_client.sh
+```
 
 ### 4. Start Cloudflare Tunnel
 
@@ -60,6 +85,11 @@ Expected public URLs:
 
 - `https://client.ravenapis.com`
 - `https://brp.ravenapis.com`
+- `https://osrm-shanghai.ravenapis.com`
+- `https://osrm-beijing.ravenapis.com`
+- `https://osrm-suzhou.ravenapis.com`
+- `https://osrm-xian.ravenapis.com`
+- `https://osrm-south-korea.ravenapis.com`
 
 ## Quick health checks
 
@@ -67,6 +97,16 @@ Expected public URLs:
 
 ```bash
 docker ps
+```
+
+If Cloudflare Tunnel is configured for OSRM hostnames, you can also test them through the public domains:
+
+```bash
+curl -i https://osrm-shanghai.ravenapis.com
+curl -i https://osrm-beijing.ravenapis.com
+curl -i https://osrm-suzhou.ravenapis.com
+curl -i https://osrm-xian.ravenapis.com
+curl -i https://osrm-south-korea.ravenapis.com
 ```
 
 ### Check backend

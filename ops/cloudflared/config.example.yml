@@ -6,4 +6,14 @@ ingress:
     service: http://127.0.0.1:8501
   - hostname: brp.example.com
     service: http://127.0.0.1:8001
+  - hostname: osrm-shanghai.example.com
+    service: http://127.0.0.1:5002
+  - hostname: osrm-beijing.example.com
+    service: http://127.0.0.1:5003
+  - hostname: osrm-suzhou.example.com
+    service: http://127.0.0.1:5004
+  - hostname: osrm-xian.example.com
+    service: http://127.0.0.1:5005
+  - hostname: osrm-south-korea.example.com
+    service: http://127.0.0.1:5006
   - service: http_status:404

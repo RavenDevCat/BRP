@@ -29,6 +29,18 @@ Expected ports:
 - `5005` Xian
 - `5006` South Korea
 
+To expose the Docker OSRM ports to operator access, bind them to all interfaces or to the operator access IP explicitly:
+
+```bash
+OSRM_BIND_HOST=0.0.0.0 /Users/developer/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+```
+
+or
+
+```bash
+OSRM_BIND_HOST=<TAILSCALE_IP> /Users/developer/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+```
+
 ### 2. Start backend
 
 ```bash
@@ -40,6 +52,13 @@ Expected port:
 
 - `8001`
 
+To expose the backend to operator access:
+
+```bash
+source /Users/developer/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/export_osrm_env.sh
+BRP_BACKEND_HOST=0.0.0.0 /Users/developer/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_backend.sh
+```
+
 ### 3. Start client
 
 ```bash
@@ -49,6 +68,12 @@ Expected port:
 Expected port:
 
 - `8501`
+
+To expose the client to operator access:
+
+```bash
+STREAMLIT_SERVER_ADDRESS=0.0.0.0 /Users/developer/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_client.sh
+```
 
 ### 4. Start Cloudflare Tunnel
 
@@ -60,6 +85,11 @@ Expected public URLs:
 
 - `https://client.example.com`
 - `https://brp.example.com`
+- `https://osrm-shanghai.example.com`
+- `https://osrm-beijing.example.com`
+- `https://osrm-suzhou.example.com`
+- `https://osrm-xian.example.com`
+- `https://osrm-south-korea.example.com`
 
 ## Quick health checks
 
@@ -67,6 +97,16 @@ Expected public URLs:
 
 ```bash
 docker ps
+```
+
+If Cloudflare Tunnel is configured for OSRM hostnames, you can also test them through the public domains:
+
+```bash
+curl -i https://osrm-shanghai.example.com
+curl -i https://osrm-beijing.example.com
+curl -i https://osrm-suzhou.example.com
+curl -i https://osrm-xian.example.com
+curl -i https://osrm-south-korea.example.com
 ```
 
 ### Check backend

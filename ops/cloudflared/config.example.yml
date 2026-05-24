@@ -1,5 +1,5 @@
 tunnel: YOUR_TUNNEL_ID
-credentials-file: /Users/developer/.cloudflared/YOUR_TUNNEL_ID.json
+credentials-file: /home/brp/.cloudflared/YOUR_TUNNEL_ID.json
 
 ingress:
   - hostname: client.example.com

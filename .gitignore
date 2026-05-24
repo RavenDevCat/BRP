@@ -21,6 +21,8 @@ apps/backend/jobs/*
 apps/client/.streamlit/secrets.toml
 .env
 .env.*
+ops/env/local.env
+ops/env/*.local
 ops/restart.txt
 
 data/osrm/

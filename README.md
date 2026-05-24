@@ -41,7 +41,7 @@ This repository is intended to store the codebase and documentation only.
 
 Heavy OSRM data should live outside the repository.
 
-- Recommended OSRM data root: `/Users/developer/brp-osrm-data`
+- Recommended OSRM data root: `/opt/brp/osrm-data`
 - Expected subfolders:
   - `shanghai`
   - `beijing`
@@ -77,6 +77,8 @@ Set these in your shell environment before running the client:
 
 ## Operations
 
+- Fresh deployment overview:
+  - `docs/deployment-overview.md`
 - Runbook:
   - `docs/operations-checklist.md`
 

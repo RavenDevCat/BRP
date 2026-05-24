@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-LOCAL_OSRM_DIR="${OSRM_LOCAL_DATA_DIR:-/Users/developer/brp-osrm-data}"
+LOCAL_OSRM_DIR="${OSRM_LOCAL_DATA_DIR:-/opt/brp/osrm-data}"
 OSRM_BIND_HOST="${OSRM_BIND_HOST:-0.0.0.0}"
 
 if [[ ! -d "$LOCAL_OSRM_DIR" ]]; then

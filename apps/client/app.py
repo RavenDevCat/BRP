@@ -1392,6 +1392,10 @@ else:
         source_excel_path = str(selected_demo_path)
         source_label = selected_demo_path.name
         st.caption(
+            f"{len(demo_files)} demo workbook{'s' if len(demo_files) != 1 else ''} available. "
+            f"Currently selected: `{selected_demo_path.name}`."
+        )
+        st.caption(
             "This demo uses the same workbook parsing and planning flow as a real user upload. "
             "The only difference is that the file comes from `apps/client/demodata`."
         )

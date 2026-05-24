@@ -394,9 +394,9 @@ Primary implementation:
 
 The live OSRM data path has been moved out of OneDrive-backed project storage.
 
-Current expected OSRM data root:
+Recommended OSRM data root:
 
-- `/Users/alexus/brp-osrm-data`
+- `/opt/brp/osrm-data`
 
 Why:
 

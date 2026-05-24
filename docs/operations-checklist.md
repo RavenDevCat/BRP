@@ -2,6 +2,8 @@
 
 This document is the practical runbook for the live BRP stack.
 
+For fresh server setup, first read `docs/deployment-overview.md`.
+
 ## What must be running
 
 The live system depends on four parts:
@@ -18,7 +20,9 @@ Use this order whenever you restart the full stack.
 ### 1. Start OSRM
 
 ```bash
-/Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+cd /opt/brp/app
+source ops/env/local.env
+ops/scripts/run_osrm_stack.sh
 ```
 
 Expected ports:
@@ -32,20 +36,22 @@ Expected ports:
 To expose the Docker OSRM ports to Tailscale, bind them to all interfaces or to the Tailscale IP explicitly:
 
 ```bash
-OSRM_BIND_HOST=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+OSRM_BIND_HOST=0.0.0.0 ops/scripts/run_osrm_stack.sh
 ```
 
 or
 
 ```bash
-OSRM_BIND_HOST=<TAILSCALE_IP> /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_osrm_stack.sh
+OSRM_BIND_HOST=<TAILSCALE_IP> ops/scripts/run_osrm_stack.sh
 ```
 
 ### 2. Start backend
 
 ```bash
-source /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/export_osrm_env.sh
-/Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_backend.sh
+cd /opt/brp/app
+source ops/env/local.env
+source ops/scripts/export_osrm_env.sh
+ops/scripts/run_backend.sh
 ```
 
 Expected port:
@@ -55,14 +61,17 @@ Expected port:
 To expose the backend to Tailscale:
 
 ```bash
-source /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/export_osrm_env.sh
-BRP_BACKEND_HOST=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_backend.sh
+source ops/env/local.env
+source ops/scripts/export_osrm_env.sh
+BRP_BACKEND_HOST=0.0.0.0 ops/scripts/run_backend.sh
 ```
 
 ### 3. Start client
 
 ```bash
-/Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_client.sh
+cd /opt/brp/app
+source ops/env/local.env
+ops/scripts/run_client.sh
 ```
 
 Expected port:
@@ -72,13 +81,13 @@ Expected port:
 To expose the client to Tailscale:
 
 ```bash
-STREAMLIT_SERVER_ADDRESS=0.0.0.0 /Users/alexus/Library/CloudStorage/OneDrive-EiM/python\ stuff/busing\ routing\ designer/ops/scripts/run_client.sh
+STREAMLIT_SERVER_ADDRESS=0.0.0.0 ops/scripts/run_client.sh
 ```
 
 ### 4. Start Cloudflare Tunnel
 
 ```bash
-/Users/alexus/bin/cloudflared tunnel run osrm-tunnel
+cloudflared tunnel run osrm-tunnel
 ```
 
 Expected public URLs:
@@ -224,10 +233,10 @@ Best practice:
 ## Notes
 
 - Codebase root:
-  - `/Users/alexus/Library/CloudStorage/OneDrive-EiM/python stuff/busing routing designer`
+  - `/opt/brp/app`
 - Client root:
-  - `/Users/alexus/Library/CloudStorage/OneDrive-EiM/python stuff/busing routing designer/apps/client`
+  - `/opt/brp/app/apps/client`
 - Backend root:
-  - `/Users/alexus/Library/CloudStorage/OneDrive-EiM/python stuff/busing routing designer/apps/backend`
+  - `/opt/brp/app/apps/backend`
 - OSRM data root:
-  - `/Users/alexus/brp-osrm-data`
+  - `/opt/brp/osrm-data`

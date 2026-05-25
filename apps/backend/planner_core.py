@@ -15,7 +15,10 @@ from urllib.parse import urljoin
 import uuid
 
 import pandas as pd
-from BusingProblem import transpose_matrix
+try:
+    from .BusingProblem import transpose_matrix
+except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from BusingProblem import transpose_matrix
 import requests
 
 

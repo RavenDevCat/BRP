@@ -16,7 +16,10 @@ from typing import Any
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+try:
+    from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
 
 
 BASE_DIR = Path(__file__).resolve().parent

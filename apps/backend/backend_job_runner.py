@@ -9,7 +9,10 @@ import sys
 import traceback
 from typing import Any
 
-from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+try:
+    from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+except ImportError:  # pragma: no cover - supports running as a direct script.
+    from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
 
 
 def utc_now_iso() -> str:

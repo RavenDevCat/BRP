@@ -4,6 +4,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 import io
 import json
+import os
 from pathlib import Path
 import time
 from typing import Any
@@ -28,6 +29,18 @@ TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
 }
 TRAFFIC_PROFILE_OPTIONS: tuple[str, ...] = tuple(TRAFFIC_PROFILE_MULTIPLIERS.keys())
 SERVICE_DIRECTION_OPTIONS: tuple[str, ...] = ("From School", "To School")
+BACKEND_SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
+DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+
+
+def _backend_auth_headers(user_email: str | None = None) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    normalized_email = str(user_email or DEV_USER_EMAIL).strip().lower()
+    if normalized_email:
+        headers["X-BRP-User-Email"] = normalized_email
+    if BACKEND_SERVICE_TOKEN:
+        headers["Authorization"] = f"Bearer {BACKEND_SERVICE_TOKEN}"
+    return headers
 
 
 @dataclass
@@ -796,6 +809,7 @@ def submit_prepared_payload_to_backend(
     prepared_payload: dict[str, Any],
     config: PlannerConfig,
     backend_base_url: str,
+    user_email: str | None = None,
     timeout_seconds: int = 1800,
 ) -> dict[str, Any]:
     compute_url = urljoin(backend_base_url.rstrip("/") + "/", "compute")
@@ -805,6 +819,7 @@ def submit_prepared_payload_to_backend(
         session.trust_env = False
     response = session.post(
         compute_url,
+        headers=_backend_auth_headers(user_email),
         json={
             "config": asdict(config),
             "prepared_payload": prepared_payload,
@@ -852,12 +867,14 @@ def submit_job_to_backend(
     config: PlannerConfig,
     backend_base_url: str,
     metadata: dict[str, Any] | None = None,
+    user_email: str | None = None,
     timeout_seconds: int = 60,
 ) -> dict[str, Any]:
     jobs_url = urljoin(backend_base_url.rstrip("/") + "/", "jobs")
     session = _build_backend_session(jobs_url)
     response = session.post(
         jobs_url,
+        headers=_backend_auth_headers(user_email),
         json={
             "config": asdict(config),
             "prepared_payload": prepared_payload,
@@ -875,11 +892,12 @@ def submit_job_to_backend(
 
 def list_backend_jobs(
     backend_base_url: str,
+    user_email: str | None = None,
     timeout_seconds: int = 30,
 ) -> list[dict[str, Any]]:
     jobs_url = urljoin(backend_base_url.rstrip("/") + "/", "jobs")
     session = _build_backend_session(jobs_url)
-    response = session.get(jobs_url, timeout=timeout_seconds)
+    response = session.get(jobs_url, headers=_backend_auth_headers(user_email), timeout=timeout_seconds)
     if response.status_code >= 400:
         _raise_backend_error(response)
     payload = response.json()
@@ -892,11 +910,12 @@ def list_backend_jobs(
 def get_backend_job(
     backend_base_url: str,
     job_id: str,
+    user_email: str | None = None,
     timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     job_url = urljoin(backend_base_url.rstrip("/") + "/", f"jobs/{job_id}")
     session = _build_backend_session(job_url)
-    response = session.get(job_url, timeout=timeout_seconds)
+    response = session.get(job_url, headers=_backend_auth_headers(user_email), timeout=timeout_seconds)
     if response.status_code >= 400:
         _raise_backend_error(response)
     payload = response.json()
@@ -908,11 +927,12 @@ def get_backend_job(
 def cancel_backend_job(
     backend_base_url: str,
     job_id: str,
+    user_email: str | None = None,
     timeout_seconds: int = 30,
 ) -> dict[str, Any]:
     cancel_url = urljoin(backend_base_url.rstrip("/") + "/", f"jobs/{job_id}/cancel")
     session = _build_backend_session(cancel_url)
-    response = session.post(cancel_url, json={}, timeout=timeout_seconds)
+    response = session.post(cancel_url, headers=_backend_auth_headers(user_email), json={}, timeout=timeout_seconds)
     if response.status_code >= 400:
         _raise_backend_error(response)
     payload = response.json()
@@ -924,11 +944,12 @@ def cancel_backend_job(
 def delete_backend_job(
     backend_base_url: str,
     job_id: str,
+    user_email: str | None = None,
     timeout_seconds: int = 30,
 ) -> None:
     delete_url = urljoin(backend_base_url.rstrip("/") + "/", f"jobs/{job_id}")
     session = _build_backend_session(delete_url)
-    response = session.delete(delete_url, timeout=timeout_seconds)
+    response = session.delete(delete_url, headers=_backend_auth_headers(user_email), timeout=timeout_seconds)
     if response.status_code >= 400:
         _raise_backend_error(response)
 

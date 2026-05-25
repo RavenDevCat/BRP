@@ -1,0 +1,15 @@
+name: brp
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - streamlit
+      - pandas
+      - openpyxl
+      - folium
+      - requests
+      - ortools
+      - branca

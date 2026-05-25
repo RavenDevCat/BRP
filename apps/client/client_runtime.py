@@ -473,13 +473,14 @@ def build_geocode_warning(
     city: str,
     address: str,
     source_excel_rows: list[int] | None = None,
+    reason: str = "",
 ) -> dict[str, str]:
     return {
         "country": country,
         "city": city,
         "address": address,
         "source_excel_rows": _format_source_excel_rows(source_excel_rows),
-        "warning": "This address could not be resolved to coordinates from the original user input.",
+        "warning": reason.strip() or "This address could not be resolved to coordinates from the original user input.",
         "suggestion": (
             "Review the source address manually. Use a complete postal-style address with city, district, road name, "
             "and building number. Avoid route labels, landmarks only, shorthand notes, or pickup/dropoff annotations."
@@ -543,7 +544,7 @@ def resolve_geocoded_point(
             "city": city,
             "address": address,
         }
-        return None, build_geocode_warning(country, city, address, source_excel_rows), True
+        return None, build_geocode_warning(country, city, address, source_excel_rows, reason=str(exc)), True
 
 
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
@@ -805,7 +806,16 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
     if changed:
         save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
     if not points:
-        raise RuntimeError("No valid stops were accepted as valid input stops.")
+        details = []
+        for warning in warnings[:20]:
+            address = str(warning.get("address", "")).strip()
+            reason = str(warning.get("warning", "") or warning.get("reason", "")).strip()
+            if address and reason:
+                details.append(f"- {address}: {reason}")
+            elif address:
+                details.append(f"- {address}")
+        suffix = "\n\nGeocode failures:\n" + "\n".join(details) if details else ""
+        raise RuntimeError(f"No valid stops were accepted as valid input stops.{suffix}")
     return points, warnings
 
 

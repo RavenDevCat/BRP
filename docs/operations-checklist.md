@@ -33,6 +33,34 @@ Expected ports:
 - `5005` Xian
 - `5006` South Korea
 
+For a lightweight South Korea-only deployment, use:
+
+```bash
+cd /opt/brp/app
+source ops/env/local.env
+ops/scripts/run_osrm_south_korea.sh
+```
+
+This only starts `osrm-south-korea` on `5006` and expects the South Korea dataset under `OSRM_SOUTH_KOREA_DATASET_DIR`.
+
+On Windows PowerShell, use:
+
+```powershell
+.\ops\scripts\run_osrm_south_korea.ps1
+```
+
+If you only have the raw South Korea `.osm.pbf`, place it at:
+
+```text
+C:\brp-osrm-data\south-korea\south-korea-latest.osm.pbf
+```
+
+Then preprocess it first:
+
+```powershell
+.\ops\scripts\prepare_osrm_south_korea.ps1
+```
+
 To expose the Docker OSRM ports to Tailscale, bind them to all interfaces or to the Tailscale IP explicitly:
 
 ```bash
@@ -100,6 +128,11 @@ Expected public URLs:
 - `https://osrm-xian.ravenapis.com`
 - `https://osrm-south-korea.ravenapis.com`
 
+For the South Korea server, use the KR tunnel config and expected public URLs:
+
+- `https://brp-kr.ravenapis.com`
+- `https://brp-api-kr.ravenapis.com`
+
 ## Quick health checks
 
 ### Check OSRM containers
@@ -136,6 +169,13 @@ Expected result:
 ```bash
 lsof -iTCP:8501 -sTCP:LISTEN -n -P
 curl -I https://client.ravenapis.com
+```
+
+For the South Korea server:
+
+```bash
+curl -i https://brp-api-kr.ravenapis.com/health
+curl -I https://brp-kr.ravenapis.com
 ```
 
 Expected result:

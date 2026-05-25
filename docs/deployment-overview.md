@@ -91,6 +91,20 @@ south-korea/
 
 Each folder must contain the matching preprocessed `.osrm*` files expected by `ops/scripts/run_osrm_stack.sh`.
 
+For a lightweight South Korea-only deployment, only this folder is required:
+
+```text
+south-korea/
+```
+
+Start that smaller runtime with:
+
+```bash
+ops/scripts/run_osrm_south_korea.sh
+```
+
+That script expects `south-korea-latest.osrm` plus the matching generated `.osrm*` sidecar files in the South Korea dataset folder.
+
 ## Environment Variables
 
 ### API keys
@@ -123,6 +137,12 @@ Then load city routing endpoints:
 
 ```bash
 source ops/scripts/export_osrm_env.sh
+```
+
+For a South Korea-only deployment, load the smaller endpoint set instead:
+
+```bash
+source ops/scripts/export_osrm_south_korea_env.sh
 ```
 
 If a server uses different OSRM hostnames or ports, override the exported `OSRM_BASE_URL_*` values in that server's environment.
@@ -168,6 +188,7 @@ The current public access layer is Cloudflare Tunnel.
 Reference config:
 
 - `ops/cloudflared/config.example.yml`
+- `ops/cloudflared/kr-config.example.yml` for the South Korea server
 
 Current public hostnames:
 
@@ -178,6 +199,11 @@ Current public hostnames:
 - `osrm-suzhou.ravenapis.com`
 - `osrm-xian.ravenapis.com`
 - `osrm-south-korea.ravenapis.com`
+
+South Korea server hostnames:
+
+- `brp-kr.ravenapis.com`
+- `brp-api-kr.ravenapis.com`
 
 For production-like environments, avoid exposing the backend publicly without an access control layer.
 

@@ -22,8 +22,11 @@ apps/client/.streamlit/secrets.toml
 .env
 .env.*
 ops/env/local.env
+ops/env/local.ps1
 ops/env/*.local
 ops/restart.txt
+state/*
+!state/.gitkeep
 
 data/osrm/
 *.osm.pbf

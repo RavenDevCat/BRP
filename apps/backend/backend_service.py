@@ -20,8 +20,15 @@ from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
 
 
 BASE_DIR = Path(__file__).resolve().parent
-JOBS_DIR = BASE_DIR / "jobs"
+JOBS_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", str(BASE_DIR / "jobs"))).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
+SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
+DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+ADMIN_EMAILS = {
+    item.strip().lower()
+    for item in os.environ.get("BRP_ADMIN_EMAILS", "").split(",")
+    if item.strip()
+}
 
 
 def utc_now_iso() -> str:
@@ -36,6 +43,15 @@ def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
         if key in allowed_field_names
     }
     return PlannerConfig(**filtered_payload)
+
+
+def _normalize_email(value: object) -> str:
+    return str(value or "").strip().lower()
+
+
+def _is_admin_email(email: str) -> bool:
+    normalized_email = _normalize_email(email)
+    return bool(normalized_email and normalized_email in ADMIN_EMAILS)
 
 
 def _summarize_prepared_payload(prepared_payload: dict[str, Any]) -> dict[str, Any]:
@@ -107,6 +123,7 @@ class JobStore:
         index_entries = self._load_index_unlocked()
         summary = {
             "job_id": job_id,
+            "owner_email": _normalize_email(record.get("owner_email")),
             "status": str(record.get("status", "queued")),
             "created_at": record.get("created_at"),
             "started_at": record.get("started_at"),
@@ -130,11 +147,14 @@ class JobStore:
         config_payload: dict[str, Any],
         prepared_payload: dict[str, Any],
         metadata: dict[str, Any] | None = None,
+        owner_email: str = "",
     ) -> dict[str, Any]:
         job_id = uuid4().hex[:12]
         created_at = utc_now_iso()
+        normalized_owner_email = _normalize_email(owner_email)
         record = {
             "job_id": job_id,
+            "owner_email": normalized_owner_email,
             "status": "queued",
             "created_at": created_at,
             "started_at": None,
@@ -153,6 +173,7 @@ class JobStore:
             self._upsert_index_entry_unlocked(record)
         return {
             "job_id": job_id,
+            "owner_email": normalized_owner_email,
             "status": "queued",
             "created_at": created_at,
             "started_at": None,
@@ -177,9 +198,17 @@ class JobStore:
             record = self._load_job_unlocked(job_id)
             return deepcopy(record) if record else None
 
-    def list_jobs(self) -> list[dict[str, Any]]:
+    def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         with self.lock:
-            return deepcopy(self._load_index_unlocked())
+            entries = self._load_index_unlocked()
+            if include_all:
+                return deepcopy(entries)
+            normalized_user_email = _normalize_email(user_email)
+            return [
+                deepcopy(entry)
+                for entry in entries
+                if _normalize_email(entry.get("owner_email")) == normalized_user_email
+            ]
 
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
@@ -220,6 +249,7 @@ class JobStore:
                     refreshed_entries.append(
                         {
                             "job_id": job_id,
+                            "owner_email": _normalize_email(record.get("owner_email")),
                             "status": str(record.get("status", "queued")),
                             "created_at": record.get("created_at"),
                             "started_at": record.get("started_at"),
@@ -282,6 +312,12 @@ def _cancel_job(job_id: str) -> dict[str, Any] | None:
     )
 
 
+def _can_access_job(job_record: dict[str, Any], user_email: str, include_all: bool = False) -> bool:
+    if include_all:
+        return True
+    return _normalize_email(job_record.get("owner_email")) == _normalize_email(user_email)
+
+
 class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
@@ -304,6 +340,26 @@ class BackendHandler(BaseHTTPRequestHandler):
         payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         return payload if isinstance(payload, dict) else {}
 
+    def _current_user_email(self) -> str:
+        return (
+            _normalize_email(self.headers.get("X-BRP-User-Email"))
+            or _normalize_email(self.headers.get("Cf-Access-Authenticated-User-Email"))
+            or DEV_USER_EMAIL
+        )
+
+    def _is_authorized_request(self) -> bool:
+        if not SERVICE_TOKEN:
+            return True
+        authorization = str(self.headers.get("Authorization", "") or "").strip()
+        expected = f"Bearer {SERVICE_TOKEN}"
+        return authorization == expected
+
+    def _require_authorized_request(self) -> bool:
+        if self._is_authorized_request():
+            return True
+        self._send_json(401, {"error": "Unauthorized backend request."})
+        return False
+
     def _handle_sync_compute(self, payload: dict[str, Any]) -> None:
         config_payload = payload.get("config") or {}
         prepared_payload = payload.get("prepared_payload") or {}
@@ -317,8 +373,12 @@ class BackendHandler(BaseHTTPRequestHandler):
         if path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if not self._require_authorized_request():
+            return
+        user_email = self._current_user_email()
+        include_all = _is_admin_email(user_email)
         if path == "/jobs":
-            self._send_json(200, {"jobs": JOB_STORE.list_jobs()})
+            self._send_json(200, {"jobs": JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)})
             return
         if path.startswith("/jobs/"):
             parts = [part for part in path.split("/") if part]
@@ -330,6 +390,9 @@ class BackendHandler(BaseHTTPRequestHandler):
             if not job_record:
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return
+            if not _can_access_job(job_record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                return
             self._send_json(200, job_record)
             return
         self._send_json(404, {"error": f"Unknown path: {path}"})
@@ -338,6 +401,10 @@ class BackendHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
+            if not self._require_authorized_request():
+                return
+            user_email = self._current_user_email()
+            include_all = _is_admin_email(user_email)
             payload = self._read_json_body()
             if path == "/compute":
                 self._handle_sync_compute(payload)
@@ -346,7 +413,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 config_payload = payload.get("config") or {}
                 prepared_payload = payload.get("prepared_payload") or {}
                 metadata = payload.get("metadata") or {}
-                summary = JOB_STORE.create_job(config_payload, prepared_payload, metadata=metadata)
+                summary = JOB_STORE.create_job(
+                    config_payload,
+                    prepared_payload,
+                    metadata=metadata,
+                    owner_email=user_email,
+                )
                 spawned = _spawn_job_worker(str(summary["job_id"]))
                 if spawned:
                     summary["worker_pid"] = spawned.get("worker_pid")
@@ -358,6 +430,13 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Unknown path: {path}"})
                     return
                 job_id = parts[1].strip()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    return
                 updated = _cancel_job(job_id)
                 if not updated:
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
@@ -381,6 +460,10 @@ class BackendHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         try:
+            if not self._require_authorized_request():
+                return
+            user_email = self._current_user_email()
+            include_all = _is_admin_email(user_email)
             if not path.startswith("/jobs/"):
                 self._send_json(404, {"error": f"Unknown path: {path}"})
                 return
@@ -392,6 +475,9 @@ class BackendHandler(BaseHTTPRequestHandler):
             job_record = JOB_STORE.get_job(job_id)
             if not job_record:
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
+                return
+            if not _can_access_job(job_record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
                 return
             _cancel_job(job_id)
             JOB_STORE.delete_job(job_id)

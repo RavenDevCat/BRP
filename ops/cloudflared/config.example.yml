@@ -16,4 +16,6 @@ ingress:
     service: http://127.0.0.1:5005
   - hostname: osrm-south-korea.example.com
     service: http://127.0.0.1:5006
+  - hostname: osrm-korea.example.com
+    service: http://127.0.0.1:5006
   - service: http_status:404

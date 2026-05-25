@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from html import escape as html_escape
 import http.server
 import io
 from functools import partial
@@ -85,7 +86,80 @@ APP_BASE_DIR = Path(__file__).resolve().parent
 DEMO_DATA_DIR = APP_BASE_DIR / "demodata"
 BACKEND_BASE_URL = os.environ.get("BRP_BACKEND_BASE_URL", "http://127.0.0.1:8001")
 BACKEND_TIMEOUT_SECONDS = int(os.environ.get("BRP_BACKEND_TIMEOUT_SECONDS", "1800"))
+DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
 ROUTE_DURATION_GRACE_MINUTES = 10
+
+
+def get_current_user_email() -> str:
+    context = getattr(st, "context", None)
+    headers = getattr(context, "headers", {}) if context is not None else {}
+    cloudflare_email = ""
+    if headers:
+        try:
+            cloudflare_email = str(
+                headers.get("Cf-Access-Authenticated-User-Email", "")
+                or headers.get("cf-access-authenticated-user-email", "")
+                or ""
+            ).strip()
+        except AttributeError:
+            cloudflare_email = ""
+    return (cloudflare_email or DEV_USER_EMAIL or "local@brp.dev").strip().lower()
+
+
+def get_access_logout_url() -> str:
+    context = getattr(st, "context", None)
+    headers = getattr(context, "headers", {}) if context is not None else {}
+    host = ""
+    proto = "https"
+    if headers:
+        try:
+            host = str(headers.get("Host", "") or headers.get("host", "") or "").strip()
+            proto = str(
+                headers.get("X-Forwarded-Proto", "")
+                or headers.get("x-forwarded-proto", "")
+                or proto
+            ).strip()
+        except AttributeError:
+            host = ""
+    if host:
+        return f"{proto}://{host}/cdn-cgi/access/logout"
+    return "/cdn-cgi/access/logout"
+
+
+CURRENT_USER_EMAIL = get_current_user_email()
+ACCESS_LOGOUT_URL = get_access_logout_url()
+
+
+def render_sign_out_link(logout_url: str) -> None:
+    safe_url = html_escape(str(logout_url), quote=True)
+    st.markdown(
+        f"""
+        <a class="brp-sign-out-link" href="{safe_url}" target="_self">Sign out</a>
+        <style>
+        .brp-sign-out-link {{
+            display: block;
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.45rem 0.75rem;
+            margin: 0.25rem 0 1rem 0;
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            border-radius: 0.5rem;
+            color: rgb(49, 51, 63);
+            text-align: center;
+            text-decoration: none;
+            font-size: 0.9rem;
+            background: white;
+        }}
+        .brp-sign-out-link:hover {{
+            border-color: rgba(49, 51, 63, 0.4);
+            color: rgb(49, 51, 63);
+            text-decoration: none;
+            background: rgba(250, 250, 250, 1);
+        }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def effective_route_duration_limit_minutes(route_duration_limit_minutes: int) -> int:
@@ -1510,12 +1584,14 @@ if current_plan_preview:
 job_summaries: list[dict[str, object]] = []
 job_list_error: str | None = None
 try:
-    job_summaries = list_backend_jobs(BACKEND_BASE_URL)
+    job_summaries = list_backend_jobs(BACKEND_BASE_URL, user_email=CURRENT_USER_EMAIL)
 except Exception as exc:
     job_list_error = friendly_error_message(exc)
 
 
 with st.sidebar:
+    st.caption(f"Signed in as `{CURRENT_USER_EMAIL}`")
+    render_sign_out_link(ACCESS_LOGOUT_URL)
     st.header("Optional Baseline Settings")
     st.caption(
         "Most users can leave these unchanged. When a current plan workbook is loaded, these baseline settings are auto-filled from the imported fleet facts; they still only affect the system-generated baselines and do not overwrite the imported current plan."
@@ -1796,6 +1872,7 @@ if run_planner_clicked:
                 client_prep["prepared_payload"],
                 config=planner_config,
                 backend_base_url=BACKEND_BASE_URL,
+                user_email=CURRENT_USER_EMAIL,
                 metadata={
                     "job_name": submission_snapshot["job_name"],
                     "source_label": submission_snapshot["source_label"],
@@ -1889,14 +1966,14 @@ with st.expander("Job History", expanded=bool(job_summaries)):
         action_col_1, action_col_2 = st.columns(2)
         if action_col_1.button("Terminate Selected Job", width="stretch", disabled=str(selected_job_summary.get("status", "")).strip() not in {"queued", "running"}):
             try:
-                cancel_backend_job(BACKEND_BASE_URL, selected_job_id)
+                cancel_backend_job(BACKEND_BASE_URL, selected_job_id, user_email=CURRENT_USER_EMAIL)
                 st.session_state["active_job_id"] = ""
                 st.rerun()
             except Exception as exc:
                 st.error(f"Terminate failed: {friendly_error_message(exc)}")
         if action_col_2.button("Delete Selected Job", width="stretch"):
             try:
-                delete_backend_job(BACKEND_BASE_URL, selected_job_id)
+                delete_backend_job(BACKEND_BASE_URL, selected_job_id, user_email=CURRENT_USER_EMAIL)
                 if st.session_state.get("selected_job_id") == selected_job_id:
                     st.session_state["selected_job_id"] = ""
                 if st.session_state.get("loaded_job_id") == selected_job_id:
@@ -1915,7 +1992,7 @@ job_detail: dict[str, object] | None = None
 job_detail_error: str | None = None
 if selected_job_id:
     try:
-        job_detail = get_backend_job(BACKEND_BASE_URL, selected_job_id)
+        job_detail = get_backend_job(BACKEND_BASE_URL, selected_job_id, user_email=CURRENT_USER_EMAIL)
     except Exception as exc:
         job_detail_error = friendly_error_message(exc)
 

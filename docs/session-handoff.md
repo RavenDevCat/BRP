@@ -587,3 +587,31 @@ Recommended next step:
 - `apps/client/client_core.py`
   - output-path handling and rerender loops already include `further_most`
 - The earlier `private_access_mode` NameError appears resolved in current on-disk code because the summary helper now takes that parameter explicitly.
+
+## Lightweight User Layer
+
+- Added a first-pass user layer that delegates registration/login to Cloudflare Access and keeps BRP itself lightweight.
+- Frontend identity:
+  - `apps/client/app.py` reads `Cf-Access-Authenticated-User-Email` from `st.context.headers`.
+  - If the Cloudflare header is absent, it falls back to `BRP_DEV_USER_EMAIL` and then `local@brp.dev`.
+  - The current email is shown in the Streamlit sidebar.
+- Backend request trust:
+  - `apps/client/client_core.py` sends `X-BRP-User-Email` on backend requests.
+  - If `BRP_BACKEND_SERVICE_TOKEN` is set, the client also sends `Authorization: Bearer <token>`.
+  - `apps/backend/backend_service.py` requires that bearer token for all non-`/health` endpoints when the env var is configured.
+- Job ownership:
+  - New jobs are saved with top-level `owner_email`.
+  - `GET /jobs`, `GET /jobs/<id>`, cancel, and delete are filtered by `owner_email`.
+  - Emails listed in `BRP_ADMIN_EMAILS` bypass this filter and can see/manage all jobs, including legacy jobs without an owner.
+  - The backend job store can now be moved with `BRP_BACKEND_JOBS_DIR`; the KR Windows runtime uses `state\jobs` under the project root and ignores it in git.
+- Environment additions:
+  - `BRP_AUTH_MODE=cloudflare`
+  - `BRP_DEV_USER_EMAIL`
+  - `BRP_ADMIN_EMAILS`
+  - `BRP_BACKEND_SERVICE_TOKEN`
+- Updated env files:
+  - `ops/env/south-korea.example.env` uses a placeholder service token.
+  - local env files carry matching local values for the KR deployment.
+- Validation:
+  - `.\ops\env\local.ps1`
+  - `$env:BACKEND_PYTHON -m py_compile apps\backend\backend_service.py apps\client\client_core.py apps\client\app.py`

@@ -1,7 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
-LOCAL_OSRM_DIR="${OSRM_LOCAL_DATA_DIR:-/opt/brp/osrm-data}"
+DEFAULT_OSRM_DIR="/opt/brp/osrm-data"
+if [[ -n "${OSRM_LOCAL_DATA_DIR:-}" ]]; then
+  LOCAL_OSRM_DIR="$OSRM_LOCAL_DATA_DIR"
+elif [[ -d "$DEFAULT_OSRM_DIR" ]]; then
+  LOCAL_OSRM_DIR="$DEFAULT_OSRM_DIR"
+elif [[ -d "$HOME/brp-osrm-data" ]]; then
+  LOCAL_OSRM_DIR="$HOME/brp-osrm-data"
+else
+  LOCAL_OSRM_DIR="$DEFAULT_OSRM_DIR"
+fi
 OSRM_DATASET_DIR="${OSRM_SOUTH_KOREA_DATASET_DIR:-$LOCAL_OSRM_DIR/south-korea}"
 OSRM_PBF_FILE="${OSRM_SOUTH_KOREA_PBF_FILE:-south-korea-latest.osm.pbf}"
 OSRM_DATASET_FILE="${OSRM_SOUTH_KOREA_DATASET_FILE:-south-korea-latest.osrm}"

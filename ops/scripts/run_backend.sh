@@ -2,9 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+LOCAL_ENV_FILE="$ROOT_DIR/ops/env/local.env"
+if [ -f "$LOCAL_ENV_FILE" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$LOCAL_ENV_FILE"
+  set +a
+fi
+
 cd "$ROOT_DIR/apps/backend"
 
-BACKEND_PYTHON="${BACKEND_PYTHON:-python3}"
+DEFAULT_BRP_PYTHON="/opt/homebrew/Caskroom/miniforge/base/envs/brp/bin/python"
+if [ -z "${BACKEND_PYTHON:-}" ] && [ -x "$DEFAULT_BRP_PYTHON" ]; then
+  BACKEND_PYTHON="$DEFAULT_BRP_PYTHON"
+else
+  BACKEND_PYTHON="${BACKEND_PYTHON:-python3}"
+fi
 BRP_BACKEND_HOST="${BRP_BACKEND_HOST:-127.0.0.1}"
 BRP_BACKEND_PORT="${BRP_BACKEND_PORT:-8001}"
 

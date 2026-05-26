@@ -18,8 +18,10 @@ from uuid import uuid4
 
 try:
     from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from .ai_audit import generate_ai_audit_report
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from ai_audit import generate_ai_audit_report
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -445,6 +447,32 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 self._send_json(200, updated)
+                return
+            if path.startswith("/jobs/") and path.endswith("/ai-audit"):
+                parts = [part for part in path.split("/") if part]
+                if len(parts) != 3:
+                    self._send_json(404, {"error": f"Unknown path: {path}"})
+                    return
+                job_id = parts[1].strip()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    return
+                ai_report = generate_ai_audit_report(
+                    job_record,
+                    force=bool(payload.get("force")),
+                    language=str(payload.get("language") or "").strip() or None,
+                )
+                updated = JOB_STORE.update_job(job_id, ai_audit_report=ai_report)
+                if updated:
+                    updated["config"] = None
+                    updated["prepared_payload"] = None
+                    self._send_json(200, {"job_id": job_id, "ai_audit_report": ai_report})
+                    return
+                self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return
             self._send_json(404, {"error": f"Unknown path: {path}"})
         except Exception as exc:

@@ -26,6 +26,7 @@ from client_core import (
     cancel_backend_job,
     delete_backend_job,
     friendly_error_message,
+    generate_backend_ai_audit,
     get_backend_job,
     get_excel_sheet_names,
     list_backend_jobs,
@@ -979,6 +980,90 @@ def build_executive_findings(
             f"{best['name']} is currently the leanest baseline scenario by route count and network effort."
         )
     return findings
+
+
+def render_ai_audit_report_panel(
+    *,
+    job_detail: dict[str, object] | None,
+    selected_job_id: str,
+    current_user_email: str,
+    executive_findings: list[str],
+    current_plan_assessment: dict[str, object],
+    current_plan_comparison: dict[str, object],
+    route_reallocation_analysis: dict[str, object],
+) -> None:
+    st.subheader("AI Audit Report")
+    st.caption(
+        "AI uses the deterministic audit outputs only: route metrics, baseline comparisons, and recommendation summaries. "
+        "Full address lists are excluded from the prompt."
+    )
+    report = dict((job_detail or {}).get("ai_audit_report") or {})
+    button_col_1, button_col_2 = st.columns([1.4, 1])
+    with button_col_1:
+        generate_clicked = st.button(
+            "Generate AI Audit Report",
+            type="primary",
+            width="stretch",
+            disabled=not bool(selected_job_id),
+        )
+    with button_col_2:
+        regenerate_clicked = st.button(
+            "Regenerate",
+            width="stretch",
+            disabled=not bool(selected_job_id),
+        )
+    if generate_clicked or regenerate_clicked:
+        try:
+            with st.spinner("Generating AI audit report..."):
+                report = generate_backend_ai_audit(
+                    BACKEND_BASE_URL,
+                    selected_job_id,
+                    user_email=current_user_email,
+                    force=bool(regenerate_clicked),
+                    language="English",
+                )
+            st.success("AI audit report generated.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"AI audit generation failed: {friendly_error_message(exc)}")
+
+    if report.get("report_markdown"):
+        st.markdown(str(report.get("report_markdown") or ""))
+        st.caption(
+            f"Generated: {report.get('generated_at', 'unknown')} | "
+            f"Model: {report.get('model', 'unknown')} | "
+            f"Input policy: {report.get('input_policy', 'aggregated facts only')}"
+        )
+        st.download_button(
+            "Download AI Audit Report (.md)",
+            data=str(report.get("report_markdown") or "").encode("utf-8"),
+            file_name=f"ai_audit_report_{selected_job_id}.md",
+            mime="text/markdown",
+            use_container_width=True,
+        )
+    else:
+        st.info("No AI audit report has been generated for this job yet.")
+        if executive_findings:
+            st.markdown("**Deterministic findings available for AI generation**")
+            st.markdown("\n".join(f"- {item}" for item in executive_findings[:6]))
+
+    evidence_1, evidence_2, evidence_3, evidence_4 = st.columns(4)
+    if current_plan_assessment:
+        evidence_1.metric("Current Routes", current_plan_assessment["route_count"])
+        evidence_2.metric("Average Load", f"{current_plan_assessment['avg_load_factor_pct']:.1f}%")
+        evidence_3.metric("Low-Load Routes", current_plan_assessment["low_load_route_count"])
+        evidence_4.metric("Overlong Routes", current_plan_assessment["overlong_route_count"])
+    elif current_plan_comparison:
+        evidence_1.metric("Current Routes", int(current_plan_comparison.get("current_route_count", 0) or 0))
+        evidence_2.metric("Route Gap", int(current_plan_comparison.get("route_gap", 0) or 0))
+    if route_reallocation_analysis:
+        reallocation_summary = dict(route_reallocation_analysis.get("summary") or {})
+        st.caption(
+            "Top local action signal: "
+            f"{int(reallocation_summary.get('actionable_weak_route_count', 0) or 0)} actionable weak route(s), "
+            f"{int(reallocation_summary.get('route_removal_candidate_count', 0) or 0)} removal path(s), "
+            f"{int(reallocation_summary.get('route_consolidation_candidate_count', 0) or 0)} consolidation path(s)."
+        )
 
 
 PLANNER_STEP_PATTERNS = [
@@ -2103,8 +2188,8 @@ if result is not None:
     )
     tabs = st.tabs(
         [
-            "Executive Summary",
-            "Current Plan Audit",
+            "AI Audit Report",
+            "Audit Evidence",
             "Baseline Scenarios",
             "Maps",
             "Diagnostics",
@@ -2112,7 +2197,17 @@ if result is not None:
     )
 
     with tabs[0]:
-        st.subheader("Executive Summary")
+        render_ai_audit_report_panel(
+            job_detail=job_detail,
+            selected_job_id=selected_job_id,
+            current_user_email=CURRENT_USER_EMAIL,
+            executive_findings=executive_findings,
+            current_plan_assessment=current_plan_assessment,
+            current_plan_comparison=current_plan_comparison,
+            route_reallocation_analysis=route_reallocation_analysis,
+        )
+        st.divider()
+        st.subheader("Deterministic Snapshot")
         top_1, top_2, top_3, top_4 = st.columns(4)
         top_1.metric("Uploaded Addresses", summary["uploaded_address_count"])
         top_2.metric("Original Stops", summary["original_valid_stops"])
@@ -2168,7 +2263,7 @@ if result is not None:
         st.markdown("\n".join(f"- {item}" for item in executive_findings))
 
     with tabs[1]:
-        st.subheader("Current Plan Audit")
+        st.subheader("Audit Evidence")
         if not current_plan_assessment:
             st.info("This result does not include current-plan audit data.")
         else:

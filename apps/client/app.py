@@ -420,10 +420,18 @@ def build_display_result_from_backend_payload(
 def format_job_option(job: dict[str, object]) -> str:
     job_id = str(job.get("job_id", "")).strip()
     status = str(job.get("status", "")).strip() or "unknown"
+    owner_label = format_job_owner_label(job)
     metadata = dict(job.get("metadata") or {})
     job_name = str(metadata.get("job_name", "")).strip()
     source_label = str(metadata.get("source_label", "")).strip() or "Untitled job"
-    return f"{job_id} | {status} | {job_name or source_label}"
+    return f"{job_id} | {status} | {owner_label} | {job_name or source_label}"
+
+
+def format_job_owner_label(job: dict[str, object]) -> str:
+    owner_email = str(job.get("owner_email", "") or "").strip()
+    if not owner_email:
+        return "legacy"
+    return owner_email.split("@", 1)[0].strip() or owner_email
 
 
 def render_localized_timestamp(label: str, utc_iso: str, *, key: str, height: int = 28) -> None:
@@ -1941,6 +1949,7 @@ with st.expander("Job History", expanded=bool(job_summaries)):
         )
         selected_job_metadata = dict(selected_job_summary.get("metadata") or {})
         selected_job_payload_summary = dict(selected_job_summary.get("prepared_payload_summary") or {})
+        selected_job_owner = format_job_owner_label(selected_job_summary)
         selected_job_name = (
             str(selected_job_metadata.get("job_name", "")).strip()
             or str(selected_job_metadata.get("source_label", "")).strip()
@@ -1948,6 +1957,7 @@ with st.expander("Job History", expanded=bool(job_summaries)):
         )
         st.caption(
             f"Job: {selected_job_name} | "
+            f"Owner: {selected_job_owner} | "
             f"Status: {selected_job_summary.get('status', 'unknown')} | "
             f"Rows: {int(selected_job_payload_summary.get('input_record_count', 0) or 0)} | "
             f"Current-plan routes: {int(selected_job_payload_summary.get('current_plan_route_count', 0) or 0)} | "

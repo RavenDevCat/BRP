@@ -954,6 +954,32 @@ def delete_backend_job(
         _raise_backend_error(response)
 
 
+def generate_backend_ai_audit(
+    backend_base_url: str,
+    job_id: str,
+    user_email: str | None = None,
+    *,
+    force: bool = False,
+    language: str = "English",
+    timeout_seconds: int = 120,
+) -> dict[str, Any]:
+    audit_url = urljoin(backend_base_url.rstrip("/") + "/", f"jobs/{job_id}/ai-audit")
+    session = _build_backend_session(audit_url)
+    response = session.post(
+        audit_url,
+        headers=_backend_auth_headers(user_email),
+        json={"force": bool(force), "language": str(language or "English")},
+        timeout=timeout_seconds,
+    )
+    if response.status_code >= 400:
+        _raise_backend_error(response)
+    payload = response.json()
+    ai_report = payload.get("ai_audit_report") if isinstance(payload, dict) else None
+    if not isinstance(ai_report, dict):
+        raise RuntimeError("Backend returned an unexpected AI audit payload.")
+    return ai_report
+
+
 def friendly_error_message(exc: Exception) -> str:
     message = str(exc)
     if "No usable addresses found" in message:

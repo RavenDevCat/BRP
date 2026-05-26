@@ -615,3 +615,25 @@ Recommended next step:
 - Validation:
   - `.\ops\env\local.ps1`
   - `$env:BACKEND_PYTHON -m py_compile apps\backend\backend_service.py apps\client\client_core.py apps\client\app.py`
+
+## AI Audit Report v1
+
+- Added a DeepSeek-backed AI report layer for completed jobs.
+- Scope:
+  - AI only summarizes deterministic BRP audit outputs.
+  - Full address lists are excluded from the prompt.
+  - The prompt is bounded to fixed report sections and a maximum character budget.
+- Backend:
+  - `apps/backend/ai_audit.py` builds a compact fact payload and calls DeepSeek chat completions.
+  - `POST /jobs/<job_id>/ai-audit` generates or returns the cached `ai_audit_report`.
+  - Generated reports are stored back onto the job JSON as `ai_audit_report`.
+- Frontend:
+  - `apps/client/app.py` replaces the old `Executive Summary` tab with `AI Audit Report`.
+  - The old `Current Plan Audit` tab is renamed to `Audit Evidence` so detailed metrics remain traceable.
+  - The AI tab includes generate/regenerate buttons and Markdown download.
+- Environment additions:
+  - `DEEPSEEK_API_KEY`
+  - `DEEPSEEK_MODEL=deepseek-chat`
+  - `BRP_AI_AUDIT_LANGUAGE=English`
+  - `BRP_AI_AUDIT_TIMEOUT_SECONDS=90`
+- Keep real API keys only in server-local env files; examples contain placeholders only.

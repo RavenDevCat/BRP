@@ -435,6 +435,14 @@ def format_job_owner_label(job: dict[str, object]) -> str:
     return owner_email.split("@", 1)[0].strip() or owner_email
 
 
+def build_job_display_name(source_label: str, custom_name: str = "") -> str:
+    default_name = Path(str(source_label or "")).stem.strip() or "Untitled job"
+    normalized_custom_name = " ".join(str(custom_name or "").strip().split())
+    if not normalized_custom_name:
+        return default_name
+    return f"{default_name} - {normalized_custom_name}"
+
+
 def render_localized_timestamp(label: str, utc_iso: str, *, key: str, height: int = 28) -> None:
     normalized_value = str(utc_iso or "").strip()
     if not normalized_value:
@@ -991,12 +999,143 @@ def render_ai_audit_report_panel(
     current_plan_assessment: dict[str, object],
     current_plan_comparison: dict[str, object],
     route_reallocation_analysis: dict[str, object],
+    scenario_snapshots: list[dict[str, object]],
 ) -> None:
     st.subheader("AI Audit Report")
     st.caption(
         "AI uses the deterministic audit outputs only: route metrics, baseline comparisons, and recommendation summaries. "
         "Full address lists are excluded from the prompt."
     )
+    st.markdown("**Audit Briefing Board**")
+    reallocation_summary = dict(route_reallocation_analysis.get("summary") or {})
+    current_route_count = int(
+        (current_plan_assessment or {}).get("route_count")
+        or current_plan_comparison.get("current_route_count")
+        or 0
+    )
+    current_avg_duration = float((current_plan_assessment or {}).get("avg_route_duration_minutes", 0.0) or 0.0)
+    current_avg_load = float((current_plan_assessment or {}).get("avg_load_factor_pct", 0.0) or 0.0)
+    route_gap = int(current_plan_comparison.get("route_gap", 0) or 0)
+    action_count = int(reallocation_summary.get("actionable_weak_route_count", 0) or 0)
+    briefing_cols = st.columns(4)
+    briefing_cols[0].metric("Current Routes", current_route_count or "N/A", delta=f"{route_gap:+d} vs baseline" if route_gap else None)
+    briefing_cols[1].metric("Average Load", f"{current_avg_load:.1f}%" if current_avg_load else "N/A")
+    briefing_cols[2].metric("Average Route Time", format_duration_minutes(current_avg_duration) if current_avg_duration else "N/A")
+    briefing_cols[3].metric("Action Signals", action_count)
+
+    scenario_rows = []
+    for snapshot in scenario_snapshots:
+        if not bool(snapshot.get("enabled")):
+            continue
+        scenario_rows.append(
+            {
+                "Scenario": str(snapshot.get("name", "")),
+                "Routes": int(snapshot.get("route_count", 0) or 0),
+                "Avg Time (min)": round(float(snapshot.get("avg_route_duration_minutes", 0.0) or 0.0), 1),
+                "Avg Distance (km)": round(float(snapshot.get("avg_route_distance_km", 0.0) or 0.0), 1),
+                "Avg Load (%)": round(float(snapshot.get("avg_load_factor_pct", 0.0) or 0.0), 1),
+            }
+        )
+    route_rows = []
+    for route in list((current_plan_assessment or {}).get("route_summaries") or []):
+        route = dict(route)
+        duration_min = round(float(route.get("duration_s", 0.0) or 0.0) / 60.0, 1)
+        load_pct = round(float(route.get("load_factor", 0.0) or 0.0) * 100.0, 1)
+        risk_reasons = []
+        if duration_min >= 70:
+            risk_reasons.append("long ride")
+        elif duration_min >= 60:
+            risk_reasons.append("near duration limit")
+        if load_pct < 50:
+            risk_reasons.append("low utilization")
+        elif load_pct >= 90:
+            risk_reasons.append("very full")
+        if not risk_reasons:
+            risk_reasons.append("balanced")
+        route_rows.append(
+            {
+                "Route": str(route.get("route_id", "") or "Unknown"),
+                "Duration": f"{duration_min:.1f} min",
+                "Load": f"{load_pct:.1f}%",
+                "Passengers": int(route.get("passenger_count", 0) or 0),
+                "What to notice": ", ".join(risk_reasons),
+                "_score": (3 if "long ride" in risk_reasons else 0)
+                + (2 if "low utilization" in risk_reasons else 0)
+                + (2 if "very full" in risk_reasons else 0)
+                + (1 if "near duration limit" in risk_reasons else 0),
+            }
+        )
+    action_rows = []
+    priority_actions = list(
+        reallocation_summary.get("priority_recommendations")
+        or route_reallocation_analysis.get("recommendations")
+        or []
+    )
+    for index, item in enumerate(priority_actions[:8], start=1):
+        item = dict(item)
+        from_route = str(item.get("from_route_id", "") or "N/A")
+        to_route = str(item.get("to_route_id", "") or "N/A")
+        stop_count = int(item.get("stop_count", 0) or 0)
+        action_text = f"Move {stop_count} stop(s) from {from_route} to {to_route}"
+        time_saving_min = round(float(item.get("network_total_duration_saving_s", 0.0) or 0.0) / 60.0, 1)
+        distance_saving_km = round(float(item.get("network_total_distance_saving_m", 0.0) or 0.0) / 1000.0, 1)
+        action_rows.append(
+            {
+                "Suggested action": action_text,
+                "Why it matters": f"Save about {time_saving_min:.1f} min and {distance_saving_km:.1f} km",
+                "Operational meaning": str(item.get("route_action_label") or item.get("recommendation_type") or "Local improvement").replace("_", " ").title(),
+            }
+        )
+    visual_col_1, visual_col_2 = st.columns([1.1, 1.0])
+    with visual_col_1:
+        if route_rows:
+            st.markdown("**Routes to Review First**")
+            st.caption(
+                "Start here to see which current routes look inefficient or operationally tight."
+            )
+            risk_df = pd.DataFrame(sorted(route_rows, key=lambda item: int(item["_score"]), reverse=True))
+            st.dataframe(
+                risk_df.drop(columns=["_score"]).head(8),
+                width="stretch",
+                hide_index=True,
+            )
+            st.caption("Rows are sorted by review priority: long rides, low utilization, or unusually full routes rise to the top.")
+        elif scenario_rows:
+            st.markdown("**Scenario Comparison**")
+            st.caption("Compare the current plan against the generated baselines.")
+            st.dataframe(pd.DataFrame(scenario_rows), width="stretch", hide_index=True)
+    with visual_col_2:
+        if action_rows:
+            st.markdown("**Top Suggested Actions**")
+            st.caption(
+                "These are small route-to-route changes the system thinks are worth checking before any larger redesign."
+            )
+            st.dataframe(pd.DataFrame(action_rows).head(5), width="stretch", hide_index=True)
+        elif scenario_rows:
+            st.markdown("**Scenario Comparison**")
+            st.caption("Compare the current plan against the generated baselines.")
+            st.dataframe(pd.DataFrame(scenario_rows), width="stretch", hide_index=True)
+    if scenario_rows and route_rows and action_rows:
+        with st.expander("Scenario Comparison Table", expanded=False):
+            st.dataframe(pd.DataFrame(scenario_rows), width="stretch", hide_index=True)
+
+    signal_items = []
+    if int((current_plan_assessment or {}).get("low_load_route_count", 0) or 0) > 0:
+        signal_items.append(("Low-load routes", str((current_plan_assessment or {}).get("low_load_route_count"))))
+    if int((current_plan_assessment or {}).get("overlong_route_count", 0) or 0) > 0:
+        signal_items.append(("Overlong routes", str((current_plan_assessment or {}).get("overlong_route_count"))))
+    if int(reallocation_summary.get("route_removal_candidate_count", 0) or 0) > 0:
+        signal_items.append(("Removal paths", str(reallocation_summary.get("route_removal_candidate_count"))))
+    if int(reallocation_summary.get("route_consolidation_candidate_count", 0) or 0) > 0:
+        signal_items.append(("Consolidation paths", str(reallocation_summary.get("route_consolidation_candidate_count"))))
+    if signal_items:
+        chip_html = " ".join(
+            f"<span style='display:inline-block;margin:0 8px 8px 0;padding:6px 10px;border:1px solid #ccd6e0;border-radius:999px;background:#f7f9fb;font-size:0.88rem;'><strong>{html_escape(label)}</strong>: {html_escape(value)}</span>"
+            for label, value in signal_items
+        )
+        st.markdown(chip_html, unsafe_allow_html=True)
+
+    st.divider()
     report = dict((job_detail or {}).get("ai_audit_report") or {})
     button_col_1, button_col_2 = st.columns([1.4, 1])
     with button_col_1:
@@ -1035,10 +1174,17 @@ def render_ai_audit_report_panel(
             f"Input policy: {report.get('input_policy', 'aggregated facts only')}"
         )
         st.download_button(
-            "Download AI Audit Report (.md)",
-            data=str(report.get("report_markdown") or "").encode("utf-8"),
-            file_name=f"ai_audit_report_{selected_job_id}.md",
-            mime="text/markdown",
+            "Download Printable AI Report (.html)",
+            data=build_ai_audit_report_html(
+                report,
+                job_id=selected_job_id,
+                current_plan_assessment=current_plan_assessment,
+                current_plan_comparison=current_plan_comparison,
+                route_reallocation_analysis=route_reallocation_analysis,
+                scenario_snapshots=scenario_snapshots,
+            ),
+            file_name=f"ai_audit_report_{selected_job_id}.html",
+            mime="text/html",
             use_container_width=True,
         )
     else:
@@ -1307,6 +1453,220 @@ def build_current_plan_audit_pdf_bytes(result: dict[str, object]) -> bytes:
     return buffer.getvalue()
 
 
+def build_simple_pdf_bytes(title: str, lines: list[str], *, width: int = 92) -> bytes:
+    normalized_lines: list[str] = [str(title or "Report").strip() or "Report", ""]
+    for line in lines:
+        normalized_lines.extend(_wrap_pdf_line(str(line or ""), width=width))
+    max_lines_per_page = 46
+    paged_lines = [normalized_lines[index:index + max_lines_per_page] for index in range(0, len(normalized_lines), max_lines_per_page)] or [[title]]
+
+    font_object_number = 3
+    objects: list[bytes] = []
+    page_object_numbers: list[int] = []
+    content_object_numbers: list[int] = []
+    next_object_number = 4
+    for _page in paged_lines:
+        page_object_numbers.append(next_object_number)
+        next_object_number += 1
+        content_object_numbers.append(next_object_number)
+        next_object_number += 1
+
+    kids_refs = " ".join(f"{number} 0 R" for number in page_object_numbers)
+    objects.append(b"<< /Type /Catalog /Pages 2 0 R >>")
+    objects.append(f"<< /Type /Pages /Count {len(page_object_numbers)} /Kids [{kids_refs}] >>".encode("latin-1"))
+    objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    for page_index, page_lines in enumerate(paged_lines):
+        content_lines = ["BT", "/F1 11 Tf", "50 790 Td", "14 TL"]
+        for line in page_lines:
+            content_lines.append(f"({_pdf_escape(line)}) Tj")
+            content_lines.append("T*")
+        content_lines.append("ET")
+        content_stream = "\n".join(content_lines).encode("latin-1", errors="replace")
+        page_object = (
+            f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            f"/Resources << /Font << /F1 {font_object_number} 0 R >> >> "
+            f"/Contents {content_object_numbers[page_index]} 0 R >>"
+        ).encode("latin-1")
+        content_object = (
+            f"<< /Length {len(content_stream)} >>\nstream\n".encode("latin-1")
+            + content_stream
+            + b"\nendstream"
+        )
+        objects.append(page_object)
+        objects.append(content_object)
+
+    buffer = io.BytesIO()
+    buffer.write(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")
+    offsets = [0]
+    for object_index, object_bytes in enumerate(objects, start=1):
+        offsets.append(buffer.tell())
+        buffer.write(f"{object_index} 0 obj\n".encode("latin-1"))
+        buffer.write(object_bytes)
+        buffer.write(b"\nendobj\n")
+    xref_start = buffer.tell()
+    buffer.write(f"xref\n0 {len(objects) + 1}\n".encode("latin-1"))
+    buffer.write(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        buffer.write(f"{offset:010d} 00000 n \n".encode("latin-1"))
+    buffer.write(
+        (
+            f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\n"
+            f"startxref\n{xref_start}\n%%EOF"
+        ).encode("latin-1")
+    )
+    return buffer.getvalue()
+
+
+def markdown_to_pdf_lines(markdown_text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in str(markdown_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            lines.append("")
+            continue
+        if line.startswith("###"):
+            lines.extend(["", line.lstrip("# ").upper()])
+        elif line.startswith("##"):
+            lines.extend(["", line.lstrip("# ").upper()])
+        elif line.startswith("#"):
+            lines.extend(["", line.lstrip("# ").upper()])
+        elif line.startswith(("- ", "* ")):
+            lines.append("- " + line[2:].strip())
+        else:
+            lines.append(line.replace("**", "").replace("__", "").replace("`", ""))
+    return lines
+
+
+def build_ai_audit_pdf_bytes(report_markdown: str, *, job_id: str) -> bytes:
+    lines = markdown_to_pdf_lines(report_markdown)
+    return build_simple_pdf_bytes(f"AI Audit Report - {job_id}", lines, width=88)
+
+
+def markdown_to_report_html(markdown_text: str) -> str:
+    html_parts: list[str] = []
+    in_list = False
+    for raw_line in str(markdown_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            continue
+        if line.startswith("#"):
+            if in_list:
+                html_parts.append("</ul>")
+                in_list = False
+            level = min(max(len(line) - len(line.lstrip("#")), 2), 3)
+            text = html_escape(line.lstrip("# ").replace("**", "").replace("__", "").replace("`", ""))
+            html_parts.append(f"<h{level}>{text}</h{level}>")
+            continue
+        if line.startswith(("- ", "* ")):
+            if not in_list:
+                html_parts.append("<ul>")
+                in_list = True
+            text = html_escape(line[2:].replace("**", "").replace("__", "").replace("`", ""))
+            html_parts.append(f"<li>{text}</li>")
+            continue
+        if in_list:
+            html_parts.append("</ul>")
+            in_list = False
+        html_parts.append(f"<p>{html_escape(line.replace('**', '').replace('__', '').replace('`', ''))}</p>")
+    if in_list:
+        html_parts.append("</ul>")
+    return "\n".join(html_parts)
+
+
+def build_ai_audit_report_html(
+    report: dict[str, object],
+    *,
+    job_id: str,
+    current_plan_assessment: dict[str, object],
+    current_plan_comparison: dict[str, object],
+    route_reallocation_analysis: dict[str, object],
+    scenario_snapshots: list[dict[str, object]],
+) -> bytes:
+    report_markdown = str(report.get("report_markdown") or "")
+    generated_at = html_escape(str(report.get("generated_at") or ""))
+    model = html_escape(str(report.get("model") or ""))
+    reallocation_summary = dict(route_reallocation_analysis.get("summary") or {})
+    current_route_count = int(
+        current_plan_assessment.get("route_count")
+        or current_plan_comparison.get("current_route_count")
+        or 0
+    )
+    current_avg_load = float(current_plan_assessment.get("avg_load_factor_pct", 0.0) or 0.0)
+    current_avg_duration = float(current_plan_assessment.get("avg_route_duration_minutes", 0.0) or 0.0)
+    action_count = int(reallocation_summary.get("actionable_weak_route_count", 0) or 0)
+    scenario_rows = []
+    for snapshot in scenario_snapshots:
+        if not bool(snapshot.get("enabled")):
+            continue
+        scenario_rows.append(
+            "<tr>"
+            f"<td>{html_escape(str(snapshot.get('name', '')))}</td>"
+            f"<td>{int(snapshot.get('route_count', 0) or 0)}</td>"
+            f"<td>{float(snapshot.get('avg_route_duration_minutes', 0.0) or 0.0):.1f}</td>"
+            f"<td>{float(snapshot.get('avg_route_distance_km', 0.0) or 0.0):.1f}</td>"
+            f"<td>{float(snapshot.get('avg_load_factor_pct', 0.0) or 0.0):.1f}%</td>"
+            "</tr>"
+        )
+    body = markdown_to_report_html(report_markdown)
+    html = f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>AI Audit Report - {html_escape(job_id)}</title>
+  <style>
+    @page {{ margin: 18mm; }}
+    body {{ font-family: Arial, Helvetica, sans-serif; color: #172033; margin: 0; background: #f3f6fa; }}
+    .page {{ max-width: 980px; margin: 0 auto; background: #fff; padding: 36px 42px; }}
+    .eyebrow {{ color: #607086; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }}
+    h1 {{ margin: 8px 0 4px; font-size: 30px; }}
+    h2 {{ margin-top: 28px; padding-top: 14px; border-top: 1px solid #d9e0e8; font-size: 20px; }}
+    h3 {{ margin-top: 18px; font-size: 16px; }}
+    p, li {{ font-size: 14px; line-height: 1.55; }}
+    ul {{ margin-top: 8px; padding-left: 22px; }}
+    .meta {{ color: #607086; font-size: 12px; margin-bottom: 24px; }}
+    .cards {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 24px 0; }}
+    .card {{ border: 1px solid #d9e0e8; border-radius: 8px; padding: 14px; background: #f8fafc; }}
+    .card .label {{ color: #607086; font-size: 12px; }}
+    .card .value {{ font-size: 22px; font-weight: 700; margin-top: 6px; }}
+    table {{ width: 100%; border-collapse: collapse; margin: 18px 0 26px; font-size: 13px; }}
+    th {{ background: #eef3f8; text-align: left; }}
+    th, td {{ border: 1px solid #d9e0e8; padding: 9px 10px; }}
+    .report {{ border-top: 3px solid #1e6bff; padding-top: 10px; }}
+    .footer {{ margin-top: 32px; color: #607086; font-size: 11px; }}
+    @media print {{
+      body {{ background: #fff; }}
+      .page {{ padding: 0; max-width: none; }}
+    }}
+  </style>
+</head>
+<body>
+  <main class="page">
+    <div class="eyebrow">BRP AI Audit Report</div>
+    <h1>Current Scheme Assessment</h1>
+    <div class="meta">Job {html_escape(job_id)} | Generated {generated_at or "N/A"} | Model {model or "N/A"}</div>
+    <section class="cards">
+      <div class="card"><div class="label">Current Routes</div><div class="value">{current_route_count or "N/A"}</div></div>
+      <div class="card"><div class="label">Average Load</div><div class="value">{current_avg_load:.1f}%</div></div>
+      <div class="card"><div class="label">Average Route Time</div><div class="value">{current_avg_duration:.1f} min</div></div>
+      <div class="card"><div class="label">Action Signals</div><div class="value">{action_count}</div></div>
+    </section>
+    <h2>Scenario Snapshot</h2>
+    <table>
+      <thead><tr><th>Scenario</th><th>Routes</th><th>Avg Time (min)</th><th>Avg Distance (km)</th><th>Avg Load</th></tr></thead>
+      <tbody>{''.join(scenario_rows) or '<tr><td colspan="5">No scenario data available.</td></tr>'}</tbody>
+    </table>
+    <section class="report">{body}</section>
+    <div class="footer">Generated from deterministic BRP audit outputs. Full address lists are excluded from the AI prompt.</div>
+  </main>
+</body>
+</html>"""
+    return html.encode("utf-8")
+
+
 def build_audit_report_from_result(result: dict[str, object]) -> list[tuple[str, pd.DataFrame]]:
     audit_sheets: list[tuple[str, pd.DataFrame]] = []
     current_plan_assessment = summarize_current_plan_assessment(result.get("current_plan_assessment"))
@@ -1567,10 +1927,9 @@ else:
             "The only difference is that the file comes from `apps/client/demodata`."
         )
 
-job_name_default = Path(source_label).stem.strip() if source_label else ""
 job_name_signature = (source_mode, source_label)
 if st.session_state.get("planner_job_name_signature") != job_name_signature:
-    st.session_state["planner_job_name"] = job_name_default
+    st.session_state["planner_job_custom_name"] = ""
     st.session_state["planner_job_name_signature"] = job_name_signature
 
 direction_col, traffic_col, duration_col = st.columns(3)
@@ -1786,11 +2145,13 @@ if source_excel_path is not None:
         ),
     )
     st.text_input(
-        "Job Name",
-        key="planner_job_name",
-        placeholder="Enter a custom name for this run",
-        help="Job History will display this name instead of only the workbook file name.",
+        "Custom Job Name (optional)",
+        key="planner_job_custom_name",
+        placeholder="Example: May audit before parent review",
+        help="Leave blank to use the default workbook-based name. If filled, Job History displays: default name - custom name.",
     )
+    preview_job_name = build_job_display_name(source_label, str(st.session_state.get("planner_job_custom_name", "")))
+    st.caption(f"Job History name preview: `{preview_job_name}`")
     run_planner_clicked = st.button(
         "Submit Job",
         type="primary",
@@ -1848,7 +2209,9 @@ if run_planner_clicked:
             "selected_sheet": selected_sheet,
             "base_run_key": base_run_key,
             "source_label": source_label,
-            "job_name": str(st.session_state.get("planner_job_name", "")).strip() or Path(source_label).stem.strip() or "Untitled job",
+            "job_default_name": build_job_display_name(source_label),
+            "job_custom_name": str(st.session_state.get("planner_job_custom_name", "")).strip(),
+            "job_name": build_job_display_name(source_label, str(st.session_state.get("planner_job_custom_name", ""))),
             "planner_config": {
                 "large_bus_capacity": int(large_bus_capacity),
                 "large_bus_max_count": int(large_bus_max_count),
@@ -1968,6 +2331,8 @@ if run_planner_clicked:
                 user_email=CURRENT_USER_EMAIL,
                 metadata={
                     "job_name": submission_snapshot["job_name"],
+                    "job_default_name": submission_snapshot["job_default_name"],
+                    "job_custom_name": submission_snapshot["job_custom_name"],
                     "source_label": submission_snapshot["source_label"],
                     "selected_sheet": submission_snapshot["selected_sheet"],
                     "planner_config": dict(submission_snapshot["planner_config"]),
@@ -2205,6 +2570,7 @@ if result is not None:
             current_plan_assessment=current_plan_assessment,
             current_plan_comparison=current_plan_comparison,
             route_reallocation_analysis=route_reallocation_analysis,
+            scenario_snapshots=scenario_snapshots,
         )
         st.divider()
         st.subheader("Deterministic Snapshot")

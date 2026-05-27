@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -131,6 +132,23 @@ def compute_osrm_metrics_from_origin(
     return metrics
 
 
+def compute_osrm_route_leg_metrics(points: list[dict[str, Any]]) -> list[dict[str, float | None]]:
+    metrics: list[dict[str, float | None]] = []
+    if len(points) < 2:
+        return metrics
+    for origin_point, destination_point in zip(points[:-1], points[1:]):
+        durations, distances = _request_osrm_table(origin_point, [destination_point])
+        duration_s = durations[0] if durations else None
+        distance_m = distances[0] if distances else None
+        metrics.append(
+            {
+                "duration_s": float(duration_s) if duration_s is not None else None,
+                "distance_m": float(distance_m) if distance_m is not None else None,
+            }
+        )
+    return metrics
+
+
 def _row_value(row: pd.Series, column_name: str | None, fallback: str = "") -> str:
     if not column_name:
         return fallback.strip()
@@ -159,6 +177,92 @@ def build_distance_input_rows(
             }
         )
     return rows
+
+
+def _find_first_matching_column(columns: list[str], candidates: tuple[str, ...]) -> str | None:
+    normalized_columns = {str(column).strip().lower().replace(" ", "_"): str(column) for column in columns}
+    for candidate in candidates:
+        normalized_candidate = candidate.strip().lower().replace(" ", "_")
+        if normalized_candidate in normalized_columns:
+            return normalized_columns[normalized_candidate]
+    for column in columns:
+        normalized_column = str(column).strip().lower().replace(" ", "_")
+        if any(candidate.strip().lower().replace(" ", "_") in normalized_column for candidate in candidates):
+            return str(column)
+    return None
+
+
+def infer_current_plan_columns(source_df: pd.DataFrame) -> dict[str, str | None]:
+    columns = [str(column) for column in source_df.columns]
+    return {
+        "route": _find_first_matching_column(columns, ("route_id", "route", "route_name", "bus_route", "line")),
+        "sequence": _find_first_matching_column(columns, ("stop_sequence", "sequence", "stop_order", "order")),
+        "bus_type": _find_first_matching_column(columns, ("bus_type", "vehicle_type", "vehicle", "bus")),
+        "address": _find_first_matching_column(columns, ("address", "stop_address", "pickup_address", "dropoff_address", "location")),
+        "city": _find_first_matching_column(columns, ("city", "district")),
+        "country": _find_first_matching_column(columns, ("country",)),
+    }
+
+
+def _coerce_sort_number(value: Any, fallback: float) -> float:
+    try:
+        if pd.isna(value):
+            return fallback
+    except TypeError:
+        pass
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def build_current_plan_route_input_rows(
+    source_df: pd.DataFrame,
+    *,
+    route_column: str,
+    address_column: str,
+    sequence_column: str | None = None,
+    bus_type_column: str | None = None,
+    city_column: str | None = None,
+    country_column: str | None = None,
+    default_city: str = "",
+    default_country: str = "",
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row_index, row in source_df.iterrows():
+        rows.append(
+            {
+                "source_excel_row": row_index + 2,
+                "route_id": _row_value(row, route_column) or "Unknown",
+                "stop_sequence": _coerce_sort_number(_row_value(row, sequence_column), float(row_index + 1)),
+                "bus_type": _row_value(row, bus_type_column),
+                "country": _row_value(row, country_column, default_country),
+                "city": _row_value(row, city_column, default_city),
+                "address": _row_value(row, address_column),
+            }
+        )
+    return rows
+
+
+def is_electric_bus_type(bus_type: str) -> bool:
+    raw_value = str(bus_type or "").strip().lower()
+    normalized = re.sub(r"[_\-/]+", " ", raw_value)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+    if any(keyword in raw_value for keyword in ("\u65b0\u80fd\u6e90", "\u7535\u52a8", "\u96fb\u52d5")):
+        return True
+    electric_patterns = (
+        r"\be\s*bus\b",
+        r"\bebus\b",
+        r"\belectric(?:al)?\b",
+        r"\bev\b",
+        r"\bbev\b",
+        r"\bbattery\b",
+        r"\bzero\s+emission\b",
+        r"\bnew\s+energy\b",
+    )
+    return any(re.search(pattern, normalized) for pattern in electric_patterns)
 
 
 def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
@@ -299,6 +403,87 @@ def build_distance_result_dataframe(
         right_on="source_excel_row",
     )
     return result_df.drop(columns=["_source_excel_row"])
+
+
+def build_current_plan_route_cost_dataframe(
+    input_rows: list[dict[str, Any]],
+    geocoded_rows: list[dict[str, Any]],
+    *,
+    diesel_price_per_liter: float,
+    fuel_efficiency_km_per_liter: float,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    geocoded_by_row = {
+        int(row.get("source_excel_row", 0) or 0): dict(row)
+        for row in geocoded_rows
+    }
+    route_groups: dict[str, list[dict[str, Any]]] = {}
+    for row in input_rows:
+        route_id = str(row.get("route_id", "") or "Unknown").strip() or "Unknown"
+        enriched = {**row, **geocoded_by_row.get(int(row.get("source_excel_row", 0) or 0), {})}
+        route_groups.setdefault(route_id, []).append(enriched)
+
+    route_result_rows: list[dict[str, Any]] = []
+    leg_result_rows: list[dict[str, Any]] = []
+    for route_id, route_rows in route_groups.items():
+        ordered_rows = sorted(
+            route_rows,
+            key=lambda item: (
+                _coerce_sort_number(item.get("stop_sequence"), float("inf")),
+                _coerce_sort_number(item.get("source_excel_row"), float("inf")),
+            ),
+        )
+        route_bus_type = next((str(row.get("bus_type", "")).strip() for row in ordered_rows if str(row.get("bus_type", "")).strip()), "")
+        skip_diesel_cost = is_electric_bus_type(route_bus_type)
+        valid_rows = [row for row in ordered_rows if row.get("status") == "ok" and row.get("point")]
+        failed_count = len(ordered_rows) - len(valid_rows)
+        leg_metrics = compute_osrm_route_leg_metrics([dict(row["point"]) for row in valid_rows]) if len(valid_rows) >= 2 else []
+        total_distance_m = 0.0
+        total_duration_s = 0.0
+        for leg_index, (from_row, to_row, metric) in enumerate(zip(valid_rows[:-1], valid_rows[1:], leg_metrics), start=1):
+            distance_m = metric.get("distance_m")
+            duration_s = metric.get("duration_s")
+            distance_km = float(distance_m or 0.0) / 1000.0
+            duration_min = float(duration_s or 0.0) / 60.0
+            total_distance_m += float(distance_m or 0.0)
+            total_duration_s += float(duration_s or 0.0)
+            leg_result_rows.append(
+                {
+                    "route_id": route_id,
+                    "leg": leg_index,
+                    "from_stop_sequence": from_row.get("stop_sequence"),
+                    "from_address": str(from_row.get("address", "")).strip(),
+                    "to_stop_sequence": to_row.get("stop_sequence"),
+                    "to_address": str(to_row.get("address", "")).strip(),
+                    "distance_km": round(distance_km, 3),
+                    "duration_min": round(duration_min, 1),
+                }
+            )
+
+        total_distance_km = total_distance_m / 1000.0
+        fuel_liters = None if skip_diesel_cost else (total_distance_km / fuel_efficiency_km_per_liter if fuel_efficiency_km_per_liter > 0 else 0.0)
+        fuel_cost = None if fuel_liters is None else fuel_liters * diesel_price_per_liter
+        route_result_rows.append(
+            {
+                "route_id": route_id,
+                "bus_type": route_bus_type or "Unknown",
+                "diesel_cost_status": "skipped_electric_bus" if skip_diesel_cost else "estimated",
+                "stops_in_file": len(ordered_rows),
+                "resolved_stops": len(valid_rows),
+                "failed_stops": failed_count,
+                "drive_legs": len(leg_metrics),
+                "route_distance_km": round(total_distance_km, 3),
+                "route_duration_min": round(total_duration_s / 60.0, 1),
+                "estimated_diesel_liters": round(fuel_liters, 2) if fuel_liters is not None else None,
+                "estimated_one_way_fuel_cost": round(fuel_cost, 2) if fuel_cost is not None else None,
+            }
+        )
+
+    route_df = pd.DataFrame(route_result_rows).sort_values(
+        by=["route_distance_km", "route_id"],
+        ascending=[False, True],
+    )
+    leg_df = pd.DataFrame(leg_result_rows)
+    return route_df, leg_df
 
 
 def build_download_excel_bytes(results_df: pd.DataFrame) -> bytes:

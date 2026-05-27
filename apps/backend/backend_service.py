@@ -198,6 +198,24 @@ class JobStore:
             self._upsert_index_entry_unlocked(record)
             return deepcopy(record)
 
+    def begin_ai_audit(self, job_id: str, *, force: bool = False) -> tuple[str, dict[str, Any] | None]:
+        with self.lock:
+            record = self._load_job_unlocked(job_id)
+            if not record:
+                return "missing", None
+            existing_report = record.get("ai_audit_report")
+            if isinstance(existing_report, dict) and existing_report and not force:
+                return "cached", deepcopy(record)
+            if str(record.get("ai_audit_status", "")).strip().lower() == "running":
+                return "running", deepcopy(record)
+            record["ai_audit_status"] = "running"
+            record["ai_audit_started_at"] = utc_now_iso()
+            record["ai_audit_finished_at"] = None
+            record["ai_audit_error"] = None
+            self._save_job_unlocked(job_id, record)
+            self._upsert_index_entry_unlocked(record)
+            return "started", deepcopy(record)
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.lock:
             record = self._load_job_unlocked(job_id)
@@ -461,16 +479,58 @@ class BackendHandler(BaseHTTPRequestHandler):
                 if not _can_access_job(job_record, user_email, include_all=include_all):
                     self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
                     return
-                ai_report = generate_ai_audit_report(
-                    job_record,
-                    force=bool(payload.get("force")),
-                    language=str(payload.get("language") or "").strip() or None,
+                force_ai_audit = bool(payload.get("force"))
+                audit_state, audit_record = JOB_STORE.begin_ai_audit(job_id, force=force_ai_audit)
+                if audit_state == "missing" or not audit_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if audit_state == "cached":
+                    self._send_json(
+                        200,
+                        {
+                            "job_id": job_id,
+                            "ai_audit_status": "succeeded",
+                            "ai_audit_report": dict(audit_record.get("ai_audit_report") or {}),
+                            "cached": True,
+                        },
+                    )
+                    return
+                if audit_state == "running":
+                    self._send_json(
+                        202,
+                        {
+                            "job_id": job_id,
+                            "ai_audit_status": "running",
+                            "ai_audit_report": dict(audit_record.get("ai_audit_report") or {}),
+                            "message": "AI audit generation is already running for this job.",
+                        },
+                    )
+                    return
+                try:
+                    ai_report = generate_ai_audit_report(
+                        audit_record,
+                        force=force_ai_audit,
+                        language=str(payload.get("language") or "").strip() or None,
+                    )
+                except Exception as exc:
+                    JOB_STORE.update_job(
+                        job_id,
+                        ai_audit_status="failed",
+                        ai_audit_finished_at=utc_now_iso(),
+                        ai_audit_error=str(exc),
+                    )
+                    raise
+                updated = JOB_STORE.update_job(
+                    job_id,
+                    ai_audit_report=ai_report,
+                    ai_audit_status="succeeded",
+                    ai_audit_finished_at=utc_now_iso(),
+                    ai_audit_error=None,
                 )
-                updated = JOB_STORE.update_job(job_id, ai_audit_report=ai_report)
                 if updated:
                     updated["config"] = None
                     updated["prepared_payload"] = None
-                    self._send_json(200, {"job_id": job_id, "ai_audit_report": ai_report})
+                    self._send_json(200, {"job_id": job_id, "ai_audit_status": "succeeded", "ai_audit_report": ai_report})
                     return
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return

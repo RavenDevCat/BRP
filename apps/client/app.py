@@ -1218,20 +1218,27 @@ def render_ai_audit_report_panel(
 
     st.divider()
     report = dict((job_detail or {}).get("ai_audit_report") or {})
+    ai_audit_status = str((job_detail or {}).get("ai_audit_status", "") or "").strip().lower()
+    ai_audit_running = ai_audit_status == "running"
+    has_ai_report = bool(report.get("report_markdown"))
     button_col_1, button_col_2 = st.columns([1.4, 1])
     with button_col_1:
         generate_clicked = st.button(
             "Generate AI Audit Report",
             type="primary",
             width="stretch",
-            disabled=not bool(selected_job_id),
+            disabled=not bool(selected_job_id) or ai_audit_running or has_ai_report,
         )
     with button_col_2:
         regenerate_clicked = st.button(
             "Regenerate",
             width="stretch",
-            disabled=not bool(selected_job_id),
+            disabled=not bool(selected_job_id) or ai_audit_running,
         )
+    if ai_audit_running:
+        st.info("AI audit generation is already running for this job. Refresh Job History in a moment before trying again.")
+    elif has_ai_report:
+        st.caption("An AI audit report already exists. Use `Regenerate` only when you intentionally want a fresh API call.")
     if generate_clicked or regenerate_clicked:
         try:
             with st.spinner("Generating AI audit report..."):

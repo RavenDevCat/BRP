@@ -971,6 +971,13 @@ def generate_backend_ai_audit(
         json={"force": bool(force), "language": str(language or "English")},
         timeout=timeout_seconds,
     )
+    if response.status_code == 202:
+        try:
+            payload = response.json()
+        except ValueError:
+            payload = {}
+        message = str((payload if isinstance(payload, dict) else {}).get("message") or "AI audit generation is already running for this job.")
+        raise RuntimeError(message)
     if response.status_code >= 400:
         _raise_backend_error(response)
     payload = response.json()

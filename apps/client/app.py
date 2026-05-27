@@ -528,6 +528,87 @@ def build_route_table_rows(routes: list[dict[str, object]]) -> list[dict[str, ob
     return rows
 
 
+def build_baseline_template_workbook_bytes(
+    scenario: dict[str, object],
+    *,
+    service_direction: str,
+) -> bytes:
+    points = [dict(item) for item in list(scenario.get("points") or [])]
+    routes = [dict(item) for item in list(scenario.get("routes") or [])]
+    point_by_node = {int(point.get("node_id", index)): point for index, point in enumerate(points)}
+    assignment_rows: list[dict[str, object]] = []
+    fleet_counts: dict[tuple[str, int], int] = {}
+
+    for route_index, route in enumerate(routes, start=1):
+        route_id = str(route.get("route_id") or route.get("vehicle_id") or route_index).strip()
+        if not route_id.upper().startswith("R"):
+            route_id = f"R{route_id}"
+        bus_type = str(route.get("bus_type_name", "")).strip() or "Unknown"
+        bus_capacity = int(route.get("bus_capacity", 0) or 0)
+        fleet_counts[(bus_type, bus_capacity)] = fleet_counts.get((bus_type, bus_capacity), 0) + 1
+        for stop_sequence, node_id in enumerate(list(route.get("nodes") or []), start=1):
+            point = point_by_node.get(int(node_id), {})
+            assignment_rows.append(
+                {
+                    "route_id": route_id,
+                    "stop_sequence": stop_sequence,
+                    "bus_type": bus_type,
+                    "country": str(point.get("country", "")).strip(),
+                    "city": str(point.get("city", "")).strip(),
+                    "address": str(point.get("address", "")).strip(),
+                    "passenger_count": int(point.get("passenger_count", 0) or 0),
+                    "note": "Free optimization baseline export",
+                }
+            )
+
+    fleet_rows = [
+        {
+            "bus_type": bus_type,
+            "seat_count": seat_count,
+            "vehicle_count": vehicle_count,
+            "note": "Generated from free optimization baseline result",
+        }
+        for (bus_type, seat_count), vehicle_count in sorted(fleet_counts.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+    notes_df = pd.DataFrame(
+        {
+            "section": ["Source", "Service Direction", "How to use"],
+            "guidance": [
+                "Generated from the Free Optimization Baseline result.",
+                str(service_direction or "From School"),
+                "This workbook uses the same sheet and column format as the current-plan input template and can be uploaded as a current plan for another audit run.",
+            ],
+        }
+    )
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame(assignment_rows).to_excel(writer, index=False, sheet_name="current_plan_assignments")
+        pd.DataFrame(fleet_rows).to_excel(writer, index=False, sheet_name="current_plan_fleet")
+        notes_df.to_excel(writer, index=False, sheet_name="template_notes")
+    return buffer.getvalue()
+
+
+def render_free_baseline_template_download(
+    free_optimization_baseline_result: dict[str, object],
+    *,
+    service_direction: str,
+    key: str,
+) -> None:
+    if not list(free_optimization_baseline_result.get("routes") or []) or not list(free_optimization_baseline_result.get("points") or []):
+        return
+    st.download_button(
+        "Download Free Optimization as Input Template (.xlsx)",
+        data=build_baseline_template_workbook_bytes(
+            free_optimization_baseline_result,
+            service_direction=service_direction,
+        ),
+        file_name="free_optimization_baseline_template.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+        key=key,
+    )
+
+
 def build_current_route_table_rows(
     route_summaries: list[dict[str, object]],
     route_duration_limit_minutes: int,
@@ -1973,38 +2054,58 @@ direction_explanation = (
 with st.expander("Usage Steps and Notes (expand to learn how to use)", expanded=False):
     st.markdown(
         f"""
-        **How to use**
+        **Workflow**
 
-        1. Download the planning template workbook.
-        2. Choose `Service Direction` before validating the workbook so route rows are interpreted correctly.
-        3. Fill `current_plan_assignments` with one row per stop on each route:
+        1. Choose `Upload Workbook` for a real run, or `Demo Workbook` to test with sample data.
+        2. Download the template if needed. The required sheets are `current_plan_assignments` and `current_plan_fleet`.
+        3. In `current_plan_assignments`, enter one row per stop using:
            `route_id`, `stop_sequence`, `bus_type`, `country`, `city`, `address`, `passenger_count`.
-        4. Enter route rows in real operating order for the selected direction:
-           - `From School`: the **first row** of each route must be the shared school / depot row, followed by downstream drop-off stops.
-           - `To School`: the stop rows should lead toward school, and the **last row** of each route must be the shared school row.
-        5. Make sure the **{terminal_row_label} row** of every route is the **{terminal_row_description}** and has `passenger_count = 0`.
-        6. Fill `current_plan_fleet` with the actual current-plan fleet facts:
+        4. In `current_plan_fleet`, enter the actual fleet facts using:
            `bus_type`, `seat_count`, `vehicle_count`.
-        7. Upload the workbook. The app will keep the route stop rows from `current_plan_assignments` for both audit and baseline generation, while de-duplicating addresses only for geocode lookup and cache reuse.
-        8. Adjust baseline assumptions in the left sidebar if needed.
-        9. Click `Run Planner` and wait for geocoding, assessment, baseline solving, and map rendering to finish.
-        10. Review:
-           Current Plan Audit, Like-for-Like Baseline, Free Optimization Baseline, and Route Reallocation Opportunities.
+        5. Set `Service Direction`, `Traffic Assumptions`, and `Target Route Duration` before submitting.
+        6. Optional: fill `Custom Job Name`. If blank, the job uses the workbook name. If filled, Job History shows `workbook name - custom name`.
+        7. Click `Submit Job`. The backend runs geocoding, current-plan assessment, OSRM routing, OR-Tools baseline solving, route reallocation analysis, map rendering, and stores the job in history.
+        8. Reopen completed runs from `Job History`. Succeeded historical jobs can be loaded again without rerunning the planner.
+        9. Review the result tabs:
+           - `AI Audit Report`: generate or regenerate a bounded AI narrative from deterministic audit facts, then download the printable HTML report.
+           - `Audit Evidence`: inspect current-plan metrics, route diagnostics, reallocation signals, and benchmark comparisons.
+           - `Baseline Scenarios`: compare scenario route tables and download the Free Optimization Baseline as a new input-template workbook.
+           - `Maps`: view and download rendered HTML route maps.
+           - `Diagnostics`: review geocode warnings, excluded stops, and raw technical details.
+        10. Use `Distance Checker` in the sidebar for quick operational checks:
+           - `Reference Distance Check`: calculate distance from one reference stop to uploaded addresses.
+           - `Current Plan Route Cost`: sum each route's stop-to-stop OSRM distance and estimate one-way diesel cost.
+           - Distance Checker results are cached locally and can be reloaded from its job cache.
 
-        **Important notes**
+        **Workbook rules**
 
         - Current direction: `{service_direction}`. {direction_explanation}
-        - Direction-specific anchor rule:
-          `From School` uses the **first row** as the school / depot anchor. `To School` uses the **last row** as the school anchor.
-        - The school / depot anchor row should always have `passenger_count = 0`.
-        - All routes must share the same depot / school address so the system can build one consistent baseline.
+        - `From School`: the first row of each route must be the shared school / depot row.
+        - `To School`: the last row of each route must be the shared school row.
+        - The **{terminal_row_label} row** of every route should be the **{terminal_row_description}** and must have `passenger_count = 0`.
+        - All routes should use the same school / depot address so the baselines have one consistent anchor.
+        - `stop_sequence` controls the imported current-plan order. Keep it unique within each `route_id`.
+        - `bus_type` must match a row in `current_plan_fleet`.
         - `passenger_count` must be a non-negative whole number.
-        - China addresses are geocoded with AMap. South Korea addresses use Kakao by default, while English-only Korean address text is geocoded with Google Geocoding.
-        - Korean addresses are no longer auto-normalized or auto-corrected by the app. If the selected geocoder cannot recognize the original input, the stop will be flagged in Diagnostics for manual cleanup.
-        - Routing is solved on the backend with city-specific OSRM road data when a supported country/city is recognized.
-        - Current-plan assessment uses the imported route order plus the actual seat counts defined in `current_plan_fleet`.
+
+        **What the system computes**
+
+        - Current Plan: evaluates the imported route order and actual fleet seat counts.
+        - Like-for-Like Baseline: keeps route allocation and bus mix fixed, then improves stop order.
+        - Constrained Improvement Baseline: applies a small set of high-confidence route-to-route transfers.
+        - Free Optimization Baseline: lets the solver regroup planning stops more freely under the configured fleet limits.
+        - Reallocation Signals: identifies weak routes, possible route removals, and targeted stop-transfer opportunities.
+        - AI Audit Report: summarizes the deterministic outputs only; full address lists are excluded from the AI prompt.
+
+        **Geocoding, routing, and cost notes**
+
+        - China addresses use AMap. South Korea uses Kakao by default, while English-only Korean address text can fall back to Google Geocoding.
+        - Korean addresses are not auto-normalized or auto-corrected. Unresolved stops appear in Diagnostics for manual cleanup.
+        - Routing uses OSRM road data for supported country/city datasets.
         - Traffic assumptions adjust route time only. Distance stays unchanged.
-        - Large files or uncached addresses may take longer because geocoding, current-plan assessment, baseline solving, and route-reallocation analysis are all real computations.
+        - Distance Checker route-cost defaults follow the site domain: `brp` uses China/RMB diesel defaults, and `brp-kr` uses South Korea/KRW diesel defaults.
+        - E-bus, electric, EV, and new-energy bus types keep route distance results but skip diesel-cost estimation.
+        - Large files or uncached addresses may take longer because geocoding, OSRM calls, OR-Tools solving, and analysis are real computations.
         """
     )
 
@@ -2944,6 +3045,11 @@ if result is not None:
                 if free_routes:
                     with st.expander("Free Optimization Route Table", expanded=False):
                         st.dataframe(pd.DataFrame(free_routes), width="stretch")
+                render_free_baseline_template_download(
+                    free_optimization_baseline_result,
+                    service_direction=str(result.get("service_direction") or planner_config_used.get("service_direction", "From School")),
+                    key=f"free-template-audit-{loaded_job_id or selected_job_id}",
+                )
 
             if current_plan_comparison:
                 st.markdown("**Current Plan vs Free Optimization Baseline**")
@@ -2988,6 +3094,11 @@ if result is not None:
 
     with tabs[2]:
         st.subheader("Baseline Scenarios")
+        render_free_baseline_template_download(
+            free_optimization_baseline_result,
+            service_direction=str(result.get("service_direction") or planner_config_used.get("service_direction", "From School")),
+            key=f"free-template-scenarios-top-{loaded_job_id or selected_job_id}",
+        )
         for snapshot in scenario_snapshots:
             with st.container():
                 st.markdown(f"**{snapshot['name']}**")
@@ -3005,6 +3116,12 @@ if result is not None:
                     if route_rows:
                         with st.expander(f"{snapshot['name']} Route Table", expanded=False):
                             st.dataframe(pd.DataFrame(route_rows), width="stretch")
+                    if snapshot["name"] == "Free Optimization Baseline":
+                        render_free_baseline_template_download(
+                            free_optimization_baseline_result,
+                            service_direction=str(result.get("service_direction") or planner_config_used.get("service_direction", "From School")),
+                            key=f"free-template-scenarios-card-{loaded_job_id or selected_job_id}",
+                        )
 
         nearby_private_access_rows = build_private_access_rows(nearby_private_access_analysis)
         if nearby_private_access_rows:

@@ -77,10 +77,14 @@ Set these in your shell environment before running the client:
 
 ## Operations
 
+- Architecture overview:
+  - `docs/architecture.md`
+- Local development and release workflow:
+  - `docs/development-release-workflow.md`
 - Fresh deployment overview:
   - `docs/deployment-overview.md`
-- Runbook:
-  - `docs/operations-checklist.md`
+- Codex handoff:
+  - `docs/session-handoff.md`
 
 ## Current country support
 

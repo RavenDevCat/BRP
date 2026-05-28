@@ -13,7 +13,16 @@ import requests
 import client_runtime as runtime
 
 
-OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://127.0.0.1:5002")
+OSRM_USE_BUILTIN_DEFAULTS = os.environ.get("OSRM_USE_BUILTIN_DEFAULTS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+OSRM_BASE_URL = os.environ.get(
+    "OSRM_BASE_URL",
+    "http://127.0.0.1:5002" if OSRM_USE_BUILTIN_DEFAULTS else "",
+).strip()
 OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("CHINA", "SHANGHAI"): "http://127.0.0.1:5002",
     ("CHINA", "BEIJING"): "http://127.0.0.1:5003",
@@ -68,17 +77,60 @@ def _canonical_city(city: str) -> str:
     return aliases.get(normalized, city.strip().upper())
 
 
+def _normalize_osrm_key_part(value: str) -> str:
+    normalized = []
+    for char in value.strip().upper():
+        normalized.append(char if char.isalnum() else "_")
+    return "".join(normalized).strip("_")
+
+
+def _country_aliases(country: str) -> list[str]:
+    normalized = country.strip().lower()
+    aliases = [country]
+    if normalized in {"south korea", "republic of korea", "korea", "대한민국", "한국", "남한"}:
+        aliases.extend(["South Korea", "Korea"])
+    if normalized in {"china", "中国", "中华人民共和国"}:
+        aliases.extend(["China"])
+    deduped: list[str] = []
+    for item in aliases:
+        if item and item not in deduped:
+            deduped.append(item)
+    return deduped
+
+
 def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
     for point in points:
         country = _canonical_country(str(point.get("country", "")).strip())
         city = _canonical_city(str(point.get("city", "")).strip())
-        builtin_url = OSRM_LOCATION_DEFAULTS.get((country, city))
-        if builtin_url:
-            return builtin_url
-        builtin_url = OSRM_LOCATION_DEFAULTS.get((country, ""))
-        if builtin_url:
-            return builtin_url
-    return OSRM_BASE_URL
+        candidate_env_keys: list[str] = []
+        if country and city:
+            for country_alias in _country_aliases(country):
+                candidate_env_keys.append(
+                    f"OSRM_BASE_URL_{_normalize_osrm_key_part(country_alias)}_{_normalize_osrm_key_part(city)}"
+                )
+        if country:
+            for country_alias in _country_aliases(country):
+                candidate_env_keys.append(f"OSRM_BASE_URL_{_normalize_osrm_key_part(country_alias)}")
+        if city:
+            candidate_env_keys.append(f"OSRM_BASE_URL_{_normalize_osrm_key_part(city)}")
+        for env_key in candidate_env_keys:
+            env_value = os.environ.get(env_key, "").strip()
+            if env_value:
+                return env_value
+        if OSRM_USE_BUILTIN_DEFAULTS:
+            builtin_url = OSRM_LOCATION_DEFAULTS.get((country, city))
+            if builtin_url:
+                return builtin_url
+            builtin_url = OSRM_LOCATION_DEFAULTS.get((country, ""))
+            if builtin_url:
+                return builtin_url
+    if OSRM_BASE_URL:
+        return OSRM_BASE_URL
+    raise RuntimeError(
+        "No OSRM endpoint is configured for these points. "
+        "Set OSRM_BASE_URL_<COUNTRY>_<CITY>, OSRM_BASE_URL_<COUNTRY>, or OSRM_BASE_URL "
+        "in this server's local environment."
+    )
 
 
 def _osrm_coordinates(points: list[dict[str, Any]]) -> str:

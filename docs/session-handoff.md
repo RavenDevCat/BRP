@@ -771,3 +771,14 @@ Recommended next step:
 - `current_plan_assignments` and `current_plan_fleet` are legacy parser sheet names only.
 - User-facing generated-plan downloads must use `generated_plan_assignments` and `generated_plan_fleet`.
 - Internal submission may temporarily adapt generated plans into the legacy parser schema, but UI/docs/job labels should keep the concepts separate.
+
+## Multi-Server OSRM Deployment Constraint
+
+- Future staging/production may use three or more servers, and each server may host only a subset of OSRM regions.
+- Do not require every server to configure every OSRM container after pulling code.
+- `ops/scripts/run_osrm_stack.sh` now supports:
+  - `OSRM_ENABLED_REGIONS=auto` to start only regions whose dataset files exist
+  - explicit subsets such as `OSRM_ENABLED_REGIONS=south-korea` or `OSRM_ENABLED_REGIONS=shanghai,beijing`
+- Server-local env files should keep only the `OSRM_BASE_URL_*` endpoints that this server can actually serve or proxy.
+- For staging/production, set `OSRM_USE_BUILTIN_DEFAULTS=false` so unsupported regions fail clearly instead of falling back to local development default ports.
+- Runtime endpoint resolution in both backend routing and client distance tools honors explicit `OSRM_BASE_URL_*` env values before any built-in local defaults.

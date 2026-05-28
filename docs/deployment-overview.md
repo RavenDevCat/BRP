@@ -79,7 +79,7 @@ Recommended server layout:
 /opt/brp/runtime             # Optional per-server runtime state
 ```
 
-The OSRM data directory must contain these subfolders when all current regions are enabled:
+The OSRM data directory only needs the regions assigned to that server. A full local/dev stack may contain all current regions:
 
 ```text
 shanghai/
@@ -90,6 +90,20 @@ south-korea/
 ```
 
 Each folder must contain the matching preprocessed `.osrm*` files expected by `ops/scripts/run_osrm_stack.sh`.
+
+Multi-server production should not require every server to carry every OSRM dataset. Use `OSRM_ENABLED_REGIONS` to declare which containers this server should start:
+
+```bash
+export OSRM_ENABLED_REGIONS="south-korea"
+```
+
+Use a comma-separated list for multi-region servers:
+
+```bash
+export OSRM_ENABLED_REGIONS="shanghai,beijing"
+```
+
+The special value `auto` starts only regions whose dataset files exist under `OSRM_LOCAL_DATA_DIR`. If a region is explicitly listed and its dataset is missing, startup fails.
 
 For a lightweight South Korea-only deployment, only this folder is required:
 
@@ -146,6 +160,14 @@ source ops/scripts/export_osrm_south_korea_env.sh
 ```
 
 If a server uses different OSRM hostnames or ports, override the exported `OSRM_BASE_URL_*` values in that server's environment.
+
+For staging/production, keep only the `OSRM_BASE_URL_*` entries that this server can actually serve or proxy. Set:
+
+```bash
+export OSRM_USE_BUILTIN_DEFAULTS=false
+```
+
+This prevents application code from falling back to local development ports for regions that are not configured on that server. Requests for unsupported regions will fail clearly with a missing-OSRM-endpoint error instead of silently calling the wrong local container.
 
 ### Client settings
 

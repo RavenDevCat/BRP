@@ -2,7 +2,7 @@
 
 This document summarizes what a fresh BRP server environment needs before the live stack can run.
 
-Use this as the new-environment checklist. Use `docs/operations-checklist.md` as the day-to-day runbook after the server is already prepared.
+Use this as the new-environment checklist. Use `docs/development-release-workflow.md` as the day-to-day runbook after the server is already prepared.
 
 ## Deployment Principle
 
@@ -201,7 +201,7 @@ Start services in this order:
 3. Client Streamlit service
 4. Cloudflare Tunnel or the chosen public access layer
 
-See `docs/operations-checklist.md` for concrete commands and health checks.
+See `docs/development-release-workflow.md` for concrete commands and health checks.
 
 ## Public Access
 
@@ -216,11 +216,13 @@ Current public hostnames:
 
 - `client.example.com`
 - `brp.example.com`
+- `brp-api.example.com`
 - `osrm-shanghai.example.com`
 - `osrm-beijing.example.com`
 - `osrm-suzhou.example.com`
 - `osrm-xian.example.com`
 - `osrm-south-korea.example.com`
+- `osrm-korea.example.com`
 
 South Korea server hostnames:
 
@@ -242,7 +244,7 @@ curl -I http://127.0.0.1:8501
 If using Cloudflare Tunnel, also verify the public URLs:
 
 ```bash
-curl -i https://brp.example.com/health
+curl -i https://brp-api.example.com/health
 curl -I https://client.example.com
 ```
 

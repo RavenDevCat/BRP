@@ -25,17 +25,13 @@ Current intended positioning:
 
 Reference overview:
 
-- `docs/current-product-overview.md`
-- `docs/production-flow.md` for dev / staging / production workflow, Ubuntu no-GUI operation, same-server staging port layout, domain/proxy options, and release/rollback rules.
+- `docs/architecture.md` for the maintained system architecture.
+- `docs/development-release-workflow.md` for local development, staging, production, and current server operations.
+- `docs/deployment-overview.md` for fresh-environment setup.
 
 Current note:
 
-- `docs/current-product-overview.md` was refreshed against the live codebase on 2026-04-17 and now explicitly includes:
-  - dual service direction support
-  - flexible baseline fleet labels
-  - nearby private-access analysis
-  - `Further Most Stop` scenario
-  - richer map / post-package output behavior
+- Old planning docs were removed in favor of the maintained docs above. Keep future process and architecture updates in those files plus this handoff.
 - `apps/client/app.py` now presents `Current Plan Audit` in a more report-style layout:
   - "Audit Story" summary block
   - improvement-path / action-oriented narrative ahead of technical evidence
@@ -83,11 +79,9 @@ Current note:
 
 ### Documentation
 
-- `docs/backlog.md`
-- `docs/implementation-roadmap.md`
-- `docs/production-flow.md`
-- `docs/route-reallocation-design.md`
-- `docs/traffic-assumptions-design.md`
+- `docs/architecture.md`
+- `docs/development-release-workflow.md`
+- `docs/deployment-overview.md`
 - `docs/session-handoff.md`
 
 ## Input Contract
@@ -433,8 +427,9 @@ Preferred checks after each round:
 After each meaningful implementation round:
 
 1. update this file
-2. update `docs/backlog.md` if the change affects future work
-3. update `docs/implementation-roadmap.md` if the main sequence changes
+2. update `docs/architecture.md` if the runtime shape or module boundaries change
+3. update `docs/development-release-workflow.md` if local/staging/prod commands change
+4. update `docs/deployment-overview.md` if fresh-server requirements change
 
 ## Latest Fix
 

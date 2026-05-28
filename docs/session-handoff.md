@@ -26,6 +26,7 @@ Current intended positioning:
 Reference overview:
 
 - `docs/current-product-overview.md`
+- `docs/production-flow.md` for dev / staging / production workflow, Ubuntu no-GUI operation, same-server staging port layout, domain/proxy options, and release/rollback rules.
 
 Current note:
 
@@ -84,6 +85,7 @@ Current note:
 
 - `docs/backlog.md`
 - `docs/implementation-roadmap.md`
+- `docs/production-flow.md`
 - `docs/route-reallocation-design.md`
 - `docs/traffic-assumptions-design.md`
 - `docs/session-handoff.md`
@@ -637,3 +639,135 @@ Recommended next step:
   - `BRP_AI_AUDIT_LANGUAGE=English`
   - `BRP_AI_AUDIT_TIMEOUT_SECONDS=90`
 - Keep real API keys only in server-local env files; examples contain placeholders only.
+
+## Frontend Modernization Direction
+
+- Streamlit should remain the fast prototype / analysis client for now, but it should not be treated as the long-term production frontend.
+- Target production frontend direction:
+  - `Next.js`
+  - `React`
+  - `TypeScript`
+  - `TanStack Query` for backend API state / polling
+  - `MapLibre` or `Leaflet` for route maps
+  - `TanStack Table` or `AG Grid` for large operational tables
+  - Tailwind / shadcn-style component patterns for a cleaner app UI
+- Rationale:
+  - the app now needs richer auth/session behavior, job lifecycle UX, maps, reports, exports, and future fleet-planning workflows
+  - those flows are increasingly awkward to maintain in Streamlit
+  - keeping FastAPI/backend APIs as the stable contract will let Streamlit and the future web app run side by side during migration
+- Suggested migration order:
+  1. login / session / user identity display
+  2. job submission
+  3. job history and job status polling
+  4. result tabs and audit evidence views
+  5. maps
+  6. AI report and printable/exportable report views
+  7. Distance Checker
+  8. Fleet Planner / future automatic planning workflow
+- Near-term rule:
+  - continue using Streamlit to validate algorithms and business workflow quickly
+  - avoid adding deeply custom UI infrastructure to Streamlit when the same work belongs naturally in the future web frontend
+
+## Automatic Demand Planning Prototype
+
+- Added a first-pass automatic planning prototype behind `Fleet Planner Preview`.
+- Scope is intentionally preview-only and does not affect existing audit job submission.
+- Files:
+  - `apps/client/vehicle_catalog.py`
+  - `apps/client/planning_assumptions.py`
+  - `apps/client/fleet_selector.py`
+  - `apps/client/demand_input.py`
+  - `apps/client/demand_clustering.py`
+  - `apps/client/demand_routing.py`
+  - `apps/client/demand_global_optimizer.py`
+  - `apps/client/fleet_planner_page.py`
+  - `apps/client/demodata/demand-demo-shanghai-50.xlsx`
+- Implemented capabilities:
+  - Korea / China default vehicle catalog
+  - monitor-seat deduction from listed seats
+  - hidden planning modes: `balanced`, `cost_saver`, `comfort_saver`
+  - rider-count to recommended-vehicle selection
+  - demand workbook template download
+  - demand workbook parsing for address + student count inputs
+  - Shanghai demand demo workbook with 50 pickup addresses around `上海市静安区南京西路1686号`
+  - demand geocode preview with existing geocode cache reuse
+  - obvious bad-address detection before provider calls
+  - school / student demand map preview
+  - demand clustering preview by school direction sector, capacity, and max stop count
+  - cluster-level vehicle recommendations and colored map preview
+  - OSRM + OR-Tools route preview inside each cluster
+  - route preview supports `To School` and `From School`
+  - route table reports route distance/time from OSRM road-network metrics
+  - generated route preview can be downloaded as a workbook with:
+    - `generated_plan_assignments`
+    - `generated_plan_fleet`
+    - `template_notes`
+  - generated plan downloads should be treated as auto plans, not supplier current plans
+  - route preview table flags routes that exceed the active mode's duration target
+  - if a route exceeds the target, the preview attempts one automatic split by distance from school and reruns the route preview
+  - global OR-Tools plan builder:
+    - uses all geocoded demand points directly
+    - builds a candidate vehicle pool from the catalog
+    - uses OSRM road-network matrices
+    - enforces vehicle capacity, max route duration, and max stops
+    - lets OR-Tools decide selected vehicles and stop assignments
+    - exports the same generated-plan workbook format
+  - `Submit Global Plan as Job` in `Fleet Planner Preview`:
+    - generates an internal in-memory legacy route-plan workbook
+    - parses it back through existing `read_current_plan_from_excel`
+    - auto-builds `PlannerConfig` from selected vehicle mix
+    - prepares the existing backend payload
+    - submits to `/jobs`
+    - user-facing downloads use `generated_plan_*` sheet names; `current_plan_*` is only an internal compatibility schema
+- Current limitation:
+  - clustering preview is heuristic only and should be considered a fallback / explanation view
+  - global OR-Tools is now the main automatic-planning candidate, but fixed-cost tuning still needs real workbook validation
+  - exported generated plan is a reviewable auto-plan workbook, not a certified final operation plan
+  - route preview map still draws straight connectors between ordered stops; tabular distance/time comes from OSRM
+  - submitted generated jobs are opened from the main planner Job History after refresh; Fleet Planner Preview does not yet jump directly into the job detail
+- Validation:
+  - `python -m py_compile apps/client/demand_clustering.py apps/client/demand_input.py apps/client/fleet_planner_page.py apps/client/fleet_selector.py apps/client/planning_assumptions.py apps/client/vehicle_catalog.py apps/client/app.py`
+  - conda `brp` synthetic clustering smoke test:
+    - 3 resolved points
+    - 1 bad address excluded
+    - 2 clusters generated
+    - selected vehicles: `25-seat mini bus / County class`, `35-seat mid bus`
+  - local Seoul OSRM on `http://127.0.0.1:5006` returned `code=Ok` for a table request
+  - conda `brp` synthetic OSRM + OR-Tools route preview returned:
+    - 2 routes
+    - total distance about `12.92 km`
+    - total duration about `15.6 min`
+    - solver labels: `ortools`, `trivial`
+  - generated workbook smoke test returned sheets:
+    - `generated_plan_assignments`
+    - `generated_plan_fleet`
+    - `template_notes`
+    - fleet rows: 25-seat County x1, 35-seat mid bus x1
+  - conda `brp` synthetic global OR-Tools smoke test returned:
+    - 44 candidate vehicles generated from KR catalog
+    - 2 selected routes
+    - selected vehicles: 25-seat County x1, 35-seat mid bus x1
+    - total distance about `12.92 km`
+    - total duration about `15.6 min`
+  - submit-chain smoke test without posting to backend:
+    - global plan -> internal legacy workbook -> `read_current_plan_from_excel`
+    - parsed as `To School`
+    - route count `1`
+    - fleet summary `25-seat mini bus / County class: 24 seats x 1`
+    - generated `PlannerConfig` large slot matches the selected vehicle
+  - Shanghai demand demo workbook validation:
+    - `apps/client/demodata/demand-demo-shanghai-50.xlsx`
+    - sheets: `demand`, `template_notes`
+    - 50 demand rows
+    - 107 total students
+    - 0 workbook warnings
+    - geocoding was not run during validation to avoid provider/API usage
+
+### Naming Constraint
+
+- Do not conflate Current Plan and Generated / Auto Plan.
+- `Current Plan` means a real user/supplier operating plan uploaded for audit.
+- `Generated Plan` / `Auto Plan` means a system-generated plan from demand inputs.
+- `current_plan_assignments` and `current_plan_fleet` are legacy parser sheet names only.
+- User-facing generated-plan downloads must use `generated_plan_assignments` and `generated_plan_fleet`.
+- Internal submission may temporarily adapt generated plans into the legacy parser schema, but UI/docs/job labels should keep the concepts separate.

@@ -38,12 +38,16 @@ from client_core import (
 )
 from client_runtime import is_likely_english_korean_address
 from distance_checker_page import render_distance_checker_page
+from fleet_planner_page import render_fleet_planner_page
 
 
 st.set_page_config(page_title="BRP Audit & Planning Client", layout="wide")
 tool_name = str(st.query_params.get("tool", "")).strip().lower()
 if tool_name == "distance-checker":
     render_distance_checker_page()
+    st.stop()
+if tool_name == "fleet-planner-preview":
+    render_fleet_planner_page()
     st.stop()
 
 st.title("BRP Audit & Planning Client")
@@ -2196,6 +2200,9 @@ with st.sidebar:
     st.caption("Other tools")
     if st.button("Distance Checker", key="open_distance_checker"):
         st.query_params["tool"] = "distance-checker"
+        st.rerun()
+    if st.button("Fleet Planner Preview", key="open_fleet_planner_preview"):
+        st.query_params["tool"] = "fleet-planner-preview"
         st.rerun()
 
 current_input_records: list[dict[str, object]] = []

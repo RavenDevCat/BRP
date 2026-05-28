@@ -25,7 +25,23 @@ source ops/env/local.env
 ops/scripts/run_osrm_stack.sh
 ```
 
-Expected ports:
+`run_osrm_stack.sh` starts only the regions enabled for this server.
+
+Configure one server with a subset:
+
+```bash
+OSRM_ENABLED_REGIONS=south-korea ops/scripts/run_osrm_stack.sh
+```
+
+or:
+
+```bash
+OSRM_ENABLED_REGIONS=shanghai,beijing ops/scripts/run_osrm_stack.sh
+```
+
+If `OSRM_ENABLED_REGIONS=auto`, the script starts only regions whose dataset files exist under `OSRM_LOCAL_DATA_DIR`.
+
+Full-stack local/dev ports:
 
 - `5002` Shanghai
 - `5003` Beijing
@@ -78,9 +94,10 @@ OSRM_BIND_HOST=<TAILSCALE_IP> ops/scripts/run_osrm_stack.sh
 ```bash
 cd /opt/brp/app
 source ops/env/local.env
-source ops/scripts/export_osrm_env.sh
 ops/scripts/run_backend.sh
 ```
+
+For full local/dev stacks, `source ops/scripts/export_osrm_env.sh` is still a convenience. For staging/production, prefer explicit `OSRM_BASE_URL_*` values in `ops/env/local.env` and set `OSRM_USE_BUILTIN_DEFAULTS=false` so unsupported regions fail clearly.
 
 Expected port:
 
@@ -90,7 +107,6 @@ To expose the backend to operator access:
 
 ```bash
 source ops/env/local.env
-source ops/scripts/export_osrm_env.sh
 BRP_BACKEND_HOST=0.0.0.0 ops/scripts/run_backend.sh
 ```
 

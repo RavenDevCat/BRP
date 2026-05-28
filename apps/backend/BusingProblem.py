@@ -30,7 +30,16 @@ AMAP_PLACES_MAX_QPS = 2.8
 AMAP_ROUTING_MAX_QPS = 2.8
 AMAP_MATRIX_MAX_QPS = 2.8
 REQUEST_TIMEOUT = 20
-OSRM_BASE_URL = os.environ.get("OSRM_BASE_URL", "http://127.0.0.1:5002")
+OSRM_USE_BUILTIN_DEFAULTS = os.environ.get("OSRM_USE_BUILTIN_DEFAULTS", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
+OSRM_BASE_URL = os.environ.get(
+    "OSRM_BASE_URL",
+    "http://127.0.0.1:5002" if OSRM_USE_BUILTIN_DEFAULTS else "",
+).strip()
 OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("CHINA", "SHANGHAI"): "http://127.0.0.1:5002",
     ("CHINA", "BEIJING"): "http://127.0.0.1:5003",
@@ -275,11 +284,18 @@ def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
         if env_value:
             return env_value
 
-    if country and city:
+    if country and city and OSRM_USE_BUILTIN_DEFAULTS:
         builtin_url = OSRM_LOCATION_DEFAULTS.get((_canonical_country(country), _canonical_city(city)))
         if builtin_url:
             return builtin_url
-    return OSRM_BASE_URL
+    if OSRM_BASE_URL:
+        return OSRM_BASE_URL
+    location_label = "/".join(part for part in (country, city) if part) or "unknown location"
+    raise RuntimeError(
+        f"No OSRM endpoint is configured for {location_label}. "
+        "Set OSRM_BASE_URL_<COUNTRY>_<CITY>, OSRM_BASE_URL_<COUNTRY>, or OSRM_BASE_URL "
+        "in this server's local environment."
+    )
 
 
 def format_currency(amount: float) -> str:

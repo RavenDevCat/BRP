@@ -12,7 +12,7 @@ export function JobTable({ jobs }: { jobs: JobSummary[] }) {
     return (
       <EmptyState
         title="No jobs yet"
-        detail="Submitted jobs from the shared backend will appear here. Streamlit remains the production client while this view grows."
+        detail="Submitted planning jobs will appear here after workbook validation and queue submission."
       />
     );
   }

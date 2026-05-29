@@ -490,6 +490,83 @@ def build_excel_template_bytes() -> bytes:
     return buffer.getvalue()
 
 
+def build_baseline_template_workbook_bytes(
+    scenario: dict[str, Any],
+    *,
+    service_direction: str,
+) -> bytes:
+    points = [dict(item) for item in list(scenario.get("points") or [])]
+    routes = [dict(item) for item in list(scenario.get("routes") or [])]
+    point_by_node: dict[int, dict[str, Any]] = {}
+    for index, point in enumerate(points):
+        raw_node_id = point.get("node_id", index)
+        try:
+            node_id = int(raw_node_id)
+        except (TypeError, ValueError):
+            node_id = index
+        point_by_node[node_id] = point
+
+    assignment_rows: list[dict[str, Any]] = []
+    fleet_counts: dict[tuple[str, int], int] = {}
+
+    for route_index, route in enumerate(routes, start=1):
+        route_id = str(route.get("route_id") or route.get("vehicle_id") or route_index).strip()
+        if not route_id.upper().startswith("R"):
+            route_id = f"R{route_id}"
+        bus_type = str(route.get("bus_type_name") or route.get("bus_type") or "").strip() or "Unknown"
+        bus_capacity = int(route.get("bus_capacity", 0) or 0)
+        fleet_counts[(bus_type, bus_capacity)] = fleet_counts.get((bus_type, bus_capacity), 0) + 1
+
+        for stop_sequence, raw_node_id in enumerate(list(route.get("nodes") or []), start=1):
+            try:
+                node_id = int(raw_node_id)
+            except (TypeError, ValueError):
+                node_id = -1
+            point = point_by_node.get(node_id, {})
+            assignment_rows.append(
+                {
+                    "route_id": route_id,
+                    "stop_sequence": stop_sequence,
+                    "bus_type": bus_type,
+                    "country": str(point.get("country", "") or "").strip(),
+                    "city": str(point.get("city", "") or "").strip(),
+                    "address": str(point.get("address", "") or "").strip(),
+                    "passenger_count": int(point.get("passenger_count", 0) or 0),
+                    "note": "Free optimization baseline export",
+                }
+            )
+
+    if not assignment_rows:
+        raise ValueError("Free optimization baseline has no route nodes to export.")
+
+    fleet_rows = [
+        {
+            "bus_type": bus_type,
+            "seat_count": seat_count,
+            "vehicle_count": vehicle_count,
+            "note": "Generated from free optimization baseline result",
+        }
+        for (bus_type, seat_count), vehicle_count in sorted(fleet_counts.items(), key=lambda item: (item[0][0], item[0][1]))
+    ]
+    notes_df = pd.DataFrame(
+        {
+            "section": ["Source", "Service Direction", "How to use"],
+            "guidance": [
+                "Generated from the Free Optimization Baseline result.",
+                str(service_direction or "From School"),
+                "This workbook uses the current-plan input sheet format and can be uploaded for another audit run.",
+            ],
+        }
+    )
+
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        pd.DataFrame(assignment_rows).to_excel(writer, index=False, sheet_name="current_plan_assignments")
+        pd.DataFrame(fleet_rows).to_excel(writer, index=False, sheet_name="current_plan_fleet")
+        notes_df.to_excel(writer, index=False, sheet_name="template_notes")
+    return buffer.getvalue()
+
+
 def get_demo_dataframe() -> pd.DataFrame:
     return pd.DataFrame(
         {
@@ -815,7 +892,7 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
     repriced = deepcopy(results)
     revenue_rules = _normalize_revenue_rules(config.revenue_rules)
 
-    for scenario_key in ("original", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
         scenario = repriced.get(scenario_key) or {}
         routes = scenario.get("routes") or []
         total_operating_cost = 0.0
@@ -859,6 +936,11 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
 def rerender_html_from_structured_results(results: dict[str, Any], config: PlannerConfig) -> dict[str, Any]:
     hydrated = attach_output_paths_to_structured_results(results, config)
     planner = load_legacy_planner()
+    input_records = list((hydrated.get("current_plan") or hydrated.get("original") or {}).get("points") or [])
+    traffic_profile_name, traffic_time_multiplier, traffic_profile_context = resolve_traffic_profile(
+        config.traffic_profile_name,
+        input_records,
+    )
     planner.CURRENT_CURRENCY_CODE = str(hydrated.get("currency_code", "USD"))
     planner.BUS_TYPE_CONFIGS = _build_bus_type_configs(config)
     (
@@ -867,12 +949,19 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
         planner.MIN_LOAD_PENALTY,
     ) = _build_slot_policy_maps(config)
     planner.OPERATING_COST_PER_KM = config.operating_cost_per_km
+    planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
+    planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
+    planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
+    planner.SERVICE_DIRECTION = normalize_service_direction(config.service_direction)
+    planner.MAX_ROUTE_DURATION_SECONDS = effective_route_duration_limit_minutes(config) * 60
+    planner.ANNOTATION_ROUTE_DURATION_SECONDS = config.max_route_duration_minutes * 60
+    planner.STOP_SERVICE_SECONDS = config.stop_service_minutes * 60
     planner.MATRIX_NEAREST_NEIGHBORS = config.matrix_nearest_neighbors
     planner.MATRIX_MAX_CANDIDATE_DISTANCE_KM = config.matrix_candidate_radius_km
     if config.revenue_rules is not None:
         planner.REVENUE_RULES = config.revenue_rules
 
-    for scenario_key in ("original", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
         scenario = hydrated.get(scenario_key) or {}
         points = scenario.get("points")
         routes = scenario.get("routes")
@@ -1843,7 +1932,12 @@ def _summarize_constrained_move_packages(
         remaining_from_passenger_count = sum(int(row.get("passenger_count", 0) or 0) for row in remaining_from_rows)
         moved_stop_share = len(seen_stop_ids) / max(1, original_from_stop_count)
         moved_passenger_share = moved_passenger_count / max(1, original_from_passenger_count)
-        package_transfer_distance_m = min(transfer_distances_m) if transfer_distances_m else float("inf")
+        package_transfer_distance_m = min(transfer_distances_m) if transfer_distances_m else None
+        classification_transfer_distance_m = (
+            package_transfer_distance_m
+            if package_transfer_distance_m is not None
+            else float("inf")
+        )
 
         (
             package_action_stage,
@@ -1859,7 +1953,7 @@ def _summarize_constrained_move_packages(
             moved_passenger_share=moved_passenger_share,
             network_total_distance_saving_m=total_distance_saving_m,
             network_total_duration_saving_s=total_time_saving_s,
-            transfer_to_route_min_distance_m=package_transfer_distance_m,
+            transfer_to_route_min_distance_m=classification_transfer_distance_m,
         )
 
         package_summary_parts = [

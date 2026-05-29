@@ -859,6 +859,58 @@ Recommended next step:
     - final status: `succeeded`
   - browser smoke checked `/new` and `/jobs/4007db50d052`
 
+### 2026-05-29 React Closeout
+
+- Product name is now `BRP-Busing Routing Planner`.
+- React app branding uses `apps/web/public/bus-front.svg` for the sidebar/mobile logo and browser favicon.
+- `apps/web/index.html` title and favicon are aligned to the product name.
+- Jobs UI has moved from a flat history table to a master-detail workspace:
+  - left history sub-list
+  - selected job detail on the right
+  - `/jobs` defaults to the newest visible job
+  - `/jobs/<job_id>` remains a stable deep link
+  - jobs page uses a full-width shell so result cards are not squeezed
+- React result detail now includes:
+  - Audit, AI Audit, Baselines, Maps, Actions, and Diagnostics tabs
+  - current-plan metrics based on actual result payloads
+  - rerendered map iframe links with `refresh=1`
+  - AI audit generation/regeneration and printable HTML download
+  - free-optimization baseline workbook export
+  - job cancel/delete actions
+  - local filesystem paths hidden from normal user-facing panels
+- Backend fixes added during this round:
+  - JSON-safe API responses and saved job records, including replacing non-finite floats with JSON-safe values
+  - historical map artifact rerendering for moved worktrees and Windows paths
+  - map rerender now preserves service direction and traffic profile
+  - DeepSeek AI audit prompt/payload compaction and clearer empty-report errors
+  - `/api/workbooks/template`
+  - `/api/workbooks/demos`
+  - `/api/workbooks/demos/<name>`
+- React New Job now covers the main Streamlit intake settings:
+  - upload/demo workbook modes
+  - template download
+  - demo workbook loading/download
+  - service direction, traffic, target duration, and custom job name
+  - subway/nearby toggles
+  - Fleet assumptions
+  - Free baseline vehicle ratio
+  - Route policy assumptions
+  - Advanced aggregation settings
+- Important local Windows note:
+  - Always start backend with `ops/scripts/run_backend.ps1`, not a bare `python backend_service.py`.
+  - The helper loads `ops/env/local.env`; bare startup falls back to `local@brp.dev`.
+  - Current local `/api/me` smoke should return the admin email configured in `ops/env/local.env`.
+- Closeout smoke checks passed on Windows:
+  - Python compile: `apps/backend/backend_service.py`, `apps/backend/planner_core.py`, `apps/backend/ai_audit.py`, `apps/backend/backend_job_runner.py`, `apps/client/app.py`, `apps/client/client_core.py`, `apps/client/client_runtime.py`
+  - React build: `apps/web npm run build`
+  - API: `/api/health`, `/api/me`, `/api/jobs`, `/api/workbooks/demos`, `/api/workbooks/template`
+  - Historical job: `/api/jobs/c273b7efbb16`
+  - Map artifact: `/api/jobs/c273b7efbb16/artifacts/current_plan?refresh=1`
+  - React page: `/jobs`
+- Remaining React migration candidates:
+  - Distance Checker
+  - Fleet Planner Preview
+
 ### React Deployment Notes
 
 - CN and KR servers do not need changes while React remains preview-only.

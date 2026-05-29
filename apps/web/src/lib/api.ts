@@ -27,6 +27,15 @@ export type JobRecord = JobSummary & {
   traceback?: string | null;
   ai_audit_status?: string | null;
   ai_audit_report?: Record<string, unknown> | null;
+  ai_audit_error?: string | null;
+};
+
+export type AiAuditResponse = {
+  job_id: string;
+  ai_audit_status: string;
+  ai_audit_report?: Record<string, unknown> | null;
+  cached?: boolean;
+  message?: string;
 };
 
 export type PlannerConfigPayload = {
@@ -69,6 +78,12 @@ export type WorkbookPreview = {
   suggested_config: PlannerConfigPayload;
 };
 
+export type DemoWorkbook = {
+  name: string;
+  size_bytes: number;
+  modified_at?: string;
+};
+
 export type WorkbookSubmitResponse = {
   job: JobSummary & { worker_pid?: number };
   source_label: string;
@@ -85,6 +100,10 @@ export type WorkbookSubmitResponse = {
 
 type JobsResponse = {
   jobs: JobSummary[];
+};
+
+type DemoWorkbooksResponse = {
+  demos: DemoWorkbook[];
 };
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -120,6 +139,19 @@ export function getCurrentUser() {
   return apiFetch<ApiUser>("/me");
 }
 
+export async function listDemoWorkbooks() {
+  const payload = await apiFetch<DemoWorkbooksResponse>("/workbooks/demos");
+  return payload.demos;
+}
+
+export function getWorkbookTemplateUrl() {
+  return `${API_BASE_URL}/workbooks/template`;
+}
+
+export function getDemoWorkbookUrl(name: string) {
+  return `${API_BASE_URL}/workbooks/demos/${encodeURIComponent(name)}`;
+}
+
 export async function listJobs() {
   const payload = await apiFetch<JobsResponse>("/jobs");
   return payload.jobs;
@@ -127,6 +159,45 @@ export async function listJobs() {
 
 export function getJob(jobId: string) {
   return apiFetch<JobRecord>(`/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function getJobArtifactUrl(jobId: string, artifactKey: string, options?: { download?: boolean; refresh?: boolean }) {
+  const url = `${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactKey)}`;
+  const params = new URLSearchParams();
+  if (options?.download) {
+    params.set("download", "1");
+  }
+  if (options?.refresh) {
+    params.set("refresh", "1");
+  }
+  const query = params.toString();
+  return query ? `${url}?${query}` : url;
+}
+
+export function getJobExportUrl(jobId: string, exportKey: string) {
+  return `${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/exports/${encodeURIComponent(exportKey)}`;
+}
+
+export function generateAiAudit(jobId: string, payload: { force?: boolean; language?: string } = {}) {
+  return apiFetch<AiAuditResponse>(`/jobs/${encodeURIComponent(jobId)}/ai-audit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function cancelJob(jobId: string) {
+  return apiFetch<JobRecord>(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+}
+
+export function deleteJob(jobId: string) {
+  return apiFetch<{ deleted: boolean; job_id: string }>(`/jobs/${encodeURIComponent(jobId)}`, {
+    method: "DELETE",
+  });
 }
 
 export function previewWorkbook(payload: {

@@ -1,4 +1,4 @@
-# Busing Routing Designer
+# BRP-Busing Routing Planner
 
 Local interface scaffold for the bus routing planner.
 

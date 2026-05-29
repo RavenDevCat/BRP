@@ -1,18 +1,19 @@
 import type { JobRecord } from "@/lib/api";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { formatNumber } from "@/lib/format";
+import { formatDistanceKmFromMeters, formatNumber } from "@/lib/format";
 
 export function JobMetrics({ job }: { job: JobRecord }) {
   const summary = job.prepared_payload_summary || {};
-  const result = job.result || {};
-  const structured = result.structured_results as Record<string, unknown> | undefined;
-  const currentPlan = structured?.current_plan_assessment as Record<string, unknown> | undefined;
+  const result = asRecord(job.result);
+  const structured = asRecord(result.structured_results);
+  const currentPlan = asOptionalRecord(result.current_plan_assessment) ?? asRecord(structured.current_plan_assessment);
+  const currentDistanceM = currentPlan.total_distance_m ?? currentPlan.total_route_distance_m;
 
   const metrics = [
     ["Input stops", formatNumber(summary.input_record_count)],
     ["Current routes", formatNumber(summary.current_plan_route_count)],
     ["Assignments", formatNumber(summary.current_plan_assignment_count)],
-    ["Current distance", formatDistance(currentPlan?.total_route_distance_m)],
+    ["Current distance", formatDistanceKmFromMeters(currentDistanceM)],
   ];
 
   return (
@@ -31,9 +32,13 @@ export function JobMetrics({ job }: { job: JobRecord }) {
   );
 }
 
-function formatDistance(value: unknown): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "Not available";
+function asRecord(value: unknown): Record<string, unknown> {
+  return asOptionalRecord(value) ?? {};
+}
+
+function asOptionalRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
   }
-  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(value / 1000)} km`;
+  return value as Record<string, unknown>;
 }

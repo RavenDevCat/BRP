@@ -6,6 +6,7 @@ from dataclasses import asdict, fields
 from datetime import datetime, timezone
 import importlib
 import json
+import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
@@ -16,19 +17,32 @@ import tempfile
 import threading
 import traceback
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlparse
 from uuid import uuid4
 
 try:
-    from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from .planner_core import (
+        PlannerConfig,
+        build_excel_template_bytes,
+        build_baseline_template_workbook_bytes,
+        rerender_html_from_structured_results,
+        run_backend_planner_with_prepared_data,
+    )
     from .ai_audit import generate_ai_audit_report
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
-    from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from planner_core import (
+        PlannerConfig,
+        build_excel_template_bytes,
+        build_baseline_template_workbook_bytes,
+        rerender_html_from_structured_results,
+        run_backend_planner_with_prepared_data,
+    )
     from ai_audit import generate_ai_audit_report
 
 
 BASE_DIR = Path(__file__).resolve().parent
 CLIENT_DIR = BASE_DIR.parent / "client"
+DEMO_DATA_DIR = CLIENT_DIR / "demodata"
 JOBS_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", str(BASE_DIR / "jobs"))).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
@@ -39,6 +53,24 @@ ADMIN_EMAILS = {
     for item in os.environ.get("BRP_ADMIN_EMAILS", "").split(",")
     if item.strip()
 }
+MAP_ARTIFACT_KEYS = {
+    "current_plan": "current_plan",
+    "original": "original",
+    "free_optimization": "original",
+    "subway": "subway",
+    "nearby": "nearby",
+    "further_most": "further_most",
+    "further_most_nearby": "further_most_nearby",
+}
+MAP_ARTIFACT_TOP_LEVEL_KEYS = {
+    "current_plan": "current_plan_html",
+    "original": "original_html",
+    "subway": "subway_html",
+    "nearby": "nearby_html",
+    "further_most": "further_most_html",
+    "further_most_nearby": "further_most_nearby_html",
+}
+WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def utc_now_iso() -> str:
@@ -100,6 +132,41 @@ def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:
     if len(workbook_bytes) > MAX_WORKBOOK_UPLOAD_BYTES:
         raise ValueError(f"Workbook upload exceeds {MAX_WORKBOOK_UPLOAD_BYTES // (1024 * 1024)} MB.")
     return source_label, workbook_bytes
+
+
+def _list_demo_workbooks() -> list[dict[str, Any]]:
+    if not DEMO_DATA_DIR.exists():
+        return []
+    demos: list[dict[str, Any]] = []
+    for path in sorted(DEMO_DATA_DIR.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xlsm"}:
+            continue
+        if path.name.lower().startswith("demand-"):
+            continue
+        stat = path.stat()
+        demos.append(
+            {
+                "name": path.name,
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat(),
+            }
+        )
+    return demos
+
+
+def _resolve_demo_workbook_path(name: str) -> Path | None:
+    demo_name = Path(str(name or "")).name
+    if not demo_name or Path(demo_name).suffix.lower() not in {".xlsx", ".xlsm"}:
+        return None
+    root = DEMO_DATA_DIR.resolve()
+    candidate = (root / demo_name).resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
 
 
 def _read_current_plan_upload(payload: dict[str, Any]) -> tuple[Any, str, dict[str, Any]]:
@@ -265,6 +332,18 @@ def _normalize_email(value: object) -> str:
     return str(value or "").strip().lower()
 
 
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    return value
+
+
 def _is_admin_email(email: str) -> bool:
     normalized_email = _normalize_email(email)
     return bool(normalized_email and normalized_email in ADMIN_EMAILS)
@@ -319,7 +398,7 @@ class JobStore:
         return []
 
     def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
-        self.index_path.write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.index_path.write_text(json.dumps(_json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
     def _load_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
         job_path = self._job_path(job_id)
@@ -332,7 +411,7 @@ class JobStore:
             return None
 
     def _save_job_unlocked(self, job_id: str, record: dict[str, Any]) -> None:
-        self._job_path(job_id).write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        self._job_path(job_id).write_text(json.dumps(_json_safe(record), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
 
     def _upsert_index_entry_unlocked(self, record: dict[str, Any]) -> None:
         job_id = str(record.get("job_id", "")).strip()
@@ -560,15 +639,141 @@ def _strip_api_prefix(path: str) -> str:
     return path
 
 
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
+
+
+def _resolve_job_map_artifact(job_record: dict[str, Any], artifact_key: str) -> tuple[Path | None, str | None]:
+    scenario_key = MAP_ARTIFACT_KEYS.get(artifact_key.strip().lower())
+    if not scenario_key:
+        return None, f"Unknown artifact: {artifact_key}"
+
+    result = dict(job_record.get("result") or {})
+    structured = dict(result.get("structured_results") or {})
+    scenario = dict(structured.get(scenario_key) or {})
+    output_paths = dict(structured.get("output_paths") or {})
+    candidate_paths = [
+        scenario.get("output_html"),
+        output_paths.get(scenario_key),
+        result.get(MAP_ARTIFACT_TOP_LEVEL_KEYS.get(scenario_key, "")),
+    ]
+    outputs_root = (BASE_DIR / "outputs").resolve()
+
+    for raw_path in candidate_paths:
+        if not raw_path:
+            continue
+        artifact_path = Path(str(raw_path)).expanduser().resolve()
+        if artifact_path.suffix.lower() != ".html":
+            return None, "Map artifact is not an HTML file."
+        if not _path_is_relative_to(artifact_path, outputs_root):
+            return None, "Map artifact is outside the backend outputs directory."
+        if not artifact_path.exists():
+            return None, f"Map artifact file is missing: {artifact_path.name}"
+        return artifact_path, None
+
+    return None, f"Map artifact is not available: {artifact_key}"
+
+
+def _infer_output_directory_name(result: dict[str, Any]) -> str:
+    structured = dict(result.get("structured_results") or {})
+    outputs_root = (BASE_DIR / "outputs").resolve()
+    for scenario_key in MAP_ARTIFACT_TOP_LEVEL_KEYS:
+        scenario = dict(structured.get(scenario_key) or {})
+        raw_path = scenario.get("output_html") or result.get(MAP_ARTIFACT_TOP_LEVEL_KEYS.get(scenario_key, ""))
+        if not raw_path:
+            continue
+        artifact_path = Path(str(raw_path)).expanduser().resolve()
+        if _path_is_relative_to(artifact_path, outputs_root):
+            return artifact_path.parent.name
+    return ""
+
+
+def _build_rerender_config_for_job(job_record: dict[str, Any]) -> PlannerConfig:
+    metadata = dict(job_record.get("metadata") or {})
+    config_payload = dict(job_record.get("config") or metadata.get("planner_config") or {})
+    config = _build_planner_config(config_payload)
+    if not config.output_directory_name:
+        result = dict(job_record.get("result") or {})
+        config.output_directory_name = _infer_output_directory_name(result) or str(job_record.get("job_id") or uuid4().hex)
+    return config
+
+
+def _rerender_job_map_artifacts(job_id: str, job_record: dict[str, Any]) -> dict[str, Any]:
+    result = dict(job_record.get("result") or {})
+    structured = dict(result.get("structured_results") or {})
+    if not structured:
+        return job_record
+    hydrated = rerender_html_from_structured_results(structured, _build_rerender_config_for_job(job_record))
+    updated_result = dict(result)
+    updated_result["structured_results"] = hydrated
+    output_paths = dict(hydrated.get("output_paths") or {})
+    for scenario_key, top_level_key in MAP_ARTIFACT_TOP_LEVEL_KEYS.items():
+        if output_paths.get(scenario_key):
+            updated_result[top_level_key] = output_paths[scenario_key]
+    updated = JOB_STORE.update_job(job_id, result=updated_result)
+    if updated:
+        return updated
+    rerendered = dict(job_record)
+    rerendered["result"] = updated_result
+    return rerendered
+
+
+def _build_free_baseline_template_export(job_record: dict[str, Any]) -> tuple[bytes | None, str | None]:
+    result = dict(job_record.get("result") or {})
+    structured = dict(result.get("structured_results") or {})
+    scenario = (
+        dict(result.get("free_optimization_baseline") or {})
+        or dict(structured.get("free_optimization_baseline") or {})
+        or dict(structured.get("original") or {})
+    )
+    if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
+        return None, "Free optimization baseline has no route table to export."
+    planner_config = dict(result.get("planner_config") or job_record.get("config") or {})
+    service_direction = str(result.get("service_direction") or planner_config.get("service_direction") or "From School")
+    try:
+        return build_baseline_template_workbook_bytes(scenario, service_direction=service_direction), None
+    except Exception as exc:
+        return None, str(exc)
+
+
 class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
     def _send_json(self, status_code: int, payload: dict[str, Any] | list[Any]) -> bool:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(_json_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
         try:
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            print(f"[WARN] Client disconnected before response was fully sent: {self.path}")
+            return False
+
+    def _send_bytes(
+        self,
+        status_code: int,
+        body: bytes,
+        *,
+        content_type: str,
+        filename: str | None = None,
+        inline: bool = True,
+    ) -> bool:
+        try:
+            self.send_response(status_code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Cache-Control", "no-store")
+            if filename:
+                disposition = "inline" if inline else "attachment"
+                self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(filename)}")
             self.end_headers()
             self.wfile.write(body)
             return True
@@ -629,11 +834,91 @@ class BackendHandler(BaseHTTPRequestHandler):
                 },
             )
             return
+        if path == "/workbooks/template":
+            self._send_bytes(
+                200,
+                build_excel_template_bytes(),
+                content_type=WORKBOOK_CONTENT_TYPE,
+                filename="brp_planning_template.xlsx",
+                inline=False,
+            )
+            return
+        if path == "/workbooks/demos":
+            self._send_json(200, {"demos": _list_demo_workbooks()})
+            return
+        if path.startswith("/workbooks/demos/"):
+            demo_name = unquote(path.rsplit("/", 1)[-1])
+            demo_path = _resolve_demo_workbook_path(demo_name)
+            if not demo_path:
+                self._send_json(404, {"error": f"Demo workbook not found: {demo_name}"})
+                return
+            self._send_bytes(
+                200,
+                demo_path.read_bytes(),
+                content_type=WORKBOOK_CONTENT_TYPE,
+                filename=demo_path.name,
+                inline=False,
+            )
+            return
         if path == "/jobs":
             self._send_json(200, {"jobs": JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)})
             return
         if path.startswith("/jobs/"):
             parts = [part for part in path.split("/") if part]
+            if len(parts) == 4 and parts[2] == "exports":
+                job_id = parts[1].strip()
+                export_key = unquote(parts[3]).strip().lower()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    return
+                if export_key != "free-optimization-template":
+                    self._send_json(404, {"error": f"Unknown export: {export_key}"})
+                    return
+                workbook_bytes, export_error = _build_free_baseline_template_export(job_record)
+                if export_error or not workbook_bytes:
+                    self._send_json(404, {"error": export_error or "Export is not available."})
+                    return
+                self._send_bytes(
+                    200,
+                    workbook_bytes,
+                    content_type=WORKBOOK_CONTENT_TYPE,
+                    filename=f"free_optimization_baseline_{job_id}.xlsx",
+                    inline=False,
+                )
+                return
+            if len(parts) == 4 and parts[2] == "artifacts":
+                job_id = parts[1].strip()
+                artifact_key = unquote(parts[3]).strip()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    return
+                query_params = dict(parse_qsl(parsed.query))
+                if query_params.get("refresh") in {"1", "true", "yes"}:
+                    job_record = _rerender_job_map_artifacts(job_id, job_record)
+                artifact_path, artifact_error = _resolve_job_map_artifact(job_record, artifact_key)
+                if artifact_error and "file is missing" in artifact_error:
+                    job_record = _rerender_job_map_artifacts(job_id, job_record)
+                    artifact_path, artifact_error = _resolve_job_map_artifact(job_record, artifact_key)
+                if artifact_error or not artifact_path:
+                    self._send_json(404, {"error": artifact_error or f"Artifact not found: {artifact_key}"})
+                    return
+                inline = query_params.get("download") not in {"1", "true", "yes"}
+                self._send_bytes(
+                    200,
+                    artifact_path.read_bytes(),
+                    content_type="text/html; charset=utf-8",
+                    filename=artifact_path.name,
+                    inline=inline,
+                )
+                return
             if len(parts) != 2:
                 self._send_json(404, {"error": f"Unknown path: {path}"})
                 return

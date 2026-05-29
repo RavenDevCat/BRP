@@ -41,7 +41,7 @@ from distance_checker_page import render_distance_checker_page
 from fleet_planner_page import render_fleet_planner_page
 
 
-st.set_page_config(page_title="BRP Audit & Planning Client", layout="wide")
+st.set_page_config(page_title="BRP-Busing Routing Planner", layout="wide")
 tool_name = str(st.query_params.get("tool", "")).strip().lower()
 if tool_name == "distance-checker":
     render_distance_checker_page()
@@ -50,7 +50,7 @@ if tool_name == "fleet-planner-preview":
     render_fleet_planner_page()
     st.stop()
 
-st.title("BRP Audit & Planning Client")
+st.title("BRP-Busing Routing Planner")
 st.caption(
     "Upload a current-plan workbook to assess the existing scheme, generate like-for-like and free-optimization baselines, "
     "and surface route-to-route improvement opportunities."

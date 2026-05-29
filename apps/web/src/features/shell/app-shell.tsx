@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, History, LayoutDashboard, RefreshCw, Route, ShieldCheck, UploadCloud } from "lucide-react";
+import { History, LayoutDashboard, RefreshCw, ShieldCheck, UploadCloud } from "lucide-react";
 import { getCurrentUser, getHealth } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,21 +13,22 @@ const navItems = [
   { to: "/jobs", label: "Jobs", icon: History },
 ];
 
+const productName = "BRP-Busing Routing Planner";
+
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
   const userQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser });
+  const isJobsWorkspace = pathname.startsWith("/jobs");
 
   return (
     <div className="min-h-screen bg-background">
       <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-border bg-surface lg:flex lg:flex-col">
         <div className="flex h-16 items-center gap-3 border-b border-border px-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
-            <Route className="h-5 w-5" aria-hidden="true" />
-          </div>
+          <img className="h-9 w-9 rounded-md" src="/bus-front.svg" alt="" aria-hidden="true" />
           <div>
-            <div className="text-sm font-semibold">BRP Operations</div>
-            <div className="text-xs text-muted-foreground">Web preview</div>
+            <div className="text-sm font-semibold">{productName}</div>
+            <div className="text-xs text-muted-foreground">Planning console</div>
           </div>
         </div>
 
@@ -73,12 +74,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         <header className="sticky top-0 z-10 flex min-h-16 items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 backdrop-blur lg:px-6">
           <div className="min-w-0">
             <div className="flex items-center gap-2 lg:hidden">
-              <Route className="h-5 w-5 text-primary" aria-hidden="true" />
-              <span className="text-sm font-semibold">BRP Operations</span>
+              <img className="h-6 w-6 rounded" src="/bus-front.svg" alt="" aria-hidden="true" />
+              <span className="text-sm font-semibold">{productName}</span>
             </div>
-            <p className="hidden text-sm text-muted-foreground lg:block">
-              New React frontend, isolated from the Streamlit production client.
-            </p>
           </div>
           <Button
             type="button"
@@ -93,7 +91,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Button>
         </header>
 
-        <main className="mx-auto w-full max-w-7xl px-4 py-6 lg:px-6">{children}</main>
+        <main className={cn("mx-auto w-full px-4 py-6 lg:px-6", isJobsWorkspace ? "max-w-none" : "max-w-7xl")}>
+          {children}
+        </main>
 
         <nav className="fixed inset-x-0 bottom-0 grid grid-cols-3 border-t border-border bg-surface lg:hidden">
           {navItems.map((item) => {
@@ -114,11 +114,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             );
           })}
         </nav>
-      </div>
-
-      <div className="pointer-events-none fixed bottom-4 right-4 hidden rounded-md border border-border bg-surface px-3 py-2 text-xs text-muted-foreground shadow-panel xl:flex">
-        <Activity className="mr-2 h-4 w-4 text-primary" aria-hidden="true" />
-        Preview build
       </div>
     </div>
   );

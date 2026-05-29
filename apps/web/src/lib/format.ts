@@ -13,10 +13,35 @@ export function formatDateTime(value: unknown): string {
 }
 
 export function formatNumber(value: unknown): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "0";
+  const numericValue = toFiniteNumber(value);
+  if (!Number.isFinite(numericValue)) {
+    return "Not available";
   }
-  return new Intl.NumberFormat().format(value);
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(numericValue);
+}
+
+export function formatDistanceKmFromMeters(value: unknown): string {
+  const numericValue = toFiniteNumber(value);
+  if (!Number.isFinite(numericValue)) {
+    return "Not available";
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(numericValue / 1000)} km`;
+}
+
+export function formatDurationMinFromSeconds(value: unknown): string {
+  const numericValue = toFiniteNumber(value);
+  if (!Number.isFinite(numericValue)) {
+    return "Not available";
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(numericValue / 60)} min`;
+}
+
+export function formatPercent(value: unknown, scale = 1): string {
+  const numericValue = toFiniteNumber(value);
+  if (!Number.isFinite(numericValue)) {
+    return "Not available";
+  }
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(numericValue * scale)}%`;
 }
 
 export function toTitle(value: string): string {
@@ -25,4 +50,11 @@ export function toTitle(value: string): string {
     .filter(Boolean)
     .map((part) => part.slice(0, 1).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function toFiniteNumber(value: unknown): number {
+  if (value === null || value === undefined || value === "") {
+    return Number.NaN;
+  }
+  return typeof value === "number" ? value : Number(value);
 }

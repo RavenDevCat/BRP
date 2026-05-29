@@ -45,6 +45,7 @@ Start local services:
 ```bash
 ./ops/scripts/run_backend.sh
 ./ops/scripts/run_client.sh
+./ops/scripts/run_web.sh
 ```
 
 On Windows PowerShell, use the checked-in PowerShell helpers:
@@ -53,6 +54,7 @@ On Windows PowerShell, use the checked-in PowerShell helpers:
 .\ops\scripts\start_osrm_tunnel.ps1
 .\ops\scripts\run_backend.ps1
 .\ops\scripts\run_client.ps1
+.\ops\scripts\run_web.ps1
 ```
 
 The PowerShell helpers load `ops/env/local.env` if it exists. For local Windows development, keep
@@ -68,6 +70,7 @@ Local checks:
 ```bash
 curl -s http://127.0.0.1:8001/health
 curl -I http://127.0.0.1:8501
+curl -I http://127.0.0.1:5173
 curl -s 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?number=1'
 ```
 
@@ -76,8 +79,13 @@ PowerShell equivalents:
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8001/health
 Invoke-WebRequest http://127.0.0.1:8501 -UseBasicParsing
+Invoke-WebRequest http://127.0.0.1:5173 -UseBasicParsing
 Invoke-RestMethod 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?number=1'
 ```
+
+The React web frontend in `apps/web` is an isolated preview on port `5173`.
+It proxies `/api` to the backend on `127.0.0.1:8001` and does not replace the
+Streamlit client on `8501`.
 
 Before publishing:
 

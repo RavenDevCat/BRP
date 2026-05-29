@@ -808,3 +808,73 @@ Recommended next step:
 - Before the next feature implementation, inspect `git status --short` and `git diff --stat`.
 - At this handoff point, known newly added Windows-development files are the four PowerShell helpers under `ops/scripts/`.
 - The cross-machine output-path compatibility fix is in `apps/client/client_core.py`.
+
+## React Frontend Migration Handoff
+
+- New isolated React preview lives in `apps/web`.
+- It is a side-by-side migration target and does not replace Streamlit yet.
+- Local ports:
+  - backend API: `127.0.0.1:8001`
+  - Streamlit production client: `127.0.0.1:8501`
+  - React preview: `127.0.0.1:5173`
+- Windows helper:
+  - `ops/scripts/run_web.ps1`
+  - auto-finds the winget-installed Node LTS path if `npm` is not yet on PATH
+- Unix/Mac helper:
+  - `ops/scripts/run_web.sh`
+- Backend now accepts additive `/api/*` aliases for the React app:
+  - `/api/health`
+  - `/api/me`
+  - `/api/jobs`
+  - `/api/jobs/<job_id>`
+- First React slice:
+  - dashboard
+  - job history
+  - job detail JSON/result preview
+  - build verified with `npm run build`
+- Current implementation round added a functional current-plan submission path:
+  - `/api/workbooks/preview`
+    - accepts JSON `{ file_name, file_base64, config }`
+    - parses `current_plan_assignments` and `current_plan_fleet`
+    - returns summary, fleet facts, suggested planner config, and subway aggregation block reason
+  - `/api/workbooks/submit`
+    - accepts JSON `{ file_name, file_base64, config, job_custom_name }`
+    - reuses Python `apps/client/client_core.py` preparation logic server-side
+    - performs current-plan parsing, geocoding/cache reuse, aggregation prep, job metadata assembly, and `/jobs` creation
+  - React route `/new`
+    - workbook file input
+    - service direction / traffic / target duration controls
+    - optional custom job name
+    - subway and nearby baseline toggles
+    - validates workbook and autofills fleet slot assumptions
+    - submits to backend and opens the created job detail
+- Smoke validation:
+  - previewed `apps/client/demodata/current-plan-assessment-test-shanghai.xlsx`
+    - 3 routes
+    - 10 assignment rows
+    - 8 planning rows
+    - fleet auto-filled to `Large Bus: 45 seats x 3`
+  - submitted smoke job `4007db50d052`
+    - name: `current-plan-assessment-test-shanghai - react-submit-smoke`
+    - final status: `succeeded`
+  - browser smoke checked `/new` and `/jobs/4007db50d052`
+
+### React Deployment Notes
+
+- CN and KR servers do not need changes while React remains preview-only.
+- First production switch is not just `git pull`; it needs one deployment routing step:
+  - build `apps/web/dist`
+  - serve static files through nginx/cloudflared/backend static hosting
+  - route preview or main domain to React static frontend
+  - keep API traffic pointed to local backend `127.0.0.1:8001`
+- Long-term preferred deployment:
+  - build React in CI or on a dev machine
+  - deploy static `dist` to servers
+  - avoid installing Node/npm on production servers unless staging convenience requires it
+- Safer rollout:
+  - add a preview domain/path first
+  - keep Streamlit on `8501`
+  - switch the primary domain only after upload, submission, result rendering, AI audit, downloads, and rollback checks are at parity
+- Weekend handoff expectation:
+  - user may continue from Mac through OneDrive-synced repo
+  - before handing over, sync this file plus `docs/development-release-workflow.md` with the final state of the React migration

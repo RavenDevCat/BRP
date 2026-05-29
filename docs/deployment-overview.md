@@ -186,6 +186,7 @@ If the client reaches the backend through a tunnel or reverse proxy, set `BRP_BA
 | --- | ---: | --- |
 | Client Streamlit | `8501` | End-user UI |
 | Backend API | `8001` | Job API and health endpoint |
+| React preview | `5173` | Local development only unless a static preview host is explicitly configured |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -214,9 +215,9 @@ Reference config:
 
 Current public hostnames:
 
-- `client.ravenapis.com`
-- `brp.ravenapis.com`
-- `brp-api.ravenapis.com`
+- `client.ravenapis.com` -> Streamlit
+- `brp.ravenapis.com` -> Streamlit
+- `brp-api.ravenapis.com` -> backend API
 - `osrm-shanghai.ravenapis.com`
 - `osrm-beijing.ravenapis.com`
 - `osrm-suzhou.ravenapis.com`
@@ -228,6 +229,8 @@ South Korea server hostnames:
 
 - `brp-kr.ravenapis.com`
 - `brp-api-kr.ravenapis.com`
+
+React is not currently assigned a public hostname. When ready, create a separate preview hostname first, serve `apps/web/dist` as static assets, and route API calls to the appropriate backend before moving `brp.ravenapis.com`.
 
 For production-like environments, avoid exposing the backend publicly without an access control layer.
 

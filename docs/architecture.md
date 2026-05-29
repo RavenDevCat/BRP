@@ -5,6 +5,7 @@ This is the maintained high-level architecture note. For daily commands and rele
 ## Repository Layout
 
 - `apps/client`: Streamlit UI, workbook intake, client-side geocoding, demand preview, job history, map/result rendering.
+- `apps/web`: isolated React frontend preview, built against additive `/api/*` backend routes while Streamlit remains production UI.
 - `apps/backend`: HTTP job service, planner execution, route solving, AI audit integration, generated output handling.
 - `ops`: environment examples, Cloudflare examples, and local/server run scripts.
 - `docs`: maintained architecture, deployment, workflow, and Codex handoff notes.
@@ -48,6 +49,21 @@ Responsibilities:
 - submit prepared jobs to the backend
 - display job history, audit summaries, maps, and downloads
 
+## React Preview
+
+Location: `apps/web`
+
+Current status:
+
+- side-by-side migration target
+- local dev port: `127.0.0.1:5173`
+- uses the backend through `/api/*`
+- covers workbook intake, job history, job details, audit/AI/baseline/map/action/diagnostic views
+- still leaves Distance Checker and Fleet Planner Preview in Streamlit
+- not currently exposed through a public `ravenapis.com` hostname
+
+Do not assume `brp.ravenapis.com` serves React yet. As of this handoff, public BRP hostnames still point to Streamlit.
+
 ## Backend
 
 Location: `apps/backend`
@@ -81,9 +97,9 @@ The domestic server runs Cloudflare Tunnel through `cloudflared.service`.
 
 Current public routes include:
 
-- `https://client.ravenapis.com`
-- `https://brp.ravenapis.com`
-- `https://brp-api.ravenapis.com`
+- `https://client.ravenapis.com` -> Streamlit
+- `https://brp.ravenapis.com` -> Streamlit
+- `https://brp-api.ravenapis.com` -> backend API
 - `https://osrm-shanghai.ravenapis.com`
 - `https://osrm-beijing.ravenapis.com`
 - `https://osrm-suzhou.ravenapis.com`

@@ -9,6 +9,9 @@ This structure separates the public client, the solver backend, operational scri
 - `apps/client`
   - Streamlit client used by end users
   - handles Excel upload, geocoding, subway lookup, local preprocessing, and result rendering
+- `apps/web`
+  - isolated React frontend preview
+  - reads additive backend `/api/*` routes while Streamlit remains the production client
 - `apps/backend`
   - backend compute service
   - handles OSRM matrix building, OR-Tools solving, final route enrichment, and JSON responses
@@ -25,6 +28,7 @@ This repository is intended to store the codebase and documentation only.
 
 - Commit:
   - `apps/client`
+  - `apps/web`
   - `apps/backend`
   - `docs`
   - `ops`
@@ -60,9 +64,14 @@ The code repository stays lightweight, while `ops/scripts/run_osrm_stack.sh` mou
 5. Backend computes three scenarios and returns structured results.
 6. Client renders HTML maps and summary metrics.
 
+The new `apps/web` frontend is being developed as a side-by-side preview. It should
+not replace `apps/client` until upload, job submission, result rendering, and rollback
+checks are complete.
+
 ## Runtime scripts
 
 - `ops/scripts/run_client.sh`
+- `ops/scripts/run_web.sh`
 - `ops/scripts/run_backend.sh`
 - `ops/scripts/run_osrm_stack.sh`
 - `ops/scripts/export_osrm_env.sh`

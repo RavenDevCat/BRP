@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import base64
 from copy import deepcopy
-from dataclasses import fields
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
+import importlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
@@ -10,6 +12,7 @@ from pathlib import Path
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import traceback
 from typing import Any
@@ -25,10 +28,12 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 
 
 BASE_DIR = Path(__file__).resolve().parent
+CLIENT_DIR = BASE_DIR.parent / "client"
 JOBS_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", str(BASE_DIR / "jobs"))).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+MAX_WORKBOOK_UPLOAD_BYTES = int(os.environ.get("BRP_MAX_WORKBOOK_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 ADMIN_EMAILS = {
     item.strip().lower()
     for item in os.environ.get("BRP_ADMIN_EMAILS", "").split(",")
@@ -48,6 +53,212 @@ def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
         if key in allowed_field_names
     }
     return PlannerConfig(**filtered_payload)
+
+
+def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
+    return asdict(_build_planner_config(config_payload))
+
+
+def _client_core_module() -> Any:
+    client_dir = str(CLIENT_DIR)
+    if client_dir not in sys.path:
+        sys.path.insert(0, client_dir)
+    return importlib.import_module("client_core")
+
+
+def _build_client_planner_config(client_core: Any, config_payload: dict[str, Any]) -> Any:
+    allowed_field_names = {field.name for field in fields(client_core.PlannerConfig)}
+    filtered_payload = {
+        key: value
+        for key, value in dict(config_payload or {}).items()
+        if key in allowed_field_names
+    }
+    return client_core.PlannerConfig(**filtered_payload)
+
+
+def _build_job_display_name(source_label: str, custom_name: str = "") -> str:
+    default_name = Path(str(source_label or "")).stem.strip() or "Untitled job"
+    normalized_custom_name = " ".join(str(custom_name or "").strip().split())
+    if not normalized_custom_name:
+        return default_name
+    return f"{default_name} - {normalized_custom_name}"
+
+
+def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:
+    source_label = str(payload.get("file_name") or payload.get("source_label") or "workbook.xlsx").strip()
+    suffix = Path(source_label).suffix.lower()
+    if suffix not in {".xlsx", ".xlsm"}:
+        raise ValueError("Workbook upload must be an .xlsx or .xlsm file.")
+    raw_base64 = str(payload.get("file_base64") or "").strip()
+    if not raw_base64:
+        raise ValueError("Missing workbook file_base64 payload.")
+    if "," in raw_base64 and raw_base64.split(",", 1)[0].startswith("data:"):
+        raw_base64 = raw_base64.split(",", 1)[1]
+    workbook_bytes = base64.b64decode(raw_base64, validate=False)
+    if not workbook_bytes:
+        raise ValueError("Uploaded workbook is empty.")
+    if len(workbook_bytes) > MAX_WORKBOOK_UPLOAD_BYTES:
+        raise ValueError(f"Workbook upload exceeds {MAX_WORKBOOK_UPLOAD_BYTES // (1024 * 1024)} MB.")
+    return source_label, workbook_bytes
+
+
+def _read_current_plan_upload(payload: dict[str, Any]) -> tuple[Any, str, dict[str, Any]]:
+    client_core = _client_core_module()
+    source_label, workbook_bytes = _decode_workbook_bytes(payload)
+    config_payload = dict(payload.get("config") or {})
+    service_direction = str(
+        config_payload.get("service_direction")
+        or payload.get("service_direction")
+        or "From School"
+    )
+    suffix = Path(source_label).suffix.lower()
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(workbook_bytes)
+            temp_path = temp_file.name
+        current_plan = client_core.read_current_plan_from_excel(temp_path, service_direction=service_direction)
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return client_core, source_label, current_plan
+
+
+def _find_subway_aggregation_block_reason(client_core: Any, records: list[dict[str, Any]]) -> str | None:
+    is_likely_english_korean_address = getattr(client_core.runtime, "is_likely_english_korean_address", None)
+    if not is_likely_english_korean_address:
+        return None
+    for item in records:
+        country = str(item.get("country", "")).strip()
+        address = str(item.get("address", "")).strip()
+        if is_likely_english_korean_address(country, address):
+            return (
+                "Subway aggregation is unavailable for South Korea rows that use English-only addresses, "
+                "because those stops require Google geocoding."
+            )
+    return None
+
+
+def _suggest_planner_config_from_current_plan(
+    current_plan: dict[str, Any],
+    config_payload: dict[str, Any],
+) -> dict[str, Any]:
+    suggested = _planner_config_payload(config_payload)
+    normalized_fleet: list[dict[str, Any]] = []
+    for item in list(current_plan.get("fleet") or []):
+        bus_type = str(item.get("bus_type", "")).strip()
+        if not bus_type:
+            continue
+        normalized_fleet.append(
+            {
+                "bus_type": bus_type,
+                "seat_count": int(item.get("seat_count", 0) or 0),
+                "vehicle_count": int(item.get("vehicle_count", 0) or 0),
+            }
+        )
+    normalized_fleet.sort(
+        key=lambda item: (
+            -int(item["seat_count"]),
+            -int(item["vehicle_count"]),
+            str(item["bus_type"]).lower(),
+        )
+    )
+    slot_defaults = [
+        ("large", "Large Bus", 42),
+        ("mid", "Mid Bus", 35),
+        ("small", "Small Bus", 19),
+    ]
+    for index, (slot_key, default_name, default_capacity) in enumerate(slot_defaults):
+        fleet_item = normalized_fleet[index] if index < len(normalized_fleet) else {}
+        slot_name = str(fleet_item.get("bus_type", default_name)).strip() or default_name
+        seat_count = int(fleet_item.get("seat_count", default_capacity) or default_capacity)
+        vehicle_count = int(fleet_item.get("vehicle_count", 0) or 0)
+        suggested[f"{slot_key}_bus_name"] = slot_name
+        suggested[f"{slot_key}_bus_capacity"] = seat_count
+        suggested[f"{slot_key}_bus_max_count"] = vehicle_count
+        suggested[f"free_baseline_{slot_key}_bus_ratio"] = float(vehicle_count)
+    suggested["service_direction"] = str(current_plan.get("service_direction") or suggested.get("service_direction") or "From School")
+    if "include_subway_aggregation_scenario" not in config_payload:
+        suggested["include_subway_aggregation_scenario"] = False
+    if "include_nearby_aggregation_scenario" not in config_payload:
+        suggested["include_nearby_aggregation_scenario"] = False
+    return suggested
+
+
+def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
+    client_core, source_label, current_plan = _read_current_plan_upload(payload)
+    config_payload = dict(payload.get("config") or {})
+    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
+    suggested_config = _suggest_planner_config_from_current_plan(current_plan, config_payload)
+    if block_reason:
+        suggested_config["include_subway_aggregation_scenario"] = False
+    return {
+        "source_label": source_label,
+        "selected_sheet": "current_plan_assignments",
+        "job_default_name": _build_job_display_name(source_label),
+        "summary": dict(current_plan.get("summary") or {}),
+        "fleet": list(current_plan.get("fleet") or []),
+        "input_record_count": len(input_records),
+        "subway_aggregation_block_reason": block_reason,
+        "suggested_config": suggested_config,
+    }
+
+
+def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    return _workbook_preview_response(payload)
+
+
+def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    client_core, source_label, current_plan = _read_current_plan_upload(payload)
+    config_payload = _planner_config_payload(dict(payload.get("config") or {}))
+    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
+    if block_reason:
+        config_payload["include_subway_aggregation_scenario"] = False
+    client_config = _build_client_planner_config(client_core, config_payload)
+    client_prep = client_core.prepare_client_payload(
+        input_records,
+        current_plan_data=current_plan,
+        config=client_config,
+    )
+    job_custom_name = str(payload.get("job_custom_name") or "").strip()
+    job_default_name = _build_job_display_name(source_label)
+    job_name = _build_job_display_name(source_label, job_custom_name)
+    metadata = {
+        "job_name": job_name,
+        "job_default_name": job_default_name,
+        "job_custom_name": job_custom_name,
+        "source_label": source_label,
+        "selected_sheet": "current_plan_assignments",
+        "planner_config": dict(config_payload),
+        "client_prep": {
+            "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
+            "excluded_stops": list(client_prep.get("excluded_stops") or []),
+            "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
+            "logs": str(client_prep.get("logs", "") or ""),
+        },
+    }
+    summary = JOB_STORE.create_job(
+        config_payload,
+        dict(client_prep["prepared_payload"]),
+        metadata=metadata,
+        owner_email=user_email,
+    )
+    spawned = _spawn_job_worker(str(summary["job_id"]))
+    if spawned:
+        summary["worker_pid"] = spawned.get("worker_pid")
+    return {
+        "job": summary,
+        "source_label": source_label,
+        "selected_sheet": "current_plan_assignments",
+        "summary": dict(current_plan.get("summary") or {}),
+        "client_prep": metadata["client_prep"],
+        "subway_aggregation_block_reason": block_reason,
+    }
 
 
 def _normalize_email(value: object) -> str:
@@ -341,6 +552,14 @@ def _can_access_job(job_record: dict[str, Any], user_email: str, include_all: bo
     return _normalize_email(job_record.get("owner_email")) == _normalize_email(user_email)
 
 
+def _strip_api_prefix(path: str) -> str:
+    if path == "/api":
+        return "/"
+    if path.startswith("/api/"):
+        return path[4:]
+    return path
+
+
 class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
@@ -392,7 +611,7 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = _strip_api_prefix(parsed.path)
         if path == "/health":
             self._send_json(200, {"status": "ok"})
             return
@@ -400,6 +619,16 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
         user_email = self._current_user_email()
         include_all = _is_admin_email(user_email)
+        if path == "/me":
+            self._send_json(
+                200,
+                {
+                    "email": user_email,
+                    "is_admin": include_all,
+                    "auth_mode": "service-token" if SERVICE_TOKEN else "local",
+                },
+            )
+            return
         if path == "/jobs":
             self._send_json(200, {"jobs": JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)})
             return
@@ -422,7 +651,7 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = _strip_api_prefix(parsed.path)
         try:
             if not self._require_authorized_request():
                 return
@@ -431,6 +660,12 @@ class BackendHandler(BaseHTTPRequestHandler):
             payload = self._read_json_body()
             if path == "/compute":
                 self._handle_sync_compute(payload)
+                return
+            if path == "/workbooks/preview":
+                self._send_json(200, _handle_workbook_preview(payload))
+                return
+            if path == "/workbooks/submit":
+                self._send_json(202, _handle_workbook_submit(payload, user_email=user_email))
                 return
             if path == "/jobs":
                 config_payload = payload.get("config") or {}
@@ -549,7 +784,7 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         parsed = urlparse(self.path)
-        path = parsed.path
+        path = _strip_api_prefix(parsed.path)
         try:
             if not self._require_authorized_request():
                 return

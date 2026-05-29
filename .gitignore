@@ -5,6 +5,10 @@ __pycache__/
 .venv/
 .vscode/
 
+apps/web/node_modules/
+apps/web/dist/
+apps/web/tsconfig.tsbuildinfo
+
 apps/client/outputs/*
 !apps/client/outputs/.gitkeep
 apps/backend/outputs/*

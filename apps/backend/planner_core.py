@@ -3741,15 +3741,12 @@ def run_backend_planner_with_prepared_data(
 
 def attach_output_paths_to_structured_results(results: dict[str, Any], config: PlannerConfig) -> dict[str, Any]:
     hydrated = deepcopy(results)
-    existing_path_map = hydrated.get("output_paths")
-    expected_keys = ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby")
-    if isinstance(existing_path_map, dict) and all(key in existing_path_map for key in expected_keys):
-        path_map = {key: str(existing_path_map[key]) for key in expected_keys}
-    else:
-        scoped_config = deepcopy(config)
-        if hydrated.get("job_id") and not scoped_config.output_directory_name:
-            scoped_config.output_directory_name = str(hydrated["job_id"])
-        path_map = build_output_path_map(scoped_config)
+    # Persisted job records may carry absolute output paths from another
+    # machine. Rebuild paths for the current runtime before rerendering.
+    scoped_config = deepcopy(config)
+    if hydrated.get("job_id") and not scoped_config.output_directory_name:
+        scoped_config.output_directory_name = str(hydrated["job_id"])
+    path_map = build_output_path_map(scoped_config)
     for scenario_key, output_html in path_map.items():
         scenario = hydrated.setdefault(scenario_key, {})
         scenario["output_html"] = output_html

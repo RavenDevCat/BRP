@@ -47,12 +47,36 @@ Start local services:
 ./ops/scripts/run_client.sh
 ```
 
+On Windows PowerShell, use the checked-in PowerShell helpers:
+
+```powershell
+.\ops\scripts\start_osrm_tunnel.ps1
+.\ops\scripts\run_backend.ps1
+.\ops\scripts\run_client.ps1
+```
+
+The PowerShell helpers load `ops/env/local.env` if it exists. For local Windows development, keep
+`BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Conda environment, and keep
+`BRP_DEV_USER_EMAIL` set to a development email that should own or administer local jobs.
+
+If historical jobs were generated on another machine, do not rely on their persisted absolute
+map-output paths. The client rerenders historical maps into the current checkout under
+`apps/client/outputs/<job_id>/`.
+
 Local checks:
 
 ```bash
 curl -s http://127.0.0.1:8001/health
 curl -I http://127.0.0.1:8501
 curl -s 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?number=1'
+```
+
+PowerShell equivalents:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/health
+Invoke-WebRequest http://127.0.0.1:8501 -UseBasicParsing
+Invoke-RestMethod 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?number=1'
 ```
 
 Before publishing:

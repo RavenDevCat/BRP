@@ -768,12 +768,11 @@ def prepare_client_payload(
 
 def attach_output_paths_to_structured_results(results: dict[str, Any], config: PlannerConfig) -> dict[str, Any]:
     hydrated = deepcopy(results)
-    existing_path_map = hydrated.get("output_paths")
     expected_keys = ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby")
-    if isinstance(existing_path_map, dict) and all(key in existing_path_map for key in expected_keys):
-        path_map = {key: str(existing_path_map[key]) for key in expected_keys}
-    else:
-        path_map = build_output_path_map(config, job_id=str(hydrated.get("job_id") or ""))
+    # Persisted job records may contain absolute output paths from another
+    # machine, such as a Mac or deployment server. Client-side rerendering must
+    # always write into this local checkout instead of trusting those paths.
+    path_map = build_output_path_map(config, job_id=str(hydrated.get("job_id") or ""))
     for scenario_key, output_html in path_map.items():
         scenario = hydrated.setdefault(scenario_key, {})
         scenario["output_html"] = output_html

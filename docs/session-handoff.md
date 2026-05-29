@@ -777,3 +777,34 @@ Recommended next step:
 - Server-local env files should keep only the `OSRM_BASE_URL_*` endpoints that this server can actually serve or proxy.
 - For staging/production, set `OSRM_USE_BUILTIN_DEFAULTS=false` so unsupported regions fail clearly instead of falling back to local development default ports.
 - Runtime endpoint resolution in both backend routing and client distance tools honors explicit `OSRM_BASE_URL_*` env values before any built-in local defaults.
+
+## Windows Local Development Handoff
+
+- Development has moved back from server-side editing to local Windows / Mac development.
+- Windows local repo path currently used:
+  - `C:\Users\ted.fu\OneDrive - EiM\python stuff\busing routing designer`
+- Windows toolchain observed:
+  - Git: `C:\Program Files\Git\cmd\git.exe`
+  - Conda root: `C:\Users\ted.fu\AppData\Local\anaconda3`
+  - Python env: `C:\Users\ted.fu\AppData\Local\anaconda3\envs\ortools_env\python.exe`
+- Windows local OSRM access uses SSH local forwarding to the domestic server:
+  - `127.0.0.1:5002` Shanghai
+  - `127.0.0.1:5003` Beijing
+  - `127.0.0.1:5004` Suzhou
+  - `127.0.0.1:5005` Xian
+  - `127.0.0.1:5006` South Korea
+- Added Windows helpers:
+  - `ops/scripts/import_local_env.ps1`
+  - `ops/scripts/start_osrm_tunnel.ps1`
+  - `ops/scripts/run_backend.ps1`
+  - `ops/scripts/run_client.ps1`
+- Local Windows `ops/env/local.env` remains ignored by Git and should carry machine-local values only.
+- For local history browsing, `BRP_DEV_USER_EMAIL` should be an admin email if legacy jobs have empty `owner_email`.
+- Historical jobs copied from Mac / server may carry absolute `output_paths` from another machine. Client-side rerendering now rewrites historical map outputs into the current checkout under `apps/client/outputs/<job_id>/`.
+
+### Current Git Working Tree Note
+
+- This repo may show many modified files on Windows because of line-ending metadata or prior edits from Mac / Kimi / server-side work.
+- Before the next feature implementation, inspect `git status --short` and `git diff --stat`.
+- At this handoff point, known newly added Windows-development files are the four PowerShell helpers under `ops/scripts/`.
+- The cross-machine output-path compatibility fix is in `apps/client/client_core.py`.

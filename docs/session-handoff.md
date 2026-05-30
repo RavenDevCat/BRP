@@ -151,6 +151,41 @@ Docs-only changes do not need service restart.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.
 
+## Next Session Without Private Inventory
+
+If this repository is pulled on another development machine and
+`docs/private/ops-inventory.local.md` is not present, the next Codex session
+still has enough committed context to know the work plan. It should ask the user
+only for the missing private connection facts:
+
+- CN SSH host and user, or confirmation that private-network access is available
+- CN active checkout path, if one already exists
+- CN runtime data paths, if they differ from the deployment docs
+- public/private hostnames only when configuring tunnels or smoke tests
+
+Monday/CN deployment sequence:
+
+1. Confirm access to the CN Ubuntu 22.04 LTS server.
+2. Install or configure private-network access if normal SSH is blocked.
+3. Audit the existing CN filesystem before changing anything:
+   - code checkout
+   - `ops/env/local.env`
+   - `state/jobs` or `BRP_BACKEND_JOBS_DIR`
+   - `apps/client/cache`
+   - `apps/backend/cache`
+   - generated outputs
+   - OSRM data directory
+4. Back up runtime data before pulling or replacing code.
+5. Pull or clone latest `main`.
+6. Restore/confirm server-local env and runtime paths.
+7. Start or restart OSRM, backend, and frontend services.
+8. Validate backend health, OSRM health, `/new`, `/jobs`, history visibility,
+   cache continuity, AI Audit, Distance & Cost, and Google usage behavior if
+   enabled for that deployment.
+
+Do not invent missing private addresses from memory. If the private inventory is
+absent, ask the user for the minimum connection facts and then proceed.
+
 ## Documentation Rule
 
 After meaningful implementation:

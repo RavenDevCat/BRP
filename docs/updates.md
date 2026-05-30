@@ -49,6 +49,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - Startup scripts set the job store path explicitly so pull/restart workflows do not accidentally create an empty history store.
 - If `index.json` is missing or empty, the backend rebuilds history from existing job JSON records.
 
+### KR Public Frontend Switched To React
+
+- The KR public frontend origin behind `brp-kr.example.com` now serves the React frontend instead of Streamlit.
+- KR historical jobs, cache, and generated outputs were migrated from the older KR checkout into the active checkout.
+- This is a deployment/runtime switch only; existing user jobs do not need to be rerun.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

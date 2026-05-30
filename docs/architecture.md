@@ -80,6 +80,67 @@ Responsibilities:
 - return structured JSON for the client
 - generate or return cached AI audit reports when requested
 
+## External API Coordination
+
+BRP jobs may run in parallel. Submitting multiple jobs starts separate backend
+worker processes, so external API protection must be process-wide rather than
+only in-memory.
+
+### Provider QPS
+
+Kakao, Google, AMap, and DeepSeek outbound calls use a cross-process provider
+rate limiter:
+
+- client implementation: `apps/client/api_rate_limit.py`
+- backend implementation: `apps/backend/api_rate_limit.py`
+- default state directory: `state/api_rate_limits`
+- override: `BRP_API_RATE_LIMIT_DIR`
+
+The limiter protects only the short provider request gate. It does not serialize
+whole jobs. Multiple jobs can still run concurrently, but requests for the same
+provider key are paced through shared state.
+
+Current provider gates:
+
+- `amap-geocode`
+- `amap-places`
+- `amap-routing`
+- `amap-matrix`
+- `kakao-geocode`
+- `kakao-places`
+- `google-geocode`
+- `deepseek-chat-completions`
+
+DeepSeek has a separate default setting:
+
+```text
+BRP_DEEPSEEK_MAX_QPS=1.0
+```
+
+### Google Usage
+
+Google geocode usage is tracked separately from QPS because it protects monthly
+quota and billing rather than instantaneous request rate.
+
+- usage file: `apps/client/cache/google_geocode_usage.json`
+- month key timezone: `America/Los_Angeles`
+- monthly display limit: `10,000`
+- visibility flag: `BRP_SHOW_GOOGLE_GEOCODE_USAGE`
+
+Before sending a Google geocode request, BRP atomically reserves one usage slot
+with a cross-process lock. This prevents concurrent workers from reading the same
+old value, losing increments, or overshooting the monthly cap near the limit.
+
+Cache hits do not increment usage. Every actual Google request that is sent may
+reserve usage, including requests that later return no results or provider
+errors. This is intentionally conservative for budget protection.
+
+## Managed Routing
+
+OSRM is BRP-managed routing infrastructure, not an external billed API. It is not
+paced through the external provider limiter. Future OSRM stability work should
+use job concurrency limits, queue policy, or OSRM service capacity controls.
+
 ## OSRM
 
 Current live OSRM coverage:

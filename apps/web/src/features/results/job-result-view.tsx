@@ -920,14 +920,39 @@ function MetricCard({
   tone?: "neutral" | "success" | "warning" | "info";
 }) {
   return (
-    <div className="min-w-0 rounded-lg border border-border bg-surface p-4 shadow-panel">
+    <div className={cn("min-w-0 rounded-lg border bg-surface p-4 shadow-panel", metricToneClassName(tone))}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 text-xs font-medium uppercase text-muted-foreground">{label}</div>
-        {tone === "neutral" ? null : <Badge className="shrink-0" tone={tone}>{tone}</Badge>}
       </div>
-      <div className="mt-3 text-2xl font-semibold">{value}</div>
+      <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
     </div>
   );
+}
+
+function metricToneClassName(tone: "neutral" | "success" | "warning" | "info") {
+  if (tone === "success") {
+    return "border-emerald-200 bg-emerald-50/35";
+  }
+  if (tone === "warning") {
+    return "border-amber-200 bg-amber-50/35";
+  }
+  if (tone === "info") {
+    return "border-cyan-200 bg-cyan-50/35";
+  }
+  return "border-border";
+}
+
+function metricValueClassName(tone: "neutral" | "success" | "warning" | "info") {
+  if (tone === "success") {
+    return "text-emerald-800";
+  }
+  if (tone === "warning") {
+    return "text-amber-800";
+  }
+  if (tone === "info") {
+    return "text-cyan-800";
+  }
+  return "text-foreground";
 }
 
 function ReadoutItem({ label, value }: { label: string; value: string }) {

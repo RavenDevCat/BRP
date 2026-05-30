@@ -1,125 +1,197 @@
-# BRP Platform
+# BRP: Bus Route Planner
 
-Unified project layout for the live BRP stack.
+BRP is a route audit and planning platform for school bus operations. It ingests
+current-plan workbooks, geocodes stops, compares existing routes with optimized
+baselines, produces map/report artifacts, and exposes auxiliary tools for
+distance, cost, and fleet planning.
 
-This structure separates the public client, the solver backend, operational scripts, and data references so the project is easier to explain, maintain, and deploy.
+The production architecture is a Python backend with a React frontend. The
+legacy Streamlit client is still kept in the repository because it provides an
+operator UI and shared Python helpers used by server-side workbook and geocode
+flows.
 
-## Structure
+## What It Does
 
-- `apps/client`
-  - legacy Streamlit/operator client
-  - still owns shared Python workbook, geocoding, cache, and output helpers used by server-side flows
-- `apps/web`
-  - React frontend for Route Audit and Side Tools
-  - KR public frontend now serves this app; domestic public hostnames remain Streamlit until their own cutover
-- `apps/backend`
-  - backend compute service
-  - handles `/api/*`, workbook preview/submit helpers, OSRM matrix building, OR-Tools solving, final route enrichment, AI Audit, and JSON responses
-- `docs`
-  - architecture and operational notes
-- `ops`
-  - Cloudflare and local run scripts
-- `tmp`
-  - local scratch area for one-off validation outputs
+- Route Audit: upload a current bus plan workbook, validate it, run planning
+  baselines, and review AI Audit, Audit Detail, Actions, Baselines, Maps, and
+  Diagnostics.
+- Distance & Cost: check reference-stop distance and estimate route-level cost
+  from uploaded workbook data.
+- Fleet Planner: preview demand, geocode/cluster stops, generate route plans,
+  download generated workbooks, and submit generated plans as audit jobs.
+- Provider coordination: share Kakao, Google, AMap, and DeepSeek rate-limit
+  state across worker processes.
+- Runtime continuity: preserve job history, caches, generated outputs, usage
+  counters, and server-local env files outside normal Git sync.
 
-## Git Architecture
+## Repository Layout
 
-This repository is intended to store the codebase and documentation only.
+```text
+apps/backend/   Python backend service, planner execution, API routes, AI Audit
+apps/client/    Legacy Streamlit UI plus shared workbook/geocode/cache helpers
+apps/web/       React frontend for Route Audit and Side Tools
+docs/           Architecture, deployment, workflow, updates, handoff notes
+ops/            Run scripts, env examples, Cloudflare examples
+state/          Ignored runtime state placeholder
+tmp/            Ignored scratch area
+```
 
-- Commit:
-  - `apps/client`
-  - `apps/web`
-  - `apps/backend`
-  - `docs`
-  - `ops`
-  - root files such as `README.md` and `.gitignore`
-- Keep out of Git:
-  - Python virtual environments such as `.venv/`
-  - runtime caches under `apps/client/cache` and `apps/backend/cache`
-  - saved backend jobs under `state/jobs` or the server's `BRP_BACKEND_JOBS_DIR`
-  - provider coordination files under `state/api_rate_limits`
-  - rendered HTML outputs under `apps/client/outputs` and `apps/backend/outputs`
-  - local secrets such as `.env` files and Streamlit secrets
-  - OSRM datasets and preprocessed `.osrm*` files
+## Prerequisites
 
-## Local Data Layout
+- Python 3.11-compatible runtime
+- Node.js and npm for React development/builds
+- Docker if running local OSRM containers
+- Access to OSRM endpoints for the regions being tested
+- Provider keys only for flows that call those providers:
+  - `AMAP_API_KEY`
+  - `KAKAO_REST_API_KEY`
+  - `GOOGLE_GEOCODE_API_KEY`
+  - `DEEPSEEK_API_KEY`
 
-Heavy OSRM data should live outside the repository.
+For local or server-specific values, copy `ops/env/example.env` to
+`ops/env/local.env` and edit it locally. Do not commit real env files.
 
-- Recommended OSRM data root: `/srv/brp/osrm-data`
-- Expected subfolders:
-  - `shanghai`
-  - `beijing`
-  - `suzhou`
-  - `xian`
-  - `south-korea`
+## Local Setup
 
-The code repository stays lightweight, while `ops/scripts/run_osrm_stack.sh` mounts the local OSRM data directory into Docker containers at runtime.
+Install Python dependencies:
 
-## Current live flow
+```bash
+pip install -r apps/backend/requirements.txt
+pip install -r apps/client/requirements.txt
+```
 
-1. Users enter through React where a server has been cut over, or through the
-   legacy Streamlit client on deployments that have not been cut over yet.
-2. Route Audit uploads a workbook and calls backend `/api/*` routes for preview,
-   validation, job creation, history, details, and AI Audit.
-3. Server-side Python helpers parse workbooks, reuse geocode/cache data, prepare
-   stops and fleet inputs, and keep provider keys out of the browser.
-4. The backend persists the job, starts planner work, selects the configured OSRM
-   endpoint by country/city, solves scenarios, and writes generated outputs.
-5. The frontend renders job history, AI Audit, Audit Detail, Actions, Baselines,
-   Maps, Diagnostics, and Side Tools such as Distance & Cost and Fleet Planner.
+Install React dependencies:
 
-KR has already switched its public frontend to React. Domestic public hostnames
-still serve Streamlit until a separate domestic React cutover is performed. Keep
-real hostnames and server addresses in ignored private inventory, not in
-committed docs.
+```bash
+cd apps/web
+npm install
+```
 
-## Runtime scripts
+Start the backend from the repository root:
 
-- `ops/scripts/run_client.sh`
-- `ops/scripts/run_web.sh`
-- `ops/scripts/run_backend.sh`
-- `ops/scripts/run_osrm_stack.sh`
-- `ops/scripts/export_osrm_env.sh`
+```bash
+./ops/scripts/run_backend.sh
+```
 
-## Required API Keys
+Start the React dev server:
 
-Set these in `ops/env/local.env` or the shell environment before running local
-services:
+```bash
+./ops/scripts/run_web.sh
+```
 
-- `AMAP_API_KEY`
-- `KAKAO_REST_API_KEY`
-- `GOOGLE_GEOCODE_API_KEY`
-- `DEEPSEEK_API_KEY` for AI Audit
+Optional legacy/operator client:
 
-## Operations
+```bash
+./ops/scripts/run_client.sh
+```
 
-- Architecture overview:
-  - `docs/architecture.md`
-- Local development and release workflow:
-  - `docs/development-release-workflow.md`
-- Fresh deployment overview:
-  - `docs/deployment-overview.md`
-- Major user-facing updates:
-  - `docs/updates.md`
-- Codex handoff:
-  - `docs/session-handoff.md`
-- Private server inventory template:
-  - `docs/private-ops-template.md`
+Default local ports:
+
+```text
+Backend API:       http://127.0.0.1:8001
+React dev server:  http://127.0.0.1:5173
+Streamlit client:  http://127.0.0.1:8501
+```
+
+The React dev server proxies `/api` to the backend. Production-style React
+serving is static files from `apps/web/dist` plus SPA fallback and a same-origin
+`/api/*` proxy.
+
+## Useful Commands
+
+Backend health:
+
+```bash
+curl -s http://127.0.0.1:8001/health
+```
+
+React build:
+
+```bash
+cd apps/web
+npm run build
+```
+
+React type/lint check:
+
+```bash
+cd apps/web
+npm run lint
+```
+
+Python syntax check for key modules:
+
+```bash
+python3 -m py_compile apps/backend/backend_service.py apps/backend/ai_audit.py apps/client/client_runtime.py
+```
+
+## Runtime Data And Secrets
+
+This repository should contain code, documentation, scripts, and examples only.
+Do not commit:
+
+- `ops/env/local.env` or any real `.env` file
+- provider keys, passwords, tunnel tokens, or service credentials
+- `state/jobs` or a server's `BRP_BACKEND_JOBS_DIR`
+- `state/api_rate_limits` or a server's `BRP_API_RATE_LIMIT_DIR`
+- `apps/client/cache` and `apps/backend/cache`
+- generated outputs under `apps/client/outputs` or `apps/backend/outputs`
+- OSRM datasets and generated `.osrm*` files
+
+Important runtime files to preserve during server moves:
+
+- job history
+- client/backend caches
+- generated map/report outputs
+- server-local env files
+- Google geocode usage counter
+- provider rate-limit state
+
+## OSRM Data
+
+Heavy OSRM data should live outside the Git checkout, for example:
+
+```text
+/srv/brp/osrm-data
+```
+
+Expected region folders include:
+
+```text
+shanghai/
+beijing/
+suzhou/
+xian/
+south-korea/
+```
+
+Only deploy the regions that a server actually serves. See
+`docs/deployment-overview.md` for the multi-region and South Korea-only startup
+patterns.
+
+## Documentation
+
+- `docs/architecture.md`: stable system design and module boundaries
+- `docs/development-release-workflow.md`: local development, release, and deploy
+  workflow
+- `docs/deployment-overview.md`: fresh environment checklist
+- `docs/updates.md`: major user/operator-facing updates
+- `docs/session-handoff.md`: concise current project handoff for future Codex
+  sessions
+- `docs/private-ops-template.md`: template for private server inventory
 
 Committed docs use aliases, example domains, and generic paths. Keep real server
-addresses, usernames, hostnames, and machine-specific paths in ignored local
-files such as `docs/private/ops-inventory.local.md`.
+addresses, usernames, hostnames, machine paths, and deployment inventory in
+ignored local files such as `docs/private/ops-inventory.local.md`.
 
-## Current country support
+## Development Notes
 
-- China
-  - geocoding: AMap
-  - routing: city-specific OSRM datasets
-- South Korea
-  - geocoding: Kakao
-  - routing: South Korea OSRM dataset
-
-## Important note
-
-The live OSRM containers should keep mounting datasets from the local machine data directory rather than this Git repository. That separation keeps the repository small and avoids committing large generated routing artifacts.
+- Prefer React in `apps/web` for product UI work.
+- Keep Streamlit changes focused on legacy/operator needs or shared Python
+  helper behavior.
+- Do not bypass cross-process provider rate limiting when adding external API
+  calls.
+- Do not write the Google usage JSON directly; use the reservation helpers in
+  `apps/client/client_runtime.py`.
+- Keep server-specific behavior in env files and runtime data directories, not
+  hard-coded in application code.

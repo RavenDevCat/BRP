@@ -1,29 +1,76 @@
-# BRP: Bus Route Planner Backend
+# BRP Backend
 
-Backend project for BRP: Bus Route Planner.
+Python backend service for BRP: Bus Route Planner.
 
-## Current Scope
+The backend owns the job API, workbook preview/submit routes used by the React
+frontend, planner execution, OSRM matrix calls, generated output handling, and
+AI Audit integration.
 
-- Upload a current-plan workbook
-- Read `current_plan_assignments` and `current_plan_fleet`
-- Assess the current routing scheme
-- Compare the imported plan with like-for-like and free-optimization baselines
-- Output route-audit summaries plus HTML routing maps
+## Responsibilities
 
-## Planned Next Steps
+- expose `/api/*` routes consumed by `apps/web`
+- validate and submit Route Audit workbooks
+- persist job records under `BRP_BACKEND_JOBS_DIR` or `state/jobs`
+- run planner workers and enrich route results
+- select OSRM endpoints from environment configuration
+- serve generated map/report artifacts
+- generate or return cached AI Audit reports
+- expose Distance & Cost and Fleet Planner API routes
 
-- Replace monkey-patched globals with a clean core API
-- Add parameter controls in the UI
-- Add result summary tables and embedded HTML previews
-- Prepare for Windows exe packaging
+Shared workbook/geocode/cache helpers still live in `apps/client` and are used
+server-side so provider keys are not exposed to the browser.
 
-## Quick Start
+## Setup
 
-```powershell
-streamlit run app.py
+From the repository root:
+
+```bash
+pip install -r apps/backend/requirements.txt
 ```
 
-## Expected Excel Format
+Set local environment values in `ops/env/local.env` or the shell. At minimum,
+configure the provider keys and OSRM endpoints required by the flow being tested.
+
+Common variables:
+
+```text
+BRP_BACKEND_HOST=127.0.0.1
+BRP_BACKEND_PORT=8001
+BRP_BACKEND_JOBS_DIR=
+BRP_API_RATE_LIMIT_DIR=
+OSRM_USE_BUILTIN_DEFAULTS=true
+```
+
+## Run
+
+From the repository root:
+
+```bash
+./ops/scripts/run_backend.sh
+```
+
+Health check:
+
+```bash
+curl -s http://127.0.0.1:8001/health
+```
+
+## Runtime Data
+
+Do not commit backend runtime data:
+
+- job history
+- generated outputs
+- backend cache
+- provider rate-limit state
+- server-local env files
+
+See the root `README.md` and `docs/deployment-overview.md` for the full runtime
+data policy.
+
+## Workbook Inputs
+
+Route Audit expects a current-plan workbook with:
 
 - `current_plan_assignments`
   - `route_id`
@@ -37,4 +84,5 @@ streamlit run app.py
   - `bus_type`
   - `seat_count`
   - `vehicle_count`
-- The first row of every route in `current_plan_assignments` is treated as the shared depot/start point.
+
+The first row of each route is treated as the shared depot/start point.

@@ -35,9 +35,9 @@ type ResultTab = "ai" | "audit" | "baselines" | "maps" | "actions" | "diagnostic
 const resultTabs: Array<{ key: ResultTab; label: string }> = [
   { key: "ai", label: "AI Audit" },
   { key: "audit", label: "Audit Detail" },
+  { key: "actions", label: "Actions" },
   { key: "baselines", label: "Baselines" },
   { key: "maps", label: "Maps" },
-  { key: "actions", label: "Actions" },
   { key: "diagnostics", label: "Diagnostics" },
 ];
 

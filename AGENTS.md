@@ -9,6 +9,7 @@ This repository is BRP / Bus Route Planner. Read this file first in every new Co
 3. Read `docs/deployment-overview.md` before fresh-server or environment setup.
 4. Read `docs/updates.md` before deciding whether a user-facing change needs a release note.
 5. If present, read ignored local file `docs/private/ops-inventory.local.md` for private server addresses and machine-specific handoff facts.
+6. If that local private inventory is missing, look in OneDrive at `OneDrive-EiM/BRP Private/ops-inventory.local.md`, then copy it to `docs/private/ops-inventory.local.md`.
 
 ## Server Names
 

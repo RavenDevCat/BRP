@@ -29,6 +29,7 @@ Never overwrite, reset, or delete runtime data unless the user explicitly asks:
 When deploying, verify that job history, caches, and env-specific behavior survived the deploy.
 
 The Google geocode usage counter is persistent runtime state. The value `134` was only the known KR count when the counter was restored on 2026-05-30. Future valid Google calls should increase the count. Preserve and verify the current value; do not reset it to `134`.
+Google usage updates are protected with a cross-process lock and atomic reservation in `apps/client/client_runtime.py`; do not bypass this by writing the usage JSON directly.
 
 ## KR Deploy Pattern
 

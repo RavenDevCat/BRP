@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import colorsys
+from contextlib import contextmanager
 from datetime import datetime
 import html
 import json
@@ -82,15 +83,63 @@ def save_json_cache(path: Path, payload: dict[str, Any]) -> None:
     ensure_cache_dir()
     lock = CACHE_FILE_LOCKS.setdefault(path, threading.Lock())
     body = json.dumps(payload, ensure_ascii=False, indent=2)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with lock:
         temp_path.write_text(body, encoding="utf-8")
         temp_path.replace(path)
 
 
+@contextmanager
+def cross_process_file_lock(path: Path):
+    ensure_cache_dir()
+    lock_path = path.with_suffix(f"{path.suffix}.lock")
+    with lock_path.open("a+b") as lock_file:
+        if os.name == "nt":
+            import msvcrt
+
+            lock_file.seek(0)
+            if not lock_file.read(1):
+                lock_file.seek(0)
+                lock_file.write(b"\0")
+                lock_file.flush()
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _load_google_geocode_usage_payload() -> dict[str, Any]:
+    payload = load_json_cache(GOOGLE_GEOCODE_USAGE_PATH)
+    return payload if isinstance(payload, dict) else {}
+
+
+def _refresh_google_geocode_usage(payload: dict[str, Any]) -> None:
+    GOOGLE_GEOCODE_USAGE.clear()
+    GOOGLE_GEOCODE_USAGE.update(payload)
+
+
+def _coerce_google_geocode_usage_value(payload: dict[str, Any], month_key: str) -> int:
+    raw_value = payload.get(month_key, 0)
+    try:
+        return max(0, int(raw_value))
+    except Exception:
+        return 0
+
+
 GEOCODE_CACHE = load_json_cache(GEOCODE_CACHE_PATH)
 SUBWAY_CACHE = load_json_cache(SUBWAY_CACHE_PATH)
-GOOGLE_GEOCODE_USAGE = load_json_cache(GOOGLE_GEOCODE_USAGE_PATH)
+GOOGLE_GEOCODE_USAGE = _load_google_geocode_usage_payload()
 
 
 def log(message: str) -> None:
@@ -112,11 +161,10 @@ def current_google_usage_month_key() -> str:
 
 def read_google_geocode_monthly_usage(month_key: str | None = None) -> int:
     usage_month_key = month_key or current_google_usage_month_key()
-    raw_value = GOOGLE_GEOCODE_USAGE.get(usage_month_key, 0)
-    try:
-        return max(0, int(raw_value))
-    except Exception:
-        return 0
+    with cross_process_file_lock(GOOGLE_GEOCODE_USAGE_PATH):
+        payload = _load_google_geocode_usage_payload()
+        _refresh_google_geocode_usage(payload)
+        return _coerce_google_geocode_usage_value(payload, usage_month_key)
 
 
 def assert_google_geocode_monthly_limit_not_exceeded() -> str:
@@ -129,9 +177,28 @@ def assert_google_geocode_monthly_limit_not_exceeded() -> str:
     return month_key
 
 
+def reserve_google_geocode_monthly_usage() -> str:
+    month_key = current_google_usage_month_key()
+    with cross_process_file_lock(GOOGLE_GEOCODE_USAGE_PATH):
+        payload = _load_google_geocode_usage_payload()
+        used = _coerce_google_geocode_usage_value(payload, month_key)
+        if used >= GOOGLE_GEOCODE_MONTHLY_LIMIT:
+            raise RuntimeError(
+                "Google geocoding monthly usage limit reached. "
+                f"Usage is capped at {GOOGLE_GEOCODE_MONTHLY_LIMIT:,} requests per month."
+            )
+        payload[month_key] = used + 1
+        save_json_cache(GOOGLE_GEOCODE_USAGE_PATH, payload)
+        _refresh_google_geocode_usage(payload)
+    return month_key
+
+
 def increment_google_geocode_monthly_usage(month_key: str) -> None:
-    GOOGLE_GEOCODE_USAGE[month_key] = read_google_geocode_monthly_usage(month_key) + 1
-    save_json_cache(GOOGLE_GEOCODE_USAGE_PATH, GOOGLE_GEOCODE_USAGE)
+    with cross_process_file_lock(GOOGLE_GEOCODE_USAGE_PATH):
+        payload = _load_google_geocode_usage_payload()
+        payload[month_key] = _coerce_google_geocode_usage_value(payload, month_key) + 1
+        save_json_cache(GOOGLE_GEOCODE_USAGE_PATH, payload)
+        _refresh_google_geocode_usage(payload)
 
 
 def determine_currency_code(input_records: list[dict[str, Any]]) -> str:
@@ -363,15 +430,14 @@ def kakao_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimit
 
 
 def google_geocode_request_json(params: dict[str, Any]) -> dict[str, Any]:
-    month_key = assert_google_geocode_monthly_limit_not_exceeded()
     api_key = require_api_key("GOOGLE_GEOCODE_API_KEY", GOOGLE_GEOCODE_API_KEY, "Google Geocoding")
     GOOGLE_GEOCODE_LIMITER.wait()
+    reserve_google_geocode_monthly_usage()
     response = requests.get(
         "https://maps.googleapis.com/maps/api/geocode/json",
         params={**params, "key": api_key},
         timeout=REQUEST_TIMEOUT,
     )
-    increment_google_geocode_monthly_usage(month_key)
     response.raise_for_status()
     payload = response.json()
     status = str(payload.get("status", "")).strip().upper()

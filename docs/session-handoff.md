@@ -1213,3 +1213,56 @@ Recommended next step:
   - KR origin `http://127.0.0.1:8501/api/jobs` returned historical jobs
   - KR origin `/` and `/jobs` returned React static HTML from `BRPReactStatic/1.0`
   - public `https://brp-kr.example.com` still returns Cloudflare Access login for unauthenticated requests, as expected
+
+### 2026-05-30 KR AI/Geocode Key Migration Follow-Up
+
+- The old KR `local.env` did not contain DeepSeek/Kakao/Google keys; they were in `local.ps1`.
+- The active backend reads `ops\env\local.env`, so AI Audit could not see `DEEPSEEK_API_KEY` after the checkout migration.
+- Merged non-empty AI/geocode keys from `C:\Users\brp-user\BRP\ops\env\local.ps1` into `C:\Users\brp-user\BRP\ops\env\local.env`.
+- Kept `BRP_BACKEND_SERVICE_TOKEN` empty for the React static/proxy deployment so browser `/api/*` calls do not receive 401.
+- Restarted `BRP-Backend-Preview`; backend health and React `/api/jobs` remained OK.
+
+### 2026-05-30 KR Full Runtime Migration + Service Test
+
+- Re-ran a fuller KR runtime migration from `C:\BRP\busing routing designer` into the active checkout `C:\Users\brp-user\BRP`; the old checkout was left intact.
+- Backup for overwritten active files:
+  - `C:\Users\brp-user\BRP\state\migration-backup-full-20260530-152526`
+- Legacy env reference copy:
+  - `C:\Users\brp-user\BRP\ops\env\legacy-from-old-20260530-152526`
+- Merged remaining runtime files:
+  - backend job JSON from both old job stores into `state\jobs`, preserving the larger/newer duplicate where applicable
+  - client cache into `apps\client\cache`
+  - client cache and backend cache into `apps\backend\cache`
+  - client/backend generated outputs
+  - demo workbooks under `apps\client\demodata`
+  - old state logs into a timestamped legacy log folder
+- Canonicalized KR active env:
+  - `KAKAO_REST_API_KEY`: set
+  - `GOOGLE_GEOCODE_API_KEY`: set
+  - `DEEPSEEK_API_KEY`: set
+  - `DEEPSEEK_MODEL`: set
+  - `BRP_AI_AUDIT_LANGUAGE`: set
+  - `AMAP_API_KEY`: empty
+  - `BRP_AI_AUDIT_TIMEOUT_SECONDS`: empty, so backend default applies
+  - `BRP_BACKEND_SERVICE_TOKEN`: intentionally empty for the current React same-origin proxy deployment
+  - `BRP_BACKEND_JOBS_DIR`: `C:/Users/brp-user/BRP/state/jobs`
+- Restarted `BRP-Backend-Preview` after env migration:
+  - backend health returned `200`
+  - backend listener PID: `5804`
+  - job history count: `4`
+- KR service test passed:
+  - listeners are active on `8001`, `8501`, and `4173`
+  - runtime counts: 4 jobs, 6 client cache files, 6 backend cache files, 7 client output files, 13 backend output files, 7 demo files
+  - backend `health`, `me`, `jobs`, workbook template, fleet demand template, and demo workbook list all passed
+  - React public origin on `127.0.0.1:8501` serves `/`, `/jobs`, `/new`, `/distance`, and `/fleet`
+  - React public `/api/*` proxy returns backend health, jobs, and workbook template
+  - React preview on `127.0.0.1:4173` returns backend health and `/jobs`
+  - Mac SSH tunnel `http://127.0.0.1:4175` returns React `/jobs`, backend health, and 4 historical jobs
+  - job detail API for `ffdaa51faf64` returned successfully
+  - map artifact refresh for `ffdaa51faf64/current_plan` returned HTML successfully
+  - AI Audit real call for `ffdaa51faf64` succeeded with DeepSeek and is now cached
+  - public `https://brp-kr.example.com` still redirects unauthenticated users to Cloudflare Access, as expected
+- Remaining operational notes:
+  - AMAP is still empty; current KR South Korea flow uses Kakao/Google instead.
+  - Because `BRP_BACKEND_SERVICE_TOKEN` is empty, security currently relies on Cloudflare Access for the public host. A hardened production version should either keep API hostnames behind Access or teach the React static proxy to inject a server-side backend token.
+  - CN server SSH and installing operator access on CN remain pending for Monday or when the user is on an allowed network.

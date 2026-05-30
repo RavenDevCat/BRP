@@ -55,6 +55,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - KR historical jobs, cache, and generated outputs were migrated from the older KR checkout into the active checkout.
 - This is a deployment/runtime switch only; existing user jobs do not need to be rerun.
 
+### KR Runtime Migration Verified
+
+- Completed the KR runtime migration beyond job history: AI/geocode keys, Distance & Cost cache, backend cache, generated outputs, and demo workbooks are now present in the active KR checkout.
+- Verified the KR React frontend, backend proxy, historical job detail, map artifact refresh, template downloads, and AI Audit service call.
+- Existing user jobs do not need to be rerun for this migration; AI Audit reports can be generated from the migrated history.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

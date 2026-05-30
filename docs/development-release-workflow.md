@@ -6,7 +6,7 @@ This is the day-to-day workflow for developing BRP from any local machine while 
 
 - Local machine: code editing, local backend/frontend testing, git commits.
 - Domestic server: OSRM, staging, production, Cloudflare Tunnel, runtime jobs, caches, and generated outputs.
-- South Korea server: special deployment path reached through the existing operator access route, not the public hostname.
+- South Korea/KR server: Windows deployment reached through operator access for operator work; public users enter the React frontend through `brp-kr.example.com` behind Cloudflare Access.
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
@@ -96,9 +96,10 @@ Provider safety checks:
 - Provider QPS limiting should gate only outbound requests, not whole jobs.
 - OSRM capacity should be handled separately from external provider QPS.
 
-The React web frontend in `apps/web` is an isolated preview on port `5173`.
-It proxies `/api` to the backend on `127.0.0.1:8001` and does not replace the
-Streamlit client on `8501`.
+The React web frontend in `apps/web` runs locally through Vite on port `5173`.
+It proxies `/api` to the backend on `127.0.0.1:8001`. Production-style serving
+uses a static/proxy host instead of the Vite dev server. KR has already cut over
+to React; domestic public hostnames still use Streamlit until their own cutover.
 
 Production-style React serving is different from Vite dev serving:
 
@@ -177,9 +178,10 @@ Run a staging smoke test before production:
 - map output opens
 - AI report works when explicitly triggered
 
-## React Preview Host
+## React Static Host And Cutover
 
-Until the final switch, deploy React behind a separate preview hostname, for example:
+For any deployment that has not cut over yet, deploy React behind a separate
+preview hostname first, for example:
 
 ```text
 react-brp.example.com -> static server for /opt/brp/staging/app/apps/web/dist
@@ -202,7 +204,7 @@ Static server requirements:
 - serve `apps/web/dist/assets/*` as static files
 - serve `apps/web/dist/index.html` for unknown non-API paths
 - proxy `/api/*` to the staging backend on `127.0.0.1:8001`
-- keep Streamlit on `client.example.com` and `brp.example.com` until React preview passes QA
+- keep Streamlit on `client.example.com` and `brp.example.com` until the domestic React preview passes QA
 
 For lightweight preview hosts, including Windows servers without Node.js, the
 repository includes a Python static/proxy server:
@@ -215,7 +217,7 @@ python ops/scripts/serve_react_static.py \
   --port 4173
 ```
 
-React preview smoke:
+React static/proxy smoke:
 
 ```bash
 curl -I https://react-brp.example.com/
@@ -232,6 +234,28 @@ Browser QA before switching `brp.example.com`:
 If preview passes, switch the public BRP hostname by moving `brp.example.com`
 from Streamlit to the React static service. Keep Streamlit on `client.example.com`
 as a fallback/operator UI during the first React production window.
+
+KR is already in the post-cutover shape. Its public React service uses the KR
+machine's local `8501` origin, and its operator access preview uses local `4173`.
+Because KR does not currently have Node/npm in PATH, build React locally and
+copy `apps/web/dist` to KR when frontend assets change.
+
+## Deploy To KR
+
+KR uses the same `main` branch as local development. Preserve its runtime data:
+`state/jobs`, `apps/client/cache`, `apps/backend/cache`, generated outputs,
+`ops/env/local.env`, `apps/client/cache/google_geocode_usage.json`, and
+`state/api_rate_limits`.
+
+High-level KR deploy flow:
+
+1. Validate locally.
+2. Commit and push `main`.
+3. Build React locally with `npm run build` in `apps/web` when frontend assets changed.
+4. Pull `main` on `C:\Users\brp-user\BRP`.
+5. Copy the new `apps/web/dist` to KR when frontend assets changed.
+6. Restart scheduled tasks `BRP-Backend-Preview`, `BRP-React-Preview`, and `BRP-React-Public`.
+7. Verify backend health, public React proxy health, operator access React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
 
 ## Deploy To Production
 
@@ -326,14 +350,18 @@ Runtime data is intentionally outside git. When moving to a fresh server or repl
 
 ```text
 /opt/brp/osrm-data
+/opt/brp/staging/app/state/api_rate_limits
 /opt/brp/staging/data/jobs
 /opt/brp/staging/app/apps/backend/cache
 /opt/brp/staging/app/apps/client/cache
+/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
 /opt/brp/staging/app/apps/backend/outputs
 /opt/brp/staging/app/apps/client/demodata
+/opt/brp/prod/app/state/api_rate_limits
 /opt/brp/prod/data/jobs
 /opt/brp/prod/app/apps/backend/cache
 /opt/brp/prod/app/apps/client/cache
+/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
 /opt/brp/prod/app/apps/backend/outputs
 /opt/brp/prod/app/apps/client/demodata
 ```
@@ -346,5 +374,6 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
 - Do not edit directly in `/opt/brp/prod/app`.
 - Do not let staging and production share job directories.
 - Keep real secrets in `ops/env/local.env` on each machine/server, never in git.
+- Preserve `state/jobs`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
 - Keep Cloudflare Tunnel and OSRM long-running on the domestic server.
 - Use staging as the gate before production.

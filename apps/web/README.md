@@ -1,15 +1,28 @@
-# BRP Web Preview
+# BRP React Frontend
 
-This is the isolated React frontend for the BRP migration path.
+This is the React frontend for BRP: Bus Route Planner. It is the long-term
+browser UI for Route Audit and Side Tools. KR already serves this app publicly
+behind `brp-kr.example.com`; domestic public hostnames still serve Streamlit
+until their separate React cutover.
 
-It runs beside the current Streamlit client:
+The browser talks to the backend through same-origin `/api/*` routes. Workbook
+parsing, provider keys, geocoding/cache reuse, aggregation prep, job creation,
+and generated outputs stay server-side in Python.
+
+Current local ports:
 
 - Backend API: `127.0.0.1:8001`
-- Streamlit client: `127.0.0.1:8501`
-- React web preview: `127.0.0.1:5173`
+- legacy Streamlit client: `127.0.0.1:8501`
+- Vite React dev server: `127.0.0.1:5173`
 
-The preview reads additive `/api/*` backend routes and does not import from
-`apps/client`.
+Current routes:
+
+- `/`: Route Audit dashboard
+- `/new`: new Route Audit job
+- `/jobs`: job history
+- `/jobs/$jobId`: job detail
+- `/distance`: Distance & Cost
+- `/fleet`: Fleet Planner
 
 ## Development
 
@@ -21,28 +34,35 @@ npm run dev
 
 The Vite dev server proxies `/api` to `http://127.0.0.1:8001`.
 
-## First Slice
+## Production-Style Serving
 
-The first slice is intentionally read-only:
+Production-style serving is static assets plus an API proxy:
 
-- `/api/health`
-- `/api/me`
-- `/api/jobs`
-- `/api/jobs/:jobId`
+- build with `npm run build`
+- serve `apps/web/dist/assets/*` as static files
+- serve `apps/web/dist/index.html` for non-API paths so direct navigation works
+- proxy `/api/*` to the backend service
 
-## Submission Slice
+The repository includes a lightweight static/proxy server for hosts that do not
+have Node.js in PATH:
 
-The `/new` route now covers the first current-plan submission path:
+```bash
+python ops/scripts/serve_react_static.py \
+  --dist-dir apps/web/dist \
+  --backend-url http://127.0.0.1:8001 \
+  --host 127.0.0.1 \
+  --port 4173
+```
 
-- upload `.xlsx` / `.xlsm`
-- validate `current_plan_assignments` and `current_plan_fleet`
-- auto-fill fleet slot assumptions from the workbook
-- submit a backend job and open its detail route
+KR uses this static/proxy pattern. Build React locally and copy `apps/web/dist`
+to KR when frontend assets change.
 
-The browser sends the workbook as base64 JSON to:
+## API Surface
 
-- `/api/workbooks/preview`
-- `/api/workbooks/submit`
+The React app uses backend routes for:
 
-Python still performs workbook parsing, geocoding/cache reuse, aggregation prep,
-and job creation server-side so provider keys are not exposed in the browser.
+- health, identity, job list, job detail, and AI Audit
+- workbook template, demo workbook download, preview, and submit
+- Distance & Cost workbook preview, reference distance, and route cost
+- Fleet Planner preview, geocoding, clustering, route preview, global plan,
+  generated workbook download, and generated-plan submission

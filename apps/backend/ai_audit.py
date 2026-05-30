@@ -7,6 +7,8 @@ from typing import Any
 
 import requests
 
+from api_rate_limit import CrossProcessRateLimiter
+
 
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions").strip()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
@@ -21,8 +23,17 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)) or default)
+    except ValueError:
+        return default
+
+
 AI_AUDIT_TIMEOUT_SECONDS = _int_env("BRP_AI_AUDIT_TIMEOUT_SECONDS", 90)
 AI_AUDIT_MAX_TOKENS = _int_env("BRP_AI_AUDIT_MAX_TOKENS", 1600)
+DEEPSEEK_MAX_QPS = _float_env("BRP_DEEPSEEK_MAX_QPS", 1.0)
+DEEPSEEK_LIMITER = CrossProcessRateLimiter("deepseek-chat-completions", DEEPSEEK_MAX_QPS)
 
 
 def utc_now_iso() -> str:
@@ -250,6 +261,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "- If evidence is insufficient, say what needs validation.\n\n"
         f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
     )
+    DEEPSEEK_LIMITER.wait()
     response = requests.post(
         DEEPSEEK_API_URL,
         headers={

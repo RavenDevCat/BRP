@@ -1350,3 +1350,28 @@ Recommended next step:
   - near-limit smoke from `9999` with 3 processes produced one success, two quota failures, and final usage `10000`
   - KR Windows smoke with subprocess concurrency produced usage `16` from 16 simultaneous reservations
   - KR Windows near-limit smoke from `9999` with 3 subprocesses produced one success, two quota failures, and final usage `10000`
+
+### 2026-05-30 External API Global QPS Hardening
+
+- Added cross-process provider rate limiting for external API calls:
+  - `apps/client/api_rate_limit.py`
+  - `apps/backend/api_rate_limit.py`
+- Default limiter state lives under `state/api_rate_limits`; deployments can override it with `BRP_API_RATE_LIMIT_DIR`.
+- Client-side provider gates now cover:
+  - `amap-geocode`
+  - `amap-places`
+  - `kakao-geocode`
+  - `kakao-places`
+  - `google-geocode`
+- Backend provider gates now cover:
+  - `amap-geocode`
+  - `amap-places`
+  - `amap-routing`
+  - `amap-matrix`
+  - `deepseek-chat-completions`
+- Jobs and worker processes can still run concurrently. Only the outbound provider request gate is serialized enough to respect the configured QPS.
+- AI Audit uses `BRP_DEEPSEEK_MAX_QPS` with default `1.0`.
+- OSRM is intentionally not handled through this external-provider QPS limiter because it is a BRP-managed service; future OSRM stability should use job concurrency limits or OSRM capacity controls.
+- Validation:
+  - `python3 -m py_compile apps/client/api_rate_limit.py apps/backend/api_rate_limit.py apps/client/client_runtime.py apps/backend/BusingProblem.py apps/backend/ai_audit.py apps/backend/backend_service.py`
+  - client/backend mixed-process smoke used one shared provider key and state directory; 6 processes at `8 QPS` spread across about `0.645s`

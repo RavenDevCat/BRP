@@ -1333,3 +1333,18 @@ Recommended next step:
   - Mac over operator access `http://198.51.100.20:4173/api/health` returned OK
   - Mac over operator access `http://198.51.100.20:4173/api/google-geocode-usage` returned `134 / 10,000` at that point
   - public `https://brp-kr.example.com` still redirects unauthenticated users to Cloudflare Access, as expected
+
+### 2026-05-30 Google Usage Counter Concurrency Hardening
+
+- Hardened Google geocode usage counting in `apps/client/client_runtime.py` for concurrent users and multiple Python service processes.
+- Usage updates now:
+  - acquire a cross-process lock file next to `apps/client/cache/google_geocode_usage.json`
+  - read the latest usage payload from disk while holding the lock
+  - atomically reserve one monthly quota slot before sending a Google geocode request
+  - write through a process/thread-unique temp file before replacing the usage JSON
+- This prevents two processes from reading the same old value, both incrementing locally, and losing one increment on writeback.
+- The monthly cap check is now part of the same reservation operation, so near the `10,000` limit only the process that successfully reserves the last slot proceeds.
+- Validation:
+  - `python3 -m py_compile apps/client/client_runtime.py apps/backend/backend_service.py`
+  - concurrent local smoke with 32 processes produced usage `32`
+  - near-limit smoke from `9999` with 3 processes produced one success, two quota failures, and final usage `10000`

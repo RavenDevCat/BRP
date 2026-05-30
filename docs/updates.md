@@ -39,7 +39,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### KR React Preview Deployment
 
-- Deployed the React preview stack to the KR server for operator access-based QA.
+- Deployed the React preview stack to the KR server for operator access QA.
 - KR React preview serves the static React build and proxies `/api/*` to the KR backend from the same host.
 - This is a preview/operator deployment only; existing user jobs do not need to be rerun.
 
@@ -51,7 +51,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### KR Public Frontend Switched To React
 
-- The KR public frontend origin behind `brp-kr.example.com` now serves the React frontend instead of Streamlit.
+- The KR public frontend origin now serves the React frontend instead of Streamlit.
 - KR historical jobs, cache, and generated outputs were migrated from the older KR checkout into the active checkout.
 - This is a deployment/runtime switch only; existing user jobs do not need to be rerun.
 

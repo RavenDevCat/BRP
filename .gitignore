@@ -28,6 +28,9 @@ apps/client/.streamlit/secrets.toml
 ops/env/local.env
 ops/env/local.ps1
 ops/env/*.local
+docs/private/
+*.local.md
+*.private.md
 ops/restart.txt
 state/*
 !state/.gitkeep

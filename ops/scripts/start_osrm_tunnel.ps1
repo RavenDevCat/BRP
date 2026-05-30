@@ -1,10 +1,14 @@
 param(
-    [string]$Server = "203.0.113.10",
-    [string]$User = "deployuser",
+    [string]$Server = $env:BRP_OSRM_TUNNEL_HOST,
+    [string]$User = $env:BRP_OSRM_TUNNEL_USER,
     [switch]$Foreground
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $Server -or -not $User) {
+    throw "Pass -Server/-User or set BRP_OSRM_TUNNEL_HOST and BRP_OSRM_TUNNEL_USER."
+}
 
 $forwards = @(
     "127.0.0.1:5002:127.0.0.1:5002",

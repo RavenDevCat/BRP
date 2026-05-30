@@ -46,7 +46,7 @@ This repository is intended to store the codebase and documentation only.
 
 Heavy OSRM data should live outside the repository.
 
-- Recommended OSRM data root: `/opt/brp/osrm-data`
+- Recommended OSRM data root: `/srv/brp/osrm-data`
 - Expected subfolders:
   - `shanghai`
   - `beijing`
@@ -69,9 +69,10 @@ The code repository stays lightweight, while `ops/scripts/run_osrm_stack.sh` mou
 5. The frontend renders job history, AI Audit, Audit Detail, Actions, Baselines,
    Maps, Diagnostics, and Side Tools such as Distance & Cost and Fleet Planner.
 
-KR has already switched `brp-kr.example.com` to the React frontend. Domestic
-`client.example.com` and `brp.example.com` still serve Streamlit until a
-separate domestic React cutover is performed.
+KR has already switched its public frontend to React. Domestic public hostnames
+still serve Streamlit until a separate domestic React cutover is performed. Keep
+real hostnames and server addresses in ignored private inventory, not in
+committed docs.
 
 ## Runtime scripts
 
@@ -103,6 +104,12 @@ services:
   - `docs/updates.md`
 - Codex handoff:
   - `docs/session-handoff.md`
+- Private server inventory template:
+  - `docs/private-ops-template.md`
+
+Committed docs use aliases, example domains, and generic paths. Keep real server
+addresses, usernames, hostnames, and machine-specific paths in ignored local
+files such as `docs/private/ops-inventory.local.md`.
 
 ## Current country support
 

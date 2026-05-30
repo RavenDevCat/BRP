@@ -11,7 +11,7 @@ ingress:
   - hostname: react-brp.example.com
     service: http://127.0.0.1:4173
 
-  # Keep brp.example.com on Streamlit until React preview QA passes.
+  # Keep the domestic app hostname on Streamlit until React preview QA passes.
   # After cutover, point this hostname at the same React static service.
   - hostname: brp.example.com
     service: http://127.0.0.1:8501
@@ -29,7 +29,5 @@ ingress:
   - hostname: osrm-xian.example.com
     service: http://127.0.0.1:5005
   - hostname: osrm-south-korea.example.com
-    service: http://127.0.0.1:5006
-  - hostname: osrm-korea.example.com
     service: http://127.0.0.1:5006
   - service: http_status:404

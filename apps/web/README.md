@@ -2,7 +2,7 @@
 
 This is the React frontend for BRP: Bus Route Planner. It is the long-term
 browser UI for Route Audit and Side Tools. KR already serves this app publicly
-behind `brp-kr.example.com`; domestic public hostnames still serve Streamlit
+behind the KR application hostname; domestic public hostnames still serve Streamlit
 until their separate React cutover.
 
 The browser talks to the backend through same-origin `/api/*` routes. Workbook

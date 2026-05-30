@@ -10,6 +10,7 @@ This is the day-to-day workflow for developing BRP from any local machine while 
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
+That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.
 
 ## Local Development
 

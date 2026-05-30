@@ -135,6 +135,10 @@ The Google geocode usage counter is KR-only by policy. Leave it hidden on
 domestic, staging, production, and local development servers unless that server
 is the South Korea deployment:
 
+The counter file is persistent runtime state. Deployments should preserve the
+current `apps/client/cache/google_geocode_usage.json` value and verify
+continuity; they should not reset the count to a historical baseline.
+
 ```bash
 export BRP_SHOW_GOOGLE_GEOCODE_USAGE=false
 ```

@@ -25,6 +25,7 @@ Current intended positioning:
 
 Reference overview:
 
+- `AGENTS.md` for the short Codex startup card that should be read first in new sessions or on new machines.
 - `docs/architecture.md` for the maintained system architecture.
 - `docs/development-release-workflow.md` for local development, staging, production, and current server operations.
 - `docs/deployment-overview.md` for fresh-environment setup.
@@ -32,8 +33,10 @@ Reference overview:
 
 Current note:
 
+- New Codex sessions should start with `AGENTS.md`, then this handoff. This prevents machine changes or context compaction from dropping server names, deploy rules, and runtime-data safety constraints.
 - Old planning docs were removed in favor of the maintained docs above. Keep future process and architecture updates in those files plus this handoff.
 - Future sessions should remind the user to consider a `docs/updates.md` entry when a change adds a major user-facing tool, switches providers, changes routing/geocoding/planner behavior, or may require users to rerun jobs to refresh conclusions.
+- Google geocode usage is persistent runtime state, not a fixed deployment target. The KR value `134` was only the verified count when the counter was restored on 2026-05-30. Future Google calls should increase it naturally; deploys should preserve the current file and verify continuity, not reset the value.
 - `apps/client/app.py` now presents `Current Plan Audit` in a more report-style layout:
   - "Audit Story" summary block
   - improvement-path / action-oriented narrative ahead of technical evidence
@@ -1315,7 +1318,7 @@ Recommended next step:
   - client cache file count remained `6`
   - backend cache file count remained `6`
   - Google geocode usage file remained `apps\client\cache\google_geocode_usage.json`
-  - Google usage was verified as `2026-05: 134`
+  - Google usage was verified as `2026-05: 134` at that point; later valid Google calls should increase this persistent runtime counter
 - KR env correction:
   - added/confirmed `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`
   - confirmed `BRP_BACKEND_JOBS_DIR=C:/Users/brp-user/BRP/state/jobs`
@@ -1326,7 +1329,7 @@ Recommended next step:
   - operator access React preview `127.0.0.1:4173` health OK
   - `/new` and `/jobs` returned React HTML from the KR public origin
   - `/api/jobs` returned `5` jobs
-  - `/api/google-geocode-usage` returned enabled `true`, month `2026-05`, used `134`, limit `10000`
+  - `/api/google-geocode-usage` returned enabled `true`, month `2026-05`, used `134`, limit `10000` at that point
   - Mac over operator access `http://198.51.100.20:4173/api/health` returned OK
-  - Mac over operator access `http://198.51.100.20:4173/api/google-geocode-usage` returned `134 / 10,000`
+  - Mac over operator access `http://198.51.100.20:4173/api/google-geocode-usage` returned `134 / 10,000` at that point
   - public `https://brp-kr.example.com` still redirects unauthenticated users to Cloudflare Access, as expected

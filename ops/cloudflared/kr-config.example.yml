@@ -4,6 +4,12 @@ credentials-file: /home/brp/.cloudflared/YOUR_KR_TUNNEL_ID.json
 ingress:
   - hostname: brp-kr.ravenapis.com
     service: http://127.0.0.1:8501
+
+  # React preview/static frontend for KR.
+  # Keep brp-kr.ravenapis.com on Streamlit until React QA passes.
+  - hostname: react-brp-kr.ravenapis.com
+    service: http://127.0.0.1:4173
+
   - hostname: brp-api-kr.ravenapis.com
     service: http://127.0.0.1:8001
   - service: http_status:404

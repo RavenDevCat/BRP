@@ -1149,3 +1149,30 @@ Recommended next step:
   - direct routes `/jobs` and `/distance` returned the React `index.html`
   - the generated JS asset returned `200` with `text/javascript`
   - temporary local static preview on `127.0.0.1:4173` was stopped after validation
+
+### 2026-05-30 KR React Preview Deployment
+
+- KR server is the Tailscale Windows host `100.87.225.85` / `dcsl23`, user `Bus.EIM`.
+- Remote checkout path: `C:\Users\Bus.EIM\BRP`.
+- KR repo was fast-forwarded from `ce34b64` to `aaac04e`.
+- KR does not currently have Node/npm in PATH, so React was built locally with `npm run build` and `apps/web/dist` was copied to KR.
+- Backend was restarted with the KR conda Python:
+  - `C:\Users\Bus.EIM\.conda\envs\brp\python.exe`
+  - backend listens on `127.0.0.1:8001`
+  - Streamlit remains on `127.0.0.1:8501`
+- React preview is running on KR through `ops/scripts/serve_react_static.py`:
+  - static/proxy service listens on `0.0.0.0:4173`
+  - `/api/*` proxies to `http://127.0.0.1:8001`
+  - Tailscale preview URL: `http://100.87.225.85:4173`
+- Windows OpenSSH killed plain `Start-Process` children after session exit, so persistent preview processes are launched through Task Scheduler:
+  - `BRP-Backend-Preview`
+  - `BRP-React-Preview`
+  - launcher scripts and logs live under `C:\Users\Bus.EIM\BRP\state`
+- Validation passed:
+  - KR internal `http://127.0.0.1:8001/api/health` returned OK
+  - KR internal `http://127.0.0.1:4173/api/health` returned OK
+  - KR internal `/jobs`, `/distance`, and generated JS asset returned `200`
+  - Mac over Tailscale `http://100.87.225.85:4173/jobs` returned `200`
+  - Mac over Tailscale `http://100.87.225.85:4173/api/health` returned OK
+  - Browser QA via temporary SSH tunnel confirmed `/jobs`, `/distance`, `/fleet`, and `/new` render with backend OK
+- `8001` and `8501` remain loopback-only from outside; React preview is the external Tailscale entry for the new frontend.

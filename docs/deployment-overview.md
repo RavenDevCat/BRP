@@ -131,6 +131,20 @@ export KAKAO_REST_API_KEY="..."
 export GOOGLE_GEOCODE_API_KEY="..."
 ```
 
+The Google geocode usage counter is KR-only by policy. Leave it hidden on
+domestic, staging, production, and local development servers unless that server
+is the South Korea deployment:
+
+```bash
+export BRP_SHOW_GOOGLE_GEOCODE_USAGE=false
+```
+
+For the South Korea deployment only:
+
+```bash
+export BRP_SHOW_GOOGLE_GEOCODE_USAGE=true
+```
+
 ### OSRM data and bind settings
 
 ```bash

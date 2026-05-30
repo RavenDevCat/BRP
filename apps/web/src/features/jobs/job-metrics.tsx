@@ -1,6 +1,7 @@
 import type { JobRecord } from "@/lib/api";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatDistanceKmFromMeters, formatNumber } from "@/lib/format";
+import { currentPlanAssignmentCount, jobInputStopCount } from "@/features/jobs/summary-metrics";
 
 export function JobMetrics({ job }: { job: JobRecord }) {
   const summary = job.prepared_payload_summary || {};
@@ -10,9 +11,9 @@ export function JobMetrics({ job }: { job: JobRecord }) {
   const currentDistanceM = currentPlan.total_distance_m ?? currentPlan.total_route_distance_m;
 
   const metrics = [
-    ["Input stops", formatNumber(summary.input_record_count)],
+    ["Input stops", formatNumber(jobInputStopCount(summary))],
     ["Current routes", formatNumber(summary.current_plan_route_count)],
-    ["Assignments", formatNumber(summary.current_plan_assignment_count)],
+    ["Assignments", formatNumber(currentPlanAssignmentCount(summary))],
     ["Current distance", formatDistanceKmFromMeters(currentDistanceM)],
   ];
 

@@ -1,11 +1,12 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { History, LayoutDashboard, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
-import { getCurrentUser, getHealth } from "@/lib/api";
+import { Gauge, History, LayoutDashboard, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
+import { getCurrentUser, getGoogleGeocodeUsage, getHealth, type GoogleGeocodeUsage } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { formatNumber } from "@/lib/format";
 
 const primaryNavItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -31,7 +32,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
   const userQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser });
+  const googleUsageQuery = useQuery({
+    queryKey: ["google-geocode-usage"],
+    queryFn: getGoogleGeocodeUsage,
+    staleTime: 60_000,
+  });
   const isJobsWorkspace = pathname.startsWith("/jobs");
+  const googleUsage = googleUsageQuery.data;
+  const googleUsagePct =
+    googleUsage?.enabled && googleUsage.limit && googleUsage.used !== undefined
+      ? Math.round((googleUsage.used / googleUsage.limit) * 100)
+      : 0;
 
   return (
     <div className="min-h-screen bg-background">
@@ -50,6 +61,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="space-y-3 border-t border-border p-4">
+          {googleUsage?.enabled ? <GoogleUsageCard usage={googleUsage} percent={googleUsagePct} /> : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground">Backend</span>
             <Badge tone={healthQuery.data?.status === "ok" ? "success" : "warning"}>
@@ -74,17 +86,21 @@ export function AppShell({ children }: { children: ReactNode }) {
               <span className="text-sm font-semibold">{productName}</span>
             </div>
           </div>
-          <Button
-            type="button"
-            variant="secondary"
-            icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
-            onClick={() => {
-              void healthQuery.refetch();
-              void userQuery.refetch();
-            }}
-          >
-            Refresh
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            {googleUsage?.enabled ? <GoogleUsagePill usage={googleUsage} percent={googleUsagePct} /> : null}
+            <Button
+              type="button"
+              variant="secondary"
+              icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
+              onClick={() => {
+                void healthQuery.refetch();
+                void userQuery.refetch();
+                void googleUsageQuery.refetch();
+              }}
+            >
+              Refresh
+            </Button>
+          </div>
         </header>
 
         <main className={cn("mx-auto w-full px-4 py-6 lg:px-6", isJobsWorkspace ? "max-w-none" : "max-w-7xl")}>
@@ -111,6 +127,43 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
       </div>
+    </div>
+  );
+}
+
+function GoogleUsageCard({ usage, percent }: { usage: GoogleGeocodeUsage; percent: number }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
+          <Gauge className="h-3.5 w-3.5 flex-none text-primary" aria-hidden="true" />
+          <span className="truncate">Google API</span>
+        </div>
+        <Badge tone={percent >= 90 ? "warning" : "info"}>{percent}%</Badge>
+      </div>
+      <div className="mt-2 text-sm font-semibold text-foreground">
+        {formatNumber(usage.used)} / {formatNumber(usage.limit)}
+      </div>
+      <div className="mt-1 text-xs text-muted-foreground">{usage.month_key || "This month"}</div>
+    </div>
+  );
+}
+
+function GoogleUsagePill({
+  usage,
+  percent,
+}: {
+  usage: GoogleGeocodeUsage;
+  percent: number;
+}) {
+  return (
+    <div className="flex h-9 items-center gap-2 rounded-md border border-border bg-muted/50 px-2 text-xs text-muted-foreground">
+      <Gauge className="h-3.5 w-3.5 flex-none text-primary" aria-hidden="true" />
+      <span className="font-medium">Google</span>
+      <span className="font-semibold text-foreground">
+        {formatNumber(usage.used)} / {formatNumber(usage.limit)}
+      </span>
+      <span className={cn("hidden sm:inline", percent >= 90 && "text-amber-700")}>{percent}%</span>
     </div>
   );
 }

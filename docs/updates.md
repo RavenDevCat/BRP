@@ -78,6 +78,19 @@ It is not a code changelog. Record changes here when users or operators should k
 - The React job history workspace no longer lets the History panel occupy the whole screen on smaller windows.
 - Narrower layouts collapse History by default when viewing a selected job, reducing user confusion.
 
+### Route Audit Assumptions Clarified
+
+- Route Audit optional assumption panels now show that fleet, vehicle mix, route policy, and aggregation settings are optional.
+- Opening an optional panel without changing fields does not override workbook defaults.
+- When users edit optional assumptions, the panel is marked `Custom` and can be reset to the workbook/default baseline.
+- `Run audit` now validates the uploaded workbook automatically before submission, while `Validate workbook` remains available as an optional preview check.
+- Existing jobs do not need to be rerun; this is an intake workflow and presentation update.
+
+### KR Google Usage Counter Restored
+
+- The React shell can show the KR Google geocode usage counter when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
+- The counter remains hidden on non-KR deployments by default.
+
 ## Update Log Guidance
 
 Add a new dated entry when a change affects user workflow, operational behavior, or interpretation of results, such as:

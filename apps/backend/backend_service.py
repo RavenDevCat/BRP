@@ -20,6 +20,7 @@ import traceback
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlparse
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 try:
     from .planner_core import (
@@ -77,6 +78,18 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
 WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DISTANCE_CHECKER_JOBS_PATH = CLIENT_DIR / "cache" / "distance_checker_jobs.json"
 MAX_DISTANCE_CHECKER_JOBS = 80
+GOOGLE_GEOCODE_USAGE_PATH = CLIENT_DIR / "cache" / "google_geocode_usage.json"
+GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
 
 
 def utc_now_iso() -> str:
@@ -944,7 +957,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "job_default_name": _build_job_display_name(source_label),
         "summary": dict(current_plan.get("summary") or {}),
         "fleet": list(current_plan.get("fleet") or []),
-        "input_record_count": len(input_records),
+        "input_record_count": _service_input_record_count(input_records),
         "subway_aggregation_block_reason": block_reason,
         "suggested_config": suggested_config,
     }
@@ -1024,12 +1037,27 @@ def _is_admin_email(email: str) -> bool:
     return bool(normalized_email and normalized_email in ADMIN_EMAILS)
 
 
+def _service_input_record_count(input_records: list[dict[str, Any]]) -> int:
+    if not input_records:
+        return 0
+    count = 0
+    for item in input_records:
+        try:
+            passenger_count = int(item.get("passenger_count", 0) or 0)
+        except Exception:
+            passenger_count = 0
+        if passenger_count > 0:
+            count += 1
+    return count
+
+
 def _summarize_prepared_payload(prepared_payload: dict[str, Any]) -> dict[str, Any]:
     input_records = list(prepared_payload.get("input_records") or [])
     current_plan = dict(prepared_payload.get("current_plan") or {})
     current_plan_summary = dict(current_plan.get("summary") or {})
     return {
-        "input_record_count": len(input_records),
+        "input_record_count": _service_input_record_count(input_records),
+        "input_point_count": len(input_records),
         "country_samples": sorted(
             {
                 str(item.get("country", "")).strip()
@@ -1047,6 +1075,33 @@ def _summarize_prepared_payload(prepared_payload: dict[str, Any]) -> dict[str, A
         "has_current_plan": bool(current_plan),
         "current_plan_route_count": int(current_plan_summary.get("route_count", 0) or 0),
         "current_plan_assignment_count": int(current_plan_summary.get("assignment_count", 0) or 0),
+        "current_plan_service_stop_count": int(current_plan_summary.get("service_stop_count", current_plan_summary.get("stop_count", 0)) or 0),
+        "current_plan_scheduled_assignment_count": int(current_plan_summary.get("scheduled_assignment_count", 0) or 0),
+    }
+
+
+def _google_geocode_usage_month_key() -> str:
+    return datetime.now(ZoneInfo("America/Los_Angeles")).strftime("%Y-%m")
+
+
+def _google_geocode_usage_payload() -> dict[str, Any]:
+    if not GOOGLE_GEOCODE_USAGE_VISIBLE:
+        return {"enabled": False}
+    month_key = _google_geocode_usage_month_key()
+    try:
+        payload = json.loads(GOOGLE_GEOCODE_USAGE_PATH.read_text(encoding="utf-8")) if GOOGLE_GEOCODE_USAGE_PATH.exists() else {}
+    except Exception:
+        payload = {}
+    try:
+        used = max(0, int(dict(payload).get(month_key, 0) or 0))
+    except Exception:
+        used = 0
+    return {
+        "enabled": True,
+        "month_key": month_key,
+        "used": used,
+        "limit": GOOGLE_GEOCODE_MONTHLY_LIMIT,
+        "label": f"Google geocode usage this month: {used:,} / {GOOGLE_GEOCODE_MONTHLY_LIMIT:,}",
     }
 
 
@@ -1532,6 +1587,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                     "auth_mode": "service-token" if SERVICE_TOKEN else "local",
                 },
             )
+            return
+        if path == "/google-geocode-usage":
+            self._send_json(200, _google_geocode_usage_payload())
             return
         if path == "/workbooks/template":
             self._send_bytes(

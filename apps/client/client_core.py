@@ -539,15 +539,36 @@ def read_current_plan_from_excel(excel_path: str | Path, service_direction: str 
             )
 
     bus_types = sorted({item["bus_type"] for item in assignments})
+    service_stops = [item for item in stops if not bool(item.get("is_depot"))]
+    stop_is_depot = {
+        str(item.get("stop_id", "")).strip(): bool(item.get("is_depot"))
+        for item in stops
+    }
+    service_assignments = [
+        item
+        for item in assignments
+        if not stop_is_depot.get(str(item.get("stop_id", "")).strip(), False)
+    ]
+    service_input_records = [
+        item
+        for item in canonical_input_records
+        if int(item.get("passenger_count", 0) or 0) > 0
+    ]
     return {
         "stops": stops,
         "assignments": assignments,
         "fleet": fleet,
         "input_records": canonical_input_records,
         "summary": {
-            "stop_count": len(stops),
-            "planning_stop_count": len(canonical_input_records),
-            "assignment_count": len(assignments),
+            "stop_count": len(service_stops),
+            "service_stop_count": len(service_stops),
+            "scheduled_stop_count": len(stops),
+            "depot_stop_count": len(stops) - len(service_stops),
+            "planning_stop_count": len(service_input_records),
+            "planning_point_count": len(canonical_input_records),
+            "assignment_count": len(service_assignments),
+            "scheduled_assignment_count": len(assignments),
+            "depot_assignment_count": len(assignments) - len(service_assignments),
             "route_count": len(route_ids),
             "service_direction": normalized_direction,
             "bus_types": bus_types,
@@ -575,9 +596,9 @@ def summarize_structured_results(results: dict[str, Any], uploaded_address_count
     subway_vehicle_count = int(subway.get("bus_count", 0))
     nearby_vehicle_count = int(nearby.get("bus_count", 0))
 
-    original_non_depot = max(0, original_valid_stops - 1)
-    subway_non_depot = max(0, subway_valid_stops - 1)
-    nearby_non_depot = max(0, nearby_valid_stops - 1)
+    original_non_depot = max(0, original_valid_stops)
+    subway_non_depot = max(0, subway_valid_stops)
+    nearby_non_depot = max(0, nearby_valid_stops)
 
     stop_reduction = original_non_depot - subway_non_depot
     stop_reduction_pct = (stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
@@ -634,7 +655,10 @@ def summarize_current_plan_assessment(current_plan_assessment: dict[str, Any] | 
     return {
         "route_count": int(current_plan_assessment.get("route_count", 0)),
         "stop_count": int(current_plan_assessment.get("stop_count", 0)),
+        "service_stop_count": int(current_plan_assessment.get("service_stop_count", current_plan_assessment.get("stop_count", 0))),
+        "scheduled_stop_count": int(current_plan_assessment.get("scheduled_stop_count", 0)),
         "assignment_count": int(current_plan_assessment.get("assignment_count", 0)),
+        "scheduled_assignment_count": int(current_plan_assessment.get("scheduled_assignment_count", 0)),
         "bus_mix": dict(current_plan_assessment.get("bus_mix", {})),
         "total_distance_km": float(current_plan_assessment.get("total_distance_m", 0.0)) / 1000.0,
         "total_duration_minutes": float(current_plan_assessment.get("total_duration_s", 0.0)) / 60.0,

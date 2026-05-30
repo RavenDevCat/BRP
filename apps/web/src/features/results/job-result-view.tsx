@@ -30,11 +30,11 @@ import {
   toTitle,
 } from "@/lib/format";
 
-type ResultTab = "audit" | "ai" | "baselines" | "maps" | "actions" | "diagnostics";
+type ResultTab = "ai" | "audit" | "baselines" | "maps" | "actions" | "diagnostics";
 
 const resultTabs: Array<{ key: ResultTab; label: string }> = [
-  { key: "audit", label: "Audit" },
   { key: "ai", label: "AI Audit" },
+  { key: "audit", label: "Audit Detail" },
   { key: "baselines", label: "Baselines" },
   { key: "maps", label: "Maps" },
   { key: "actions", label: "Actions" },
@@ -42,7 +42,7 @@ const resultTabs: Array<{ key: ResultTab; label: string }> = [
 ];
 
 export function JobResultView({ job }: { job: JobRecord }) {
-  const [activeTab, setActiveTab] = useState<ResultTab>("audit");
+  const [activeTab, setActiveTab] = useState<ResultTab>("ai");
   const result = asRecord(job.result);
   const currentPlan = asRecord(result.current_plan_assessment);
   const routeSummaries = asRecordArray(currentPlan.route_summaries);
@@ -155,7 +155,7 @@ function AuditPanel({
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
-        <MetricCard label="Current stops" value={formatNumber(currentPlan.stop_count)} />
+        <MetricCard label="Service stops" value={formatNumber(assessmentServiceStopCount(currentPlan))} />
         <MetricCard label="Avg distance" value={formatDistanceKmFromMeters(currentPlan.avg_route_distance_m)} />
         <MetricCard label="Avg duration" value={formatDurationMinFromSeconds(currentPlan.avg_route_duration_s)} />
       </div>
@@ -171,7 +171,7 @@ function AuditPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Audit readout</h2>
+            <h2 className="text-sm font-semibold">Audit detail readout</h2>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -367,7 +367,7 @@ function AiAuditPanel({
                   <tr>
                     <th className="px-3 py-2">Scenario</th>
                     <th className="px-3 py-2">Routes</th>
-                    <th className="px-3 py-2">Stops</th>
+                    <th className="px-3 py-2">Service stops</th>
                     <th className="px-3 py-2">Avg time</th>
                     <th className="px-3 py-2">Avg distance</th>
                     <th className="px-3 py-2">Bus mix</th>
@@ -465,7 +465,7 @@ function BaselinePanel({
               {scenario.enabled ? (
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <ReadoutItem label="Routes" value={formatNumber(scenario.routeCount)} />
-                  <ReadoutItem label="Stops" value={formatNumber(scenario.stopCount)} />
+                  <ReadoutItem label="Service stops" value={formatNumber(scenario.stopCount)} />
                   <ReadoutItem label="Avg distance" value={formatDistanceKmFromMeters(scenario.avgDistanceM)} />
                   <ReadoutItem label="Avg duration" value={formatDurationMinFromSeconds(scenario.avgDurationS)} />
                   <div className="col-span-2">
@@ -733,7 +733,7 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
           <tr>
             <th className="px-3 py-2">Route</th>
             <th className="px-3 py-2">Bus</th>
-            <th className="px-3 py-2">Stops</th>
+            <th className="px-3 py-2">Service stops</th>
             <th className="px-3 py-2">Passengers</th>
             <th className="px-3 py-2">Load</th>
             <th className="px-3 py-2">Distance</th>
@@ -745,7 +745,7 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
             <tr key={stringValue(route.route_id)} className="border-t border-border">
               <td className="px-3 py-2 font-medium">{stringValue(route.route_id)}</td>
               <td className="px-3 py-2">{stringValue(route.bus_type)}</td>
-              <td className="px-3 py-2">{formatNumber(route.stop_count)}</td>
+              <td className="px-3 py-2">{formatNumber(routeServiceStopCount(route))}</td>
               <td className="px-3 py-2">{formatNumber(route.passenger_count)}</td>
               <td className="px-3 py-2">{formatPercent(route.load_factor, 100)}</td>
               <td className="px-3 py-2">{formatDistanceKmFromMeters(route.distance_m)}</td>
@@ -766,7 +766,7 @@ function BaselineRouteTable({ routes }: { routes: Array<Record<string, unknown>>
           <tr>
             <th className="px-3 py-2">Route</th>
             <th className="px-3 py-2">Bus</th>
-            <th className="px-3 py-2">Stops</th>
+            <th className="px-3 py-2">Service stops</th>
             <th className="px-3 py-2">Passengers</th>
             <th className="px-3 py-2">Capacity</th>
             <th className="px-3 py-2">Load</th>
@@ -969,7 +969,7 @@ function scenarioFromAssessment(name: string, detail: string, assessment: Record
     enabled: Object.keys(assessment).length > 0,
     skippedReason: "",
     routeCount: assessment.route_count,
-    stopCount: assessment.stop_count,
+    stopCount: assessmentServiceStopCount(assessment),
     avgDistanceM: assessment.avg_route_distance_m,
     avgDurationS: assessment.avg_route_duration_s,
     busMix: asRecord(assessment.bus_mix),
@@ -984,7 +984,7 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
     enabled: Object.keys(scenario).length > 0 && scenario.enabled !== false,
     skippedReason: stringValue(scenario.skipped_reason),
     routeCount: scenario.route_count || scenario.bus_count,
-    stopCount: scenario.stop_count,
+    stopCount: scenarioServiceStopCount(scenario),
     avgDistanceM: scenario.avg_route_distance_m,
     avgDurationS: scenario.avg_route_duration_s,
     busMix: asRecord(scenario.bus_mix),
@@ -1239,12 +1239,61 @@ function formatBusMix(value: Record<string, unknown>) {
 }
 
 function routeStopCount(route: Record<string, unknown>) {
+  return routeServiceStopCount(route);
+}
+
+function routeServiceStopCount(route: Record<string, unknown>) {
+  const explicitServiceStopCount = Number(route.service_stop_count ?? route.student_stop_count);
+  if (Number.isFinite(explicitServiceStopCount)) {
+    return explicitServiceStopCount;
+  }
   const explicitStopCount = Number(route.stop_count ?? route.stops);
   if (Number.isFinite(explicitStopCount)) {
-    return explicitStopCount;
+    const scheduledStopCount = Number(route.scheduled_stop_count ?? route.all_stop_count);
+    if (Number.isFinite(scheduledStopCount)) {
+      return explicitStopCount;
+    }
+    const nodes = Array.isArray(route.nodes) ? route.nodes : [];
+    if (nodes.length) {
+      return Math.max(0, nodes.length - 1);
+    }
+    return Math.max(0, explicitStopCount - 1);
   }
   const nodeCount = Array.isArray(route.nodes) ? route.nodes.length : 0;
   return Math.max(0, nodeCount - 1);
+}
+
+function assessmentServiceStopCount(assessment: Record<string, unknown>) {
+  const explicitServiceStopCount = Number(assessment.service_stop_count ?? assessment.student_stop_count);
+  if (Number.isFinite(explicitServiceStopCount)) {
+    return explicitServiceStopCount;
+  }
+  const routeSummaries = asRecordArray(assessment.route_summaries);
+  if (routeSummaries.length) {
+    return routeSummaries.reduce((total, route) => total + Number(routeServiceStopCount(route) || 0), 0);
+  }
+  const explicitStopCount = Number(assessment.stop_count);
+  if (Number.isFinite(explicitStopCount)) {
+    const routeCount = Number(assessment.route_count);
+    return Math.max(0, explicitStopCount - (Number.isFinite(routeCount) ? routeCount : 0));
+  }
+  return explicitStopCount;
+}
+
+function scenarioServiceStopCount(scenario: Record<string, unknown>) {
+  const explicitServiceStopCount = Number(scenario.service_stop_count ?? scenario.student_stop_count);
+  if (Number.isFinite(explicitServiceStopCount)) {
+    return explicitServiceStopCount;
+  }
+  const points = asRecordArray(scenario.points);
+  if (points.length) {
+    return points.filter((point) => !Boolean(point.is_depot)).length;
+  }
+  const explicitStopCount = Number(scenario.stop_count);
+  if (Number.isFinite(explicitStopCount)) {
+    return explicitStopCount;
+  }
+  return explicitStopCount;
 }
 
 function routePassengerCount(route: Record<string, unknown>) {

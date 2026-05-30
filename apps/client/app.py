@@ -1392,7 +1392,7 @@ def build_current_plan_audit_outline(result: dict[str, object]) -> dict[str, obj
 
     overview: list[str] = [
         f"The current network runs {int(current_plan_assessment.get('route_count', 0) or 0)} routes covering "
-        f"{int(current_plan_assessment.get('stop_count', 0) or 0)} canonical stops, with an average route length of "
+        f"{int(current_plan_assessment.get('stop_count', 0) or 0)} service stops, with an average route length of "
         f"{format_distance_km(float(current_plan_assessment.get('avg_route_distance_km', 0.0) or 0.0))} and an average route time of "
         f"{format_duration_minutes(float(current_plan_assessment.get('avg_route_duration_minutes', 0.0) or 0.0))}.",
         f"Average load is {float(current_plan_assessment.get('avg_load_factor_pct', 0.0) or 0.0):.1f}%. "
@@ -1784,7 +1784,7 @@ def build_audit_report_from_result(result: dict[str, object]) -> list[tuple[str,
     audit_sheets.append(
         ("Audit Summary", pd.DataFrame([{
             "current_routes": current_plan_assessment["route_count"],
-            "current_stops": current_plan_assessment["stop_count"],
+            "current_service_stops": current_plan_assessment["stop_count"],
             "avg_route_distance_km": current_plan_assessment["avg_route_distance_km"],
             "avg_route_duration_min": current_plan_assessment["avg_route_duration_minutes"],
             "avg_load_factor_pct": current_plan_assessment["avg_load_factor_pct"],
@@ -2218,15 +2218,15 @@ if source_excel_path is not None:
         subway_aggregation_block_reason = find_subway_aggregation_block_reason(current_input_records)
         st.caption(
             f"Workbook detected as current-plan audit input from `{source_label}`. "
-            f"Prepared {len(current_input_records)} planning rows from `current_plan_assignments`."
+            f"Prepared {current_plan_summary.get('planning_stop_count', len(current_input_records))} planning stops from `current_plan_assignments`."
         )
         st.info(
             "Current plan workbook detected. "
             f"`current_plan_assignments` is being used route-by-route for this audit run. "
             f"Direction: {current_plan_summary.get('service_direction', service_direction)} | "
             f"Routes: {current_plan_summary['route_count']} | "
-            f"Route rows: {current_plan_summary['assignment_count']} | "
-            f"Planning rows: {current_plan_summary.get('planning_stop_count', len(current_input_records))} | "
+            f"Service rows: {current_plan_summary['assignment_count']} | "
+            f"Planning stops: {current_plan_summary.get('planning_stop_count', len(current_input_records))} | "
             f"Bus types: {', '.join(current_plan_summary['bus_types']) or 'None'} | "
             f"Fleet: {'; '.join(current_plan_summary.get('fleet_summary', [])) or 'None'}"
         )
@@ -2750,7 +2750,7 @@ if result is not None:
         else:
             audit_1, audit_2, audit_3, audit_4 = st.columns(4)
             audit_1.metric("Current Routes", current_plan_assessment["route_count"])
-            audit_2.metric("Current Stops", current_plan_assessment["stop_count"])
+            audit_2.metric("Current Service Stops", current_plan_assessment["stop_count"])
             audit_3.metric("Avg Route Distance", format_distance_km(current_plan_assessment["avg_route_distance_km"]))
             audit_4.metric("Avg Route Duration", format_duration_minutes(current_plan_assessment["avg_route_duration_minutes"]))
 

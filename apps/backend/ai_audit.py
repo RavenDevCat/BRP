@@ -41,11 +41,69 @@ def _take(items: Any, limit: int) -> list[Any]:
     return list(items or [])[:limit]
 
 
+def _finite_int(value: Any) -> int | None:
+    try:
+        numeric_value = int(value)
+    except Exception:
+        return None
+    return numeric_value
+
+
+def _route_service_stop_count(route: dict[str, Any]) -> int | None:
+    explicit_service_count = _finite_int(route.get("service_stop_count") or route.get("student_stop_count"))
+    if explicit_service_count is not None:
+        return explicit_service_count
+    explicit_stop_count = _finite_int(route.get("stop_count") or route.get("stops"))
+    if explicit_stop_count is None:
+        nodes = list(route.get("nodes") or [])
+        return max(0, len(nodes) - 1) if nodes else None
+    if _finite_int(route.get("scheduled_stop_count") or route.get("all_stop_count")) is not None:
+        return explicit_stop_count
+    nodes = list(route.get("nodes") or [])
+    if nodes:
+        return max(0, len(nodes) - 1)
+    return max(0, explicit_stop_count - 1)
+
+
+def _assessment_service_stop_count(assessment: dict[str, Any]) -> Any:
+    explicit_service_count = _finite_int(assessment.get("service_stop_count") or assessment.get("student_stop_count"))
+    if explicit_service_count is not None:
+        return explicit_service_count
+    route_summaries = [dict(item) for item in list(assessment.get("route_summaries") or [])]
+    if route_summaries:
+        return sum(_route_service_stop_count(item) or 0 for item in route_summaries)
+    explicit_stop_count = _finite_int(assessment.get("stop_count"))
+    if explicit_stop_count is None:
+        return assessment.get("stop_count")
+    route_count = _finite_int(assessment.get("route_count")) or 0
+    return max(0, explicit_stop_count - route_count)
+
+
+def _assessment_assignment_count(assessment: dict[str, Any]) -> Any:
+    explicit_assignment_count = _finite_int(assessment.get("assignment_count"))
+    if explicit_assignment_count is None:
+        return assessment.get("assignment_count")
+    if _finite_int(assessment.get("scheduled_assignment_count")) is not None:
+        return explicit_assignment_count
+    route_count = _finite_int(assessment.get("route_count")) or 0
+    return max(0, explicit_assignment_count - route_count)
+
+
+def _scenario_service_stop_count(scenario: dict[str, Any]) -> Any:
+    explicit_service_count = _finite_int(scenario.get("service_stop_count") or scenario.get("student_stop_count"))
+    if explicit_service_count is not None:
+        return explicit_service_count
+    points = [dict(item) for item in list(scenario.get("points") or [])]
+    if points:
+        return len([point for point in points if not bool(point.get("is_depot"))])
+    return scenario.get("stop_count")
+
+
 def _compact_route(route: dict[str, Any]) -> dict[str, Any]:
     return {
         "route_id": route.get("route_id"),
         "bus_type": route.get("bus_type"),
-        "stop_count": route.get("stop_count"),
+        "stop_count": _route_service_stop_count(route),
         "passenger_count": route.get("passenger_count"),
         "load_factor_pct": round(float(route.get("load_factor", 0.0) or 0.0) * 100.0, 1),
         "distance_km": _float_km(route.get("distance_m")),
@@ -98,8 +156,8 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         },
         "current_plan": {
             "route_count": current_plan.get("route_count"),
-            "stop_count": current_plan.get("stop_count"),
-            "assignment_count": current_plan.get("assignment_count"),
+            "stop_count": _assessment_service_stop_count(current_plan),
+            "assignment_count": _assessment_assignment_count(current_plan),
             "avg_load_factor_pct": round(float(current_plan.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
             "avg_route_distance_km": _float_km(current_plan.get("avg_route_distance_m")),
             "avg_route_duration_min": _float_minutes(current_plan.get("avg_route_duration_s")),
@@ -112,6 +170,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         "benchmarks": {
             "free_optimization": {
                 "route_count": free_baseline.get("route_count"),
+                "stop_count": _scenario_service_stop_count(free_baseline),
                 "avg_route_distance_km": _float_km(free_baseline.get("avg_route_distance_m")),
                 "avg_route_duration_min": _float_minutes(free_baseline.get("avg_route_duration_s")),
                 "avg_load_factor_pct": round(float(free_baseline.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
@@ -119,12 +178,14 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             },
             "like_for_like": {
                 "route_count": like_for_like.get("route_count"),
+                "stop_count": _assessment_service_stop_count(like_for_like),
                 "avg_route_distance_km": _float_km(like_for_like.get("avg_route_distance_m")),
                 "avg_route_duration_min": _float_minutes(like_for_like.get("avg_route_duration_s")),
                 "avg_load_factor_pct": round(float(like_for_like.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
             },
             "constrained_improvement": {
                 "route_count": constrained.get("route_count"),
+                "stop_count": _assessment_service_stop_count(constrained),
                 "avg_route_distance_km": _float_km(constrained.get("avg_route_distance_m")),
                 "avg_route_duration_min": _float_minutes(constrained.get("avg_route_duration_s")),
                 "avg_load_factor_pct": round(float(constrained.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),

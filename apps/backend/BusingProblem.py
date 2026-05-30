@@ -1621,6 +1621,7 @@ def render_map(
 
 
 def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, Any]], output_html: str) -> dict[str, Any]:
+    service_points = [point for point in points if not bool(point.get("is_depot"))]
     total_distance_m = sum(float(route.get("distance_m", 0.0)) for route in routes)
     total_duration_s = sum(float(route.get("time_s", 0.0)) for route in routes)
     avg_route_distance_m = (total_distance_m / len(routes)) if routes else 0.0
@@ -1637,7 +1638,9 @@ def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, A
         "routes": routes,
         "output_html": output_html,
         "bus_count": len(routes),
-        "stop_count": len(points),
+        "stop_count": len(service_points),
+        "service_stop_count": len(service_points),
+        "map_point_count": len(points),
         "bus_mix": route_bus_mix(routes),
         "total_distance_m": total_distance_m,
         "total_duration_s": total_duration_s,
@@ -1727,12 +1730,15 @@ def main() -> dict[str, Any]:
     subway_result = build_scenario(subway_points, SUBWAY_OUTPUT_HTML, "Subway aggregated")
     nearby_result = build_scenario(nearby_points, NEARBY_OUTPUT_HTML, "Nearby-address aggregated")
 
+    service_original_points = [point for point in original_points if not bool(point.get("is_depot"))]
     LAST_RUN_RESULTS = {
         "original": original_result,
         "subway": subway_result,
         "nearby": nearby_result,
-        "input_address_count": len(input_records),
-        "valid_stop_count": len(original_points),
+        "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
+        "input_point_count": len(input_records),
+        "valid_stop_count": len(service_original_points),
+        "valid_point_count": len(original_points),
         "currency_code": CURRENT_CURRENCY_CODE,
     }
     return LAST_RUN_RESULTS

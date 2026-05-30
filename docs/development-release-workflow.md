@@ -9,6 +9,7 @@ This is the day-to-day workflow for developing BRP from any local machine while 
 - South Korea server: special deployment path reached through the existing operator access route, not the public hostname.
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
+The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
 
 ## Local Development
 

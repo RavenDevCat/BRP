@@ -632,9 +632,10 @@ Recommended next step:
   - The AI tab includes generate/regenerate buttons and Markdown download.
 - Environment additions:
   - `DEEPSEEK_API_KEY`
-  - `DEEPSEEK_MODEL=deepseek-chat`
+  - `DEEPSEEK_MODEL=deepseek-v4-flash`
   - `BRP_AI_AUDIT_LANGUAGE=English`
   - `BRP_AI_AUDIT_TIMEOUT_SECONDS=90`
+  - `BRP_AI_AUDIT_MAX_TOKENS=8192`
 - Keep real API keys only in server-local env files; examples contain placeholders only.
 
 ## Frontend Modernization Direction
@@ -1266,3 +1267,12 @@ Recommended next step:
   - AMAP is still empty; current KR South Korea flow uses Kakao/Google instead.
   - Because `BRP_BACKEND_SERVICE_TOKEN` is empty, security currently relies on Cloudflare Access for the public host. A hardened production version should either keep API hostnames behind Access or teach the React static proxy to inject a server-side backend token.
   - CN server SSH and installing Tailscale on CN remain pending for Monday or when the user is on an allowed network.
+
+### 2026-05-30 AI Audit Model Correction
+
+- The intended AI Audit model is `deepseek-v4-flash`; earlier defaults and example env files still said `deepseek-chat`.
+- Updated backend defaults and env examples to use `deepseek-v4-flash`.
+- Added `BRP_AI_AUDIT_MAX_TOKENS` support so token output budget is controlled by env instead of being hard-coded in `apps/backend/ai_audit.py`.
+- KR active env should use:
+  - `DEEPSEEK_MODEL=deepseek-v4-flash`
+  - `BRP_AI_AUDIT_MAX_TOKENS=8192`

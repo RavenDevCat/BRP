@@ -229,9 +229,12 @@ Current public hostnames:
 South Korea server hostnames:
 
 - `brp-kr.example.com`
+- `react-brp-kr.example.com`
 - `brp-api-kr.example.com`
 
-React is not currently assigned a public hostname. When ready, create a separate preview hostname first, serve `apps/web/dist` as static assets, and route API calls to the appropriate backend before moving `brp.example.com`.
+React should use a separate preview hostname first, serve `apps/web/dist` as
+static assets, and route API calls to the appropriate backend before moving the
+main BRP hostname.
 
 Minimum React static routing rules:
 

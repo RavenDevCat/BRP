@@ -37,6 +37,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - The production-style React host must serve static build assets, support direct navigation to app routes, and proxy `/api/*` to the backend from the same hostname.
 - This is an operator/deployment update only; existing user jobs do not need to be rerun.
 
+### KR React Preview Deployment
+
+- Deployed the React preview stack to the KR server for operator access-based QA.
+- KR React preview serves the static React build and proxies `/api/*` to the KR backend from the same host.
+- This is a preview/operator deployment only; existing user jobs do not need to be rerun.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

@@ -1,9 +1,7 @@
 # BRP React Frontend
 
 This is the React frontend for BRP: Bus Route Planner. It is the long-term
-browser UI for Route Audit and Side Tools. KR already serves this app publicly
-behind the KR application hostname; domestic public hostnames still serve Streamlit
-until their separate React cutover.
+browser UI for Route Audit and Side Tools.
 
 The browser talks to the backend through same-origin `/api/*` routes. Workbook
 parsing, provider keys, geocoding/cache reuse, aggregation prep, job creation,
@@ -54,8 +52,8 @@ python ops/scripts/serve_react_static.py \
   --port 4173
 ```
 
-KR uses this static/proxy pattern. Build React locally and copy `apps/web/dist`
-to KR when frontend assets change.
+Lightweight servers without Node.js can use this static/proxy pattern after
+`apps/web/dist` is built elsewhere.
 
 ## API Surface
 

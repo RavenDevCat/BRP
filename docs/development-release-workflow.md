@@ -181,6 +181,17 @@ Static server requirements:
 - proxy `/api/*` to the staging backend on `127.0.0.1:8001`
 - keep Streamlit on `client.ravenapis.com` and `brp.ravenapis.com` until React preview passes QA
 
+For lightweight preview hosts, including Windows servers without Node.js, the
+repository includes a Python static/proxy server:
+
+```bash
+python ops/scripts/serve_react_static.py \
+  --dist-dir apps/web/dist \
+  --backend-url http://127.0.0.1:8001 \
+  --host 127.0.0.1 \
+  --port 4173
+```
+
 React preview smoke:
 
 ```bash

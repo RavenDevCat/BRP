@@ -149,7 +149,7 @@ def render_distance_checker_page() -> None:
     currency_code = str(market_profile["currency_code"])
     currency_label = str(market_profile["currency_label"])
 
-    st.title("Distance Checker")
+    st.title("Distance & Cost")
     st.caption("Measure distance from one reference stop to each address in an Excel file.")
     st.caption(read_google_geocode_usage_display())
 
@@ -158,9 +158,9 @@ def render_distance_checker_page() -> None:
         st.rerun()
 
     cached_jobs = load_distance_checker_jobs()
-    with st.expander("Distance Checker Job Cache", expanded=False):
+    with st.expander("Distance & Cost Job Cache", expanded=False):
         if not cached_jobs:
-            st.caption("No cached distance checker jobs yet.")
+            st.caption("No cached Distance & Cost jobs yet.")
         else:
             cached_job_ids = [str(item.get("job_id", "")).strip() for item in cached_jobs if str(item.get("job_id", "")).strip()]
             selected_cached_job_id = st.selectbox(
@@ -244,7 +244,7 @@ def render_distance_checker_page() -> None:
             )
             st.dataframe(source_df.head(20), width="stretch")
 
-            run_checker = st.button("Run Distance Checker", type="primary")
+            run_checker = st.button("Run Distance Check", type="primary")
         else:
             run_checker = False
 

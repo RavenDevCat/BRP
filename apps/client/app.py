@@ -41,7 +41,7 @@ from distance_checker_page import render_distance_checker_page
 from fleet_planner_page import render_fleet_planner_page
 
 
-st.set_page_config(page_title="BRP-Busing Routing Planner", layout="wide")
+st.set_page_config(page_title="BRP Audit & Planning Client", layout="wide")
 tool_name = str(st.query_params.get("tool", "")).strip().lower()
 if tool_name == "distance-checker":
     render_distance_checker_page()
@@ -50,7 +50,7 @@ if tool_name == "fleet-planner-preview":
     render_fleet_planner_page()
     st.stop()
 
-st.title("BRP-Busing Routing Planner")
+st.title("BRP Audit & Planning Client")
 st.caption(
     "Upload a current-plan workbook to assess the existing scheme, generate like-for-like and free-optimization baselines, "
     "and surface route-to-route improvement opportunities."
@@ -2083,10 +2083,10 @@ with st.expander("Usage Steps and Notes (expand to learn how to use)", expanded=
            - `Baseline Scenarios`: compare scenario route tables and download the Free Optimization Baseline as a new input-template workbook.
            - `Maps`: view and download rendered HTML route maps.
            - `Diagnostics`: review geocode warnings, excluded stops, and raw technical details.
-        10. Use `Distance Checker` in the sidebar for quick operational checks:
+        10. Use `Distance & Cost` in the sidebar for quick operational checks:
            - `Reference Distance Check`: calculate distance from one reference stop to uploaded addresses.
            - `Current Plan Route Cost`: sum each route's stop-to-stop OSRM distance and estimate one-way diesel cost.
-           - Distance Checker results are cached locally and can be reloaded from its job cache.
+           - Distance & Cost results are cached locally and can be reloaded from its job cache.
 
         **Workbook rules**
 
@@ -2114,7 +2114,7 @@ with st.expander("Usage Steps and Notes (expand to learn how to use)", expanded=
         - Korean addresses are not auto-normalized or auto-corrected. Unresolved stops appear in Diagnostics for manual cleanup.
         - Routing uses OSRM road data for supported country/city datasets.
         - Traffic assumptions adjust route time only. Distance stays unchanged.
-        - Distance Checker route-cost defaults follow the site domain: `brp` uses China/RMB diesel defaults, and `brp-kr` uses South Korea/KRW diesel defaults.
+        - Distance & Cost route-cost defaults follow the site domain: `brp` uses China/RMB diesel defaults, and `brp-kr` uses South Korea/KRW diesel defaults.
         - E-bus, electric, EV, and new-energy bus types keep route distance results but skip diesel-cost estimation.
         - Large files or uncached addresses may take longer because geocoding, OSRM calls, OR-Tools solving, and analysis are real computations.
         """
@@ -2198,7 +2198,7 @@ with st.sidebar:
         nearby_cluster_radius_m = st.number_input("Nearby Cluster Radius (m)", min_value=50, max_value=3000, value=500, step=50)
     st.caption(read_google_geocode_usage_display())
     st.caption("Other tools")
-    if st.button("Distance Checker", key="open_distance_checker"):
+    if st.button("Distance & Cost", key="open_distance_checker"):
         st.query_params["tool"] = "distance-checker"
         st.rerun()
     if st.button("Fleet Planner Preview", key="open_fleet_planner_preview"):

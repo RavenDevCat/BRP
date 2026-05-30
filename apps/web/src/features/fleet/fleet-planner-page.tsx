@@ -1,0 +1,927 @@
+import type { ReactNode } from "react";
+import { useMemo, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { Download, FileSpreadsheet, Loader2, MapPinned, Route, SlidersHorizontal, Upload, UsersRound } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { buttonClassName } from "@/components/ui/button-styles";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  buildFleetPlannerClusters,
+  buildFleetPlannerGlobalPlan,
+  buildFleetPlannerRoutePreview,
+  geocodeFleetPlannerDemand,
+  getDemandTemplateUrl,
+  previewFleetPlanner,
+  submitFleetPlannerGeneratedPlan,
+  type FleetPlannerClusterResponse,
+  type FleetPlannerGeocodeResponse,
+  type FleetPlannerPreviewResponse,
+  type FleetPlannerRoutePreviewResponse,
+  type FleetPlannerSubmitGeneratedPlanResponse,
+} from "@/lib/api";
+import { formatNumber, formatPercent, toTitle } from "@/lib/format";
+import { cn } from "@/lib/cn";
+
+const fieldClassName =
+  "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
+const textareaClassName =
+  "min-h-28 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-primary";
+
+export function FleetPlannerPage() {
+  const [market, setMarket] = useState<"KR" | "CN">("KR");
+  const [mode, setMode] = useState<"balanced" | "cost_saver" | "comfort_saver">("balanced");
+  const [monitorSeats, setMonitorSeats] = useState(1);
+  const [riderCounts, setRiderCounts] = useState("8, 22, 34, 44");
+  const [file, setFile] = useState<File | null>(null);
+  const [fileBase64, setFileBase64] = useState("");
+  const [fileError, setFileError] = useState("");
+  const [sectorCount, setSectorCount] = useState<4 | 8 | 12>(8);
+  const [routeDirection, setRouteDirection] = useState<"to_school" | "from_school">("to_school");
+  const [globalDirection, setGlobalDirection] = useState<"to_school" | "from_school">("to_school");
+  const [generatedJobName, setGeneratedJobName] = useState("");
+
+  const previewMutation = useMutation({
+    mutationFn: async () =>
+      previewFleetPlanner({
+        market,
+        mode,
+        monitor_seats: monitorSeats,
+        rider_counts: riderCounts,
+        file_name: file?.name,
+        file_base64: fileBase64 || undefined,
+      }),
+  });
+
+  const geocodeMutation = useMutation({
+    mutationFn: async () => {
+      if (!file || !fileBase64) {
+        throw new Error("Upload a demand workbook before running geocode preview.");
+      }
+      return geocodeFleetPlannerDemand({
+        file_name: file.name,
+        file_base64: fileBase64,
+      });
+    },
+  });
+
+  const clusterMutation = useMutation({
+    mutationFn: async () => {
+      const geocodeResult = geocodeMutation.data;
+      if (!geocodeResult) {
+        throw new Error("Run demand geocode before building clusters.");
+      }
+      return buildFleetPlannerClusters({
+        market,
+        mode,
+        monitor_seats: monitorSeats,
+        sector_count: sectorCount,
+        geocode_result: {
+          school: geocodeResult.school,
+          demand_points: geocodeResult.demand_points,
+          summary: geocodeResult.summary,
+        },
+      });
+    },
+  });
+
+  const routePreviewMutation = useMutation({
+    mutationFn: async () => {
+      const clusterResult = clusterMutation.data;
+      if (!clusterResult) {
+        throw new Error("Build clusters before running route preview.");
+      }
+      return buildFleetPlannerRoutePreview({
+        market,
+        mode,
+        monitor_seats: monitorSeats,
+        service_direction: routeDirection,
+        max_route_duration_minutes: Number(result?.assumptions.max_route_duration_minutes || 0) || undefined,
+        cluster_result: {
+          school: clusterResult.school,
+          clusters: clusterResult.clusters,
+          failed_points: clusterResult.failed_points,
+          summary: clusterResult.summary,
+        },
+      });
+    },
+  });
+
+  const globalPlanMutation = useMutation({
+    mutationFn: async () => {
+      const geocodeResult = geocodeMutation.data;
+      if (!geocodeResult) {
+        throw new Error("Run demand geocode before building a global plan.");
+      }
+      return buildFleetPlannerGlobalPlan({
+        market,
+        mode,
+        monitor_seats: monitorSeats,
+        service_direction: globalDirection,
+        geocode_result: {
+          school: geocodeResult.school,
+          demand_points: geocodeResult.demand_points,
+          summary: geocodeResult.summary,
+        },
+      });
+    },
+  });
+
+  const submitGeneratedPlanMutation = useMutation({
+    mutationFn: async () => {
+      const globalPlan = globalPlanMutation.data;
+      if (!globalPlan) {
+        throw new Error("Build a global plan before submitting it as a job.");
+      }
+      return submitFleetPlannerGeneratedPlan({
+        job_name: generatedJobName.trim() || defaultGeneratedJobName(),
+        max_route_duration_minutes: Number(globalPlan.summary.max_route_duration_minutes || result?.assumptions.max_route_duration_minutes || 0) || undefined,
+        route_preview: {
+          summary: globalPlan.summary,
+          school: globalPlan.school,
+          routes: globalPlan.routes,
+        },
+      });
+    },
+  });
+
+  function resetScenarioResults() {
+    previewMutation.reset();
+    geocodeMutation.reset();
+    clusterMutation.reset();
+    routePreviewMutation.reset();
+    globalPlanMutation.reset();
+    submitGeneratedPlanMutation.reset();
+  }
+
+  function resetClusterResults() {
+    clusterMutation.reset();
+    routePreviewMutation.reset();
+    globalPlanMutation.reset();
+    submitGeneratedPlanMutation.reset();
+  }
+
+  function resetRoutePreviewResults() {
+    routePreviewMutation.reset();
+  }
+
+  function resetGlobalPlanResults() {
+    globalPlanMutation.reset();
+    submitGeneratedPlanMutation.reset();
+  }
+
+  async function handleFileChange(nextFile: File | null) {
+    setFile(nextFile);
+    setFileError("");
+    setFileBase64("");
+    resetScenarioResults();
+    if (!nextFile) {
+      return;
+    }
+    const suffix = nextFile.name.split(".").pop()?.toLowerCase();
+    if (suffix !== "xlsx") {
+      setFileError("Use an .xlsx demand workbook.");
+      return;
+    }
+    try {
+      setFileBase64(await fileToBase64(nextFile));
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
+    }
+  }
+
+  const result = previewMutation.data;
+  const geocodeResult = geocodeMutation.data;
+  const clusterResult = clusterMutation.data;
+  const routePreviewResult = routePreviewMutation.data;
+  const globalPlanResult = globalPlanMutation.data;
+  const mixRows = useMemo(
+    () =>
+      Object.entries(result?.mix_summary.vehicle_mix || {}).map(([vehicle, count]) => ({
+        vehicle,
+        count,
+      })),
+    [result],
+  );
+
+  function handleMarketChange(nextMarket: "KR" | "CN") {
+    if (nextMarket === market) {
+      return;
+    }
+    setMarket(nextMarket);
+    resetScenarioResults();
+  }
+
+  function handleModeChange(nextMode: "balanced" | "cost_saver" | "comfort_saver") {
+    if (nextMode === mode) {
+      return;
+    }
+    setMode(nextMode);
+    resetScenarioResults();
+  }
+
+  function handleMonitorSeatsChange(nextMonitorSeats: number) {
+    setMonitorSeats(nextMonitorSeats);
+    resetScenarioResults();
+  }
+
+  function handleRiderCountsChange(nextRiderCounts: string) {
+    setRiderCounts(nextRiderCounts);
+    previewMutation.reset();
+  }
+
+  function handleSectorCountChange(nextSectorCount: 4 | 8 | 12) {
+    if (nextSectorCount === sectorCount) {
+      return;
+    }
+    setSectorCount(nextSectorCount);
+    resetClusterResults();
+  }
+
+  function handleRouteDirectionChange(nextDirection: "to_school" | "from_school") {
+    if (nextDirection === routeDirection) {
+      return;
+    }
+    setRouteDirection(nextDirection);
+    resetRoutePreviewResults();
+  }
+
+  function handleGlobalDirectionChange(nextDirection: "to_school" | "from_school") {
+    if (nextDirection === globalDirection) {
+      return;
+    }
+    setGlobalDirection(nextDirection);
+    resetGlobalPlanResults();
+  }
+
+  return (
+    <div className="space-y-6 pb-16 lg:pb-0">
+      <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+        <div>
+          <p className="text-sm font-medium text-primary">Side tools</p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+            Preview vehicle choices from rider groups or a demand workbook before running address clustering and routing.
+          </p>
+        </div>
+        <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
+          <Download className="h-4 w-4" aria-hidden="true" />
+          Demand template
+        </a>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
+                <h2 className="text-sm font-semibold">Demand Input</h2>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
+                <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
+                <span className="text-sm font-medium">{file?.name || "Select demand workbook"}</span>
+                <span className="mt-1 text-xs text-muted-foreground">Optional .xlsx demand template</span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept=".xlsx"
+                  onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                />
+              </label>
+              {fileError ? <InlineError message={fileError} /> : null}
+              <Field label="Manual Rider Groups">
+                <textarea
+                  className={textareaClassName}
+                  value={riderCounts}
+                  onChange={(event) => handleRiderCountsChange(event.target.value)}
+                  disabled={Boolean(fileBase64)}
+                />
+              </Field>
+            </CardContent>
+          </Card>
+
+          {result ? (
+            <FleetPreviewResult
+              result={result}
+              mixRows={mixRows}
+              geocodeResult={geocodeResult}
+              clusterResult={clusterResult}
+              routePreviewResult={routePreviewResult}
+              globalPlanResult={globalPlanResult}
+              generatedJobName={generatedJobName}
+              onGeneratedJobNameChange={setGeneratedJobName}
+              onSubmitGeneratedPlan={() => submitGeneratedPlanMutation.mutate()}
+              submitGeneratedPlanResult={submitGeneratedPlanMutation.data}
+              submitGeneratedPlanError={submitGeneratedPlanMutation.error as Error | null}
+              isSubmittingGeneratedPlan={submitGeneratedPlanMutation.isPending}
+            />
+          ) : null}
+        </div>
+
+        <aside className="space-y-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
+                <h2 className="text-sm font-semibold">Scenario</h2>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Field label="Market">
+                <div className="grid grid-cols-2 gap-2">
+                  <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
+                    KR
+                  </ModeButton>
+                  <ModeButton active={market === "CN"} onClick={() => handleMarketChange("CN")}>
+                    CN
+                  </ModeButton>
+                </div>
+              </Field>
+              <Field label="Planning Mode">
+                <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
+                  <option value="balanced">Balanced</option>
+                  <option value="cost_saver">Cost Saver</option>
+                  <option value="comfort_saver">Comfort Saver</option>
+                </select>
+              </Field>
+              <Field label="Bus Monitor Seats">
+                <input
+                  className={fieldClassName}
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="1"
+                  value={monitorSeats}
+                  onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
+                />
+              </Field>
+              {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
+              {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
+              {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
+              {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
+              <Button
+                type="button"
+                disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
+                icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
+                onClick={() => previewMutation.mutate()}
+              >
+                Preview fleet
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!fileBase64 || geocodeMutation.isPending}
+                icon={geocodeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+                onClick={() => {
+                  clusterMutation.reset();
+                  routePreviewMutation.reset();
+                  globalPlanMutation.reset();
+                  submitGeneratedPlanMutation.reset();
+                  geocodeMutation.mutate();
+                }}
+              >
+                Validate & geocode
+              </Button>
+              <Field label="Direction Sectors">
+                <select className={fieldClassName} value={sectorCount} onChange={(event) => handleSectorCountChange(Number(event.target.value) as 4 | 8 | 12)}>
+                  <option value={4}>4 sectors</option>
+                  <option value={8}>8 sectors</option>
+                  <option value={12}>12 sectors</option>
+                </select>
+              </Field>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!geocodeResult || clusterMutation.isPending}
+                icon={clusterMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+                onClick={() => {
+                  routePreviewMutation.reset();
+                  globalPlanMutation.reset();
+                  submitGeneratedPlanMutation.reset();
+                  clusterMutation.mutate();
+                }}
+              >
+                Build clusters
+              </Button>
+              <Field label="Route Direction">
+                <div className="grid grid-cols-2 gap-2">
+                  <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
+                    To School
+                  </ModeButton>
+                  <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
+                    From School
+                  </ModeButton>
+                </div>
+              </Field>
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!clusterResult || routePreviewMutation.isPending}
+                icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+                onClick={() => routePreviewMutation.mutate()}
+              >
+                Build route preview
+              </Button>
+              <Field label="Global Plan Direction">
+                <div className="grid grid-cols-2 gap-2">
+                  <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
+                    To School
+                  </ModeButton>
+                  <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
+                    From School
+                  </ModeButton>
+                </div>
+              </Field>
+              {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={!geocodeResult || globalPlanMutation.isPending}
+                icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+                onClick={() => {
+                  submitGeneratedPlanMutation.reset();
+                  globalPlanMutation.mutate();
+                }}
+              >
+                Build global plan
+              </Button>
+            </CardContent>
+          </Card>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function FleetPreviewResult({
+  result,
+  mixRows,
+  geocodeResult,
+  clusterResult,
+  routePreviewResult,
+  globalPlanResult,
+  generatedJobName,
+  onGeneratedJobNameChange,
+  onSubmitGeneratedPlan,
+  submitGeneratedPlanResult,
+  submitGeneratedPlanError,
+  isSubmittingGeneratedPlan,
+}: {
+  result: FleetPlannerPreviewResponse;
+  mixRows: Array<Record<string, unknown>>;
+  geocodeResult?: FleetPlannerGeocodeResponse;
+  clusterResult?: FleetPlannerClusterResponse;
+  routePreviewResult?: FleetPlannerRoutePreviewResponse;
+  globalPlanResult?: FleetPlannerRoutePreviewResponse;
+  generatedJobName: string;
+  onGeneratedJobNameChange: (value: string) => void;
+  onSubmitGeneratedPlan: () => void;
+  submitGeneratedPlanResult?: FleetPlannerSubmitGeneratedPlanResponse;
+  submitGeneratedPlanError?: Error | null;
+  isSubmittingGeneratedPlan: boolean;
+}) {
+  const assumptions = result.assumptions;
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Active Assumptions</h2>
+            <Badge tone="info">{toTitle(result.summary.mode)}</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="grid gap-3 md:grid-cols-4">
+          <Metric label="Max Route Time" value={`${formatNumber(assumptions.max_route_duration_minutes)} min`} />
+          <Metric label="Max Stops" value={formatNumber(assumptions.max_stops_per_route)} />
+          <Metric label="Target Load" value={formatPercent(assumptions.target_load_factor, 100)} />
+          <Metric label="Min Load" value={formatPercent(assumptions.min_reasonable_load_factor, 100)} />
+        </CardContent>
+      </Card>
+
+      {result.demand_workbook ? (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Demand Workbook Preview</h2>
+              <Badge tone="success">{formatNumber(result.demand_workbook.summary.student_count)} students</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <Metric label="Rows" value={formatNumber(result.demand_workbook.summary.row_count)} />
+              <Metric label="Students" value={formatNumber(result.demand_workbook.summary.student_count)} />
+              <Metric label="Unique Addresses" value={formatNumber(result.demand_workbook.summary.unique_address_count)} />
+              <Metric label="City" value={String(result.demand_workbook.summary.city || "N/A")} />
+            </div>
+            {result.demand_workbook.warnings.map((warning) => (
+              <InlineError key={warning} message={warning} />
+            ))}
+            <ResultTable rows={result.demand_workbook.riders} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {geocodeResult ? <DemandGeocodePreview result={geocodeResult} /> : null}
+      {clusterResult ? <DemandClusterPreview result={clusterResult} /> : null}
+      {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Route Preview" /> : null}
+      {globalPlanResult ? (
+        <RoutePreviewResult
+          result={globalPlanResult}
+          title="Global OR-Tools Plan"
+          generatedJobName={generatedJobName}
+          onGeneratedJobNameChange={onGeneratedJobNameChange}
+          onSubmitGeneratedPlan={onSubmitGeneratedPlan}
+          submitGeneratedPlanResult={submitGeneratedPlanResult}
+          submitGeneratedPlanError={submitGeneratedPlanError}
+          isSubmittingGeneratedPlan={isSubmittingGeneratedPlan}
+          showGeneratedJobSubmit
+        />
+      ) : null}
+
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="text-sm font-semibold">Recommended Vehicles</h2>
+            <Badge tone="info">{formatNumber(result.summary.group_count)} groups</Badge>
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <ResultTable
+            rows={result.recommendations}
+            columns={["riders", "recommended_vehicle", "student_capacity", "load_factor", "empty_seats", "feasible_options", "rejected_options"]}
+          />
+          {mixRows.length ? (
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
+              <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <h2 className="text-sm font-semibold">Vehicle Catalog</h2>
+        </CardHeader>
+        <CardContent>
+          <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "notes"]} />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function DemandGeocodePreview({ result }: { result: FleetPlannerGeocodeResponse }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Demand Geocode Preview</h2>
+          </div>
+          <Badge tone={result.summary.failed_student_rows ? "warning" : "success"}>
+            {formatNumber(result.summary.resolved_student_rows)} resolved
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-5">
+          <Metric label="School" value={String(result.summary.school_status || "unknown")} />
+          <Metric label="Resolved Rows" value={formatNumber(result.summary.resolved_student_rows)} />
+          <Metric label="Failed Rows" value={formatNumber(result.summary.failed_student_rows)} />
+          <Metric label="Resolved Students" value={formatNumber(result.summary.resolved_students)} />
+          <Metric label="Cache Hits" value={formatNumber(result.summary.cache_hits)} />
+        </div>
+        <ResultTable
+          rows={result.rows}
+          columns={["Role", "Row", "Address", "Students", "Status", "Cache Hit", "Provider", "Formatted Address", "Lat", "Lng", "Warning"]}
+        />
+        {result.map_html ? (
+          <iframe
+            className="h-[520px] w-full rounded-md border border-border"
+            title="Demand geocode map"
+            srcDoc={result.map_html}
+            sandbox="allow-scripts allow-same-origin"
+          />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DemandClusterPreview({ result }: { result: FleetPlannerClusterResponse }) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Demand Clustering Preview</h2>
+          </div>
+          <Badge tone="success">{formatNumber(result.summary.cluster_count)} clusters</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-5">
+          <Metric label="Clusters" value={formatNumber(result.summary.cluster_count)} />
+          <Metric label="Resolved Points" value={formatNumber(result.summary.resolved_points)} />
+          <Metric label="Resolved Students" value={formatNumber(result.summary.resolved_students)} />
+          <Metric label="Failed Points" value={formatNumber(result.summary.failed_points)} />
+          <Metric label="Max Capacity" value={formatNumber(result.summary.max_vehicle_student_capacity)} />
+        </div>
+        <ResultTable
+          rows={result.rows}
+          columns={[
+            "Cluster",
+            "Sector",
+            "Students",
+            "Stops",
+            "Recommended Vehicle",
+            "Student Capacity",
+            "Load Factor",
+            "Empty Seats",
+            "Avg School Distance km",
+            "Max School Distance km",
+            "Warnings",
+          ]}
+        />
+        {result.stop_rows.length ? (
+          <details className="rounded-md border border-border bg-muted/40">
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Cluster stop detail</summary>
+            <div className="border-t border-border">
+              <ResultTable
+                rows={result.stop_rows}
+                columns={["Cluster", "Sector", "Students", "Address", "Formatted Address", "Distance From School km", "Lat", "Lng"]}
+              />
+            </div>
+          </details>
+        ) : null}
+        {result.map_html ? (
+          <iframe
+            className="h-[560px] w-full rounded-md border border-border"
+            title="Demand cluster map"
+            srcDoc={result.map_html}
+            sandbox="allow-scripts allow-same-origin"
+          />
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RoutePreviewResult({
+  result,
+  title,
+  showGeneratedJobSubmit = false,
+  generatedJobName = "",
+  onGeneratedJobNameChange,
+  onSubmitGeneratedPlan,
+  submitGeneratedPlanResult,
+  submitGeneratedPlanError,
+  isSubmittingGeneratedPlan = false,
+}: {
+  result: FleetPlannerRoutePreviewResponse;
+  title: string;
+  showGeneratedJobSubmit?: boolean;
+  generatedJobName?: string;
+  onGeneratedJobNameChange?: (value: string) => void;
+  onSubmitGeneratedPlan?: () => void;
+  submitGeneratedPlanResult?: FleetPlannerSubmitGeneratedPlanResponse;
+  submitGeneratedPlanError?: Error | null;
+  isSubmittingGeneratedPlan?: boolean;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Route className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">{title}</h2>
+          </div>
+          <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(result.summary.route_count)} routes</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-5">
+          <Metric label="Routes" value={formatNumber(result.summary.route_count)} />
+          <Metric label="Distance" value={`${formatNumber(result.summary.total_distance_km)} km`} />
+          <Metric label="Time" value={`${formatNumber(result.summary.total_duration_min)} min`} />
+          <Metric label="Direction" value={result.summary.service_direction === "from_school" ? "From School" : "To School"} />
+          <Metric label="Target" value={result.summary.max_route_duration_minutes ? `${formatNumber(result.summary.max_route_duration_minutes)} min` : "N/A"} />
+        </div>
+        {result.summary.candidate_vehicle_count || result.summary.solver ? (
+          <div className="grid gap-3 md:grid-cols-2">
+            <Metric label="Candidates" value={formatNumber(result.summary.candidate_vehicle_count)} />
+            <Metric label="Solver" value={String(result.summary.solver || "global_ortools")} />
+          </div>
+        ) : null}
+        {result.refinement_note ? <InlineError message={result.refinement_note} /> : null}
+        {result.workbook_base64 ? (
+          <Button
+            type="button"
+            variant="secondary"
+            icon={<Download className="h-4 w-4" />}
+            onClick={() => downloadBase64Workbook(result.workbook_base64 || "", result.workbook_file_name || "fleet_planner_generated_plan.xlsx")}
+          >
+            Download workbook
+          </Button>
+        ) : null}
+        <ResultTable
+          rows={result.rows}
+          columns={[
+            "cluster_id",
+            "solver",
+            "service_direction",
+            "students",
+            "stops",
+            "vehicle",
+            "distance_km",
+            "duration_min",
+            "load_factor_pct",
+            "warnings",
+          ]}
+        />
+        {result.stop_rows.length ? (
+          <details className="rounded-md border border-border bg-muted/40">
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Route stop detail</summary>
+            <div className="border-t border-border">
+              <ResultTable
+                rows={result.stop_rows}
+                columns={[
+                  "route_id",
+                  "stop_sequence",
+                  "bus_type",
+                  "country",
+                  "city",
+                  "address",
+                  "formatted_address",
+                  "passenger_count",
+                  "lat",
+                  "lng",
+                ]}
+              />
+            </div>
+          </details>
+        ) : null}
+        {result.map_html ? (
+          <iframe
+            className="h-[560px] w-full rounded-md border border-border"
+            title="Route preview map"
+            srcDoc={result.map_html}
+            sandbox="allow-scripts allow-same-origin"
+          />
+        ) : null}
+        {showGeneratedJobSubmit ? (
+          <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
+            <Field label="Generated Job Name">
+              <input
+                className={fieldClassName}
+                value={generatedJobName}
+                placeholder={defaultGeneratedJobName()}
+                onChange={(event) => onGeneratedJobNameChange?.(event.target.value)}
+              />
+            </Field>
+            {submitGeneratedPlanError ? <InlineError message={submitGeneratedPlanError.message} /> : null}
+            {submitGeneratedPlanResult?.job ? (
+              <Badge tone="success">Submitted job {submitGeneratedPlanResult.job.job_id}</Badge>
+            ) : null}
+            <Button
+              type="button"
+              disabled={isSubmittingGeneratedPlan}
+              icon={isSubmittingGeneratedPlan ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
+              onClick={onSubmitGeneratedPlan}
+            >
+              Submit global plan as job
+            </Button>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block space-y-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ModeButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "h-9 rounded-md border px-3 text-sm font-medium transition",
+        active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface text-foreground hover:bg-muted",
+      )}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/50 p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 text-lg font-semibold">{value}</div>
+    </div>
+  );
+}
+
+function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) {
+  if (!rows.length || !columns.length) {
+    return null;
+  }
+  return (
+    <div className="overflow-auto rounded-md border border-border">
+      <table className="min-w-full divide-y divide-border text-left text-sm">
+        <thead className="bg-muted text-xs text-muted-foreground">
+          <tr>
+            {columns.map((column) => (
+              <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
+                {column}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border">
+          {rows.slice(0, 80).map((row, index) => (
+            <tr key={index}>
+              {columns.map((column) => (
+                <td key={column} className="max-w-80 truncate px-3 py-2">
+                  {formatCell(row[column])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function InlineError({ message }: { message: string }) {
+  return <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
+}
+
+function formatCell(value: unknown) {
+  if (value === null || value === undefined || value === "") {
+    return "";
+  }
+  if (typeof value === "number") {
+    if (value > 0 && value < 1) {
+      return formatPercent(value, 100);
+    }
+    return formatNumber(value);
+  }
+  return String(value);
+}
+
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = reader.result;
+      if (typeof value !== "string") {
+        reject(new Error("Workbook could not be read as base64."));
+        return;
+      }
+      resolve(value);
+    };
+    reader.onerror = () => reject(reader.error || new Error("Workbook could not be read."));
+    reader.readAsDataURL(file);
+  });
+}
+
+function defaultGeneratedJobName() {
+  const now = new Date();
+  const date = now.toISOString().slice(0, 10);
+  const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  return `Demand Auto Plan - ${date} ${time}`;
+}
+
+function downloadBase64Workbook(base64Value: string, fileName: string) {
+  const binary = atob(base64Value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  const blob = new Blob([bytes], {
+    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}

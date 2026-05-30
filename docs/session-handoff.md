@@ -51,6 +51,9 @@ Recent UX state:
 - Real server addresses, usernames, private hostnames, and machine paths should
   stay out of committed docs. Use ignored local file
   `docs/private/ops-inventory.local.md` for those details.
+- If that local private file is missing on a new machine, look in OneDrive at
+  `OneDrive-EiM/BRP Private/ops-inventory.local.md` and copy it back to
+  `docs/private/ops-inventory.local.md`.
 
 ## Runtime And Data Rules
 
@@ -155,8 +158,11 @@ Docs-only changes do not need service restart.
 
 If this repository is pulled on another development machine and
 `docs/private/ops-inventory.local.md` is not present, the next Codex session
-still has enough committed context to know the work plan. It should ask the user
-only for the missing private connection facts:
+should first look for the shared private copy at
+`OneDrive-EiM/BRP Private/ops-inventory.local.md`. If that OneDrive file is also
+missing or unavailable, the committed context still has enough information to
+know the work plan. It should ask the user only for the missing private
+connection facts:
 
 - CN SSH host and user, or confirmation that operator access access is available
 - CN active checkout path, if one already exists

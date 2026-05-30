@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Gauge, History, LayoutDashboard, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
+import { Gauge, History, LayoutDashboard, LogOut, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
 import { getCurrentUser, getGoogleGeocodeUsage, getHealth, type GoogleGeocodeUsage } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +43,9 @@ export function AppShell({ children }: { children: ReactNode }) {
     googleUsage?.enabled && googleUsage.limit && googleUsage.used !== undefined
       ? Math.round((googleUsage.used / googleUsage.limit) * 100)
       : 0;
+  const signOut = () => {
+    window.location.assign(getAccessLogoutUrl());
+  };
 
   return (
     <div className="min-h-screen bg-background">
@@ -90,6 +93,16 @@ export function AppShell({ children }: { children: ReactNode }) {
             <Button
               type="button"
               variant="secondary"
+              aria-label="Sign out"
+              title="Sign out"
+              icon={<LogOut className="h-4 w-4" aria-hidden="true" />}
+              onClick={signOut}
+            >
+              <span className="hidden sm:inline">Sign out</span>
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
               icon={<RefreshCw className="h-4 w-4" aria-hidden="true" />}
               onClick={() => {
                 void healthQuery.refetch();
@@ -128,6 +141,13 @@ export function AppShell({ children }: { children: ReactNode }) {
       </div>
     </div>
   );
+}
+
+function getAccessLogoutUrl() {
+  if (typeof window === "undefined") {
+    return "/cdn-cgi/access/logout";
+  }
+  return `${window.location.origin}/cdn-cgi/access/logout`;
 }
 
 function GoogleUsagePill({

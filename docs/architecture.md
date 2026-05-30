@@ -15,11 +15,11 @@ This is the maintained high-level architecture note. For daily commands and rele
 Current domestic server layout:
 
 ```text
-/opt/brp/staging/app          # staging git checkout
-/opt/brp/staging/data/jobs    # staging job history
-/opt/brp/prod/app             # production git checkout
-/opt/brp/prod/data/jobs       # production job history
-/opt/brp/osrm-data            # shared read-only OSRM datasets
+/srv/brp/staging/app          # staging git checkout
+/srv/brp/staging/data/jobs    # staging job history
+/srv/brp/prod/app             # production git checkout
+/srv/brp/prod/data/jobs       # production job history
+/srv/brp/osrm-data            # shared read-only OSRM datasets
 ```
 
 Current domestic server services:
@@ -64,9 +64,9 @@ Current status:
   - Distance & Cost
   - Fleet Planner
 - production-style serving uses static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
-- KR public frontend `https://brp-kr.ravenapis.com` serves React from the KR server's local `8501` origin
-- KR Tailscale preview can serve the same static/proxy stack from local `4173`
-- domestic `https://client.ravenapis.com` and `https://brp.ravenapis.com` still serve Streamlit until a separate domestic React cutover
+- KR public frontend serves React from the KR server's local `8501` origin
+- KR private preview can serve the same static/proxy stack from local `4173`
+- domestic public hostnames still serve Streamlit until a separate domestic React cutover
 
 ## Backend
 
@@ -165,17 +165,16 @@ The domestic server runs Cloudflare Tunnel through `cloudflared.service`.
 
 Current public routes include:
 
-- `https://client.ravenapis.com` -> Streamlit
-- `https://brp.ravenapis.com` -> Streamlit
-- `https://brp-api.ravenapis.com` -> backend API
-- `https://osrm-shanghai.ravenapis.com`
-- `https://osrm-beijing.ravenapis.com`
-- `https://osrm-suzhou.ravenapis.com`
-- `https://osrm-xian.ravenapis.com`
-- `https://osrm-south-korea.ravenapis.com`
-- `https://osrm-korea.ravenapis.com`
+- `client.example.com` -> Streamlit
+- `brp.example.com` -> Streamlit until domestic React cutover
+- `brp-api.example.com` -> backend API
+- `osrm-shanghai.example.com`
+- `osrm-beijing.example.com`
+- `osrm-suzhou.example.com`
+- `osrm-xian.example.com`
+- `osrm-south-korea.example.com`
 
-The South Korea server is special: operator access should use the existing Tailscale route. `https://brp-kr.ravenapis.com` is Cloudflare Access-protected and currently serves the React frontend from the KR machine's local `8501` origin.
+The South Korea server is special: operator access should use the private-network route. The KR app hostname is access-protected and currently serves the React frontend from the KR machine's local `8501` origin.
 
 ## Runtime Data
 
@@ -184,21 +183,21 @@ Do not commit runtime data or secrets.
 Runtime data to preserve during server moves:
 
 ```text
-/opt/brp/staging/app/state/api_rate_limits
-/opt/brp/osrm-data
-/opt/brp/staging/data/jobs
-/opt/brp/staging/app/apps/backend/cache
-/opt/brp/staging/app/apps/client/cache
-/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
-/opt/brp/staging/app/apps/backend/outputs
-/opt/brp/staging/app/apps/client/demodata
-/opt/brp/prod/app/state/api_rate_limits
-/opt/brp/prod/data/jobs
-/opt/brp/prod/app/apps/backend/cache
-/opt/brp/prod/app/apps/client/cache
-/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
-/opt/brp/prod/app/apps/backend/outputs
-/opt/brp/prod/app/apps/client/demodata
+/srv/brp/staging/app/state/api_rate_limits
+/srv/brp/osrm-data
+/srv/brp/staging/data/jobs
+/srv/brp/staging/app/apps/backend/cache
+/srv/brp/staging/app/apps/client/cache
+/srv/brp/staging/app/apps/client/cache/google_geocode_usage.json
+/srv/brp/staging/app/apps/backend/outputs
+/srv/brp/staging/app/apps/client/demodata
+/srv/brp/prod/app/state/api_rate_limits
+/srv/brp/prod/data/jobs
+/srv/brp/prod/app/apps/backend/cache
+/srv/brp/prod/app/apps/client/cache
+/srv/brp/prod/app/apps/client/cache/google_geocode_usage.json
+/srv/brp/prod/app/apps/backend/outputs
+/srv/brp/prod/app/apps/client/demodata
 ```
 
 Lightweight deployments may keep job history under repository-level

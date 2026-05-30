@@ -1,9 +1,14 @@
-$env:OSRM_BASE_URL_CHINA_SHANGHAI = "https://osrm-shanghai.ravenapis.com"
-$env:OSRM_BASE_URL_CHINA_BEIJING = "https://osrm-beijing.ravenapis.com"
-$env:OSRM_BASE_URL_CHINA_SUZHOU = "https://osrm-suzhou.ravenapis.com"
-$env:OSRM_BASE_URL_CHINA_XIAN = "https://osrm-xian.ravenapis.com"
-$env:OSRM_BASE_URL_SOUTH_KOREA = "https://osrm-south-korea.ravenapis.com"
-$env:OSRM_BASE_URL_SOUTH_KOREA_SEOUL = "https://osrm-south-korea.ravenapis.com"
+function Require-Env($Name) {
+    $Value = [Environment]::GetEnvironmentVariable($Name)
+    if (-not $Value) {
+        throw "Set $Name before sourcing export_osrm_cloudflare_env.ps1."
+    }
+    return $Value
+}
 
-# Backward-compatible alias for older local notes and browser bookmarks.
-$env:OSRM_BASE_URL_SOUTH_KOREA_LEGACY = "https://osrm-korea.ravenapis.com"
+$env:OSRM_BASE_URL_CHINA_SHANGHAI = Require-Env "BRP_OSRM_SHANGHAI_URL"
+$env:OSRM_BASE_URL_CHINA_BEIJING = Require-Env "BRP_OSRM_BEIJING_URL"
+$env:OSRM_BASE_URL_CHINA_SUZHOU = Require-Env "BRP_OSRM_SUZHOU_URL"
+$env:OSRM_BASE_URL_CHINA_XIAN = Require-Env "BRP_OSRM_XIAN_URL"
+$env:OSRM_BASE_URL_SOUTH_KOREA = Require-Env "BRP_OSRM_SOUTH_KOREA_URL"
+$env:OSRM_BASE_URL_SOUTH_KOREA_SEOUL = $env:OSRM_BASE_URL_SOUTH_KOREA

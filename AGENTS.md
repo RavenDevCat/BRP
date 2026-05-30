@@ -8,12 +8,13 @@ This repository is BRP / Bus Route Planner. Read this file first in every new Co
 2. Read `docs/development-release-workflow.md` before running local services or deploying.
 3. Read `docs/deployment-overview.md` before fresh-server or environment setup.
 4. Read `docs/updates.md` before deciding whether a user-facing change needs a release note.
+5. If present, read ignored local file `docs/private/ops-inventory.local.md` for private server addresses and machine-specific handoff facts.
 
 ## Server Names
 
-- KR server: Tailscale Windows host `100.87.225.85`, user `Bus.EiM`, active checkout `C:\Users\Bus.EIM\BRP`.
-- CN server: `143.64.19.35`, user `azureuser`.
-- Do not confuse the KR Tailscale host with the CN server.
+- KR server: South Korea Windows deployment. Real address/user/path belong in the ignored private inventory.
+- CN server: domestic deployment. Real address/user/path belong in the ignored private inventory.
+- Do not confuse the KR private-network host with the CN server.
 
 ## Runtime Data Safety
 
@@ -44,7 +45,7 @@ External provider QPS is protected with a cross-process rate limiter under `stat
 - Verify:
   - backend health
   - public React proxy health
-  - Tailscale React preview health
+  - private React preview health
   - `/new` and `/jobs`
   - job count
   - client/backend cache file counts

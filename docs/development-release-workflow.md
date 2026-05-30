@@ -6,7 +6,7 @@ This is the day-to-day workflow for developing BRP from any local machine while 
 
 - Local machine: code editing, local backend/frontend testing, git commits.
 - Domestic server: OSRM, staging, production, Cloudflare Tunnel, runtime jobs, caches, and generated outputs.
-- South Korea/KR server: Windows deployment reached through Tailscale for operator work; public users enter the React frontend through `brp-kr.ravenapis.com` behind Cloudflare Access.
+- South Korea/KR server: Windows deployment reached through private-network access for operator work; public users enter the React frontend through the access-protected KR app hostname.
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
@@ -32,7 +32,7 @@ ssh -fN -o ExitOnForwardFailure=yes \
   -L 127.0.0.1:5004:127.0.0.1:5004 \
   -L 127.0.0.1:5005:127.0.0.1:5005 \
   -L 127.0.0.1:5006:127.0.0.1:5006 \
-  azureuser@143.64.19.35
+  "$CN_SSH_USER@$CN_SSH_HOST"
 ```
 
 Local OSRM endpoints stay as localhost values because the tunnel forwards them to the domestic server:
@@ -125,12 +125,12 @@ git push origin main
 Staging runs on the domestic server:
 
 ```text
-app:      /opt/brp/staging/app
-jobs:     /opt/brp/staging/data/jobs
+app:      $BRP_STAGING_APP_ROOT
+jobs:     $BRP_STAGING_JOBS_ROOT
 backend:  127.0.0.1:8001
 frontend: 127.0.0.1:8501
-public:   https://brp-api.ravenapis.com
-public:   https://client.ravenapis.com
+public:   https://$DOMESTIC_API_HOST
+public:   https://$DOMESTIC_CLIENT_HOST
 ```
 
 Before restarting a server backend, confirm the job store is pinned to runtime
@@ -146,8 +146,8 @@ Do not rely on `apps/backend/jobs` for real history.
 Deploy:
 
 ```bash
-ssh azureuser@143.64.19.35
-cd /opt/brp/staging/app
+ssh "$CN_SSH_USER@$CN_SSH_HOST"
+cd "$BRP_STAGING_APP_ROOT"
 git pull --ff-only
 sudo systemctl restart brp-staging-backend.service brp-staging-frontend.service
 curl -s http://127.0.0.1:8001/health
@@ -184,15 +184,15 @@ For any deployment that has not cut over yet, deploy React behind a separate
 preview hostname first, for example:
 
 ```text
-react-brp.ravenapis.com -> static server for /opt/brp/staging/app/apps/web/dist
-react-brp.ravenapis.com/api/* -> 127.0.0.1:8001
+$DOMESTIC_REACT_PREVIEW_HOST -> static server for $BRP_STAGING_APP_ROOT/apps/web/dist
+$DOMESTIC_REACT_PREVIEW_HOST/api/* -> 127.0.0.1:8001
 ```
 
 Suggested staging workflow:
 
 ```bash
-ssh azureuser@143.64.19.35
-cd /opt/brp/staging/app
+ssh "$CN_SSH_USER@$CN_SSH_HOST"
+cd "$BRP_STAGING_APP_ROOT"
 git pull --ff-only
 cd apps/web
 npm install
@@ -204,7 +204,7 @@ Static server requirements:
 - serve `apps/web/dist/assets/*` as static files
 - serve `apps/web/dist/index.html` for unknown non-API paths
 - proxy `/api/*` to the staging backend on `127.0.0.1:8001`
-- keep Streamlit on `client.ravenapis.com` and `brp.ravenapis.com` until the domestic React preview passes QA
+- keep Streamlit on the domestic client/app hostnames until the domestic React preview passes QA
 
 For lightweight preview hosts, including Windows servers without Node.js, the
 repository includes a Python static/proxy server:
@@ -220,23 +220,23 @@ python ops/scripts/serve_react_static.py \
 React static/proxy smoke:
 
 ```bash
-curl -I https://react-brp.ravenapis.com/
-curl -I https://react-brp.ravenapis.com/jobs
-curl -s https://react-brp.ravenapis.com/api/health
+curl -I "https://${DOMESTIC_REACT_PREVIEW_HOST}/"
+curl -I "https://${DOMESTIC_REACT_PREVIEW_HOST}/jobs"
+curl -s "https://${DOMESTIC_REACT_PREVIEW_HOST}/api/health"
 ```
 
-Browser QA before switching `brp.ravenapis.com`:
+Browser QA before switching the domestic app hostname:
 
 - Route Audit dashboard, new audit submit, Job History, job detail, maps, and AI Audit
 - Distance & Cost workbook preview, reference distance, and route cost
 - Fleet Planner demand geocode, clustering, route preview, global plan, workbook download, and submit generated plan as job
 
-If preview passes, switch the public BRP hostname by moving `brp.ravenapis.com`
-from Streamlit to the React static service. Keep Streamlit on `client.ravenapis.com`
+If preview passes, switch the public BRP hostname by moving the domestic app
+hostname from Streamlit to the React static service. Keep Streamlit on the domestic client hostname
 as a fallback/operator UI during the first React production window.
 
 KR is already in the post-cutover shape. Its public React service uses the KR
-machine's local `8501` origin, and its Tailscale preview uses local `4173`.
+machine's local `8501` origin, and its private preview uses local `4173`.
 Because KR does not currently have Node/npm in PATH, build React locally and
 copy `apps/web/dist` to KR when frontend assets change.
 
@@ -252,18 +252,18 @@ High-level KR deploy flow:
 1. Validate locally.
 2. Commit and push `main`.
 3. Build React locally with `npm run build` in `apps/web` when frontend assets changed.
-4. Pull `main` on `C:\Users\Bus.EIM\BRP`.
+4. Pull `main` in the KR active checkout recorded in the private inventory.
 5. Copy the new `apps/web/dist` to KR when frontend assets changed.
 6. Restart scheduled tasks `BRP-Backend-Preview`, `BRP-React-Preview`, and `BRP-React-Public`.
-7. Verify backend health, public React proxy health, Tailscale React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
+7. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
 
 ## Deploy To Production
 
 Production runs on the domestic server:
 
 ```text
-app:      /opt/brp/prod/app
-jobs:     /opt/brp/prod/data/jobs
+app:      $BRP_PROD_APP_ROOT
+jobs:     $BRP_PROD_JOBS_ROOT
 backend:  127.0.0.1:8000
 frontend: 127.0.0.1:8500
 ```
@@ -273,8 +273,8 @@ Only deploy to production after staging passes.
 Deploy:
 
 ```bash
-ssh azureuser@143.64.19.35
-cd /opt/brp/prod/app
+ssh "$CN_SSH_USER@$CN_SSH_HOST"
+cd "$BRP_PROD_APP_ROOT"
 git pull --ff-only
 sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
 curl -s http://127.0.0.1:8000/health
@@ -291,7 +291,7 @@ git push origin vX.Y.Z
 Then on production:
 
 ```bash
-cd /opt/brp/prod/app
+cd "$BRP_PROD_APP_ROOT"
 git fetch --tags
 git checkout vX.Y.Z
 sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
@@ -300,7 +300,7 @@ sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
 Rollback example:
 
 ```bash
-cd /opt/brp/prod/app
+cd "$BRP_PROD_APP_ROOT"
 git fetch --tags
 git checkout vX.Y.PREVIOUS
 sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
@@ -349,21 +349,21 @@ sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 Runtime data is intentionally outside git. When moving to a fresh server or replacing a server, remember these paths:
 
 ```text
-/opt/brp/osrm-data
-/opt/brp/staging/app/state/api_rate_limits
-/opt/brp/staging/data/jobs
-/opt/brp/staging/app/apps/backend/cache
-/opt/brp/staging/app/apps/client/cache
-/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
-/opt/brp/staging/app/apps/backend/outputs
-/opt/brp/staging/app/apps/client/demodata
-/opt/brp/prod/app/state/api_rate_limits
-/opt/brp/prod/data/jobs
-/opt/brp/prod/app/apps/backend/cache
-/opt/brp/prod/app/apps/client/cache
-/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
-/opt/brp/prod/app/apps/backend/outputs
-/opt/brp/prod/app/apps/client/demodata
+$BRP_OSRM_DATA_ROOT
+$BRP_STAGING_APP_ROOT/state/api_rate_limits
+$BRP_STAGING_JOBS_ROOT
+$BRP_STAGING_APP_ROOT/apps/backend/cache
+$BRP_STAGING_APP_ROOT/apps/client/cache
+$BRP_STAGING_APP_ROOT/apps/client/cache/google_geocode_usage.json
+$BRP_STAGING_APP_ROOT/apps/backend/outputs
+$BRP_STAGING_APP_ROOT/apps/client/demodata
+$BRP_PROD_APP_ROOT/state/api_rate_limits
+$BRP_PROD_JOBS_ROOT
+$BRP_PROD_APP_ROOT/apps/backend/cache
+$BRP_PROD_APP_ROOT/apps/client/cache
+$BRP_PROD_APP_ROOT/apps/client/cache/google_geocode_usage.json
+$BRP_PROD_APP_ROOT/apps/backend/outputs
+$BRP_PROD_APP_ROOT/apps/client/demodata
 ```
 
 Job JSON files may contain absolute paths to generated outputs. If jobs are copied from a local machine to a server, rewrite local repository paths to the server app path before relying on historical map links.
@@ -371,7 +371,7 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
 ## Guardrails
 
 - Do not run local OSRM Docker for normal development.
-- Do not edit directly in `/opt/brp/prod/app`.
+- Do not edit directly in the production app checkout.
 - Do not let staging and production share job directories.
 - Keep real secrets in `ops/env/local.env` on each machine/server, never in git.
 - Preserve `state/jobs`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.

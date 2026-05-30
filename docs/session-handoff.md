@@ -48,6 +48,9 @@ Recent UX state:
 - Sign out lives in the sidebar user panel.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
+- Real server addresses, usernames, private hostnames, and machine paths should
+  stay out of committed docs. Use ignored local file
+  `docs/private/ops-inventory.local.md` for those details.
 
 ## Runtime And Data Rules
 
@@ -86,12 +89,12 @@ External provider QPS:
 
 ### KR
 
-- Tailscale host: `100.87.225.85`
-- Windows user: `Bus.EiM`
-- Active checkout: `C:\Users\Bus.EIM\BRP`
-- Backend: `127.0.0.1:8001`
-- Public React origin for `brp-kr.ravenapis.com`: `127.0.0.1:8501`
-- Tailscale React preview: `http://100.87.225.85:4173`
+- South Korea Windows deployment.
+- Real private-network address, Windows user, active checkout, public hostname,
+  and preview origin belong in `docs/private/ops-inventory.local.md`.
+- Backend service uses local port `8001`.
+- Public React static/proxy service uses local port `8501`.
+- Private React preview uses local port `4173`.
 - Persistent scheduled tasks:
   - `BRP-Backend-Preview`
   - `BRP-React-Preview`
@@ -105,7 +108,7 @@ Last verified KR runtime state in this session:
 
 - backend health: ok
 - public React proxy health: ok
-- Tailscale React preview health: ok
+- private React preview health: ok
 - job files: `5`
 - client cache files: `6`
 - backend cache files: `6`
@@ -113,12 +116,12 @@ Last verified KR runtime state in this session:
 
 ### CN
 
-- Host: `143.64.19.35`
-- User: `azureuser`
+- Domestic deployment.
+- Real SSH host/user belong in `docs/private/ops-inventory.local.md`.
 - OS: Ubuntu 22.04 LTS
-- This is the CN server. Do not confuse it with the KR Tailscale host.
+- This is the CN server. Do not confuse it with the KR private-network host.
 - SSH was inaccessible from the current network; likely IP/network access policy.
-- Monday/next office-network task: install or configure Tailscale on the CN
+- Monday/next office-network task: install or configure private-network access on the CN
   server if access permits.
 
 ## Deployment Habit
@@ -127,7 +130,7 @@ For ordinary code changes:
 
 1. Validate locally.
 2. Commit and push `main`.
-3. For KR, pull on `C:\Users\Bus.EIM\BRP`.
+3. For KR, pull in the active checkout recorded in the private inventory.
 4. If React assets changed, build locally with `npm run build` in `apps/web` and
    copy `apps/web/dist` to KR.
 5. Restart KR scheduled tasks.
@@ -138,7 +141,7 @@ Docs-only changes do not need service restart.
 
 ## Known Gaps / Next Work
 
-- CN access/Tailscale remains pending.
+- CN private-network access remains pending.
 - Domestic final React cutover is still separate from the KR React cutover.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access. A

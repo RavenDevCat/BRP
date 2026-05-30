@@ -25,7 +25,7 @@ The live stack needs these services on each server:
 
 Optional access helpers:
 
-- Tailscale or another private network layer for operator access
+- a private network layer for operator access
 - systemd, tmux, launchd, or another process supervisor for long-running services
 
 ## Required System Dependencies
@@ -77,9 +77,9 @@ Do not store large routing data, runtime jobs, generated outputs, cache files, o
 Recommended server layout:
 
 ```text
-/opt/brp/app                 # Git checkout
-/opt/brp/osrm-data           # Preprocessed OSRM datasets
-/opt/brp/runtime             # Optional per-server runtime state
+/srv/brp/app                 # Git checkout
+/srv/brp/osrm-data           # Preprocessed OSRM datasets
+/srv/brp/runtime             # Optional per-server runtime state
 ```
 
 The OSRM data directory only needs the regions assigned to that server. A full local/dev stack may contain all current regions:
@@ -159,7 +159,7 @@ processes through a cross-process limiter. By default it stores state under
 separate runtime data mount:
 
 ```bash
-export BRP_API_RATE_LIMIT_DIR="/opt/brp/runtime/api_rate_limits"
+export BRP_API_RATE_LIMIT_DIR="/srv/brp/runtime/api_rate_limits"
 ```
 
 AI Audit calls use the same limiter family:
@@ -171,7 +171,7 @@ export BRP_DEEPSEEK_MAX_QPS="1.0"
 ### OSRM data and bind settings
 
 ```bash
-export OSRM_LOCAL_DATA_DIR="/opt/brp/osrm-data"
+export OSRM_LOCAL_DATA_DIR="/srv/brp/osrm-data"
 export OSRM_BIND_HOST="127.0.0.1"
 ```
 
@@ -182,7 +182,7 @@ Use `OSRM_BIND_HOST=0.0.0.0` only when OSRM ports must be reachable from outside
 ```bash
 export BRP_BACKEND_HOST="127.0.0.1"
 export BRP_BACKEND_PORT="8001"
-export BRP_BACKEND_JOBS_DIR="/opt/brp/runtime/jobs"
+export BRP_BACKEND_JOBS_DIR="/srv/brp/runtime/jobs"
 ```
 
 `BRP_BACKEND_JOBS_DIR` should always point at server-local runtime storage, not
@@ -264,21 +264,20 @@ Reference config:
 
 Current public hostnames:
 
-- `client.ravenapis.com` -> Streamlit
-- `brp.ravenapis.com` -> Streamlit
-- `brp-api.ravenapis.com` -> backend API
-- `osrm-shanghai.ravenapis.com`
-- `osrm-beijing.ravenapis.com`
-- `osrm-suzhou.ravenapis.com`
-- `osrm-xian.ravenapis.com`
-- `osrm-south-korea.ravenapis.com`
-- `osrm-korea.ravenapis.com`
+- `client.example.com` -> Streamlit
+- `brp.example.com` -> Streamlit until domestic React cutover
+- `brp-api.example.com` -> backend API
+- `osrm-shanghai.example.com`
+- `osrm-beijing.example.com`
+- `osrm-suzhou.example.com`
+- `osrm-xian.example.com`
+- `osrm-south-korea.example.com`
 
 South Korea server hostnames:
 
-- `brp-kr.ravenapis.com` -> React frontend behind Cloudflare Access
-- `react-brp-kr.ravenapis.com` -> optional React preview hostname, must be configured in Cloudflare before use
-- `brp-api-kr.ravenapis.com`
+- `kr-brp.example.com` -> React frontend behind access control
+- `kr-react-brp.example.com` -> optional React preview hostname
+- `kr-brp-api.example.com`
 
 For a deployment that has not cut over yet, React should use a separate preview
 hostname first, serve `apps/web/dist` as static assets, and route API calls to
@@ -309,8 +308,8 @@ curl -I http://127.0.0.1:8501
 If using Cloudflare Tunnel, also verify the public URLs:
 
 ```bash
-curl -i https://brp-api.ravenapis.com/health
-curl -I https://client.ravenapis.com
+curl -i "https://${DOMESTIC_API_HOST}/health"
+curl -I "https://${DOMESTIC_CLIENT_HOST}"
 ```
 
 Then run one demo workbook through the client and confirm:

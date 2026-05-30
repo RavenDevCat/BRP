@@ -77,6 +77,15 @@ export function AppShell({ children }: { children: ReactNode }) {
               {userQuery.data?.is_admin ? " · admin" : ""}
             </span>
           </div>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            icon={<LogOut className="h-4 w-4" aria-hidden="true" />}
+            onClick={signOut}
+          >
+            Sign out
+          </Button>
         </div>
       </aside>
 
@@ -90,16 +99,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {googleUsage?.enabled ? <GoogleUsagePill usage={googleUsage} percent={googleUsagePct} /> : null}
-            <Button
-              type="button"
-              variant="secondary"
-              aria-label="Sign out"
-              title="Sign out"
-              icon={<LogOut className="h-4 w-4" aria-hidden="true" />}
-              onClick={signOut}
-            >
-              <span className="hidden sm:inline">Sign out</span>
-            </Button>
             <Button
               type="button"
               variant="secondary"

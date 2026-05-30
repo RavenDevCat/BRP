@@ -10,9 +10,19 @@ import requests
 
 DEEPSEEK_API_URL = os.environ.get("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions").strip()
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip()
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
 AI_AUDIT_LANGUAGE = os.environ.get("BRP_AI_AUDIT_LANGUAGE", "English").strip() or "English"
-AI_AUDIT_TIMEOUT_SECONDS = int(os.environ.get("BRP_AI_AUDIT_TIMEOUT_SECONDS", "90") or 90)
+
+
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)) or default)
+    except ValueError:
+        return default
+
+
+AI_AUDIT_TIMEOUT_SECONDS = _int_env("BRP_AI_AUDIT_TIMEOUT_SECONDS", 90)
+AI_AUDIT_MAX_TOKENS = _int_env("BRP_AI_AUDIT_MAX_TOKENS", 1600)
 
 
 def utc_now_iso() -> str:
@@ -192,7 +202,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 1600,
+            "max_tokens": AI_AUDIT_MAX_TOKENS,
         },
         timeout=AI_AUDIT_TIMEOUT_SECONDS,
     )

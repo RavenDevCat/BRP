@@ -61,6 +61,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - Verified the KR React frontend, backend proxy, historical job detail, map artifact refresh, template downloads, and AI Audit service call.
 - Existing user jobs do not need to be rerun for this migration; AI Audit reports can be generated from the migrated history.
 
+### AI Audit Model Restored
+
+- AI Audit defaults and KR configuration were restored to `deepseek-v4-flash` instead of `deepseek-chat`.
+- AI Audit output token budget is now configurable through `BRP_AI_AUDIT_MAX_TOKENS`.
+- Existing route audit jobs do not need to be rerun; regenerate AI Audit reports when users want conclusions produced by the restored model.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

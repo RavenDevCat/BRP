@@ -4,7 +4,7 @@ This repository is BRP / Bus Route Planner. Read this file first in every new Co
 
 ## First Reads
 
-1. Read `docs/session-handoff.md` for the rolling project context.
+1. Read `docs/session-handoff.md` for the concise current project context.
 2. Read `docs/development-release-workflow.md` before running local services or deploying.
 3. Read `docs/deployment-overview.md` before fresh-server or environment setup.
 4. Read `docs/updates.md` before deciding whether a user-facing change needs a release note.
@@ -25,6 +25,7 @@ Never overwrite, reset, or delete runtime data unless the user explicitly asks:
 - generated output folders
 - `ops/env/local.env`
 - `apps/client/cache/google_geocode_usage.json`
+- `state/api_rate_limits`
 
 When deploying, verify that job history, caches, and env-specific behavior survived the deploy.
 
@@ -34,8 +35,8 @@ External provider QPS is protected with a cross-process rate limiter under `stat
 
 ## KR Deploy Pattern
 
-- Build React locally from `apps/web` with `npm run build`.
-- KR currently does not have Node/npm in PATH, so copy local `apps/web/dist` to KR after KR pulls the code.
+- If frontend assets changed, build React locally from `apps/web` with `npm run build`.
+- KR currently does not have Node/npm in PATH, so copy local `apps/web/dist` to KR after KR pulls the code when frontend assets changed.
 - Restart the KR scheduled tasks:
   - `BRP-Backend-Preview`
   - `BRP-React-Preview`
@@ -57,4 +58,4 @@ External provider QPS is protected with a cross-process rate limiter under `stat
 
 ## Session Habit
 
-After meaningful implementation rounds, update `docs/session-handoff.md`. Also ask whether `docs/updates.md` should receive a user-facing update when the change affects features, providers, routing/geocoding/planner behavior, or whether users should rerun jobs.
+After meaningful implementation rounds, update `docs/session-handoff.md` only for facts needed by the next Codex session. Also ask whether `docs/updates.md` should receive a user-facing update when the change affects features, providers, routing/geocoding/planner behavior, or whether users should rerun jobs.

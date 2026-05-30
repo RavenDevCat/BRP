@@ -7,14 +7,14 @@ This structure separates the public client, the solver backend, operational scri
 ## Structure
 
 - `apps/client`
-  - Streamlit client used by end users
-  - handles Excel upload, geocoding, subway lookup, local preprocessing, and result rendering
+  - legacy Streamlit/operator client
+  - still owns shared Python workbook, geocoding, cache, and output helpers used by server-side flows
 - `apps/web`
-  - isolated React frontend preview
-  - reads additive backend `/api/*` routes while Streamlit remains the production client
+  - React frontend for Route Audit and Side Tools
+  - KR public frontend now serves this app; domestic public hostnames remain Streamlit until their own cutover
 - `apps/backend`
   - backend compute service
-  - handles OSRM matrix building, OR-Tools solving, final route enrichment, and JSON responses
+  - handles `/api/*`, workbook preview/submit helpers, OSRM matrix building, OR-Tools solving, final route enrichment, AI Audit, and JSON responses
 - `docs`
   - architecture and operational notes
 - `ops`
@@ -36,7 +36,8 @@ This repository is intended to store the codebase and documentation only.
 - Keep out of Git:
   - Python virtual environments such as `.venv/`
   - runtime caches under `apps/client/cache` and `apps/backend/cache`
-  - saved backend jobs under `apps/backend/jobs`
+  - saved backend jobs under `state/jobs` or the server's `BRP_BACKEND_JOBS_DIR`
+  - provider coordination files under `state/api_rate_limits`
   - rendered HTML outputs under `apps/client/outputs` and `apps/backend/outputs`
   - local secrets such as `.env` files and Streamlit secrets
   - OSRM datasets and preprocessed `.osrm*` files
@@ -57,16 +58,20 @@ The code repository stays lightweight, while `ops/scripts/run_osrm_stack.sh` mou
 
 ## Current live flow
 
-1. User uploads Excel in `apps/client`.
-2. Client geocodes and aggregates stops locally.
-3. Client sends prepared payload to `apps/backend`.
-4. Backend selects the correct OSRM endpoint by country/city.
-5. Backend computes three scenarios and returns structured results.
-6. Client renders HTML maps and summary metrics.
+1. Users enter through React where a server has been cut over, or through the
+   legacy Streamlit client on deployments that have not been cut over yet.
+2. Route Audit uploads a workbook and calls backend `/api/*` routes for preview,
+   validation, job creation, history, details, and AI Audit.
+3. Server-side Python helpers parse workbooks, reuse geocode/cache data, prepare
+   stops and fleet inputs, and keep provider keys out of the browser.
+4. The backend persists the job, starts planner work, selects the configured OSRM
+   endpoint by country/city, solves scenarios, and writes generated outputs.
+5. The frontend renders job history, AI Audit, Audit Detail, Actions, Baselines,
+   Maps, Diagnostics, and Side Tools such as Distance & Cost and Fleet Planner.
 
-The new `apps/web` frontend is being developed as a side-by-side preview. It should
-not replace `apps/client` until upload, job submission, result rendering, and rollback
-checks are complete.
+KR has already switched `brp-kr.ravenapis.com` to the React frontend. Domestic
+`client.ravenapis.com` and `brp.ravenapis.com` still serve Streamlit until a
+separate domestic React cutover is performed.
 
 ## Runtime scripts
 
@@ -78,11 +83,13 @@ checks are complete.
 
 ## Required API Keys
 
-Set these in your shell environment before running the client:
+Set these in `ops/env/local.env` or the shell environment before running local
+services:
 
 - `AMAP_API_KEY`
 - `KAKAO_REST_API_KEY`
 - `GOOGLE_GEOCODE_API_KEY`
+- `DEEPSEEK_API_KEY` for AI Audit
 
 ## Operations
 

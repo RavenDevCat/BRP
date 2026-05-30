@@ -18,7 +18,9 @@ The live stack needs these services on each server:
 
 1. OSRM Docker containers
 2. Backend Python service
-3. Client Streamlit service
+3. Frontend service:
+   - React static/proxy service where that deployment has cut over
+   - Streamlit service where that deployment is still on the legacy UI
 4. Public access layer, currently Cloudflare Tunnel
 
 Optional access helpers:
@@ -33,6 +35,7 @@ Install these before running the application:
 - Git
 - Python 3.11-compatible runtime or Conda environment
 - Docker
+- Node.js/npm only if the server builds React assets locally
 - cloudflared, if using Cloudflare Tunnel
 - curl or an equivalent HTTP checker
 
@@ -123,12 +126,13 @@ That script expects `south-korea-latest.osrm` plus the matching generated `.osrm
 
 ### API keys
 
-Set these before starting the client:
+Set these before starting the backend/frontend services:
 
 ```bash
 export AMAP_API_KEY="..."
 export KAKAO_REST_API_KEY="..."
 export GOOGLE_GEOCODE_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
 ```
 
 The Google geocode usage counter is KR-only by policy. Leave it hidden on
@@ -208,7 +212,7 @@ export OSRM_USE_BUILTIN_DEFAULTS=false
 
 This prevents application code from falling back to local development ports for regions that are not configured on that server. Requests for unsupported regions will fail clearly with a missing-OSRM-endpoint error instead of silently calling the wrong local container.
 
-### Client settings
+### Frontend and client settings
 
 ```bash
 export BRP_BACKEND_BASE_URL="http://127.0.0.1:8001"
@@ -219,14 +223,19 @@ export STREAMLIT_SERVER_PORT="8501"
 
 If the client reaches the backend through a tunnel or reverse proxy, set `BRP_BACKEND_BASE_URL` to that internal or public backend URL.
 
+React defaults to same-origin `/api`. In normal production-style serving, keep
+that default and configure the static host to proxy `/api/*` to the backend.
+Use `VITE_API_BASE_URL` only for special builds that intentionally target a
+different API origin.
+
 ## Default Ports
 
 | Service | Port | Notes |
 | --- | ---: | --- |
-| Client Streamlit | `8501` | End-user UI |
+| Client Streamlit | `8501` | Legacy/operator UI; still public on domestic hostnames until domestic React cutover |
 | Backend API | `8001` | Job API and health endpoint |
-| React frontend | `5173` | Local development only unless a static preview host is explicitly configured |
-| React static preview | `4173` or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy |
+| React Vite dev | `5173` | Local development |
+| React static/proxy | `4173`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; KR public React uses local `8501` |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -239,7 +248,7 @@ Start services in this order:
 
 1. OSRM containers
 2. Backend service
-3. Client Streamlit service
+3. Frontend service, either React static/proxy or Streamlit
 4. Cloudflare Tunnel or the chosen public access layer
 
 See `docs/development-release-workflow.md` for concrete commands and health checks.
@@ -271,10 +280,10 @@ South Korea server hostnames:
 - `react-brp-kr.ravenapis.com` -> optional React preview hostname, must be configured in Cloudflare before use
 - `brp-api-kr.ravenapis.com`
 
-React should use a separate preview hostname first, serve `apps/web/dist` as
-static assets, and route API calls to the appropriate backend before moving the
-main BRP hostname. KR has already switched its public frontend origin to React
-on local port `8501`.
+For a deployment that has not cut over yet, React should use a separate preview
+hostname first, serve `apps/web/dist` as static assets, and route API calls to
+the appropriate backend before moving the main BRP hostname. KR has already
+switched its public frontend origin to React on local port `8501`.
 
 Minimum React static routing rules:
 
@@ -311,6 +320,13 @@ Then run one demo workbook through the client and confirm:
 - backend job finishes
 - result summary renders
 - route map downloads or previews are available
+
+For React deployments, also check direct navigation to:
+
+- `/new`
+- `/jobs`
+- `/distance`
+- `/fleet`
 
 ## Multi-Server Note
 

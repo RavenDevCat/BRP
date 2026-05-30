@@ -4,7 +4,7 @@ This is the maintained high-level architecture note. For daily commands and rele
 
 ## Repository Layout
 
-- `apps/client`: Streamlit UI, workbook intake, client-side geocoding, demand preview, job history, map/result rendering.
+- `apps/client`: legacy Streamlit/operator UI plus shared Python helpers for workbook intake, geocoding, caches, demand preview, and map/result rendering.
 - `apps/web`: React frontend for Route Audit plus side tools such as Distance & Cost and Fleet Planner.
 - `apps/backend`: HTTP job service, planner execution, route solving, AI audit integration, generated output handling.
 - `ops`: environment examples, Cloudflare examples, and local/server run scripts.
@@ -35,18 +35,20 @@ cloudflared.service           # public access layer
 
 Local development does not run OSRM Docker. Local `127.0.0.1:5002-5006` is an SSH port-forward into the domestic server.
 
-## Client
+## Streamlit Client And Python Helpers
 
 Location: `apps/client`
 
 Responsibilities:
 
+- provide the legacy Streamlit/operator UI where a deployment has not cut over to React
 - accept workbook uploads
 - build and download workbook templates
 - validate current-plan and demand workbooks
 - geocode addresses through configured providers
 - reuse client cache files under `apps/client/cache`
-- submit prepared jobs to the backend
+- provide Python helper modules used by backend `/api/*` routes so provider keys stay server-side
+- submit prepared jobs to the backend in the legacy UI
 - display job history, audit summaries, maps, and downloads
 
 ## React Frontend
@@ -61,9 +63,10 @@ Current status:
 - includes Side Tools:
   - Distance & Cost
   - Fleet Planner
-- not currently assigned a public static hostname
-
-Do not assume `brp.ravenapis.com` serves React until Cloudflare routing and static hosting are explicitly changed.
+- production-style serving uses static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
+- KR public frontend `https://brp-kr.ravenapis.com` serves React from the KR server's local `8501` origin
+- KR Tailscale preview can serve the same static/proxy stack from local `4173`
+- domestic `https://client.ravenapis.com` and `https://brp.ravenapis.com` still serve Streamlit until a separate domestic React cutover
 
 ## Backend
 
@@ -72,7 +75,10 @@ Location: `apps/backend`
 Responsibilities:
 
 - receive prepared jobs from the client
+- expose the additive `/api/*` routes used by React
 - persist job history under `BRP_BACKEND_JOBS_DIR`
+- record job ownership through `owner_email`
+- start planner workers so multiple submitted jobs may run concurrently
 - select OSRM endpoint by country/city from explicit environment variables
 - build OSRM time and distance matrices
 - solve and enrich routes
@@ -178,18 +184,26 @@ Do not commit runtime data or secrets.
 Runtime data to preserve during server moves:
 
 ```text
+/opt/brp/staging/app/state/api_rate_limits
 /opt/brp/osrm-data
 /opt/brp/staging/data/jobs
 /opt/brp/staging/app/apps/backend/cache
 /opt/brp/staging/app/apps/client/cache
+/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
 /opt/brp/staging/app/apps/backend/outputs
 /opt/brp/staging/app/apps/client/demodata
+/opt/brp/prod/app/state/api_rate_limits
 /opt/brp/prod/data/jobs
 /opt/brp/prod/app/apps/backend/cache
 /opt/brp/prod/app/apps/client/cache
+/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
 /opt/brp/prod/app/apps/backend/outputs
 /opt/brp/prod/app/apps/client/demodata
 ```
+
+Lightweight deployments may keep job history under repository-level
+`state/jobs` and provider coordination under `state/api_rate_limits`. Preserve
+both alongside caches, generated outputs, and server-local `ops/env/local.env`.
 
 ## Separation Of Concerns
 
@@ -197,4 +211,4 @@ Runtime data to preserve during server moves:
 - Secrets live in server-local `ops/env/local.env`.
 - OSRM data lives outside Git.
 - Staging and production have separate checkouts, env files, job stores, caches, and output folders.
-- Cloudflare Tunnel and OSRM stay on the domestic server for long-running service stability.
+- Cloudflare Tunnel and OSRM stay with the server that owns that deployment's runtime data.

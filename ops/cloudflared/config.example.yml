@@ -4,8 +4,22 @@ credentials-file: /home/brp/.cloudflared/YOUR_TUNNEL_ID.json
 ingress:
   - hostname: client.ravenapis.com
     service: http://127.0.0.1:8501
+
+  # React preview/static frontend.
+  # The static service behind this hostname must serve apps/web/dist, provide
+  # SPA fallback to index.html, and proxy /api/* to the backend.
+  - hostname: react-brp.ravenapis.com
+    service: http://127.0.0.1:4173
+
+  # Keep brp.ravenapis.com on Streamlit until React preview QA passes.
+  # After cutover, point this hostname at the same React static service.
   - hostname: brp.ravenapis.com
+    service: http://127.0.0.1:8501
+
+  # Direct backend API hostname for clients and diagnostics.
+  - hostname: brp-api.ravenapis.com
     service: http://127.0.0.1:8001
+
   - hostname: osrm-shanghai.ravenapis.com
     service: http://127.0.0.1:5002
   - hostname: osrm-beijing.ravenapis.com

@@ -295,7 +295,10 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="min-w-0">
           <h1 className="break-words text-2xl font-semibold tracking-normal">{getJobName(job)}</h1>
-          <p className="mt-1 font-mono text-xs text-muted-foreground">{job.job_id}</p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+            <span className="font-mono">{job.job_id}</span>
+            <span>Submitted by {job.owner_email || "Unknown"}</span>
+          </div>
         </div>
         <Badge tone={getJobStatusTone(job.status)}>{job.status}</Badge>
       </div>

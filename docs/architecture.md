@@ -108,7 +108,7 @@ Current public routes include:
 - `https://osrm-south-korea.ravenapis.com`
 - `https://osrm-korea.ravenapis.com`
 
-The South Korea server is special: operator access should use the existing Tailscale route rather than the public hostname.
+The South Korea server is special: operator access should use the existing Tailscale route. `https://brp-kr.ravenapis.com` is Cloudflare Access-protected and currently serves the React frontend from the KR machine's local `8501` origin.
 
 ## Runtime Data
 

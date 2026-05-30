@@ -1159,7 +1159,7 @@ Recommended next step:
 - Backend was restarted with the KR conda Python:
   - `C:\Users\Bus.EIM\.conda\envs\brp\python.exe`
   - backend listens on `127.0.0.1:8001`
-  - Streamlit remains on `127.0.0.1:8501`
+  - Streamlit originally remained on `127.0.0.1:8501`; later KR public frontend was switched to React on `8501`
 - React preview is running on KR through `ops/scripts/serve_react_static.py`:
   - static/proxy service listens on `0.0.0.0:4173`
   - `/api/*` proxies to `http://127.0.0.1:8001`
@@ -1180,10 +1180,36 @@ Recommended next step:
 ### 2026-05-30 Backend History Persistence Follow-Up
 
 - Root cause for empty KR React history:
-  - KR had no `ops/env/local.env`
-  - backend fell back to the old default `apps/backend/jobs`
-  - that directory only contained an empty `index.json`
-  - no old KR job JSON files were found under `C:\Users\Bus.EIM`
+  - React/backend were first deployed into a new checkout: `C:\Users\Bus.EIM\BRP`
+  - the old runtime checkout was `C:\BRP\busing routing designer`
+  - old `local.env`, job history, cache, and outputs were still under the old checkout
+  - the new checkout initially had no `ops/env/local.env`, so backend fell back to an empty `apps/backend/jobs`
+- Migrated runtime data from `C:\BRP\busing routing designer` to `C:\Users\Bus.EIM\BRP` without deleting the old directory:
+  - merged backend jobs into `C:\Users\Bus.EIM\BRP\state\jobs`
+  - restored 4 historical jobs: `ffdaa51faf64`, `d720aa27ef38`, `6d5ebbdc6aa2`, `48e52ba5f367`
+  - copied client cache, Distance & Cost history, backend/client outputs, and local env files
+  - adjusted new `ops\env\local.env` to use `BRP_BACKEND_JOBS_DIR=C:/Users/Bus.EIM/BRP/state/jobs`
 - Code and run scripts were updated so backend history defaults to `state/jobs` under the repository root.
 - Backend now rebuilds `index.json` from existing job JSON files if the index is missing or empty.
 - KR should keep `BRP_BACKEND_JOBS_DIR=C:\Users\Bus.EIM\BRP\state\jobs` in server-local `ops/env/local.env`.
+- React `/jobs` and job detail were browser-verified after migration; history shows 4 runs and job `48e52ba5f367` renders detail metrics.
+
+### 2026-05-30 KR Public React Cutover
+
+- Cloudflared on KR is a remote-managed token tunnel, so local config files cannot add `react-brp-kr.ravenapis.com`; that hostname must be added in Cloudflare Dashboard/Zero Trust if needed.
+- Existing Cloudflare route `brp-kr.ravenapis.com` points to the KR machine's `127.0.0.1:8501`.
+- Switched KR public frontend origin by replacing Streamlit on `8501` with `ops/scripts/serve_react_static.py`.
+- Current KR services:
+  - backend: `127.0.0.1:8001`
+  - public React origin for `brp-kr.ravenapis.com`: `127.0.0.1:8501`
+  - Tailscale React preview: `0.0.0.0:4173`
+  - Cloudflare Access remains in front of `brp-kr.ravenapis.com`
+- Persistent Windows scheduled tasks:
+  - `BRP-Backend-Preview`
+  - `BRP-React-Preview`
+  - `BRP-React-Public`
+- Validation:
+  - KR origin `http://127.0.0.1:8501/api/health` returned OK
+  - KR origin `http://127.0.0.1:8501/api/jobs` returned historical jobs
+  - KR origin `/` and `/jobs` returned React static HTML from `BRPReactStatic/1.0`
+  - public `https://brp-kr.ravenapis.com` still returns Cloudflare Access login for unauthenticated requests, as expected

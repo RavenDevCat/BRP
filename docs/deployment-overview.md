@@ -234,13 +234,14 @@ Current public hostnames:
 
 South Korea server hostnames:
 
-- `brp-kr.ravenapis.com`
-- `react-brp-kr.ravenapis.com`
+- `brp-kr.ravenapis.com` -> React frontend behind Cloudflare Access
+- `react-brp-kr.ravenapis.com` -> optional React preview hostname, must be configured in Cloudflare before use
 - `brp-api-kr.ravenapis.com`
 
 React should use a separate preview hostname first, serve `apps/web/dist` as
 static assets, and route API calls to the appropriate backend before moving the
-main BRP hostname.
+main BRP hostname. KR has already switched its public frontend origin to React
+on local port `8501`.
 
 Minimum React static routing rules:
 

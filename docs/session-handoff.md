@@ -1348,3 +1348,5 @@ Recommended next step:
   - `python3 -m py_compile apps/client/client_runtime.py apps/backend/backend_service.py`
   - concurrent local smoke with 32 processes produced usage `32`
   - near-limit smoke from `9999` with 3 processes produced one success, two quota failures, and final usage `10000`
+  - KR Windows smoke with subprocess concurrency produced usage `16` from 16 simultaneous reservations
+  - KR Windows near-limit smoke from `9999` with 3 subprocesses produced one success, two quota failures, and final usage `10000`

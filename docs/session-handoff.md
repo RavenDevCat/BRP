@@ -28,10 +28,12 @@ Reference overview:
 - `docs/architecture.md` for the maintained system architecture.
 - `docs/development-release-workflow.md` for local development, staging, production, and current server operations.
 - `docs/deployment-overview.md` for fresh-environment setup.
+- `docs/updates.md` for major user-facing product and operations updates.
 
 Current note:
 
 - Old planning docs were removed in favor of the maintained docs above. Keep future process and architecture updates in those files plus this handoff.
+- Future sessions should remind the user to consider a `docs/updates.md` entry when a change adds a major user-facing tool, switches providers, changes routing/geocoding/planner behavior, or may require users to rerun jobs to refresh conclusions.
 - `apps/client/app.py` now presents `Current Plan Audit` in a more report-style layout:
   - "Audit Story" summary block
   - improvement-path / action-oriented narrative ahead of technical evidence
@@ -657,7 +659,7 @@ Recommended next step:
   4. result tabs and audit evidence views
   5. maps
   6. AI report and printable/exportable report views
-  7. Distance Checker
+  7. Distance & Cost
   8. Fleet Planner / future automatic planning workflow
 - Near-term rule:
   - continue using Streamlit to validate algorithms and business workflow quickly
@@ -861,7 +863,7 @@ Recommended next step:
 
 ### 2026-05-29 React Closeout
 
-- Product name is now `BRP-Busing Routing Planner`.
+- Product name is now `BRP: Bus Route Planner`.
 - React app branding uses `apps/web/public/bus-front.svg` for the sidebar/mobile logo and browser favicon.
 - `apps/web/index.html` title and favicon are aligned to the product name.
 - Jobs UI has moved from a flat history table to a master-detail workspace:
@@ -908,7 +910,7 @@ Recommended next step:
   - Map artifact: `/api/jobs/c273b7efbb16/artifacts/current_plan?refresh=1`
   - React page: `/jobs`
 - Remaining React migration candidates:
-  - Distance Checker
+  - Distance & Cost
   - Fleet Planner Preview
 
 ### React Deployment Notes
@@ -930,3 +932,201 @@ Recommended next step:
 - Weekend handoff expectation:
   - user may continue from Mac through OneDrive-synced repo
   - before handing over, sync this file plus `docs/development-release-workflow.md` with the final state of the React migration
+
+### 2026-05-30 Mac Local + React Continuation
+
+- Active local repo moved to:
+  - `/Users/alexus/Developer/BRP`
+- Mac local runtime now uses:
+  - Anaconda Apple Silicon install at `/opt/anaconda3`
+  - conda env `/opt/anaconda3/envs/brp`
+  - `BACKEND_PYTHON=/opt/anaconda3/envs/brp/bin/python`
+  - `CLIENT_PYTHON=/opt/anaconda3/envs/brp/bin/python`
+- `ops/scripts/run_backend.sh` and `ops/scripts/run_client.sh` now default to `/opt/anaconda3/envs/brp/bin/python` instead of the removed Homebrew Miniforge path.
+- Local runtime data was reconciled after the OneDrive-to-local move:
+  - `BRP_BACKEND_JOBS_DIR=/Users/alexus/Developer/BRP/state/jobs`
+  - historical job JSON paths were rewritten from the old OneDrive checkout path to `/Users/alexus/Developer/BRP`
+  - historical `/api/jobs` now returns the copied job history again
+- React jobs workspace responsive fix:
+  - non-`xl` windows now collapse the job History panel by default when a job is selected
+  - the History list height is capped on narrower layouts so it no longer consumes the whole viewport
+- React Distance & Cost migration:
+  - added backend API:
+    - `POST /api/distance-checker/workbook-preview`
+    - `POST /api/distance-checker/reference`
+    - `POST /api/distance-checker/route-cost`
+  - added React route:
+    - `/distance`
+  - added shell navigation item under the dedicated `Side Tools` group:
+    - `Distance & Cost`
+  - implemented Reference Distance Check:
+    - upload `.xlsx` / `.xlsm`
+    - preview sheets, columns, row count, and sample rows
+    - select address/city/country columns
+    - enter reference stop
+    - run road or straight-line distance check
+    - show summary metrics and result table
+  - implemented Current Plan Route Cost:
+    - upload `.xlsx` / `.xlsm`
+    - map route, address, stop-order, bus-type, city, and country columns
+    - choose China or South Korea market defaults
+    - adjust diesel price and fuel efficiency
+    - calculate per-route road distance, duration, diesel liters, and one-way diesel cost
+    - show per-route results and leg-by-leg details
+  - backend reuses existing `apps/client/distance_tool.py` geocoding, OSRM, and straight-line logic
+  - results are saved to the existing `apps/client/cache/distance_checker_jobs.json`
+- Validation:
+  - Python compile passed for `apps/backend/backend_service.py`
+  - React build passed with `npm run build`
+  - API smoke passed for `current-plan-assessment-test-shanghai.xlsx` workbook preview:
+    - sheets: `current_plan_assignments`, `current_plan_fleet`
+    - 10 assignment rows
+    - suggested address/city/country columns detected
+  - Reference distance smoke passed in straight-line mode:
+    - 10 rows
+    - 10 resolved
+    - 0 failed
+  - Route cost endpoint smoke passed with a one-stop generated workbook:
+    - 1 route
+    - 0 OSRM legs
+    - CNY/RMB summary returned successfully
+  - `/distance` returns the Vite React app shell locally
+- Remaining React migration candidates:
+  - Fleet Planner Preview geocode / clustering / OSRM route preview / global OR-Tools plan
+- React navigation naming update:
+  - product name is now `BRP: Bus Route Planner`
+  - primary workflow is now named `Route Audit`
+  - main audit actions use `New Audit` / `Audit History`
+  - auxiliary tools live under a separate `Side Tools` sidebar group
+- Update-log process added:
+  - `docs/updates.md` tracks major user-facing product and operations updates, not code-level diffs
+  - future sessions should ask whether to record major feature/provider/behavior updates there
+
+### 2026-05-30 Fleet Planner React First Slice
+
+- Added backend API:
+  - `GET /api/fleet-planner/demand-template`
+  - `POST /api/fleet-planner/preview`
+  - `POST /api/fleet-planner/geocode`
+  - `POST /api/fleet-planner/clusters`
+  - `POST /api/fleet-planner/route-preview`
+  - `POST /api/fleet-planner/global-plan`
+  - `POST /api/fleet-planner/submit-generated-plan`
+- Added React route:
+  - `/fleet`
+- Added `Fleet Planner` under the `Side Tools` sidebar group.
+- Implemented Fleet Planner Preview first slice:
+  - download demand workbook template
+  - optional `.xlsx` demand workbook upload and preview
+  - manual rider-group entry
+  - market selection (`KR` / `CN`)
+  - planning mode selection (`balanced`, `cost_saver`, `comfort_saver`)
+  - bus monitor seats control
+  - active assumption metrics
+  - recommended vehicle table
+  - estimated vehicle mix table
+  - vehicle catalog table
+- Implemented Demand Geocode Preview:
+  - validates/geocodes uploaded demand workbook
+  - reuses existing geocode cache/provider logic from `apps/client/demand_input.py`
+  - shows school status, resolved rows, failed rows, resolved students, and cache hits
+  - shows geocode result table
+  - renders existing Folium demand geocode map HTML inside the React page
+- Implemented Demand Clustering Preview:
+  - builds clusters from the existing geocode result without rerunning geocode
+  - supports `Direction Sectors` values of `4`, `8`, and `12`
+  - reuses `apps/client/demand_clustering.py`
+  - shows cluster count, resolved points, resolved students, failed points, and max vehicle capacity
+  - shows cluster table and expandable stop detail
+  - renders existing Folium cluster map HTML inside the React page
+- Implemented OSRM Route Preview:
+  - builds routes from the current cluster result without rerunning geocode or clustering
+  - supports `To School` and `From School` service direction
+  - reuses `apps/client/demand_routing.py` OSRM matrix and OR-Tools/greedy fallback ordering logic
+  - applies the current market/mode/monitor-seat context and max-route-duration target
+  - splits overlong clusters once by distance-from-school when a route exceeds the target
+  - shows route metrics, route table, expandable stop detail, and Folium route map HTML
+- Implemented generated plan workbook download:
+  - route preview returns `fleet_planner_generated_plan.xlsx`
+  - global plan returns `fleet_planner_global_plan.xlsx`
+  - workbook generation reuses `apps/client/demand_routing.py`
+- Implemented Global OR-Tools Plan:
+  - builds from the demand geocode result without requiring cluster preview
+  - supports `To School` and `From School` service direction
+  - reuses `apps/client/demand_global_optimizer.py`
+  - shows route metrics, candidate vehicle count, solver, route table, stop detail, map, and workbook download
+- Implemented Global Plan job submission API:
+  - converts the global plan into the legacy current-plan workbook shape internally
+  - prepares the existing backend planner payload
+  - creates a normal backend job owned by the current user
+  - starts the existing background worker
+- Backend reuses existing Streamlit-side modules:
+  - `apps/client/demand_input.py`
+  - `apps/client/fleet_selector.py`
+  - `apps/client/planning_assumptions.py`
+  - `apps/client/vehicle_catalog.py`
+  - `apps/client/demand_clustering.py`
+  - `apps/client/demand_routing.py`
+  - `apps/client/demand_global_optimizer.py`
+- Validation:
+  - Python compile passed for `apps/backend/backend_service.py`
+  - React build passed with `npm run build`
+  - demand template GET returned `200`
+  - manual rider-group preview returned recommended vehicles for KR and CN smoke payloads
+  - demand geocode smoke passed with `apps/client/demodata/demand-demo-shanghai-50.xlsx`:
+    - 50 student rows
+    - 50 resolved
+    - 0 failed
+    - 107 resolved students
+    - map HTML generated
+  - demand clustering smoke passed with the same workbook:
+    - 9 clusters
+    - 50 resolved points
+    - 0 failed points
+    - 107 resolved students
+    - cluster map HTML generated
+  - route preview smoke passed with the same workbook:
+    - 9 routes
+    - 93.79 km total distance
+    - 141.8 min total duration
+    - 59 stop-detail rows
+    - route map HTML generated
+    - generated-plan workbook base64 returned
+  - global plan smoke passed with the same workbook:
+    - 5 routes
+    - 94.65 km total distance
+    - 137.7 min total duration
+    - 59 candidate vehicles
+    - 55 stop-detail rows
+    - global map HTML generated
+    - global-plan workbook base64 returned
+  - submit-generated-plan smoke passed against isolated temp backend state:
+    - temporary jobs dir: `/private/tmp/brp-submit-smoke-jobs`
+    - created job `b4c833054589`
+    - prepared payload had 51 input rows
+    - worker started successfully
+    - test job was immediately canceled
+  - `/fleet` returns the Vite React app shell locally
+- Streamlit Fleet Planner migration status:
+  - Fleet Planner Preview, geocode, clustering, route preview, global plan, generated workbook download, and global-plan job submission are now represented in React.
+
+### 2026-05-30 React QA Smoke
+
+- Renamed the side tool from `Distance Checker` to `Distance & Cost` in user-facing React and Streamlit UI plus maintained docs.
+  - Internal API paths remain `/api/distance-checker/...` for compatibility.
+- React `/distance` browser check passed:
+  - page title shows `Distance & Cost`
+  - reference-distance and route-cost tabs render
+- React `/fleet` browser check passed:
+  - Fleet Planner page renders
+  - scenario controls, geocode/cluster/route/global-plan buttons, and demand template link are visible
+- Route Audit backend/frontend smoke passed with `apps/client/demodata/current-plan-assessment-test-shanghai.xlsx`:
+  - workbook preview returned 8 input stops and 3 current routes
+  - submitted real local job `8dff49b766d0` with custom name `QA Smoke`
+  - job transitioned `queued` -> `running` -> `succeeded`
+  - job detail rendered in React Job History
+  - displayed metrics included 8 input stops, 3 current routes, 10 assignments, and 126.5 km current distance
+- Diff review follow-up:
+  - Fleet Planner now clears stale preview/geocode/cluster/route/global-plan results when scenario settings, sectors, or directions change.
+  - Distance & Cost now clears stale result tables when workbook sheet, column mapping, reference stop, distance mode, market defaults, diesel price, or fuel efficiency changes.
+  - AI audit prompt payload/output handling changes are considered part of the same overall stability pass and do not need to be isolated as a separate change set.

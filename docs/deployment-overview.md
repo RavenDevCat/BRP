@@ -186,7 +186,7 @@ If the client reaches the backend through a tunnel or reverse proxy, set `BRP_BA
 | --- | ---: | --- |
 | Client Streamlit | `8501` | End-user UI |
 | Backend API | `8001` | Job API and health endpoint |
-| React preview | `5173` | Local development only unless a static preview host is explicitly configured |
+| React frontend | `5173` | Local development only unless a static preview host is explicitly configured |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |

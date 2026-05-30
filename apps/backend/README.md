@@ -1,6 +1,6 @@
-# BRP-Busing Routing Planner
+# BRP: Bus Route Planner Backend
 
-Local interface scaffold for the bus routing planner.
+Backend project for BRP: Bus Route Planner.
 
 ## Current Scope
 

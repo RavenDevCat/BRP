@@ -12,7 +12,7 @@ fi
 
 cd "$ROOT_DIR/apps/client"
 
-DEFAULT_BRP_PYTHON="/opt/homebrew/Caskroom/miniforge/base/envs/brp/bin/python"
+DEFAULT_BRP_PYTHON="/opt/anaconda3/envs/brp/bin/python"
 if [ -z "${CLIENT_PYTHON:-}" ] && [ -x "$DEFAULT_BRP_PYTHON" ]; then
   CLIENT_PYTHON="$DEFAULT_BRP_PYTHON"
 else

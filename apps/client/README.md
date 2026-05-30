@@ -1,6 +1,6 @@
 # BRP
 
-Client-only project for the Busing Routing Planner split architecture.
+Client-only project for the BRP: Bus Route Planner split architecture.
 
 What lives here:
 - `app.py`: Streamlit client

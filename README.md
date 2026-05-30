@@ -92,6 +92,8 @@ Set these in your shell environment before running the client:
   - `docs/development-release-workflow.md`
 - Fresh deployment overview:
   - `docs/deployment-overview.md`
+- Major user-facing updates:
+  - `docs/updates.md`
 - Codex handoff:
   - `docs/session-handoff.md`
 

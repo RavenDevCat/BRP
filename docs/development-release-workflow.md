@@ -88,6 +88,14 @@ Invoke-WebRequest http://127.0.0.1:5173 -UseBasicParsing
 Invoke-RestMethod 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?number=1'
 ```
 
+Provider safety checks:
+
+- Do not bypass `CrossProcessRateLimiter` for Kakao, Google, AMap, or DeepSeek calls.
+- Do not write `apps/client/cache/google_geocode_usage.json` directly; use the atomic reservation helpers.
+- Keep `state/api_rate_limits` as runtime coordination state, or set `BRP_API_RATE_LIMIT_DIR` to an equivalent server-local runtime path.
+- Provider QPS limiting should gate only outbound requests, not whole jobs.
+- OSRM capacity should be handled separately from external provider QPS.
+
 The React web frontend in `apps/web` is an isolated preview on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001` and does not replace the
 Streamlit client on `8501`.

@@ -1176,3 +1176,14 @@ Recommended next step:
   - Mac over Tailscale `http://100.87.225.85:4173/api/health` returned OK
   - Browser QA via temporary SSH tunnel confirmed `/jobs`, `/distance`, `/fleet`, and `/new` render with backend OK
 - `8001` and `8501` remain loopback-only from outside; React preview is the external Tailscale entry for the new frontend.
+
+### 2026-05-30 Backend History Persistence Follow-Up
+
+- Root cause for empty KR React history:
+  - KR had no `ops/env/local.env`
+  - backend fell back to the old default `apps/backend/jobs`
+  - that directory only contained an empty `index.json`
+  - no old KR job JSON files were found under `C:\Users\Bus.EIM`
+- Code and run scripts were updated so backend history defaults to `state/jobs` under the repository root.
+- Backend now rebuilds `index.json` from existing job JSON files if the index is missing or empty.
+- KR should keep `BRP_BACKEND_JOBS_DIR=C:\Users\Bus.EIM\BRP\state\jobs` in server-local `ops/env/local.env`.

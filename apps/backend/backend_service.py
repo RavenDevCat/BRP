@@ -42,9 +42,12 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 
 
 BASE_DIR = Path(__file__).resolve().parent
+REPO_ROOT = BASE_DIR.parent.parent
 CLIENT_DIR = BASE_DIR.parent / "client"
 DEMO_DATA_DIR = CLIENT_DIR / "demodata"
-JOBS_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", str(BASE_DIR / "jobs"))).expanduser()
+DEFAULT_JOBS_DIR = REPO_ROOT / "state" / "jobs"
+RAW_JOBS_DIR = os.environ.get("BRP_BACKEND_JOBS_DIR", "").strip()
+JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
@@ -1055,6 +1058,7 @@ class JobStore:
         self.jobs_dir.mkdir(parents=True, exist_ok=True)
         if not self.index_path.exists():
             self.index_path.write_text("[]", encoding="utf-8")
+        self.rebuild_index_from_jobs_if_needed()
         self.reconcile_running_jobs()
 
     def _job_path(self, job_id: str) -> Path:
@@ -1108,6 +1112,29 @@ class JobStore:
         if not updated:
             index_entries.insert(0, summary)
         self._save_index_unlocked(index_entries)
+
+    def rebuild_index_from_jobs_if_needed(self) -> None:
+        with self.lock:
+            if self._load_index_unlocked():
+                return
+            records: list[dict[str, Any]] = []
+            for job_path in self.jobs_dir.glob("*.json"):
+                if job_path.name == self.index_path.name:
+                    continue
+                try:
+                    payload = json.loads(job_path.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                if isinstance(payload, dict) and str(payload.get("job_id", "")).strip():
+                    records.append(payload)
+            if not records:
+                return
+            records.sort(
+                key=lambda item: str(item.get("created_at") or item.get("started_at") or item.get("finished_at") or ""),
+                reverse=True,
+            )
+            for record in records:
+                self._upsert_index_entry_unlocked(record)
 
     def create_job(
         self,

@@ -43,6 +43,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - KR React preview serves the static React build and proxies `/api/*` to the KR backend from the same host.
 - This is a preview/operator deployment only; existing user jobs do not need to be rerun.
 
+### Backend Job History Persistence Hardened
+
+- Backend job history now defaults to repository-level runtime storage under `state/jobs` instead of the code package directory.
+- Startup scripts set the job store path explicitly so pull/restart workflows do not accidentally create an empty history store.
+- If `index.json` is missing or empty, the backend rebuilds history from existing job JSON records.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

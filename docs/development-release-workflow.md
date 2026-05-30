@@ -119,6 +119,16 @@ public:   https://brp-api.ravenapis.com
 public:   https://client.ravenapis.com
 ```
 
+Before restarting a server backend, confirm the job store is pinned to runtime
+storage:
+
+```bash
+echo "$BRP_BACKEND_JOBS_DIR"
+```
+
+If unset, the run scripts default it to `state/jobs` under the repository root.
+Do not rely on `apps/backend/jobs` for real history.
+
 Deploy:
 
 ```bash

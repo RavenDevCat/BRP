@@ -5,7 +5,7 @@ This is the maintained high-level architecture note. For daily commands and rele
 ## Repository Layout
 
 - `apps/client`: Streamlit UI, workbook intake, client-side geocoding, demand preview, job history, map/result rendering.
-- `apps/web`: isolated React frontend preview, built against additive `/api/*` backend routes while Streamlit remains production UI.
+- `apps/web`: React frontend for Route Audit plus side tools such as Distance & Cost and Fleet Planner.
 - `apps/backend`: HTTP job service, planner execution, route solving, AI audit integration, generated output handling.
 - `ops`: environment examples, Cloudflare examples, and local/server run scripts.
 - `docs`: maintained architecture, deployment, workflow, and Codex handoff notes.
@@ -49,20 +49,21 @@ Responsibilities:
 - submit prepared jobs to the backend
 - display job history, audit summaries, maps, and downloads
 
-## React Preview
+## React Frontend
 
 Location: `apps/web`
 
 Current status:
 
-- side-by-side migration target
 - local dev port: `127.0.0.1:5173`
 - uses the backend through `/api/*`
-- covers workbook intake, job history, job details, audit/AI/baseline/map/action/diagnostic views
-- still leaves Distance Checker and Fleet Planner Preview in Streamlit
-- not currently exposed through a public `example.com` hostname
+- covers Route Audit dashboard, new audit submission, job history, job detail views, AI audit, baselines, maps, actions, and diagnostics
+- includes Side Tools:
+  - Distance & Cost
+  - Fleet Planner
+- not currently assigned a public static hostname
 
-Do not assume `brp.example.com` serves React yet. As of this handoff, public BRP hostnames still point to Streamlit.
+Do not assume `brp.example.com` serves React until Cloudflare routing and static hosting are explicitly changed.
 
 ## Backend
 

@@ -1276,3 +1276,27 @@ Recommended next step:
 - KR active env should use:
   - `DEEPSEEK_MODEL=deepseek-v4-flash`
   - `BRP_AI_AUDIT_MAX_TOKENS=8192`
+
+### 2026-05-30 KR Old Checkout Removal
+
+- Confirmed code sync state:
+  - local Mac checkout: `5e3c016`
+  - `origin/main`: `5e3c016`
+  - KR active checkout `C:\Users\Bus.EIM\BRP`: `5e3c016`, git clean
+- Re-audited old KR checkout `C:\BRP\busing routing designer` before deletion:
+  - old runtime jobs, cache, outputs, demo workbooks, env files, and logs had already been migrated or archived under the active checkout
+  - old jobs matched the active `state\jobs` set
+  - old `apps\client\cache`, `apps\backend\cache`, `apps\client\outputs`, `apps\backend\outputs`, `apps\client\demodata`, and `.streamlit` files were present in the active checkout
+  - old `state\logs` were archived under `C:\Users\Bus.EIM\BRP\state\logs\legacy-from-old-20260530-152526`
+  - old env files are archived under `C:\Users\Bus.EIM\BRP\state\migration-backup-full-20260530-152526\legacy-env`
+  - old `.vscode\settings.json` was archived under `C:\Users\Bus.EIM\BRP\state\migration-backup-full-20260530-152526\legacy-vscode\settings.json`
+  - old tracked source files had no uncommitted modifications and no non-ignored untracked files
+- Removed the old checkout:
+  - `C:\BRP\busing routing designer` no longer exists
+  - the old directory contents were deleted first; the empty root directory was locked by the KR desktop VS Code process tree and was removed after closing that KR-side VS Code process tree
+- Post-removal validation:
+  - KR backend health: `200`
+  - KR public React proxy health: `200`
+  - KR Tailscale React preview proxy health: `200`
+  - Mac SSH tunnel `http://127.0.0.1:4175/api/health` returned OK
+  - Mac SSH tunnel `http://127.0.0.1:4175/api/jobs` returned `200`

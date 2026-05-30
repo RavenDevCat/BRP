@@ -87,6 +87,16 @@ The React web frontend in `apps/web` is an isolated preview on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001` and does not replace the
 Streamlit client on `8501`.
 
+Production-style React serving is different from Vite dev serving:
+
+- build static assets with `npm run build` in `apps/web`
+- serve `apps/web/dist` from a static web server
+- configure SPA fallback so `/jobs`, `/fleet`, and `/distance` return `index.html`
+- reverse proxy `/api/*` from the same hostname to the backend service
+
+Do not expose `apps/web/dist` without the `/api/*` proxy. The React app uses
+`/api` as its default API base URL so it can stay same-origin behind Cloudflare.
+
 Before publishing:
 
 ```bash
@@ -143,6 +153,51 @@ Run a staging smoke test before production:
 - job history reloads
 - map output opens
 - AI report works when explicitly triggered
+
+## React Preview Host
+
+Until the final switch, deploy React behind a separate preview hostname, for example:
+
+```text
+react-brp.example.com -> static server for /opt/brp/staging/app/apps/web/dist
+react-brp.example.com/api/* -> 127.0.0.1:8001
+```
+
+Suggested staging workflow:
+
+```bash
+ssh deployuser@203.0.113.10
+cd /opt/brp/staging/app
+git pull --ff-only
+cd apps/web
+npm install
+npm run build
+```
+
+Static server requirements:
+
+- serve `apps/web/dist/assets/*` as static files
+- serve `apps/web/dist/index.html` for unknown non-API paths
+- proxy `/api/*` to the staging backend on `127.0.0.1:8001`
+- keep Streamlit on `client.example.com` and `brp.example.com` until React preview passes QA
+
+React preview smoke:
+
+```bash
+curl -I https://react-brp.example.com/
+curl -I https://react-brp.example.com/jobs
+curl -s https://react-brp.example.com/api/health
+```
+
+Browser QA before switching `brp.example.com`:
+
+- Route Audit dashboard, new audit submit, Job History, job detail, maps, and AI Audit
+- Distance & Cost workbook preview, reference distance, and route cost
+- Fleet Planner demand geocode, clustering, route preview, global plan, workbook download, and submit generated plan as job
+
+If preview passes, switch the public BRP hostname by moving `brp.example.com`
+from Streamlit to the React static service. Keep Streamlit on `client.example.com`
+as a fallback/operator UI during the first React production window.
 
 ## Deploy To Production
 

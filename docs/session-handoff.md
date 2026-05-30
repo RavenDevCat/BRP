@@ -1130,3 +1130,22 @@ Recommended next step:
   - Fleet Planner now clears stale preview/geocode/cluster/route/global-plan results when scenario settings, sectors, or directions change.
   - Distance & Cost now clears stale result tables when workbook sheet, column mapping, reference stop, distance mode, market defaults, diesel price, or fuel efficiency changes.
   - AI audit prompt payload/output handling changes are considered part of the same overall stability pass and do not need to be isolated as a separate change set.
+
+### 2026-05-30 React Cutover Prep
+
+- CN server SSH is not reachable from the current network, so deployment work stayed repo-side and local for now.
+- React production serving requirements are documented:
+  - build with `npm run build` from `apps/web`
+  - serve `apps/web/dist` as static assets
+  - route unknown non-API paths to `index.html` for SPA fallback
+  - reverse proxy `/api/*` from the same hostname to the backend on `127.0.0.1:8001`
+- Planned preview host:
+  - `react-brp.example.com` -> React static service, suggested local service port `4173`
+  - `react-brp.example.com/api/*` -> backend API on `127.0.0.1:8001`
+- Keep `client.example.com` and `brp.example.com` on Streamlit until React preview QA passes.
+- Local production-style static/proxy smoke passed:
+  - `npm run build` succeeded in `apps/web`
+  - `/api/health` through the static/proxy server returned backend health OK
+  - direct routes `/jobs` and `/distance` returned the React `index.html`
+  - the generated JS asset returned `200` with `text/javascript`
+  - temporary local static preview on `127.0.0.1:4173` was stopped after validation

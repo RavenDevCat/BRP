@@ -187,6 +187,7 @@ If the client reaches the backend through a tunnel or reverse proxy, set `BRP_BA
 | Client Streamlit | `8501` | End-user UI |
 | Backend API | `8001` | Job API and health endpoint |
 | React frontend | `5173` | Local development only unless a static preview host is explicitly configured |
+| React static preview | `4173` or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -231,6 +232,15 @@ South Korea server hostnames:
 - `brp-api-kr.example.com`
 
 React is not currently assigned a public hostname. When ready, create a separate preview hostname first, serve `apps/web/dist` as static assets, and route API calls to the appropriate backend before moving `brp.example.com`.
+
+Minimum React static routing rules:
+
+- `/assets/*` -> static files under `apps/web/dist/assets`
+- `/api/*` -> backend API
+- all other paths -> `apps/web/dist/index.html`
+
+This fallback is required for direct navigation to React routes such as `/jobs`,
+`/distance`, and `/fleet`.
 
 For production-like environments, avoid exposing the backend publicly without an access control layer.
 

@@ -30,6 +30,13 @@ It is not a code changelog. Record changes here when users or operators should k
 - Global OR-Tools planning is now available in the React preview, including generated route metrics, candidate vehicle count, stop detail, map rendering, and workbook download.
 - Global plan job submission has been added to the React preview; it creates a normal backend planner job from the generated global plan.
 
+### React Cutover Preparation
+
+- Documented the production serving plan for the React frontend.
+- React should first be deployed behind a preview hostname before replacing the current Streamlit public hostname.
+- The production-style React host must serve static build assets, support direct navigation to app routes, and proxy `/api/*` to the backend from the same hostname.
+- This is an operator/deployment update only; existing user jobs do not need to be rerun.
+
 ### Mac Local Development Runtime Rebuilt
 
 - Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.

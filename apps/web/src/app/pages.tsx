@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCircle2, Clock3, ListChecks, Loader2, Trash2, XCircle } from "lucide-react";
+import { Ban, CheckCircle2, ChevronDown, ChevronUp, Clock3, ListChecks, Loader2, Trash2, XCircle } from "lucide-react";
 import { AppShell } from "@/features/shell/app-shell";
 import { JobMetrics } from "@/features/jobs/job-metrics";
 import { JobTable } from "@/features/jobs/job-table";
@@ -40,12 +41,12 @@ export function DashboardPage() {
             Planning dashboard
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Review route jobs, current-plan audits, baseline scenarios, maps, and report outputs from one workspace.
+            Run current-plan audits, compare baseline scenarios, review maps, and collect report outputs from one workspace.
           </p>
         </div>
         <Link to="/jobs" className={buttonClassName("primary")}>
           <ListChecks className="h-4 w-4" aria-hidden="true" />
-          Open jobs
+          Open Route Audit
         </Link>
       </section>
 
@@ -65,7 +66,7 @@ export function DashboardPage() {
         <StatusPanel
           label="Succeeded"
           value={String(succeededCount)}
-          detail="Completed jobs"
+          detail="Completed audits"
           icon={<CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
         />
         <StatusPanel
@@ -78,7 +79,7 @@ export function DashboardPage() {
 
       <section className="space-y-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-base font-semibold">Recent jobs</h2>
+          <h2 className="text-base font-semibold">Recent audits</h2>
           <Badge tone="info">{jobs.length} visible</Badge>
         </div>
         {jobsQuery.isLoading ? <LoadingState label="Loading jobs" /> : <JobTable jobs={jobs.slice(0, 5)} />}
@@ -97,22 +98,30 @@ export function JobDetailPage() {
 }
 
 function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
+  const [historyOpen, setHistoryOpen] = useState(!selectedJobId);
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 15_000 });
   const jobs = jobsQuery.data || [];
   const resolvedJobId = selectedJobId || jobs[0]?.job_id || "";
+  const selectedJob = jobs.find((job) => job.job_id === resolvedJobId);
+
+  useEffect(() => {
+    if (selectedJobId) {
+      setHistoryOpen(false);
+    }
+  }, [selectedJobId]);
 
   return (
     <div className="space-y-4 pb-16 lg:pb-0">
       <section className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <h1 className="text-2xl font-semibold tracking-normal">Job history</h1>
+          <h1 className="text-2xl font-semibold tracking-normal">Route Audit</h1>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Select a run from history and review its audit, maps, actions, and reports in the same workspace.
+            Select an audit run from history and review its metrics, maps, actions, and reports in the same workspace.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Link to="/new" className={buttonClassName("secondary")}>
-            New job
+            New audit
           </Link>
           <Button
             type="button"
@@ -129,11 +138,35 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
         <Card className="min-w-0 xl:sticky xl:top-20 xl:self-start">
           <CardHeader>
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold">History</h2>
-              <Badge tone="info">{formatNumber(jobs.length)}</Badge>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-sm font-semibold">History</h2>
+                  <Badge tone="info">{formatNumber(jobs.length)}</Badge>
+                </div>
+                {selectedJob ? (
+                  <div className="mt-1 truncate text-xs text-muted-foreground xl:hidden">
+                    {getJobName(selectedJob)}
+                  </div>
+                ) : null}
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                className="xl:hidden"
+                icon={
+                  historyOpen ? (
+                    <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                  )
+                }
+                onClick={() => setHistoryOpen((open) => !open)}
+              >
+                {historyOpen ? "Hide" : "Show"}
+              </Button>
             </div>
           </CardHeader>
-          <CardContent>
+          <CardContent className={historyOpen ? "block" : "hidden xl:block"}>
             {jobsQuery.error ? (
               <InlineError message={(jobsQuery.error as Error).message} />
             ) : jobsQuery.isLoading ? (
@@ -145,8 +178,8 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
               <JobHistorySubList jobs={jobs} selectedJobId={resolvedJobId} />
             ) : (
               <EmptyState
-                title="No jobs yet"
-                detail="Submitted planning jobs will appear here after workbook validation and queue submission."
+                title="No audits yet"
+                detail="Submitted audit runs will appear here after workbook validation and queue submission."
               />
             )}
           </CardContent>
@@ -156,11 +189,11 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
           <JobDetailPanel jobId={resolvedJobId} />
         ) : (
           <EmptyState
-            title="Select a job"
+            title="Select an audit"
             detail="Choose a run from history to inspect its result."
             action={
               <Link to="/new" className={buttonClassName("primary")}>
-                New job
+                New audit
               </Link>
             }
           />
@@ -178,7 +211,7 @@ function JobHistorySubList({
   selectedJobId: string;
 }) {
   return (
-    <div className="max-h-[calc(100vh-220px)] space-y-2 overflow-auto pr-1">
+    <div className="max-h-72 space-y-2 overflow-auto pr-1 xl:max-h-[calc(100vh-220px)]">
       {jobs.map((job) => {
         const active = job.job_id === selectedJobId;
         const summary = job.prepared_payload_summary || {};

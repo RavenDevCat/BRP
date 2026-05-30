@@ -13,7 +13,6 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat").strip()
 AI_AUDIT_LANGUAGE = os.environ.get("BRP_AI_AUDIT_LANGUAGE", "English").strip() or "English"
 AI_AUDIT_TIMEOUT_SECONDS = int(os.environ.get("BRP_AI_AUDIT_TIMEOUT_SECONDS", "90") or 90)
-AI_AUDIT_MAX_TOKENS = int(os.environ.get("BRP_AI_AUDIT_MAX_TOKENS", "2400") or 2400)
 
 
 def utc_now_iso() -> str:
@@ -54,59 +53,6 @@ def _compact_move(item: dict[str, Any]) -> dict[str, Any]:
         "distance_saving_km": _float_km(item.get("network_total_distance_saving_m")),
         "explanation": str(item.get("explanation", "") or "")[:420],
     }
-
-
-def _compact_comparison(comparison: dict[str, Any]) -> dict[str, Any]:
-    keep_keys = (
-        "current_route_count",
-        "baseline_route_count",
-        "route_gap",
-        "current_avg_route_distance_m",
-        "baseline_avg_route_distance_m",
-        "avg_distance_gap_pct",
-        "current_avg_route_duration_s",
-        "baseline_avg_route_duration_s",
-        "avg_duration_gap_pct",
-        "current_avg_load_factor",
-        "baseline_avg_load_factor",
-        "avg_load_factor_gap_pct",
-        "current_bus_mix",
-        "baseline_bus_mix",
-        "bus_mix_delta",
-        "recommendations",
-    )
-    return {key: comparison.get(key) for key in keep_keys if key in comparison}
-
-
-def _compact_reallocation_summary(summary: dict[str, Any]) -> dict[str, Any]:
-    keep_keys = (
-        "weak_route_count",
-        "actionable_weak_route_count",
-        "route_removable_now_count",
-        "route_removal_candidate_count",
-        "route_consolidation_candidate_count",
-        "best_network_time_saving_s",
-        "best_network_distance_saving_m",
-        "weak_reason_counts",
-        "route_action_stage_counts",
-    )
-    return {key: summary.get(key) for key in keep_keys if key in summary}
-
-
-def _message_content_to_text(content: Any) -> str:
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, str):
-                parts.append(item)
-            elif isinstance(item, dict):
-                text = item.get("text") or item.get("content")
-                if text:
-                    parts.append(str(text))
-        return "\n".join(parts).strip()
-    return str(content or "").strip()
 
 
 def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
@@ -175,12 +121,12 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             },
         },
         "comparisons": {
-            "current_vs_free": _compact_comparison(current_vs_free),
-            "current_vs_like_for_like": _compact_comparison(current_vs_like),
-            "current_vs_constrained": _compact_comparison(current_vs_constrained),
+            "current_vs_free": current_vs_free,
+            "current_vs_like_for_like": current_vs_like,
+            "current_vs_constrained": current_vs_constrained,
         },
         "local_reallocation": {
-            "summary": _compact_reallocation_summary(reallocation_summary),
+            "summary": reallocation_summary,
             "priority_actions": [
                 _compact_move(dict(item))
                 for item in _take(
@@ -246,7 +192,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": AI_AUDIT_MAX_TOKENS,
+            "max_tokens": 1600,
         },
         timeout=AI_AUDIT_TIMEOUT_SECONDS,
     )
@@ -255,17 +201,10 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
     choices = body.get("choices") if isinstance(body, dict) else None
     if not choices:
         raise RuntimeError("DeepSeek returned no report choices.")
-    first_choice = dict(choices[0] or {})
-    message = dict(first_choice.get("message") or {})
-    report_markdown = _message_content_to_text(message.get("content"))
+    message = dict(choices[0].get("message") or {})
+    report_markdown = str(message.get("content") or "").strip()
     if not report_markdown:
-        finish_reason = str(first_choice.get("finish_reason") or "unknown")
-        usage = dict(body.get("usage") or {}) if isinstance(body, dict) else {}
-        message_keys = ", ".join(sorted(str(key) for key in message.keys())) or "none"
-        raise RuntimeError(
-            "DeepSeek returned an empty report "
-            f"(model={DEEPSEEK_MODEL}, finish_reason={finish_reason}, message_keys={message_keys}, usage={usage})."
-        )
+        raise RuntimeError("DeepSeek returned an empty report.")
     return {
         "generated_at": utc_now_iso(),
         "provider": "deepseek",

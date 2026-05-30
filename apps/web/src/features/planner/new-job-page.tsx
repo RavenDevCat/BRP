@@ -129,10 +129,10 @@ export function NewJobPage() {
       <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
           <p className="text-sm font-medium text-primary">Current plan audit</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">New job</h1>
+          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">New audit</h1>
         </div>
         <Link to="/jobs" className={buttonClassName("secondary")}>
-          Job history
+          Audit history
         </Link>
       </section>
 

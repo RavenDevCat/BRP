@@ -1,19 +1,31 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { History, LayoutDashboard, RefreshCw, ShieldCheck, UploadCloud } from "lucide-react";
+import { History, LayoutDashboard, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
 import { getCurrentUser, getHealth } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 
-const navItems = [
+const primaryNavItems = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
-  { to: "/new", label: "New Job", icon: UploadCloud },
-  { to: "/jobs", label: "Jobs", icon: History },
+  { to: "/new", label: "New Audit", icon: UploadCloud },
+  { to: "/jobs", label: "Audit History", icon: History },
 ];
 
-const productName = "BRP-Busing Routing Planner";
+const sideToolNavItems = [
+  { to: "/distance", label: "Distance & Cost", icon: Ruler },
+  { to: "/fleet", label: "Fleet Planner", icon: UsersRound },
+];
+
+const mobileNavItems = [
+  { to: "/", label: "Home", icon: LayoutDashboard },
+  { to: "/new", label: "New Audit", icon: UploadCloud },
+  { to: "/jobs", label: "History", icon: History },
+  { to: "/distance", label: "Tools", icon: Ruler },
+];
+
+const productName = "BRP: Bus Route Planner";
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -32,25 +44,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </div>
 
-        <nav className="flex-1 space-y-1 px-3 py-4">
-          {navItems.map((item) => {
-            const Icon = item.icon;
-            const active = pathname === item.to || (item.to !== "/" && pathname.startsWith(item.to));
-            return (
-              <Link
-                key={item.to}
-                to={item.to}
-                className={cn(
-                  "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition",
-                  active && "bg-muted text-foreground",
-                  !active && "hover:bg-muted/70 hover:text-foreground",
-                )}
-              >
-                <Icon className="h-4 w-4" aria-hidden="true" />
-                {item.label}
-              </Link>
-            );
-          })}
+        <nav className="flex-1 space-y-5 px-3 py-4">
+          <NavGroup title="Route Audit" items={primaryNavItems} pathname={pathname} />
+          <NavGroup title="Side Tools" items={sideToolNavItems} pathname={pathname} />
         </nav>
 
         <div className="space-y-3 border-t border-border p-4">
@@ -95,8 +91,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           {children}
         </main>
 
-        <nav className="fixed inset-x-0 bottom-0 grid grid-cols-3 border-t border-border bg-surface lg:hidden">
-          {navItems.map((item) => {
+        <nav className="fixed inset-x-0 bottom-0 grid grid-cols-4 border-t border-border bg-surface lg:hidden">
+          {mobileNavItems.map((item) => {
             const Icon = item.icon;
             const active = pathname === item.to || (item.to !== "/" && pathname.startsWith(item.to));
             return (
@@ -115,6 +111,42 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
       </div>
+    </div>
+  );
+}
+
+function NavGroup({
+  title,
+  items,
+  pathname,
+}: {
+  title: string;
+  items: Array<{ to: string; label: string; icon: typeof LayoutDashboard }>;
+  pathname: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
+        {title}
+      </div>
+      {items.map((item) => {
+        const Icon = item.icon;
+        const active = pathname === item.to || (item.to !== "/" && pathname.startsWith(item.to));
+        return (
+          <Link
+            key={item.to}
+            to={item.to}
+            className={cn(
+              "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition",
+              active && "bg-muted text-foreground",
+              !active && "hover:bg-muted/70 hover:text-foreground",
+            )}
+          >
+            <Icon className="h-4 w-4" aria-hidden="true" />
+            {item.label}
+          </Link>
+        );
+      })}
     </div>
   );
 }

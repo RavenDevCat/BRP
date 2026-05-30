@@ -5,6 +5,7 @@ from copy import deepcopy
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
 import importlib
+import io
 import json
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,6 +72,8 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "further_most_nearby": "further_most_nearby_html",
 }
 WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+DISTANCE_CHECKER_JOBS_PATH = CLIENT_DIR / "cache" / "distance_checker_jobs.json"
+MAX_DISTANCE_CHECKER_JOBS = 80
 
 
 def utc_now_iso() -> str:
@@ -96,6 +99,20 @@ def _client_core_module() -> Any:
     if client_dir not in sys.path:
         sys.path.insert(0, client_dir)
     return importlib.import_module("client_core")
+
+
+def _distance_tool_module() -> Any:
+    client_dir = str(CLIENT_DIR)
+    if client_dir not in sys.path:
+        sys.path.insert(0, client_dir)
+    return importlib.import_module("distance_tool")
+
+
+def _client_module(module_name: str) -> Any:
+    client_dir = str(CLIENT_DIR)
+    if client_dir not in sys.path:
+        sys.path.insert(0, client_dir)
+    return importlib.import_module(module_name)
 
 
 def _build_client_planner_config(client_core: Any, config_payload: dict[str, Any]) -> Any:
@@ -132,6 +149,661 @@ def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:
     if len(workbook_bytes) > MAX_WORKBOOK_UPLOAD_BYTES:
         raise ValueError(f"Workbook upload exceeds {MAX_WORKBOOK_UPLOAD_BYTES // (1024 * 1024)} MB.")
     return source_label, workbook_bytes
+
+
+def _with_temp_workbook(payload: dict[str, Any], callback: Any) -> Any:
+    source_label, workbook_bytes = _decode_workbook_bytes(payload)
+    suffix = Path(source_label).suffix.lower()
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(workbook_bytes)
+            temp_path = temp_file.name
+        return callback(source_label, temp_path)
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _dataframe_records(dataframe: Any) -> list[dict[str, Any]]:
+    return json.loads(dataframe.to_json(orient="records", force_ascii=False))
+
+
+def _distance_checker_jobs() -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(DISTANCE_CHECKER_JOBS_PATH.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, list) else []
+    except Exception:
+        return []
+
+
+def _save_distance_checker_job(job: dict[str, Any]) -> None:
+    DISTANCE_CHECKER_JOBS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    jobs = _distance_checker_jobs()
+    jobs.insert(0, job)
+    DISTANCE_CHECKER_JOBS_PATH.write_text(
+        json.dumps(_json_safe(jobs[:MAX_DISTANCE_CHECKER_JOBS]), ensure_ascii=False, indent=2, allow_nan=False),
+        encoding="utf-8",
+    )
+
+
+def _handle_distance_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    distance_tool = _distance_tool_module()
+
+    def read_preview(source_label: str, temp_path: str) -> dict[str, Any]:
+        sheet_names = list(distance_tool.get_excel_sheet_names(temp_path))
+        if not sheet_names:
+            raise ValueError("Workbook has no readable sheets.")
+        requested_sheet = str(payload.get("selected_sheet") or "").strip()
+        selected_sheet = requested_sheet if requested_sheet in sheet_names else sheet_names[0]
+        source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
+        columns = [str(column) for column in list(source_df.columns)]
+        inferred = distance_tool.infer_current_plan_columns(source_df)
+        return {
+            "source_label": source_label,
+            "sheet_names": sheet_names,
+            "selected_sheet": selected_sheet,
+            "columns": columns,
+            "row_count": int(len(source_df)),
+            "sample_rows": _dataframe_records(source_df.head(8)),
+            "suggested_columns": {
+                "address": inferred.get("address") or (columns[0] if columns else ""),
+                "city": inferred.get("city") or "",
+                "country": inferred.get("country") or "",
+                "route": inferred.get("route") or "",
+                "sequence": inferred.get("sequence") or "",
+                "bus_type": inferred.get("bus_type") or "",
+            },
+        }
+
+    return _with_temp_workbook(payload, read_preview)
+
+
+def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
+    distance_tool = _distance_tool_module()
+    origin = dict(payload.get("origin") or {})
+    origin_country = str(origin.get("country") or "").strip()
+    origin_city = str(origin.get("city") or "").strip()
+    origin_address = str(origin.get("address") or "").strip()
+    distance_mode = str(payload.get("distance_mode") or "road").strip()
+    if distance_mode not in {"road", "straight_line"}:
+        raise ValueError("distance_mode must be road or straight_line.")
+    if not origin_address:
+        raise ValueError("Reference stop address is required.")
+
+    def run_check(source_label: str, temp_path: str) -> dict[str, Any]:
+        sheet_names = list(distance_tool.get_excel_sheet_names(temp_path))
+        requested_sheet = str(payload.get("selected_sheet") or "").strip()
+        selected_sheet = requested_sheet if requested_sheet in sheet_names else (sheet_names[0] if sheet_names else "")
+        if not selected_sheet:
+            raise ValueError("Workbook has no readable sheets.")
+        source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
+        columns = {str(column) for column in list(source_df.columns)}
+        address_column = str(payload.get("address_column") or "").strip()
+        city_column = str(payload.get("city_column") or "").strip() or None
+        country_column = str(payload.get("country_column") or "").strip() or None
+        if address_column not in columns:
+            raise ValueError("Select a valid address column.")
+        if city_column and city_column not in columns:
+            raise ValueError("Select a valid city column or leave it blank.")
+        if country_column and country_column not in columns:
+            raise ValueError("Select a valid country column or leave it blank.")
+
+        origin_rows, _ = distance_tool.geocode_records_for_distance_tool(
+            [
+                {
+                    "source_excel_row": 1,
+                    "country": origin_country,
+                    "city": origin_city,
+                    "address": origin_address,
+                }
+            ]
+        )
+        origin_row = dict(origin_rows[0])
+        if origin_row.get("status") != "ok":
+            raise RuntimeError(str(origin_row.get("warning") or "Reference stop could not be geocoded."))
+
+        input_rows = distance_tool.build_distance_input_rows(
+            source_df,
+            address_column=address_column,
+            city_column=city_column,
+            country_column=country_column,
+            default_city=origin_city,
+            default_country=origin_country,
+        )
+        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows)
+        results_df = distance_tool.build_distance_result_dataframe(
+            source_df,
+            input_rows,
+            geocoded_rows,
+            origin_record=origin_row,
+            origin_point=dict(origin_row["point"]),
+            distance_mode=distance_mode,
+        )
+        records = _dataframe_records(results_df)
+        ok_count = sum(1 for row in records if str(row.get("status")) == "ok")
+        failed_count = sum(1 for row in records if str(row.get("status")) == "geocode_failed")
+        blank_count = sum(1 for row in records if str(row.get("status")) == "blank_address")
+        job = {
+            "job_id": uuid4().hex[:12],
+            "type": "reference_distance",
+            "created_at": utc_now_iso(),
+            "label": f"{Path(source_label).stem} from {origin_address}",
+            "metadata": {
+                "source_label": source_label,
+                "selected_sheet": selected_sheet,
+                "origin_country": origin_country,
+                "origin_city": origin_city,
+                "origin_address": origin_address,
+                "distance_mode": distance_mode,
+                "address_column": address_column,
+                "city_column": city_column or "",
+                "country_column": country_column or "",
+            },
+            "results": records,
+        }
+        _save_distance_checker_job(job)
+        return {
+            "job": {key: value for key, value in job.items() if key != "results"},
+            "summary": {
+                "row_count": len(records),
+                "resolved_count": ok_count,
+                "failed_count": failed_count,
+                "blank_count": blank_count,
+                "distance_mode": distance_mode,
+            },
+            "results": records,
+        }
+
+    return _with_temp_workbook(payload, run_check)
+
+
+def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
+    distance_tool = _distance_tool_module()
+    default_city = str(payload.get("default_city") or "").strip()
+    default_country = str(payload.get("default_country") or "").strip()
+    diesel_price_per_liter = float(payload.get("diesel_price_per_liter") or 0.0)
+    fuel_efficiency_km_per_liter = float(payload.get("fuel_efficiency_km_per_liter") or 0.0)
+    currency_code = str(payload.get("currency_code") or "").strip().upper()
+    currency_label = str(payload.get("currency_label") or currency_code or "").strip()
+    if diesel_price_per_liter < 0:
+        raise ValueError("diesel_price_per_liter must be zero or greater.")
+    if fuel_efficiency_km_per_liter <= 0:
+        raise ValueError("fuel_efficiency_km_per_liter must be greater than zero.")
+
+    def run_route_cost(source_label: str, temp_path: str) -> dict[str, Any]:
+        sheet_names = list(distance_tool.get_excel_sheet_names(temp_path))
+        requested_sheet = str(payload.get("selected_sheet") or "").strip()
+        selected_sheet = requested_sheet if requested_sheet in sheet_names else (sheet_names[0] if sheet_names else "")
+        if not selected_sheet:
+            raise ValueError("Workbook has no readable sheets.")
+        source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
+        columns = {str(column) for column in list(source_df.columns)}
+        route_column = str(payload.get("route_column") or "").strip()
+        address_column = str(payload.get("address_column") or "").strip()
+        sequence_column = str(payload.get("sequence_column") or "").strip() or None
+        bus_type_column = str(payload.get("bus_type_column") or "").strip() or None
+        city_column = str(payload.get("city_column") or "").strip() or None
+        country_column = str(payload.get("country_column") or "").strip() or None
+        required_columns = {"route_column": route_column, "address_column": address_column}
+        for label, column in required_columns.items():
+            if column not in columns:
+                raise ValueError(f"Select a valid {label.replace('_', ' ')}.")
+        optional_columns = {
+            "sequence_column": sequence_column,
+            "bus_type_column": bus_type_column,
+            "city_column": city_column,
+            "country_column": country_column,
+        }
+        for label, column in optional_columns.items():
+            if column and column not in columns:
+                raise ValueError(f"Select a valid {label.replace('_', ' ')} or leave it blank.")
+
+        input_rows = distance_tool.build_current_plan_route_input_rows(
+            source_df,
+            route_column=route_column,
+            address_column=address_column,
+            sequence_column=sequence_column,
+            bus_type_column=bus_type_column,
+            city_column=city_column,
+            country_column=country_column,
+            default_city=default_city,
+            default_country=default_country,
+        )
+        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows)
+        route_results_df, leg_results_df = distance_tool.build_current_plan_route_cost_dataframe(
+            input_rows,
+            geocoded_rows,
+            diesel_price_per_liter=diesel_price_per_liter,
+            fuel_efficiency_km_per_liter=fuel_efficiency_km_per_liter,
+        )
+        route_records = _dataframe_records(route_results_df)
+        leg_records = _dataframe_records(leg_results_df)
+        total_distance = sum(float(row.get("route_distance_km") or 0.0) for row in route_records)
+        total_cost = sum(float(row.get("estimated_one_way_fuel_cost") or 0.0) for row in route_records)
+        unresolved_routes = sum(1 for row in route_records if float(row.get("failed_stops") or 0.0) > 0)
+        electric_routes = sum(1 for row in route_records if str(row.get("diesel_cost_status") or "") == "skipped_electric_bus")
+        job = {
+            "job_id": uuid4().hex[:12],
+            "type": "route_cost",
+            "created_at": utc_now_iso(),
+            "label": f"{Path(source_label).stem} route cost",
+            "metadata": {
+                "source_label": source_label,
+                "selected_sheet": selected_sheet,
+                "default_city": default_city,
+                "default_country": default_country,
+                "currency_code": currency_code,
+                "currency_label": currency_label,
+                "diesel_price_per_liter": diesel_price_per_liter,
+                "fuel_efficiency_km_per_liter": fuel_efficiency_km_per_liter,
+                "route_column": route_column,
+                "address_column": address_column,
+                "sequence_column": sequence_column or "",
+                "bus_type_column": bus_type_column or "",
+                "city_column": city_column or "",
+                "country_column": country_column or "",
+            },
+            "route_results": route_records,
+            "leg_results": leg_records,
+        }
+        _save_distance_checker_job(job)
+        return {
+            "job": {key: value for key, value in job.items() if key not in {"route_results", "leg_results"}},
+            "summary": {
+                "route_count": len(route_records),
+                "leg_count": len(leg_records),
+                "total_one_way_distance_km": round(total_distance, 3),
+                "estimated_one_way_fuel_cost": round(total_cost, 2),
+                "routes_with_unresolved_stops": unresolved_routes,
+                "electric_routes_skipped": electric_routes,
+                "currency_code": currency_code,
+                "currency_label": currency_label,
+            },
+            "route_results": route_records,
+            "leg_results": leg_records,
+        }
+
+    return _with_temp_workbook(payload, run_route_cost)
+
+
+def _parse_rider_counts_payload(value: Any) -> list[int]:
+    if isinstance(value, list):
+        chunks = [str(item) for item in value]
+    else:
+        chunks = str(value or "").replace("\n", ",").split(",")
+    rider_counts: list[int] = []
+    for chunk in chunks:
+        text = str(chunk or "").strip()
+        if not text:
+            continue
+        try:
+            rider_count = int(float(text))
+        except ValueError as exc:
+            raise ValueError(f"Invalid rider group value: {text!r}") from exc
+        if rider_count <= 0:
+            raise ValueError(f"Rider group values must be greater than zero: {text!r}")
+        rider_counts.append(rider_count)
+    if not rider_counts:
+        raise ValueError("Enter at least one rider group or upload a demand workbook.")
+    return rider_counts
+
+
+def _demand_workbook_from_payload(payload: dict[str, Any]) -> tuple[Any | None, str]:
+    if not str(payload.get("file_base64") or "").strip():
+        return None, ""
+    source_label, workbook_bytes = _decode_workbook_bytes(payload)
+    demand_input = _client_module("demand_input")
+    return demand_input.read_demand_workbook(io.BytesIO(workbook_bytes)), source_label
+
+
+def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    demand_input = _client_module("demand_input")
+    fleet_selector = _client_module("fleet_selector")
+    planning_assumptions = _client_module("planning_assumptions")
+    vehicle_catalog = _client_module("vehicle_catalog")
+
+    market = str(payload.get("market") or "KR").strip().upper()
+    mode = str(payload.get("mode") or "balanced").strip()
+    monitor_seats = int(payload.get("monitor_seats") or 0)
+    demand_workbook, source_label = _demand_workbook_from_payload(payload)
+    workbook_payload: dict[str, Any] | None = None
+    if demand_workbook is not None:
+        rider_counts = [int(item["student_count"]) for item in demand_workbook.riders]
+        workbook_payload = {
+            "source_label": source_label,
+            "school": dict(demand_workbook.school),
+            "summary": dict(demand_workbook.summary),
+            "warnings": list(demand_workbook.warnings),
+            "riders": _dataframe_records(demand_input.demand_riders_to_dataframe(demand_workbook.riders)),
+        }
+    else:
+        rider_counts = _parse_rider_counts_payload(payload.get("rider_counts"))
+
+    assumptions = planning_assumptions.get_planning_assumptions(
+        market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+    )
+    recommendations: list[dict[str, Any]] = []
+    decision_details: list[dict[str, Any]] = []
+    for rider_count in rider_counts:
+        selection = fleet_selector.select_vehicle_for_group(
+            int(rider_count),
+            market=market,
+            mode=mode,
+            monitor_seats=monitor_seats,
+            assumptions=assumptions,
+        )
+        selected = dict(selection.selected_vehicle or {})
+        recommendations.append(
+            {
+                "riders": rider_count,
+                "recommended_vehicle": selected.get("display_name", "No feasible vehicle"),
+                "student_capacity": selected.get("student_capacity", ""),
+                "load_factor": selected.get("load_factor"),
+                "empty_seats": selected.get("empty_seats", ""),
+                "feasible_options": len(selection.feasible_options),
+                "rejected_options": len(selection.rejected_options),
+            }
+        )
+        decision_details.append(
+            {
+                "riders": rider_count,
+                "selected_vehicle": selected,
+                "feasible_options": selection.feasible_options[:8],
+                "rejected_options": selection.rejected_options[:8],
+            }
+        )
+
+    mix_summary = fleet_selector.estimate_vehicle_mix_for_groups(
+        rider_counts,
+        market=market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+    )
+    catalog = []
+    for vehicle in vehicle_catalog.get_vehicle_catalog(assumptions.market, monitor_seats=assumptions.monitor_seats):
+        catalog.append(
+            {
+                "vehicle": vehicle.get("display_name"),
+                "category": vehicle.get("category"),
+                "propulsion": vehicle.get("propulsion"),
+                "listed_seats": vehicle.get("listed_seats"),
+                "monitor_seats": vehicle.get("monitor_seats"),
+                "student_capacity": vehicle.get("student_capacity"),
+                "notes": vehicle.get("notes"),
+            }
+        )
+
+    return {
+        "summary": {
+            "market": assumptions.market,
+            "mode": assumptions.mode,
+            "monitor_seats": assumptions.monitor_seats,
+            "group_count": len(rider_counts),
+            "total_riders": sum(rider_counts),
+            "source": "demand_workbook" if demand_workbook is not None else "manual_rider_groups",
+        },
+        "assumptions": assumptions.to_dict(),
+        "demand_workbook": workbook_payload,
+        "recommendations": recommendations,
+        "mix_summary": mix_summary,
+        "decision_details": decision_details,
+        "catalog": catalog,
+    }
+
+
+def _handle_fleet_planner_geocode(payload: dict[str, Any]) -> dict[str, Any]:
+    demand_input = _client_module("demand_input")
+    demand_workbook, source_label = _demand_workbook_from_payload(payload)
+    if demand_workbook is None:
+        raise ValueError("Upload a demand workbook before running geocode preview.")
+    geocode_result = demand_input.geocode_demand_workbook(demand_workbook)
+    return {
+        "source_label": source_label,
+        "summary": dict(geocode_result.get("summary") or {}),
+        "school": dict(geocode_result.get("school") or {}),
+        "demand_points": list(geocode_result.get("demand_points") or []),
+        "rows": _dataframe_records(demand_input.demand_geocode_results_to_dataframe(geocode_result)),
+        "map_html": demand_input.build_demand_geocode_map_html(geocode_result),
+    }
+
+
+def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
+    demand_clustering = _client_module("demand_clustering")
+    market = str(payload.get("market") or "KR").strip().upper()
+    mode = str(payload.get("mode") or "balanced").strip()
+    monitor_seats = int(payload.get("monitor_seats") or 0)
+    sector_count = int(payload.get("sector_count") or 8)
+    if sector_count not in {4, 8, 12}:
+        raise ValueError("sector_count must be 4, 8, or 12.")
+    geocode_result = dict(payload.get("geocode_result") or {})
+    if not geocode_result:
+        raise ValueError("Run demand geocode before building clusters.")
+    cluster_result = demand_clustering.build_demand_clusters(
+        geocode_result,
+        market=market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+        sector_count=sector_count,
+    )
+    return {
+        "summary": dict(cluster_result.get("summary") or {}),
+        "school": dict(cluster_result.get("school") or {}),
+        "clusters": list(cluster_result.get("clusters") or []),
+        "failed_points": list(cluster_result.get("failed_points") or []),
+        "rows": _dataframe_records(demand_clustering.demand_clusters_to_dataframe(cluster_result)),
+        "stop_rows": _dataframe_records(demand_clustering.cluster_points_to_dataframe(cluster_result)),
+        "map_html": demand_clustering.build_demand_cluster_map_html(cluster_result),
+    }
+
+
+def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    demand_clustering = _client_module("demand_clustering")
+    demand_routing = _client_module("demand_routing")
+    market = str(payload.get("market") or "KR").strip().upper()
+    mode = str(payload.get("mode") or "balanced").strip()
+    monitor_seats = int(payload.get("monitor_seats") or 0)
+    service_direction = str(payload.get("service_direction") or "to_school").strip()
+    if service_direction not in {"to_school", "from_school"}:
+        raise ValueError("service_direction must be to_school or from_school.")
+    max_route_duration_minutes = int(payload.get("max_route_duration_minutes") or 0) or None
+    cluster_result = dict(payload.get("cluster_result") or {})
+    if not cluster_result:
+        raise ValueError("Build demand clusters before route preview.")
+
+    route_preview = demand_routing.build_osrm_route_preview(
+        cluster_result,
+        service_direction=service_direction,
+        max_route_duration_minutes=max_route_duration_minutes,
+    )
+    overlong_route_ids = {
+        str(row.get("cluster_id", "")).strip()
+        for row in list(route_preview.get("route_rows") or [])
+        if max_route_duration_minutes and float(row.get("duration_min", 0.0) or 0.0) > float(max_route_duration_minutes)
+    }
+    if overlong_route_ids:
+        refined_cluster_result = demand_clustering.split_cluster_result_by_route_limit(
+            cluster_result,
+            overlong_route_ids,
+            market=market,
+            mode=mode,
+            monitor_seats=monitor_seats,
+        )
+        route_preview = demand_routing.build_osrm_route_preview(
+            refined_cluster_result,
+            service_direction=service_direction,
+            max_route_duration_minutes=max_route_duration_minutes,
+        )
+        route_preview["refinement_note"] = (
+            "One or more clusters exceeded the route-duration target and were split once by distance from school."
+        )
+
+    return _route_plan_response(route_preview, workbook_file_name="fleet_planner_generated_plan.xlsx")
+
+
+def _service_direction_label(service_direction: str) -> str:
+    return "To School" if str(service_direction).strip().lower() == "to_school" else "From School"
+
+
+def _route_plan_response(route_preview: dict[str, Any], *, workbook_file_name: str) -> dict[str, Any]:
+    demand_routing = _client_module("demand_routing")
+    workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
+    return {
+        "summary": dict(route_preview.get("summary") or {}),
+        "school": dict(route_preview.get("school") or {}),
+        "routes": list(route_preview.get("routes") or []),
+        "rows": _dataframe_records(demand_routing.route_preview_to_dataframe(route_preview)),
+        "stop_rows": _dataframe_records(demand_routing.route_preview_stop_detail_to_dataframe(route_preview)),
+        "map_html": demand_routing.build_route_preview_map_html(route_preview),
+        "refinement_note": str(route_preview.get("refinement_note") or ""),
+        "workbook_file_name": workbook_file_name,
+        "workbook_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+    }
+
+
+def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    demand_global_optimizer = _client_module("demand_global_optimizer")
+    market = str(payload.get("market") or "KR").strip().upper()
+    mode = str(payload.get("mode") or "balanced").strip()
+    monitor_seats = int(payload.get("monitor_seats") or 0)
+    service_direction = str(payload.get("service_direction") or "to_school").strip()
+    if service_direction not in {"to_school", "from_school"}:
+        raise ValueError("service_direction must be to_school or from_school.")
+    geocode_result = dict(payload.get("geocode_result") or {})
+    if not geocode_result:
+        raise ValueError("Run demand geocode before building a global plan.")
+    global_plan = demand_global_optimizer.build_global_ortools_plan(
+        geocode_result,
+        market=market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+        service_direction=service_direction,
+    )
+    return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx")
+
+
+def _generated_plan_config_payload(route_preview: dict[str, Any], max_route_duration_minutes: int) -> dict[str, Any]:
+    fleet_items: dict[str, dict[str, int | str]] = {}
+    for route in list(route_preview.get("routes") or []):
+        vehicle = dict(route.get("selected_vehicle") or {})
+        bus_type = str(vehicle.get("display_name") or "").strip() or "Generated Bus"
+        capacity = int(vehicle.get("student_capacity", vehicle.get("capacity", 0)) or 0)
+        fleet_item = fleet_items.setdefault(
+            bus_type,
+            {
+                "bus_type": bus_type,
+                "seat_count": capacity,
+                "vehicle_count": 0,
+            },
+        )
+        fleet_item["vehicle_count"] = int(fleet_item["vehicle_count"]) + 1
+
+    sorted_fleet = sorted(
+        fleet_items.values(),
+        key=lambda item: (int(item.get("seat_count", 0) or 0), str(item.get("bus_type", "")).lower()),
+        reverse=True,
+    )
+    slots = list(sorted_fleet[:3])
+    while len(slots) < 3:
+        slots.append({"bus_type": f"Generated Slot {len(slots) + 1}", "seat_count": 0, "vehicle_count": 0})
+
+    large, mid, small = slots[0], slots[1], slots[2]
+    service_direction = str(dict(route_preview.get("summary") or {}).get("service_direction") or "to_school")
+    return _planner_config_payload(
+        {
+            "large_bus_name": str(large["bus_type"]),
+            "mid_bus_name": str(mid["bus_type"]),
+            "small_bus_name": str(small["bus_type"]),
+            "large_bus_capacity": int(large["seat_count"]),
+            "mid_bus_capacity": int(mid["seat_count"]),
+            "small_bus_capacity": int(small["seat_count"]),
+            "large_bus_max_count": int(large["vehicle_count"]),
+            "mid_bus_max_count": int(mid["vehicle_count"]),
+            "small_bus_max_count": int(small["vehicle_count"]),
+            "free_baseline_large_bus_ratio": float(max(0, int(large["vehicle_count"]))),
+            "free_baseline_mid_bus_ratio": float(max(0, int(mid["vehicle_count"]))),
+            "free_baseline_small_bus_ratio": float(max(0, int(small["vehicle_count"]))),
+            "max_route_duration_minutes": int(max_route_duration_minutes),
+            "service_direction": _service_direction_label(service_direction),
+            "include_subway_aggregation_scenario": False,
+            "include_nearby_aggregation_scenario": False,
+        }
+    )
+
+
+def _handle_fleet_planner_submit_generated_plan(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    client_core = _client_core_module()
+    demand_routing = _client_module("demand_routing")
+    route_preview = dict(payload.get("route_preview") or {})
+    if not route_preview:
+        raise ValueError("Build a global plan before submitting it as a job.")
+    summary = dict(route_preview.get("summary") or {})
+    max_route_duration_minutes = int(
+        payload.get("max_route_duration_minutes")
+        or summary.get("max_route_duration_minutes")
+        or 60
+    )
+    job_name = str(payload.get("job_name") or "").strip() or f"Demand Auto Plan - {datetime.now().strftime('%Y-%m-%d %H%M')}"
+    service_direction = str(summary.get("service_direction") or "to_school")
+    workbook_bytes = demand_routing.build_legacy_route_plan_workbook_bytes(route_preview)
+    temp_path = ""
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
+            temp_file.write(workbook_bytes)
+            temp_path = temp_file.name
+        current_plan = client_core.read_current_plan_from_excel(
+            temp_path,
+            service_direction=_service_direction_label(service_direction),
+        )
+        input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+        config_payload = _generated_plan_config_payload(route_preview, max_route_duration_minutes)
+        client_config = _build_client_planner_config(client_core, config_payload)
+        client_prep = client_core.prepare_client_payload(
+            input_records,
+            current_plan_data=current_plan,
+            config=client_config,
+        )
+        metadata = {
+            "job_name": job_name,
+            "job_default_name": "Fleet Planner Global OR-Tools Plan",
+            "job_custom_name": job_name,
+            "source_mode": "fleet_planner_preview",
+            "source_label": "Fleet Planner Global OR-Tools Plan",
+            "generated_from": "Fleet Planner Preview",
+            "service_direction": _service_direction_label(service_direction),
+            "plan_type": "generated_auto_plan",
+            "planner_config": dict(config_payload),
+            "client_prep": {
+                "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
+                "excluded_stops": list(client_prep.get("excluded_stops") or []),
+                "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
+                "logs": str(client_prep.get("logs", "") or ""),
+            },
+        }
+        job_summary = JOB_STORE.create_job(
+            config_payload,
+            dict(client_prep["prepared_payload"]),
+            metadata=metadata,
+            owner_email=user_email,
+        )
+        spawned = _spawn_job_worker(str(job_summary["job_id"]))
+        if spawned:
+            job_summary["worker_pid"] = spawned.get("worker_pid")
+        return {
+            "job": job_summary,
+            "client_prep": metadata["client_prep"],
+        }
+    finally:
+        if temp_path:
+            try:
+                Path(temp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _list_demo_workbooks() -> list[dict[str, Any]]:
@@ -843,6 +1515,16 @@ class BackendHandler(BaseHTTPRequestHandler):
                 inline=False,
             )
             return
+        if path == "/fleet-planner/demand-template":
+            demand_input = _client_module("demand_input")
+            self._send_bytes(
+                200,
+                demand_input.build_demand_template_workbook_bytes(),
+                content_type=WORKBOOK_CONTENT_TYPE,
+                filename="brp_demand_template.xlsx",
+                inline=False,
+            )
+            return
         if path == "/workbooks/demos":
             self._send_json(200, {"demos": _list_demo_workbooks()})
             return
@@ -951,6 +1633,33 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             if path == "/workbooks/submit":
                 self._send_json(202, _handle_workbook_submit(payload, user_email=user_email))
+                return
+            if path == "/distance-checker/workbook-preview":
+                self._send_json(200, _handle_distance_workbook_preview(payload))
+                return
+            if path == "/distance-checker/reference":
+                self._send_json(200, _handle_reference_distance_check(payload))
+                return
+            if path == "/distance-checker/route-cost":
+                self._send_json(200, _handle_current_plan_route_cost(payload))
+                return
+            if path == "/fleet-planner/preview":
+                self._send_json(200, _handle_fleet_planner_preview(payload))
+                return
+            if path == "/fleet-planner/geocode":
+                self._send_json(200, _handle_fleet_planner_geocode(payload))
+                return
+            if path == "/fleet-planner/clusters":
+                self._send_json(200, _handle_fleet_planner_clusters(payload))
+                return
+            if path == "/fleet-planner/route-preview":
+                self._send_json(200, _handle_fleet_planner_route_preview(payload))
+                return
+            if path == "/fleet-planner/global-plan":
+                self._send_json(200, _handle_fleet_planner_global_plan(payload))
+                return
+            if path == "/fleet-planner/submit-generated-plan":
+                self._send_json(202, _handle_fleet_planner_submit_generated_plan(payload, user_email=user_email))
                 return
             if path == "/jobs":
                 config_payload = payload.get("config") or {}

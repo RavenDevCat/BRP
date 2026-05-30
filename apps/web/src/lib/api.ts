@@ -98,6 +98,161 @@ export type WorkbookSubmitResponse = {
   subway_aggregation_block_reason?: string | null;
 };
 
+export type DistanceWorkbookPreview = {
+  source_label: string;
+  sheet_names: string[];
+  selected_sheet: string;
+  columns: string[];
+  row_count: number;
+  sample_rows: Array<Record<string, unknown>>;
+  suggested_columns: {
+    address?: string;
+    city?: string;
+    country?: string;
+    route?: string;
+    sequence?: string;
+    bus_type?: string;
+  };
+};
+
+export type ReferenceDistanceResponse = {
+  job: {
+    job_id: string;
+    type: string;
+    created_at: string;
+    label: string;
+    metadata: Record<string, unknown>;
+  };
+  summary: {
+    row_count: number;
+    resolved_count: number;
+    failed_count: number;
+    blank_count: number;
+    distance_mode: string;
+  };
+  results: Array<Record<string, unknown>>;
+};
+
+export type RouteCostResponse = {
+  job: {
+    job_id: string;
+    type: string;
+    created_at: string;
+    label: string;
+    metadata: Record<string, unknown>;
+  };
+  summary: {
+    route_count: number;
+    leg_count: number;
+    total_one_way_distance_km: number;
+    estimated_one_way_fuel_cost: number;
+    routes_with_unresolved_stops: number;
+    electric_routes_skipped: number;
+    currency_code: string;
+    currency_label: string;
+  };
+  route_results: Array<Record<string, unknown>>;
+  leg_results: Array<Record<string, unknown>>;
+};
+
+export type FleetPlannerPreviewResponse = {
+  summary: {
+    market: string;
+    mode: string;
+    monitor_seats: number;
+    group_count: number;
+    total_riders: number;
+    source: string;
+  };
+  assumptions: Record<string, unknown>;
+  demand_workbook?: {
+    source_label: string;
+    school: Record<string, unknown>;
+    summary: Record<string, unknown>;
+    warnings: string[];
+    riders: Array<Record<string, unknown>>;
+  } | null;
+  recommendations: Array<Record<string, unknown>>;
+  mix_summary: {
+    market: string;
+    mode: string;
+    monitor_seats: number;
+    group_count: number;
+    vehicle_mix: Record<string, number>;
+    selections: Array<Record<string, unknown>>;
+  };
+  decision_details: Array<Record<string, unknown>>;
+  catalog: Array<Record<string, unknown>>;
+};
+
+export type FleetPlannerGeocodeResponse = {
+  source_label: string;
+  summary: {
+    school_status?: string;
+    student_rows?: number;
+    resolved_student_rows?: number;
+    failed_student_rows?: number;
+    resolved_students?: number;
+    failed_students?: number;
+    cache_hits?: number;
+    cache_changed?: boolean;
+  };
+  school: Record<string, unknown>;
+  demand_points: Array<Record<string, unknown>>;
+  rows: Array<Record<string, unknown>>;
+  map_html: string;
+};
+
+export type FleetPlannerClusterResponse = {
+  summary: {
+    cluster_count?: number;
+    resolved_points?: number;
+    failed_points?: number;
+    resolved_students?: number;
+    failed_students?: number;
+    max_vehicle_student_capacity?: number;
+    market?: string;
+    mode?: string;
+    monitor_seats?: number;
+  };
+  school: Record<string, unknown>;
+  clusters: Array<Record<string, unknown>>;
+  failed_points: Array<Record<string, unknown>>;
+  rows: Array<Record<string, unknown>>;
+  stop_rows: Array<Record<string, unknown>>;
+  map_html: string;
+};
+
+export type FleetPlannerRoutePreviewResponse = {
+  summary: {
+    route_count?: number;
+    total_distance_km?: number;
+    total_duration_min?: number;
+    service_direction?: string;
+    max_route_duration_minutes?: number | null;
+    candidate_vehicle_count?: number;
+    solver?: string;
+  };
+  school: Record<string, unknown>;
+  routes: Array<Record<string, unknown>>;
+  rows: Array<Record<string, unknown>>;
+  stop_rows: Array<Record<string, unknown>>;
+  map_html: string;
+  refinement_note: string;
+  workbook_file_name?: string;
+  workbook_base64?: string;
+};
+
+export type FleetPlannerSubmitGeneratedPlanResponse = {
+  job: JobSummary & { worker_pid?: number };
+  client_prep: {
+    geocode_warnings: Array<Record<string, unknown>>;
+    excluded_stops: Array<Record<string, unknown>>;
+    elapsed_seconds: number;
+    logs: string;
+  };
+};
+
 type JobsResponse = {
   jobs: JobSummary[];
 };
@@ -146,6 +301,10 @@ export async function listDemoWorkbooks() {
 
 export function getWorkbookTemplateUrl() {
   return `${API_BASE_URL}/workbooks/template`;
+}
+
+export function getDemandTemplateUrl() {
+  return `${API_BASE_URL}/fleet-planner/demand-template`;
 }
 
 export function getDemoWorkbookUrl(name: string) {
@@ -219,6 +378,161 @@ export function submitWorkbookJob(payload: {
   job_custom_name?: string;
 }) {
   return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewDistanceWorkbook(payload: {
+  file_name: string;
+  file_base64: string;
+  selected_sheet?: string;
+}) {
+  return apiFetch<DistanceWorkbookPreview>("/distance-checker/workbook-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runReferenceDistanceCheck(payload: {
+  file_name: string;
+  file_base64: string;
+  selected_sheet: string;
+  address_column: string;
+  city_column?: string;
+  country_column?: string;
+  distance_mode: "road" | "straight_line";
+  origin: {
+    country: string;
+    city: string;
+    address: string;
+  };
+}) {
+  return apiFetch<ReferenceDistanceResponse>("/distance-checker/reference", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function runCurrentPlanRouteCost(payload: {
+  file_name: string;
+  file_base64: string;
+  selected_sheet: string;
+  route_column: string;
+  address_column: string;
+  sequence_column?: string;
+  bus_type_column?: string;
+  city_column?: string;
+  country_column?: string;
+  default_city: string;
+  default_country: string;
+  currency_code: string;
+  currency_label: string;
+  diesel_price_per_liter: number;
+  fuel_efficiency_km_per_liter: number;
+}) {
+  return apiFetch<RouteCostResponse>("/distance-checker/route-cost", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function previewFleetPlanner(payload: {
+  market: "KR" | "CN";
+  mode: "balanced" | "cost_saver" | "comfort_saver";
+  monitor_seats: number;
+  rider_counts?: string;
+  file_name?: string;
+  file_base64?: string;
+}) {
+  return apiFetch<FleetPlannerPreviewResponse>("/fleet-planner/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function geocodeFleetPlannerDemand(payload: {
+  file_name: string;
+  file_base64: string;
+}) {
+  return apiFetch<FleetPlannerGeocodeResponse>("/fleet-planner/geocode", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function buildFleetPlannerClusters(payload: {
+  market: "KR" | "CN";
+  mode: "balanced" | "cost_saver" | "comfort_saver";
+  monitor_seats: number;
+  sector_count: 4 | 8 | 12;
+  geocode_result: {
+    school: Record<string, unknown>;
+    demand_points: Array<Record<string, unknown>>;
+    summary: Record<string, unknown>;
+  };
+}) {
+  return apiFetch<FleetPlannerClusterResponse>("/fleet-planner/clusters", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function buildFleetPlannerRoutePreview(payload: {
+  market: "KR" | "CN";
+  mode: "balanced" | "cost_saver" | "comfort_saver";
+  monitor_seats: number;
+  service_direction: "to_school" | "from_school";
+  max_route_duration_minutes?: number;
+  cluster_result: {
+    school: Record<string, unknown>;
+    clusters: Array<Record<string, unknown>>;
+    failed_points: Array<Record<string, unknown>>;
+    summary: Record<string, unknown>;
+  };
+}) {
+  return apiFetch<FleetPlannerRoutePreviewResponse>("/fleet-planner/route-preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function buildFleetPlannerGlobalPlan(payload: {
+  market: "KR" | "CN";
+  mode: "balanced" | "cost_saver" | "comfort_saver";
+  monitor_seats: number;
+  service_direction: "to_school" | "from_school";
+  geocode_result: {
+    school: Record<string, unknown>;
+    demand_points: Array<Record<string, unknown>>;
+    summary: Record<string, unknown>;
+  };
+}) {
+  return apiFetch<FleetPlannerRoutePreviewResponse>("/fleet-planner/global-plan", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+export function submitFleetPlannerGeneratedPlan(payload: {
+  job_name: string;
+  max_route_duration_minutes?: number;
+  route_preview: {
+    summary: Record<string, unknown>;
+    school: Record<string, unknown>;
+    routes: Array<Record<string, unknown>>;
+  };
+}) {
+  return apiFetch<FleetPlannerSubmitGeneratedPlanResponse>("/fleet-planner/submit-generated-plan", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

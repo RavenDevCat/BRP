@@ -1300,3 +1300,33 @@ Recommended next step:
   - KR Tailscale React preview proxy health: `200`
   - Mac SSH tunnel `http://127.0.0.1:4175/api/health` returned OK
   - Mac SSH tunnel `http://127.0.0.1:4175/api/jobs` returned `200`
+
+### 2026-05-30 KR React Workflow Refresh Deployment
+
+- Deployed local main commit `217a5a4` to KR active checkout `C:\Users\Bus.EIM\BRP`.
+- Deployment method:
+  - local Mac committed and pushed `217a5a4`
+  - KR ran `git pull --ff-only`
+  - local React `apps/web/dist` build was copied to KR because KR still does not have Node/npm in PATH
+  - restarted scheduled tasks `BRP-Backend-Preview`, `BRP-React-Preview`, and `BRP-React-Public`
+- Runtime preservation checks:
+  - KR active job store remained `C:/Users/Bus.EIM/BRP/state/jobs`
+  - job JSON count remained `5`
+  - client cache file count remained `6`
+  - backend cache file count remained `6`
+  - Google geocode usage file remained `apps\client\cache\google_geocode_usage.json`
+  - Google usage was verified as `2026-05: 134`
+- KR env correction:
+  - added/confirmed `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`
+  - confirmed `BRP_BACKEND_JOBS_DIR=C:/Users/Bus.EIM/BRP/state/jobs`
+- Post-deploy validation:
+  - KR git clean at `217a5a4`
+  - direct backend health OK
+  - public React origin `127.0.0.1:8501` health OK
+  - Tailscale React preview `127.0.0.1:4173` health OK
+  - `/new` and `/jobs` returned React HTML from the KR public origin
+  - `/api/jobs` returned `5` jobs
+  - `/api/google-geocode-usage` returned enabled `true`, month `2026-05`, used `134`, limit `10000`
+  - Mac over Tailscale `http://100.87.225.85:4173/api/health` returned OK
+  - Mac over Tailscale `http://100.87.225.85:4173/api/google-geocode-usage` returned `134 / 10,000`
+  - public `https://brp-kr.ravenapis.com` still redirects unauthenticated users to Cloudflare Access, as expected

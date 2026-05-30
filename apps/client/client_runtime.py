@@ -98,11 +98,6 @@ def cross_process_file_lock(path: Path):
             import msvcrt
 
             lock_file.seek(0)
-            if not lock_file.read(1):
-                lock_file.seek(0)
-                lock_file.write(b"\0")
-                lock_file.flush()
-            lock_file.seek(0)
             msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             try:
                 yield

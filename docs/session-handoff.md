@@ -1228,7 +1228,7 @@ Recommended next step:
 - Backup for overwritten active files:
   - `C:\Users\brp-user\BRP\state\migration-backup-full-20260530-152526`
 - Legacy env reference copy:
-  - `C:\Users\brp-user\BRP\ops\env\legacy-from-old-20260530-152526`
+  - `C:\Users\brp-user\BRP\state\migration-backup-full-20260530-152526\legacy-env`
 - Merged remaining runtime files:
   - backend job JSON from both old job stores into `state\jobs`, preserving the larger/newer duplicate where applicable
   - client cache into `apps\client\cache`

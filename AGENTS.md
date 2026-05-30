@@ -30,6 +30,7 @@ When deploying, verify that job history, caches, and env-specific behavior survi
 
 The Google geocode usage counter is persistent runtime state. The value `134` was only the known KR count when the counter was restored on 2026-05-30. Future valid Google calls should increase the count. Preserve and verify the current value; do not reset it to `134`.
 Google usage updates are protected with a cross-process lock and atomic reservation in `apps/client/client_runtime.py`; do not bypass this by writing the usage JSON directly.
+External provider QPS is protected with a cross-process rate limiter under `state/api_rate_limits` by default. Do not replace it with per-process-only throttling when touching Kakao, Google, AMap, or DeepSeek API calls.
 
 ## KR Deploy Pattern
 

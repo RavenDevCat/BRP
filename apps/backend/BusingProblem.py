@@ -16,6 +16,8 @@ import requests
 from folium import Element
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
+from api_rate_limit import CrossProcessRateLimiter
+
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = BASE_DIR / "cache"
@@ -97,23 +99,17 @@ ROUTE_DURATION_SOFT_PENALTY_PER_SECOND = 80
 
 
 class RateLimiter:
-    def __init__(self, max_qps: float) -> None:
-        self.min_interval = 1.0 / max_qps
-        self.lock = threading.Lock()
-        self.next_allowed_time = 0.0
+    def __init__(self, name: str, max_qps: float) -> None:
+        self.shared_limiter = CrossProcessRateLimiter(name, max_qps)
 
     def wait(self) -> None:
-        with self.lock:
-            now = time.monotonic()
-            if now < self.next_allowed_time:
-                time.sleep(self.next_allowed_time - now)
-            self.next_allowed_time = time.monotonic() + self.min_interval
+        self.shared_limiter.wait()
 
 
-AMAP_GEOCODE_LIMITER = RateLimiter(AMAP_GEOCODE_MAX_QPS)
-AMAP_PLACES_LIMITER = RateLimiter(AMAP_PLACES_MAX_QPS)
-AMAP_ROUTING_LIMITER = RateLimiter(AMAP_ROUTING_MAX_QPS)
-AMAP_MATRIX_LIMITER = RateLimiter(AMAP_MATRIX_MAX_QPS)
+AMAP_GEOCODE_LIMITER = RateLimiter("amap-geocode", AMAP_GEOCODE_MAX_QPS)
+AMAP_PLACES_LIMITER = RateLimiter("amap-places", AMAP_PLACES_MAX_QPS)
+AMAP_ROUTING_LIMITER = RateLimiter("amap-routing", AMAP_ROUTING_MAX_QPS)
+AMAP_MATRIX_LIMITER = RateLimiter("amap-matrix", AMAP_MATRIX_MAX_QPS)
 CACHE_FILE_LOCKS: dict[Path, threading.Lock] = {}
 
 
@@ -449,7 +445,7 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 "offset": 10,
                 "page": 1,
             },
-            AMAP_GEOCODE_LIMITER,
+            AMAP_PLACES_LIMITER,
         )
         pois = payload.get("pois") or []
         if pois:

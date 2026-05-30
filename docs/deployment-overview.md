@@ -149,6 +149,21 @@ For the South Korea deployment only:
 export BRP_SHOW_GOOGLE_GEOCODE_USAGE=true
 ```
 
+External API throttling is shared across backend workers and client-side helper
+processes through a cross-process limiter. By default it stores state under
+`state/api_rate_limits` in the checkout. Set this only if a deployment needs a
+separate runtime data mount:
+
+```bash
+export BRP_API_RATE_LIMIT_DIR="/opt/brp/runtime/api_rate_limits"
+```
+
+AI Audit calls use the same limiter family:
+
+```bash
+export BRP_DEEPSEEK_MAX_QPS="1.0"
+```
+
 ### OSRM data and bind settings
 
 ```bash

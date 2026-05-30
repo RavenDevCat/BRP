@@ -93,6 +93,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - The counter is persistent runtime state; future Google geocoding calls should increase it, and deployments should preserve the current value rather than resetting it to a past baseline.
 - Google geocode usage updates now reserve quota through a cross-process lock, so concurrent users or multiple Python service processes do not lose increments or overshoot the monthly cap because of stale read/write races.
 
+### External API Throttling Hardened
+
+- Kakao, Google, AMap, and DeepSeek calls now share cross-process rate limiter state, so concurrent jobs do not multiply each provider's QPS by the number of Python worker processes.
+- Jobs still run in parallel; only the external provider request gate is globally paced.
+- Existing jobs do not need to be rerun.
+
 ## Update Log Guidance
 
 Add a new dated entry when a change affects user workflow, operational behavior, or interpretation of results, such as:

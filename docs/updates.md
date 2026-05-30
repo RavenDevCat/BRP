@@ -90,6 +90,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 - The React shell can show the KR Google geocode usage counter when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - The counter remains hidden on non-KR deployments by default.
+- The counter is persistent runtime state; future Google geocoding calls should increase it, and deployments should preserve the current value rather than resetting it to a past baseline.
 
 ## Update Log Guidance
 

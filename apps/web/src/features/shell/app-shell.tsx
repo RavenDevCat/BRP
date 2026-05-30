@@ -61,7 +61,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="space-y-3 border-t border-border p-4">
-          {googleUsage?.enabled ? <GoogleUsageCard usage={googleUsage} percent={googleUsagePct} /> : null}
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground">Backend</span>
             <Badge tone={healthQuery.data?.status === "ok" ? "success" : "warning"}>
@@ -127,24 +126,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
       </div>
-    </div>
-  );
-}
-
-function GoogleUsageCard({ usage, percent }: { usage: GoogleGeocodeUsage; percent: number }) {
-  return (
-    <div className="rounded-md border border-border bg-muted/40 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex min-w-0 items-center gap-2 text-xs font-medium text-muted-foreground">
-          <Gauge className="h-3.5 w-3.5 flex-none text-primary" aria-hidden="true" />
-          <span className="truncate">Google API</span>
-        </div>
-        <Badge tone={percent >= 90 ? "warning" : "info"}>{percent}%</Badge>
-      </div>
-      <div className="mt-2 text-sm font-semibold text-foreground">
-        {formatNumber(usage.used)} / {formatNumber(usage.limit)}
-      </div>
-      <div className="mt-1 text-xs text-muted-foreground">{usage.month_key || "This month"}</div>
     </div>
   );
 }

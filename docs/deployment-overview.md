@@ -145,7 +145,13 @@ Use `OSRM_BIND_HOST=0.0.0.0` only when OSRM ports must be reachable from outside
 ```bash
 export BRP_BACKEND_HOST="127.0.0.1"
 export BRP_BACKEND_PORT="8001"
+export BRP_BACKEND_JOBS_DIR="/opt/brp/runtime/jobs"
 ```
+
+`BRP_BACKEND_JOBS_DIR` should always point at server-local runtime storage, not
+at a Git-managed code directory. If it is omitted, the backend defaults to
+`state/jobs` under the repository root. The backend also rebuilds `index.json`
+from existing job JSON files when the index is missing or empty.
 
 Then load city routing endpoints:
 

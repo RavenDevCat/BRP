@@ -6,6 +6,7 @@ import { buttonClassName } from "@/components/ui/button-styles";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { getJobName, getJobStatusTone } from "@/features/jobs/status";
+import { jobInputStopCount } from "@/features/jobs/summary-metrics";
 
 export function JobTable({ jobs }: { jobs: JobSummary[] }) {
   if (!jobs.length) {
@@ -51,7 +52,7 @@ export function JobTable({ jobs }: { jobs: JobSummary[] }) {
                     <Badge tone={getJobStatusTone(job.status)}>{job.status}</Badge>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground">{formatDateTime(job.created_at)}</td>
-                  <td className="px-4 py-3">{formatNumber(summary.input_record_count)}</td>
+                  <td className="px-4 py-3">{formatNumber(jobInputStopCount(summary))}</td>
                   <td className="px-4 py-3">{formatNumber(summary.current_plan_route_count)}</td>
                   <td className="max-w-[220px] truncate px-4 py-3 text-muted-foreground">
                     {job.owner_email || "Unknown"}

@@ -803,9 +803,9 @@ def summarize_structured_results(results: dict[str, Any], uploaded_address_count
     subway_total_profit_loss = float(subway.get("total_profit_loss", 0.0))
     nearby_total_profit_loss = float(nearby.get("total_profit_loss", 0.0))
 
-    original_non_depot = max(0, original_valid_stops - 1)
-    subway_non_depot = max(0, subway_valid_stops - 1)
-    nearby_non_depot = max(0, nearby_valid_stops - 1)
+    original_non_depot = max(0, original_valid_stops)
+    subway_non_depot = max(0, subway_valid_stops)
+    nearby_non_depot = max(0, nearby_valid_stops)
 
     stop_reduction = original_non_depot - subway_non_depot
     stop_reduction_pct = (stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
@@ -1281,10 +1281,10 @@ def assess_current_plan(
                 route_duration_s += float(solve_time[from_node][to_node])
                 route_distance_m += float(solve_distance[from_node][to_node])
 
+        service_stops = [stop for stop in ordered_stops if not bool(stop.get("is_depot"))]
         passenger_count = sum(
             int(stop.get("passenger_count", 0))
-            for stop in ordered_stops
-            if not bool(stop.get("is_depot"))
+            for stop in service_stops
         )
         load_factor = (passenger_count / capacity) if capacity > 0 else 0.0
         total_distance_m += route_distance_m
@@ -1301,22 +1301,27 @@ def assess_current_plan(
             recommendation_set.append(
                 f"Route {route_id} exceeds the target route duration threshold of {config.max_route_duration_minutes} minutes plus the 10-minute operating buffer."
             )
-        if len(ordered_stops) > 12:
+        if len(service_stops) > 12:
             recommendation_set.append(
-                f"Route {route_id} has {len(ordered_stops)} scheduled stops. Review whether some nearby stops can be consolidated."
+                f"Route {route_id} has {len(service_stops)} service stops. Review whether some nearby stops can be consolidated."
             )
         route_summaries.append(
             {
                 "route_id": route_id,
                 "bus_type": bus_type,
                 "capacity": capacity,
-                "stop_count": len(ordered_stops),
+                "stop_count": len(service_stops),
+                "service_stop_count": len(service_stops),
+                "scheduled_stop_count": len(ordered_stops),
+                "depot_stop_count": len(ordered_stops) - len(service_stops),
                 "passenger_count": passenger_count,
                 "distance_m": route_distance_m,
                 "duration_s": route_duration_s,
                 "load_factor": load_factor,
                 "stop_ids": [str(stop.get("stop_id", "")).strip() for stop in ordered_stops],
+                "service_stop_ids": [str(stop.get("stop_id", "")).strip() for stop in service_stops],
                 "addresses": [str(stop.get("address", "")).strip() for stop in ordered_stops],
+                "service_addresses": [str(stop.get("address", "")).strip() for stop in service_stops],
                 "matched_stop_ids": [
                     str(stop.get("stop_id", "")).strip()
                     for stop in ordered_stops
@@ -1340,10 +1345,26 @@ def assess_current_plan(
             "The imported plan has a low overall average load factor. Review whether some routes can be merged or downsized."
         )
 
+    service_stop_rows = [stop for stop in stop_rows if not bool(stop.get("is_depot"))]
+    stop_is_depot = {
+        str(stop.get("stop_id", "")).strip(): bool(stop.get("is_depot"))
+        for stop in stop_rows
+    }
+    service_assignments = [
+        assignment
+        for assignment in assignments
+        if not stop_is_depot.get(str(assignment.get("stop_id", "")).strip(), False)
+    ]
+
     return {
         "route_count": route_count,
-        "stop_count": len(stop_rows),
-        "assignment_count": len(assignments),
+        "stop_count": len(service_stop_rows),
+        "service_stop_count": len(service_stop_rows),
+        "scheduled_stop_count": len(stop_rows),
+        "depot_stop_count": len(stop_rows) - len(service_stop_rows),
+        "assignment_count": len(service_assignments),
+        "scheduled_assignment_count": len(assignments),
+        "depot_assignment_count": len(assignments) - len(service_assignments),
         "target_route_duration_minutes": int(config.max_route_duration_minutes),
         "effective_route_duration_limit_minutes": int(effective_route_duration_limit_minutes(config)),
         "service_direction": service_direction,
@@ -1404,7 +1425,9 @@ def build_current_plan_map_scenario(
         "routes": routes,
         "output_html": "",
         "bus_count": len(routes),
-        "stop_count": len(points),
+        "stop_count": int(current_plan_assessment.get("service_stop_count", current_plan_assessment.get("stop_count", 0)) or 0),
+        "service_stop_count": int(current_plan_assessment.get("service_stop_count", current_plan_assessment.get("stop_count", 0)) or 0),
+        "map_point_count": len(points),
         "bus_mix": dict(current_plan_assessment.get("bus_mix", {})),
         "enabled": True,
         "avg_route_distance_m": float(current_plan_assessment.get("avg_route_distance_m", 0.0) or 0.0),
@@ -1616,14 +1639,30 @@ def _rebuild_current_plan_from_route_rows(
             stops.append(stop_item)
             assignments.append(assignment_item)
 
+    service_stops = [item for item in stops if not bool(item.get("is_depot"))]
+    stop_is_depot = {
+        str(item.get("stop_id", "")).strip(): bool(item.get("is_depot"))
+        for item in stops
+    }
+    service_assignments = [
+        item
+        for item in assignments
+        if not stop_is_depot.get(str(item.get("stop_id", "")).strip(), False)
+    ]
+
     return {
         "stops": stops,
         "assignments": assignments,
         "fleet": [dict(item) for item in list(fleet or [])],
         "service_direction": normalized_direction,
         "summary": {
-            "stop_count": len(stops),
-            "assignment_count": len(assignments),
+            "stop_count": len(service_stops),
+            "service_stop_count": len(service_stops),
+            "scheduled_stop_count": len(stops),
+            "depot_stop_count": len(stops) - len(service_stops),
+            "assignment_count": len(service_assignments),
+            "scheduled_assignment_count": len(assignments),
+            "depot_assignment_count": len(assignments) - len(service_assignments),
             "route_count": len(route_ids),
             "service_direction": normalized_direction,
             "bus_types": sorted(bus_types),
@@ -3478,7 +3517,10 @@ def build_further_most_stop_scenario(
     scenario["routes"] = truncated_routes
     scenario["outlying_private_access_rows"] = private_drive_rows
     scenario["private_drive_stop_count"] = len(private_drive_rows)
-    scenario["stop_count"] = int(scenario.get("stop_count", len(points)))
+    service_point_count = len([point for point in points if not bool(point.get("is_depot"))])
+    scenario["stop_count"] = int(scenario.get("service_stop_count", scenario.get("stop_count", service_point_count)) or 0)
+    scenario["service_stop_count"] = int(scenario.get("service_stop_count", scenario["stop_count"]) or 0)
+    scenario["map_point_count"] = len(points)
     if private_drive_rows:
         scenario["avg_route_distance_m"] = (
             sum(float(route.get("distance_m", 0.0) or 0.0) for route in truncated_routes) / len(truncated_routes)
@@ -3601,6 +3643,8 @@ def _build_skipped_scenario_result(reason: str) -> dict[str, Any]:
         "output_html": "",
         "bus_count": 0,
         "stop_count": 0,
+        "service_stop_count": 0,
+        "map_point_count": 0,
         "bus_mix": {},
         "enabled": False,
         "skipped_reason": reason,
@@ -3776,6 +3820,8 @@ def run_backend_planner_with_prepared_data(
         )
     log_stream.flush()
 
+    service_original_points = [point for point in original_points if not bool(point.get("is_depot"))]
+
     structured_results = {
         "original": original_result,
         "current_plan": current_plan_scenario,
@@ -3783,8 +3829,10 @@ def run_backend_planner_with_prepared_data(
         "nearby": nearby_result,
         "further_most": further_most_result,
         "further_most_nearby": further_most_nearby_result,
-        "input_address_count": len(input_records),
-        "valid_stop_count": len(original_points),
+        "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
+        "input_point_count": len(input_records),
+        "valid_stop_count": len(service_original_points),
+        "valid_point_count": len(original_points),
         "currency_code": planner.CURRENT_CURRENCY_CODE,
         "job_id": config.output_directory_name,
         "current_plan_assessment": current_plan_assessment,
@@ -3807,9 +3855,10 @@ def run_backend_planner_with_prepared_data(
         "service_direction": normalize_service_direction(config.service_direction),
     }
     structured_results = attach_output_paths_to_structured_results(structured_results, config)
+    service_input_record_count = len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0])
     return {
         "structured_results": structured_results,
-        "summary": summarize_structured_results(structured_results, len(input_records)),
+        "summary": summarize_structured_results(structured_results, service_input_record_count),
         "logs": log_stream.getvalue(),
         "elapsed_seconds": time.perf_counter() - started_at,
         "current_plan_assessment": current_plan_assessment,
@@ -3913,10 +3962,11 @@ def run_legacy_planner_with_addresses(
 
     logs = log_stream.getvalue()
     structured_results = run_results or getattr(planner, "LAST_RUN_RESULTS", {})
+    service_normalized_record_count = len([item for item in normalized_records if int(item.get("passenger_count", 0) or 0) > 0])
     if structured_results:
-        summary = summarize_structured_results(structured_results, len(normalized_records))
+        summary = summarize_structured_results(structured_results, service_normalized_record_count)
     else:
-        summary = summarize_logs(logs, len(normalized_records))
+        summary = summarize_logs(logs, service_normalized_record_count)
 
     result = {
         "original_html": output_paths["original_html"],

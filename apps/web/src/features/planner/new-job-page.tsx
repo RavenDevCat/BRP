@@ -1,5 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
@@ -19,6 +19,39 @@ import {
 } from "@/lib/api";
 import { formatDateTime, formatNumber } from "@/lib/format";
 
+type PlannerConfigKey = keyof PlannerConfigPayload;
+
+const FLEET_ASSUMPTION_KEYS: PlannerConfigKey[] = [
+  "large_bus_name",
+  "large_bus_capacity",
+  "large_bus_max_count",
+  "mid_bus_name",
+  "mid_bus_capacity",
+  "mid_bus_max_count",
+  "small_bus_name",
+  "small_bus_capacity",
+  "small_bus_max_count",
+];
+
+const FREE_BASELINE_MIX_KEYS: PlannerConfigKey[] = [
+  "free_baseline_large_bus_ratio",
+  "free_baseline_mid_bus_ratio",
+  "free_baseline_small_bus_ratio",
+];
+
+const ROUTE_POLICY_KEYS: PlannerConfigKey[] = [
+  "stop_service_minutes",
+  "express_threshold_km",
+  "reserved_express_buses",
+  "express_skip_inner_km",
+];
+
+const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
+  "subway_search_radius_m",
+  "max_subway_walk_distance_m",
+  "nearby_cluster_radius_m",
+];
+
 export function NewJobPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -30,6 +63,7 @@ export function NewJobPage() {
   const [selectedDemoName, setSelectedDemoName] = useState("");
   const [config, setConfig] = useState<PlannerConfigPayload>(DEFAULT_PLANNER_CONFIG);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
+  const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
   const demosQuery = useQuery({
     queryKey: ["workbook-demos"],
     queryFn: listDemoWorkbooks,
@@ -37,6 +71,51 @@ export function NewJobPage() {
   });
   const demoOptions = demosQuery.data || [];
   const resolvedDemoName = selectedDemoName || demoOptions[0]?.name || "";
+
+  function buildConfigWithOverrides(
+    baseConfig: PlannerConfigPayload,
+    subwayAggregationBlocked = false,
+    overrides = configOverridesRef.current,
+  ) {
+    const safeOverrides = { ...overrides };
+    if (subwayAggregationBlocked) {
+      delete safeOverrides.include_subway_aggregation_scenario;
+    }
+    return { ...baseConfig, ...safeOverrides };
+  }
+
+  function resetConfigToDefaultsWithOverrides() {
+    setConfig(buildConfigWithOverrides(DEFAULT_PLANNER_CONFIG));
+  }
+
+  function updateUserConfig(patch: Partial<PlannerConfigPayload>) {
+    configOverridesRef.current = { ...configOverridesRef.current, ...patch };
+    updateConfig(setConfig, patch);
+  }
+
+  function hasUserConfigOverrides(keys: PlannerConfigKey[]) {
+    return keys.some((key) => Object.prototype.hasOwnProperty.call(configOverridesRef.current, key));
+  }
+
+  function clearUserConfigOverrides(keys: PlannerConfigKey[]) {
+    const nextOverrides = { ...configOverridesRef.current };
+    for (const key of keys) {
+      delete nextOverrides[key];
+    }
+    configOverridesRef.current = nextOverrides;
+    setConfig(
+      preview
+        ? buildConfigWithOverrides(preview.suggested_config, Boolean(preview.subway_aggregation_block_reason), nextOverrides)
+        : buildConfigWithOverrides(DEFAULT_PLANNER_CONFIG, false, nextOverrides),
+    );
+  }
+
+  function configFromPreview(payload: WorkbookPreview) {
+    return buildConfigWithOverrides(
+      payload.suggested_config,
+      Boolean(payload.subway_aggregation_block_reason),
+    );
+  }
 
   const demoMutation = useMutation({
     mutationFn: async (demoName: string) => {
@@ -54,6 +133,7 @@ export function NewJobPage() {
       setFileBase64(payload.fileBase64);
       setFileError("");
       setPreview(null);
+      resetConfigToDefaultsWithOverrides();
     },
   });
 
@@ -66,7 +146,7 @@ export function NewJobPage() {
     },
     onSuccess: (payload) => {
       setPreview(payload);
-      setConfig(payload.suggested_config);
+      setConfig(configFromPreview(payload));
     },
   });
 
@@ -75,10 +155,17 @@ export function NewJobPage() {
       if (!file || !fileBase64) {
         throw new Error("Select a workbook first.");
       }
+      let submitConfig = config;
+      if (!preview) {
+        const payload = await previewWorkbook({ file_name: file.name, file_base64: fileBase64, config });
+        submitConfig = configFromPreview(payload);
+        setPreview(payload);
+        setConfig(submitConfig);
+      }
       return submitWorkbookJob({
         file_name: file.name,
         file_base64: fileBase64,
-        config,
+        config: submitConfig,
         job_custom_name: jobCustomName,
       });
     },
@@ -98,6 +185,7 @@ export function NewJobPage() {
   async function handleFileChange(nextFile: File | null) {
     setFile(nextFile);
     setPreview(null);
+    resetConfigToDefaultsWithOverrides();
     setFileError("");
     setFileBase64("");
     if (!nextFile) {
@@ -123,6 +211,7 @@ export function NewJobPage() {
   }
 
   const busy = previewMutation.isPending || submitMutation.isPending || demoMutation.isPending;
+  const canSubmit = Boolean(fileBase64 && !busy);
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -153,6 +242,7 @@ export function NewJobPage() {
                     onClick={() => {
                       setSourceMode("upload");
                       resetWorkbookState();
+                      resetConfigToDefaultsWithOverrides();
                     }}
                   >
                     Upload Workbook
@@ -162,6 +252,7 @@ export function NewJobPage() {
                     onClick={() => {
                       setSourceMode("demo");
                       resetWorkbookState();
+                      resetConfigToDefaultsWithOverrides();
                     }}
                   >
                     Demo Workbook
@@ -195,6 +286,7 @@ export function NewJobPage() {
                       onChange={(event) => {
                         setSelectedDemoName(event.target.value);
                         resetWorkbookState();
+                        resetConfigToDefaultsWithOverrides();
                       }}
                     >
                       {demoOptions.map((demo) => (
@@ -254,7 +346,7 @@ export function NewJobPage() {
                     value={config.service_direction}
                     onChange={(event) => {
                       setPreview(null);
-                      updateConfig(setConfig, { service_direction: event.target.value });
+                      updateUserConfig({ service_direction: event.target.value });
                     }}
                   >
                     {SERVICE_DIRECTION_OPTIONS.map((option) => (
@@ -268,7 +360,7 @@ export function NewJobPage() {
                   <select
                     className={fieldClassName}
                     value={config.traffic_profile_name}
-                    onChange={(event) => updateConfig(setConfig, { traffic_profile_name: event.target.value })}
+                    onChange={(event) => updateUserConfig({ traffic_profile_name: event.target.value })}
                   >
                     {TRAFFIC_PROFILE_OPTIONS.map((option) => (
                       <option key={option} value={option}>
@@ -285,7 +377,7 @@ export function NewJobPage() {
                     max={300}
                     step={5}
                     value={config.max_route_duration_minutes}
-                    onChange={(event) => updateConfig(setConfig, { max_route_duration_minutes: Number(event.target.value) })}
+                    onChange={(event) => updateUserConfig({ max_route_duration_minutes: Number(event.target.value) })}
                   />
                 </Field>
               </div>
@@ -305,7 +397,7 @@ export function NewJobPage() {
                     type="checkbox"
                     checked={config.include_subway_aggregation_scenario}
                     disabled={Boolean(preview?.subway_aggregation_block_reason)}
-                    onChange={(event) => updateConfig(setConfig, { include_subway_aggregation_scenario: event.target.checked })}
+                    onChange={(event) => updateUserConfig({ include_subway_aggregation_scenario: event.target.checked })}
                   />
                   <span>Subway baseline</span>
                 </label>
@@ -313,77 +405,92 @@ export function NewJobPage() {
                   <input
                     type="checkbox"
                     checked={config.include_nearby_aggregation_scenario}
-                    onChange={(event) => updateConfig(setConfig, { include_nearby_aggregation_scenario: event.target.checked })}
+                    onChange={(event) => updateUserConfig({ include_nearby_aggregation_scenario: event.target.checked })}
                   />
                   <span>Nearby baseline</span>
                 </label>
               </div>
 
-              <SettingsSection title="Fleet assumptions">
+              <SettingsSection
+                title="Fleet assumptions"
+                description="Optional baseline fleet inputs; workbook fleet is still used for current-plan audit when present."
+                customized={hasUserConfigOverrides(FLEET_ASSUMPTION_KEYS)}
+                onReset={() => clearUserConfigOverrides(FLEET_ASSUMPTION_KEYS)}
+              >
                 <div className="space-y-3">
                   <FleetSettingsRow
                     slotLabel="Large Slot"
                     name={config.large_bus_name}
                     capacity={config.large_bus_capacity}
                     count={config.large_bus_max_count}
-                    onNameChange={(value) => updateConfig(setConfig, { large_bus_name: value })}
-                    onCapacityChange={(value) => updateConfig(setConfig, { large_bus_capacity: value })}
-                    onCountChange={(value) => updateConfig(setConfig, { large_bus_max_count: value })}
+                    onNameChange={(value) => updateUserConfig({ large_bus_name: value })}
+                    onCapacityChange={(value) => updateUserConfig({ large_bus_capacity: value })}
+                    onCountChange={(value) => updateUserConfig({ large_bus_max_count: value })}
                   />
                   <FleetSettingsRow
                     slotLabel="Mid Slot"
                     name={config.mid_bus_name}
                     capacity={config.mid_bus_capacity}
                     count={config.mid_bus_max_count}
-                    onNameChange={(value) => updateConfig(setConfig, { mid_bus_name: value })}
-                    onCapacityChange={(value) => updateConfig(setConfig, { mid_bus_capacity: value })}
-                    onCountChange={(value) => updateConfig(setConfig, { mid_bus_max_count: value })}
+                    onNameChange={(value) => updateUserConfig({ mid_bus_name: value })}
+                    onCapacityChange={(value) => updateUserConfig({ mid_bus_capacity: value })}
+                    onCountChange={(value) => updateUserConfig({ mid_bus_max_count: value })}
                   />
                   <FleetSettingsRow
                     slotLabel="Small Slot"
                     name={config.small_bus_name}
                     capacity={config.small_bus_capacity}
                     count={config.small_bus_max_count}
-                    onNameChange={(value) => updateConfig(setConfig, { small_bus_name: value })}
-                    onCapacityChange={(value) => updateConfig(setConfig, { small_bus_capacity: value })}
-                    onCountChange={(value) => updateConfig(setConfig, { small_bus_max_count: value })}
+                    onNameChange={(value) => updateUserConfig({ small_bus_name: value })}
+                    onCapacityChange={(value) => updateUserConfig({ small_bus_capacity: value })}
+                    onCountChange={(value) => updateUserConfig({ small_bus_max_count: value })}
                   />
                 </div>
               </SettingsSection>
 
-              <SettingsSection title="Free baseline vehicle ratio">
+              <SettingsSection
+                title="Free baseline vehicle mix"
+                description="Optional mix weights for the free optimization baseline vehicle pool."
+                customized={hasUserConfigOverrides(FREE_BASELINE_MIX_KEYS)}
+                onReset={() => clearUserConfigOverrides(FREE_BASELINE_MIX_KEYS)}
+              >
                 <div className="grid gap-3 md:grid-cols-3">
                   <NumberField
-                    label={`${config.large_bus_name || "Large Slot"} Weight`}
+                    label={`${config.large_bus_name || "Large Slot"} Mix Weight`}
                     value={config.free_baseline_large_bus_ratio}
                     min={0}
                     max={500}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { free_baseline_large_bus_ratio: value })}
+                    onChange={(value) => updateUserConfig({ free_baseline_large_bus_ratio: value })}
                   />
                   <NumberField
-                    label={`${config.mid_bus_name || "Mid Slot"} Weight`}
+                    label={`${config.mid_bus_name || "Mid Slot"} Mix Weight`}
                     value={config.free_baseline_mid_bus_ratio}
                     min={0}
                     max={500}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { free_baseline_mid_bus_ratio: value })}
+                    onChange={(value) => updateUserConfig({ free_baseline_mid_bus_ratio: value })}
                   />
                   <NumberField
-                    label={`${config.small_bus_name || "Small Slot"} Weight`}
+                    label={`${config.small_bus_name || "Small Slot"} Mix Weight`}
                     value={config.free_baseline_small_bus_ratio}
                     min={0}
                     max={500}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { free_baseline_small_bus_ratio: value })}
+                    onChange={(value) => updateUserConfig({ free_baseline_small_bus_ratio: value })}
                   />
                 </div>
                 <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                  Current ratio: {formatVehicleRatio(config)}
+                  Current mix: {formatVehicleRatio(config)}
                 </div>
               </SettingsSection>
 
-              <SettingsSection title="Route policy assumptions">
+              <SettingsSection
+                title="Route policy assumptions"
+                description="Optional dwell-time and express-route assumptions used by route calculations."
+                customized={hasUserConfigOverrides(ROUTE_POLICY_KEYS)}
+                onReset={() => clearUserConfigOverrides(ROUTE_POLICY_KEYS)}
+              >
                 <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                   <NumberField
                     label="Stop Dwell Minutes"
@@ -391,7 +498,7 @@ export function NewJobPage() {
                     min={0}
                     max={20}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { stop_service_minutes: value })}
+                    onChange={(value) => updateUserConfig({ stop_service_minutes: value })}
                   />
                   <NumberField
                     label="Remote Stop Threshold (km)"
@@ -399,7 +506,7 @@ export function NewJobPage() {
                     min={1}
                     max={100}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { express_threshold_km: value })}
+                    onChange={(value) => updateUserConfig({ express_threshold_km: value })}
                   />
                   <NumberField
                     label="Reserved Express Buses"
@@ -407,7 +514,7 @@ export function NewJobPage() {
                     min={0}
                     max={100}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { reserved_express_buses: value })}
+                    onChange={(value) => updateUserConfig({ reserved_express_buses: value })}
                   />
                   <NumberField
                     label="Express Skip Inner Radius (km)"
@@ -415,12 +522,17 @@ export function NewJobPage() {
                     min={0}
                     max={100}
                     step={1}
-                    onChange={(value) => updateConfig(setConfig, { express_skip_inner_km: value })}
+                    onChange={(value) => updateUserConfig({ express_skip_inner_km: value })}
                   />
                 </div>
               </SettingsSection>
 
-              <SettingsSection title="Advanced aggregation settings">
+              <SettingsSection
+                title="Advanced aggregation settings"
+                description="Optional search and clustering radii; only used when Subway or Nearby baselines are enabled."
+                customized={hasUserConfigOverrides(AGGREGATION_SETTING_KEYS)}
+                onReset={() => clearUserConfigOverrides(AGGREGATION_SETTING_KEYS)}
+              >
                 <div className="grid gap-3 md:grid-cols-3">
                   <NumberField
                     label="Subway Search Radius (m)"
@@ -428,7 +540,7 @@ export function NewJobPage() {
                     min={100}
                     max={5000}
                     step={100}
-                    onChange={(value) => updateConfig(setConfig, { subway_search_radius_m: value })}
+                    onChange={(value) => updateUserConfig({ subway_search_radius_m: value })}
                   />
                   <NumberField
                     label="Max Subway Walk Distance (m)"
@@ -436,7 +548,7 @@ export function NewJobPage() {
                     min={50}
                     max={3000}
                     step={50}
-                    onChange={(value) => updateConfig(setConfig, { max_subway_walk_distance_m: value })}
+                    onChange={(value) => updateUserConfig({ max_subway_walk_distance_m: value })}
                   />
                   <NumberField
                     label="Nearby Cluster Radius (m)"
@@ -444,7 +556,7 @@ export function NewJobPage() {
                     min={50}
                     max={3000}
                     step={50}
-                    onChange={(value) => updateConfig(setConfig, { nearby_cluster_radius_m: value })}
+                    onChange={(value) => updateUserConfig({ nearby_cluster_radius_m: value })}
                   />
                 </div>
               </SettingsSection>
@@ -466,11 +578,12 @@ export function NewJobPage() {
                 </Button>
                 <Button
                   type="button"
-                  disabled={!fileBase64 || busy}
+                  disabled={!canSubmit}
+                  title={preview ? undefined : "Workbook will be validated before the audit starts."}
                   icon={submitMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   onClick={() => submitMutation.mutate()}
                 >
-                  Prepare & submit
+                  Run audit
                 </Button>
               </div>
             </CardContent>
@@ -547,13 +660,47 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
+function SettingsSection({
+  title,
+  description,
+  customized = false,
+  onReset,
+  children,
+}: {
+  title: string;
+  description: string;
+  customized?: boolean;
+  onReset?: () => void;
+  children: ReactNode;
+}) {
   return (
     <details className="group rounded-md border border-border bg-muted/40">
-      <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">
-        <span className="inline-flex items-center gap-2">
-          <span className="text-muted-foreground transition group-open:rotate-90">&gt;</span>
-          {title}
+      <summary className="cursor-pointer list-none px-3 py-3 marker:hidden">
+        <span className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <span className="inline-flex min-w-0 items-start gap-2">
+            <span className="mt-0.5 text-muted-foreground transition group-open:rotate-90">&gt;</span>
+            <span className="min-w-0">
+              <span className="block text-sm font-semibold text-foreground">{title}</span>
+              <span className="mt-1 block text-xs font-normal text-muted-foreground">{description}</span>
+            </span>
+          </span>
+          <span className="flex w-fit shrink-0 items-center gap-2">
+            <Badge tone="info">Optional</Badge>
+            {customized ? <Badge tone="warning">Custom</Badge> : null}
+            {customized && onReset ? (
+              <button
+                type="button"
+                className="h-6 rounded-md border border-border bg-surface px-2 text-xs font-medium text-muted-foreground transition hover:text-foreground"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onReset();
+                }}
+              >
+                Reset
+              </button>
+            ) : null}
+          </span>
         </span>
       </summary>
       <div className="space-y-3 border-t border-border px-3 py-3">{children}</div>
@@ -636,8 +783,8 @@ function PreviewSummary({ preview }: { preview: WorkbookPreview }) {
   return (
     <div className="grid grid-cols-2 gap-3">
       <SummaryMetric label="Routes" value={summary.route_count} />
-      <SummaryMetric label="Route rows" value={summary.assignment_count} />
-      <SummaryMetric label="Planning rows" value={summary.planning_stop_count} />
+      <SummaryMetric label="Service rows" value={summary.assignment_count} />
+      <SummaryMetric label="Planning stops" value={summary.planning_stop_count} />
       <SummaryMetric label="Fleet types" value={summary.fleet_count} />
       <div className="col-span-2">
         <div className="mb-2 text-xs uppercase text-muted-foreground">Bus types</div>

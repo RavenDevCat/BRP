@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { getJobName, getJobStatusTone } from "@/features/jobs/status";
+import { jobInputStopCount } from "@/features/jobs/summary-metrics";
 
 export function RootLayout() {
   return (
@@ -237,7 +238,7 @@ function JobHistorySubList({
               <Badge tone={active ? "neutral" : getJobStatusTone(job.status)}>{job.status}</Badge>
             </div>
             <div className={active ? "mt-3 grid grid-cols-2 gap-2 text-xs text-primary-foreground/80" : "mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground"}>
-              <span>{formatNumber(summary.input_record_count)} stops</span>
+              <span>{formatNumber(jobInputStopCount(summary))} stops</span>
               <span>{formatNumber(summary.current_plan_route_count)} routes</span>
             </div>
           </Link>

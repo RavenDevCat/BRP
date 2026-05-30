@@ -10,6 +10,14 @@ export type ApiHealth = {
   status: string;
 };
 
+export type GoogleGeocodeUsage = {
+  enabled: boolean;
+  month_key?: string;
+  used?: number;
+  limit?: number;
+  label?: string;
+};
+
 export type JobSummary = {
   job_id: string;
   owner_email?: string;
@@ -292,6 +300,10 @@ export function getHealth() {
 
 export function getCurrentUser() {
   return apiFetch<ApiUser>("/me");
+}
+
+export function getGoogleGeocodeUsage() {
+  return apiFetch<GoogleGeocodeUsage>("/google-geocode-usage");
 }
 
 export async function listDemoWorkbooks() {

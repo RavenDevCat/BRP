@@ -8,6 +8,13 @@ This is the day-to-day workflow for developing BRP from any local machine while 
 - Domestic server: OSRM, staging, production, Cloudflare Tunnel, runtime jobs, caches, and generated outputs.
 - South Korea/KR server: Windows deployment reached through operator access access for operator work; public users enter the React frontend through the access-protected KR app hostname.
 
+Planned workflow shift: once stable server access is available, prefer
+developing directly on the target server checkout for changes that depend on
+server env, OSRM, runtime caches, job history, or tunnel behavior. This avoids
+daily local/server pull cycles and keeps validation close to production. Continue
+to commit and push through Git, and keep runtime data and server-local env files
+out of Git.
+
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
 That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.

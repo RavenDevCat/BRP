@@ -54,6 +54,9 @@ Recent UX state:
 - If that local private file is missing on a new machine, look in OneDrive at
   `OneDrive-EiM/BRP Private/ops-inventory.local.md` and copy it back to
   `docs/private/ops-inventory.local.md`.
+- Intended future workflow: move primary development and validation onto the
+  server once access is stable, so Codex works in the same runtime environment
+  instead of pushing/pulling between local and server checkouts every day.
 
 ## Runtime And Data Rules
 
@@ -144,6 +147,16 @@ For ordinary code changes:
    continuity.
 
 Docs-only changes do not need service restart.
+
+Near-term workflow direction:
+
+- Use local development only for disconnected editing or frontend builds that a
+  server cannot perform.
+- Prefer server-side development for changes that depend on server env, OSRM,
+  runtime caches, job history, or Cloudflare behavior.
+- Keep Git commits and pushes as the source-of-truth record even when coding on
+  the server.
+- Never let server-side development overwrite runtime data or local env files.
 
 ## Known Gaps / Next Work
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import os
 import tempfile
 from pathlib import Path
 from uuid import uuid4
@@ -79,8 +80,20 @@ def get_request_host() -> str:
 
 
 def get_route_cost_market_profile() -> dict[str, object]:
-    host = get_request_host()
-    if host.startswith("brp-kr.") or "brp-kr." in host:
+    market_override = os.environ.get("BRP_ROUTE_COST_MARKET", "").strip().lower()
+    if market_override in {"china", "cn"}:
+        return {
+            "market": "China",
+            "default_city": "Shanghai",
+            "default_country": "China",
+            "currency_code": "CNY",
+            "currency_label": "RMB",
+            "diesel_price": DEFAULT_CHINA_DIESEL_CNY_PER_LITER,
+            "diesel_price_source": "GlobalPetrolPrices China fuel prices",
+            "diesel_price_source_url": "https://www.globalpetrolprices.com/China/",
+            "diesel_price_date": "18-May-2026",
+        }
+    if market_override in {"south-korea", "korea", "kr"}:
         return {
             "market": "South Korea",
             "default_city": "Seoul",
@@ -92,7 +105,22 @@ def get_route_cost_market_profile() -> dict[str, object]:
             "diesel_price_source_url": "https://www.globalpetrolprices.com/South-Korea/diesel_prices/",
             "diesel_price_date": "18-May-2026",
         }
-    if host.startswith("brp.") or "brp.example.com" in host:
+    host = get_request_host()
+    korea_hosts = {item.strip().lower() for item in os.environ.get("BRP_ROUTE_COST_KOREA_HOSTS", "").split(",") if item.strip()}
+    china_hosts = {item.strip().lower() for item in os.environ.get("BRP_ROUTE_COST_CHINA_HOSTS", "").split(",") if item.strip()}
+    if host and host in korea_hosts:
+        return {
+            "market": "South Korea",
+            "default_city": "Seoul",
+            "default_country": "South Korea",
+            "currency_code": "KRW",
+            "currency_label": "KRW",
+            "diesel_price": DEFAULT_KOREA_DIESEL_KRW_PER_LITER,
+            "diesel_price_source": "GlobalPetrolPrices South Korea diesel prices",
+            "diesel_price_source_url": "https://www.globalpetrolprices.com/South-Korea/diesel_prices/",
+            "diesel_price_date": "18-May-2026",
+        }
+    if host and host in china_hosts:
         return {
             "market": "China",
             "default_city": "Shanghai",

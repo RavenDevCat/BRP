@@ -2114,7 +2114,7 @@ with st.expander("Usage Steps and Notes (expand to learn how to use)", expanded=
         - Korean addresses are not auto-normalized or auto-corrected. Unresolved stops appear in Diagnostics for manual cleanup.
         - Routing uses OSRM road data for supported country/city datasets.
         - Traffic assumptions adjust route time only. Distance stays unchanged.
-        - Distance & Cost route-cost defaults follow the site domain: `brp` uses China/RMB diesel defaults, and `brp-kr` uses South Korea/KRW diesel defaults.
+        - Distance & Cost route-cost defaults can be selected by deployment through `BRP_ROUTE_COST_MARKET`.
         - E-bus, electric, EV, and new-energy bus types keep route distance results but skip diesel-cost estimation.
         - Large files or uncached addresses may take longer because geocoding, OSRM calls, OR-Tools solving, and analysis are real computations.
         """

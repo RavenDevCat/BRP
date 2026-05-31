@@ -31,6 +31,7 @@ TRAFFIC_PROFILE_OPTIONS: tuple[str, ...] = tuple(TRAFFIC_PROFILE_MULTIPLIERS.key
 SERVICE_DIRECTION_OPTIONS: tuple[str, ...] = ("From School", "To School")
 BACKEND_SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+DEFAULT_PROXY_BYPASS_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _backend_auth_headers(user_email: str | None = None) -> dict[str, str]:
@@ -41,6 +42,18 @@ def _backend_auth_headers(user_email: str | None = None) -> dict[str, str]:
     if BACKEND_SERVICE_TOKEN:
         headers["Authorization"] = f"Bearer {BACKEND_SERVICE_TOKEN}"
     return headers
+
+
+def _should_bypass_env_proxy(hostname: str | None) -> bool:
+    normalized = str(hostname or "").strip().lower()
+    if normalized in DEFAULT_PROXY_BYPASS_HOSTS:
+        return True
+    configured_hosts = {
+        host.strip().lower()
+        for host in os.environ.get("BRP_BYPASS_ENV_PROXY_HOSTS", "").split(",")
+        if host.strip()
+    }
+    return normalized in configured_hosts
 
 
 @dataclass
@@ -838,7 +851,7 @@ def submit_prepared_payload_to_backend(
     compute_url = urljoin(backend_base_url.rstrip("/") + "/", "compute")
     parsed_url = urlparse(compute_url)
     session = requests.Session()
-    if parsed_url.hostname in {"127.0.0.1", "localhost", "brp.example.com"}:
+    if _should_bypass_env_proxy(parsed_url.hostname):
         session.trust_env = False
     response = session.post(
         compute_url,
@@ -868,7 +881,7 @@ def submit_prepared_payload_to_backend(
 def _build_backend_session(target_url: str) -> requests.Session:
     parsed_url = urlparse(target_url)
     session = requests.Session()
-    if parsed_url.hostname in {"127.0.0.1", "localhost", "brp.example.com"}:
+    if _should_bypass_env_proxy(parsed_url.hostname):
         session.trust_env = False
     return session
 

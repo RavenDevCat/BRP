@@ -126,6 +126,9 @@ Last verified KR runtime state in this session:
 - SSH was inaccessible from the current network; likely IP/network access policy.
 - Monday/next operator-approved task: install or configure operator access access on the CN
   server if access permits.
+- The old direct domestic legacy client hostname was disabled at DNS level on
+  2026-06-01 because it exposed Streamlit without access control. The protected
+  domestic app hostname remains available behind Cloudflare Access.
 
 ## Deployment Habit
 

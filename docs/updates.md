@@ -6,6 +6,12 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-05-30
 
+### Unprotected Domestic Client Host Disabled
+
+- Disabled the direct domestic legacy client hostname so the Streamlit client is no longer exposed without access control.
+- The protected domestic app hostname remains available behind Cloudflare Access.
+- This is an access-control change only; existing jobs and results do not need to be rerun.
+
 ### Product Name Standardized
 
 - Standardized the product name to `BRP: Bus Route Planner`.

@@ -1,17 +1,16 @@
 # Development And Release Workflow
 
-This is the day-to-day workflow for developing BRP across the Windows/Mac
-operation machines, the domestic CN server, and the South Korea/KR production
-server. Local Windows and Mac checkouts are connection and code-record
-workspaces only. CN owns the development, staging, domestic production, OSRM,
-and Cloudflare Tunnel chain. KR is a separate final production landing target.
+This is the day-to-day workflow for developing BRP across operator workstations,
+the domestic CN server, and the South Korea/KR production server. Operator
+workstation checkouts are connection and code-record workspaces only. CN owns
+the development, staging, domestic production, OSRM, and Cloudflare Tunnel
+chain. KR is a separate final production landing target.
 
 ## Current Roles
 
-- Windows operation machine and Mac operation machine: operator access-first remote
-  connection and development workstations. Use them to open
-  `staging.example.com` in a browser for testing, and to connect by
-  Codex/VS Code Remote into the CN staging checkout for code changes.
+- Operator workstations: approved connection and test workspaces. Use them to
+  open `staging.example.com` in a browser for testing and to connect into the
+  CN staging checkout for code changes.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
   Cloudflare Tunnel. Development and test changes happen only in CN staging.
   CN production is a separate checkout and service pair; it should change only
@@ -20,10 +19,10 @@ and Cloudflare Tunnel chain. KR is a separate final production landing target.
   only an intended release revision after CN staging validation and any required
   CN production promotion.
 
-Default posture: connect over operator access where available, work directly in the CN
-staging checkout, validate through `staging.example.com`, commit and push the
-intended Git revision, then promote only when the user explicitly asks for a
-production update. Keep runtime data and server-local env files out of Git.
+Default posture: work directly in the CN staging checkout, validate through
+`staging.example.com`, commit and push the intended Git revision, then promote
+only when the user explicitly asks for a production update. Keep runtime data
+and server-local env files out of Git.
 
 ## Environment Boundary Contract
 
@@ -51,7 +50,8 @@ logic. When the company domain is ready, update domain references in Cloudflare
 DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
 private inventory together.
 
-The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
+Operator workstations should not run OSRM Docker containers. Lightweight local
+checks can reach OSRM through an approved port-forward to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
 That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.
 External API QPS is also persistent runtime coordination state. Kakao, Google,
@@ -64,12 +64,11 @@ so the limit is host-wide instead of per service. If a backend dies after
 claiming a queue slot but before starting the worker, the slot is reclaimed
 after `BRP_JOB_SLOT_ATTACH_STALE_SECONDS`.
 
-## Local And Mac Connection Workspaces
+## Operator Connection Workspaces
 
-Local Windows and Mac checkouts should not be treated as the main runtime source.
-Use them to keep a code record, connect through SSH/Remote SSH, inspect Git, run
-Codex/VS Code Remote against CN, and test the staging site in a browser. For
-normal BRP feature work, connect to CN over operator access when possible and work in:
+Operator workstation checkouts should not be treated as the main runtime source.
+Use them to keep a code record, connect to CN, inspect Git, and test the staging
+site in a browser. For normal BRP feature work, work in:
 
 ```text
 staging app: /opt/brp/staging/app
@@ -114,7 +113,7 @@ Start local services:
 ./ops/scripts/run_web.sh
 ```
 
-On Windows PowerShell, use the checked-in PowerShell helpers:
+In PowerShell, use the checked-in helpers:
 
 ```powershell
 .\ops\scripts\start_osrm_tunnel.ps1
@@ -123,9 +122,10 @@ On Windows PowerShell, use the checked-in PowerShell helpers:
 .\ops\scripts\run_web.ps1
 ```
 
-The PowerShell helpers load `ops/env/local.env` if it exists. For local Windows development, keep
-`BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Conda environment, and keep
-`BRP_DEV_USER_EMAIL` set to a development email that should own or administer local jobs.
+The PowerShell helpers load `ops/env/local.env` if it exists. For local checks,
+keep `BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Python
+environment, and keep `BRP_DEV_USER_EMAIL` set to a development email that
+should own or administer local jobs.
 
 If historical jobs were generated on another machine, do not rely on their persisted absolute
 map-output paths. The client rerenders historical maps into the current checkout under
@@ -275,8 +275,8 @@ Static server requirements:
 - if `BRP_BACKEND_SERVICE_TOKEN` is set for the backend, inject that token
   server-side in the static/proxy process; never expose it to the browser
 
-For lightweight preview hosts, including Windows servers without Node.js, the
-repository includes a Python static/proxy server:
+For lightweight preview hosts without Node.js, the repository includes a Python
+static/proxy server:
 
 ```bash
 python ops/scripts/serve_react_static.py \

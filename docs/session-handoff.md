@@ -51,15 +51,14 @@ Recent UX state:
 - Real server addresses, usernames, private hostnames, and machine paths should
   stay out of committed docs. Use ignored local file
   `docs/private/ops-inventory.local.md` for those details.
-- If that local private file is missing on a new machine, look in OneDrive at
-  `OneDrive-EiM/BRP Private/ops-inventory.local.md` and copy it back to
-  `docs/private/ops-inventory.local.md`.
-- Operating model as of 2026-06-01: use operator access first across Windows, Mac,
-  CN, and KR. Windows and Mac are remote connection/development workstations:
-  use them to test `staging.example.com` in a browser and to connect by
-  Codex/VS Code Remote into CN. CN staging is the active dev/test environment.
-  CN production and KR production are release targets only and should not change
-  during staging work.
+- If that local private file is missing on a new machine, restore it from the
+  private inventory backup outside Git before changing server access or tunnel
+  settings.
+- Operating model as of 2026-06-01: operator workstations are approved
+  connection and testing workspaces. Use them to test `staging.example.com` in
+  a browser and to connect into CN staging for code changes. CN staging is the
+  active dev/test environment. CN production and KR production are release
+  targets only and should not change during staging work.
 
 ## Runtime And Data Rules
 
@@ -99,9 +98,9 @@ External provider QPS:
 
 ### KR
 
-- South Korea Windows deployment.
-- Real operator access address, Windows user, active checkout, public hostname,
-  and preview origin belong in `docs/private/ops-inventory.local.md`.
+- South Korea deployment.
+- Real access details, active checkout, public hostname, and preview origin
+  belong in `docs/private/ops-inventory.local.md`.
 - Backend service uses local port `8001`.
 - Public React static/proxy service uses local port `8501`.
 - Private React preview uses local port `4173`.
@@ -129,7 +128,7 @@ Last verified KR runtime state in this session:
 - Domestic deployment.
 - Real SSH host/user belong in `docs/private/ops-inventory.local.md`.
 - OS: Ubuntu 22.04 LTS
-- This is the CN server. Do not confuse it with the KR operator access host.
+- This is the CN server. Do not confuse it with the KR host.
 - CN hosts both staging and domestic production, but development changes should
   happen only in staging unless the user explicitly asks for a production
   promotion.
@@ -176,7 +175,7 @@ Last verified KR runtime state in this session:
 
 For ordinary code changes:
 
-1. Connect by operator access when available.
+1. Connect through the approved access path.
 2. Work in the CN staging checkout.
 3. Validate against CN staging services and `staging.example.com`.
 4. Commit and push the intended Git revision.
@@ -190,11 +189,11 @@ For ordinary code changes:
 
 Docs-only changes do not need service restart.
 
-Local/Mac role:
+Operator workstation role:
 
-- Use the Windows and Mac checkouts as code-record, SSH/Remote SSH, and emergency
-  light-test workspaces only.
-- Do not make local or Mac runtime state the source of truth.
+- Use operator workstation checkouts as code-record and light-test workspaces
+  only.
+- Do not make workstation runtime state the source of truth.
 - Keep Git commits and pushes as the source-of-truth record even when coding on
   CN.
 - Never let development overwrite runtime data or local/server env files.
@@ -216,13 +215,12 @@ Local/Mac role:
 
 If this repository is pulled on another development machine and
 `docs/private/ops-inventory.local.md` is not present, the next Codex session
-should first look for the shared private copy at
-`OneDrive-EiM/BRP Private/ops-inventory.local.md`. If that OneDrive file is also
-missing or unavailable, the committed context still has enough information to
-know the work plan. It should ask the user only for the missing private
-connection facts:
+should first restore the private inventory from the backup outside Git. If that
+private copy is missing or unavailable, the committed context still has enough
+information to know the work plan. It should ask the user only for the missing
+private connection facts:
 
-- CN SSH host and user, or confirmation that operator access access is available
+- CN SSH host and user, or confirmation that approved access is available
 - CN active checkout path only if it differs from `/opt/brp/staging/app` or
   `/opt/brp/prod/app`
 - CN runtime data paths, if they differ from the deployment docs

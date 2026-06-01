@@ -33,14 +33,14 @@ brp-prod-frontend.service     # 127.0.0.1:8500
 cloudflared.service           # public access layer
 ```
 
-Local development does not run OSRM Docker. Local `127.0.0.1:5002-5006` is an
-SSH/operator access port-forward into the domestic server.
+Operator workstation checks do not run OSRM Docker. Local `127.0.0.1:5002-5006`
+can be forwarded to the domestic server through an approved access path.
 
 ## Environment Roles
 
-- Windows and Mac operation machines: operator access-first remote development and
-  testing clients. They connect to CN with Codex/VS Code Remote and use a browser
-  to test staging. They are not runtime authorities.
+- Operator workstations: approved development and testing clients. They connect
+  to CN staging for code changes and use a browser to test staging. They are not
+  runtime authorities.
 - CN staging: active development and test environment. Public hostname:
   `staging.example.com`; frontend `127.0.0.1:8501`; backend
   `127.0.0.1:8001`.
@@ -197,7 +197,9 @@ Current public routes include:
 - `osrm-xian.example.com`
 - `osrm-south-korea.example.com`
 
-The South Korea server is special: operator access should use the operator access route. The KR app hostname is access-protected and currently serves the React frontend from the KR machine's local `8501` origin.
+The South Korea server is special: operator access should use the approved
+access route. The KR app hostname is access-protected and currently serves the
+React frontend from the KR machine's local `8501` origin.
 
 The public domain is replaceable. Domain-specific values should stay in
 Cloudflare DNS, Cloudflare Access applications, tunnel ingress, environment

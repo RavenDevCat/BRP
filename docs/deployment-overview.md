@@ -25,7 +25,7 @@ The live stack needs these services on each server:
 
 Optional access helpers:
 
-- a private network layer for operator access
+- an approved operator access layer
 - systemd, tmux, launchd, or another process supervisor for long-running services
 
 ## Required System Dependencies
@@ -175,7 +175,8 @@ export OSRM_LOCAL_DATA_DIR="/srv/brp/osrm-data"
 export OSRM_BIND_HOST="127.0.0.1"
 ```
 
-Use `OSRM_BIND_HOST=0.0.0.0` only when OSRM ports must be reachable from outside localhost, for example through a private network layer.
+Use `OSRM_BIND_HOST=0.0.0.0` only when OSRM ports must be reachable from outside
+localhost through an approved access layer.
 
 ### Backend settings
 

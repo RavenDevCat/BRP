@@ -8,9 +8,9 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### Environment Workflow Reset
 
-- Redefined the four-machine operating model: Windows and Mac are operator access-first
-  remote development/testing workstations, CN owns staging and domestic
-  production, and KR is a separate final production landing target.
+- Redefined the operating model: operator workstations are connection/testing
+  workspaces, CN owns staging and domestic production, and KR is a separate
+  final production landing target.
 - `staging.example.com` is the stage-only test endpoint.
 - `$CN_PROD_HOST` and `$KR_PROD_HOST` are final production endpoints
   and should not be repointed or restarted during staging work.
@@ -77,7 +77,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### KR React Preview Deployment
 
-- Deployed the React preview stack to the KR server for operator access QA.
+- Deployed the React preview stack to the KR server for QA.
 - KR React preview serves the static React build and proxies `/api/*` to the KR backend from the same host.
 - This is a preview/operator deployment only; existing user jobs do not need to be rerun.
 
@@ -105,11 +105,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - AI Audit output token budget is now configurable through `BRP_AI_AUDIT_MAX_TOKENS`.
 - Existing route audit jobs do not need to be rerun; regenerate AI Audit reports when users want conclusions produced by the restored model.
 
-### Mac Local Development Runtime Rebuilt
+### Local Development Runtime Rebuilt
 
-- Rebuilt the local Mac development runtime around Apple Silicon Anaconda at `/opt/anaconda3`.
+- Rebuilt a local development runtime around a dedicated Conda environment.
 - Created the `brp` conda environment for backend and Streamlit client development.
-- Restored local historical job browsing after moving the project out of OneDrive into `/Users/developer/Developer/BRP`.
+- Restored local historical job browsing after moving the project into a stable
+  development checkout.
 
 ### React Job History Responsive Fix
 

@@ -39,6 +39,6 @@ paths, and other handoff details that should not be shared with the repository.
 
 ## Access Notes
 
-- SSH/operator access/access-control notes:
+- SSH/access-control notes:
 - Monday/next access task:
 - Known blockers:

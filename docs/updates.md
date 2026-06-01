@@ -8,7 +8,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### Environment Workflow Reset
 
-- Redefined the operating model: operator workstations are connection/testing
+- Redefined the operating model: local checkouts are code-record and testing
   workspaces, CN owns staging and domestic production, and KR is a separate
   final production landing target.
 - `staging.example.com` is the stage-only test endpoint.
@@ -114,7 +114,7 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### React Job History Responsive Fix
 
-- The React job history workspace no longer lets the History panel occupy the whole screen on smaller windows.
+- The React job history workspace no longer lets the History panel occupy the whole screen on smaller viewports.
 - Narrower layouts collapse History by default when viewing a selected job, reducing user confusion.
 
 ### Route Audit Assumptions Clarified

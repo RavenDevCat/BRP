@@ -1,5 +1,5 @@
 tunnel: YOUR_KR_TUNNEL_ID
-credentials-file: /home/brp/.cloudflared/YOUR_KR_TUNNEL_ID.json
+credentials-file: /etc/cloudflared/YOUR_KR_TUNNEL_ID.json
 
 ingress:
   # KR public frontend. This currently serves the React static/proxy service.

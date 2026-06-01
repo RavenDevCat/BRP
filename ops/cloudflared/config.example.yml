@@ -1,5 +1,5 @@
 tunnel: YOUR_TUNNEL_ID
-credentials-file: /home/brp/.cloudflared/YOUR_TUNNEL_ID.json
+credentials-file: /etc/cloudflared/YOUR_TUNNEL_ID.json
 
 ingress:
   # Stage-only test hostname. This must point at the staging frontend origin.

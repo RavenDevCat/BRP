@@ -44,21 +44,21 @@ Recent UX state:
   actually edited. Opening a panel does not override workbook/default values.
 - `Run audit` validates the workbook automatically before submission.
 - Job detail shows job name, job seed, submitter, and status near the top.
-- Job History no longer takes over the whole screen on narrower windows.
+- Job History no longer takes over the whole screen on narrower viewports.
 - Sign out lives in the sidebar user panel.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
-- Real server addresses, usernames, private hostnames, and machine paths should
+- Real server addresses, usernames, private hostnames, and environment-specific paths should
   stay out of committed docs. Use ignored local file
   `docs/private/ops-inventory.local.md` for those details.
-- If that local private file is missing on a new machine, restore it from the
+- If that local private file is missing in a new environment, restore it from the
   private inventory backup outside Git before changing server access or tunnel
   settings.
-- Operating model as of 2026-06-01: operator workstations are approved
-  connection and testing workspaces. Use them to test `staging.example.com` in
-  a browser and to connect into CN staging for code changes. CN staging is the
-  active dev/test environment. CN production and KR production are release
-  targets only and should not change during staging work.
+- Operating model as of 2026-06-01: local checkouts are code-record and testing
+  workspaces only. Use them to test `staging.example.com` in a browser and
+  keep Git visibility. CN staging is the active dev/test environment. CN
+  production and KR production are release targets only and should not change
+  during staging work.
 
 ## Runtime And Data Rules
 
@@ -189,11 +189,10 @@ For ordinary code changes:
 
 Docs-only changes do not need service restart.
 
-Operator workstation role:
+Local checkout role:
 
-- Use operator workstation checkouts as code-record and light-test workspaces
-  only.
-- Do not make workstation runtime state the source of truth.
+- Use local checkouts as code-record and light-test workspaces only.
+- Do not make local runtime state the source of truth.
 - Keep Git commits and pushes as the source-of-truth record even when coding on
   CN.
 - Never let development overwrite runtime data or local/server env files.
@@ -213,7 +212,7 @@ Operator workstation role:
 
 ## Next Session Without Private Inventory
 
-If this repository is pulled on another development machine and
+If this repository is pulled in a fresh environment and
 `docs/private/ops-inventory.local.md` is not present, the next Codex session
 should first restore the private inventory from the backup outside Git. If that
 private copy is missing or unavailable, the committed context still has enough

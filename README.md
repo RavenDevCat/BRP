@@ -181,7 +181,7 @@ patterns.
 - `docs/private-ops-template.md`: template for private server inventory
 
 Committed docs use aliases, example domains, and generic paths. Keep real server
-addresses, usernames, hostnames, machine paths, and deployment inventory in
+addresses, usernames, hostnames, environment-specific paths, and deployment inventory in
 ignored local files such as `docs/private/ops-inventory.local.md`.
 
 ## Development Notes

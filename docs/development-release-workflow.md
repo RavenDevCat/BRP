@@ -1,16 +1,15 @@
 # Development And Release Workflow
 
-This is the day-to-day workflow for developing BRP across operator workstations,
-the domestic CN server, and the South Korea/KR production server. Operator
-workstation checkouts are connection and code-record workspaces only. CN owns
-the development, staging, domestic production, OSRM, and Cloudflare Tunnel
-chain. KR is a separate final production landing target.
+This is the day-to-day workflow for developing BRP across local checkouts, the
+domestic CN server, and the South Korea/KR production server. Local checkouts
+are code-record and test workspaces only. CN owns the development, staging,
+domestic production, OSRM, and Cloudflare Tunnel chain. KR is a separate final
+production landing target.
 
 ## Current Roles
 
-- Operator workstations: approved connection and test workspaces. Use them to
-  open `staging.example.com` in a browser for testing and to connect into the
-  CN staging checkout for code changes.
+- Local checkouts: code-record and test workspaces. Use them to validate
+  `staging.example.com` in a browser and keep Git visibility.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
   Cloudflare Tunnel. Development and test changes happen only in CN staging.
   CN production is a separate checkout and service pair; it should change only
@@ -50,8 +49,8 @@ logic. When the company domain is ready, update domain references in Cloudflare
 DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
 private inventory together.
 
-Operator workstations should not run OSRM Docker containers. Lightweight local
-checks can reach OSRM through an approved port-forward to the domestic server.
+Local checkouts should not run OSRM Docker containers. Lightweight local checks
+can reach OSRM through the approved access path recorded in private inventory.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
 That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.
 External API QPS is also persistent runtime coordination state. Kakao, Google,
@@ -64,11 +63,11 @@ so the limit is host-wide instead of per service. If a backend dies after
 claiming a queue slot but before starting the worker, the slot is reclaimed
 after `BRP_JOB_SLOT_ATTACH_STALE_SECONDS`.
 
-## Operator Connection Workspaces
+## Connection Workspaces
 
-Operator workstation checkouts should not be treated as the main runtime source.
-Use them to keep a code record, connect to CN, inspect Git, and test the staging
-site in a browser. For normal BRP feature work, work in:
+Local checkouts should not be treated as the main runtime source. Use them to
+keep a code record, inspect Git, and test the staging site in a browser. For
+normal BRP feature work, work in the CN staging checkout:
 
 ```text
 staging app: /opt/brp/staging/app
@@ -76,26 +75,8 @@ prod app:    /opt/brp/prod/app  # release promotion only
 ```
 
 Local service startup remains useful only as a fallback or diagnostic path.
-
-From the repository root on the local machine, confirm the OSRM tunnel is running:
-
-```bash
-ps aux | grep '[s]sh -fN.*5002'
-```
-
-If it is not running, start it:
-
-```bash
-ssh -fN -o ExitOnForwardFailure=yes \
-  -L 127.0.0.1:5002:127.0.0.1:5002 \
-  -L 127.0.0.1:5003:127.0.0.1:5003 \
-  -L 127.0.0.1:5004:127.0.0.1:5004 \
-  -L 127.0.0.1:5005:127.0.0.1:5005 \
-  -L 127.0.0.1:5006:127.0.0.1:5006 \
-  "$CN_SSH_USER@$CN_SSH_HOST"
-```
-
-Local OSRM endpoints stay as localhost values because the tunnel forwards them to the domestic server:
+When a local diagnostic run is needed, OSRM endpoints should be provided by the
+approved access path recorded in the private inventory:
 
 ```text
 127.0.0.1:5002 -> Shanghai OSRM
@@ -127,7 +108,7 @@ keep `BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Python
 environment, and keep `BRP_DEV_USER_EMAIL` set to a development email that
 should own or administer local jobs.
 
-If historical jobs were generated on another machine, do not rely on their persisted absolute
+If historical jobs were generated in another environment, do not rely on their persisted absolute
 map-output paths. The client rerenders historical maps into the current checkout under
 `apps/client/outputs/<job_id>/`.
 
@@ -305,7 +286,7 @@ repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move
 only during an explicit release window.
 
 KR is already in the post-cutover shape. Its public React service uses the KR
-machine's local `8501` origin, and its private preview uses local `4173`.
+server's local `8501` origin, and its preview uses local `4173`.
 Because KR does not currently have Node/npm in PATH, build React locally and
 copy `apps/web/dist` to KR when frontend assets change.
 
@@ -440,14 +421,14 @@ $BRP_PROD_APP_ROOT/apps/backend/outputs
 $BRP_PROD_APP_ROOT/apps/client/demodata
 ```
 
-Job JSON files may contain absolute paths to generated outputs. If jobs are copied from a local machine to a server, rewrite local repository paths to the server app path before relying on historical map links.
+Job JSON files may contain absolute paths to generated outputs. If jobs are copied from one environment to another, rewrite local repository paths to the target app path before relying on historical map links.
 
 ## Guardrails
 
 - Do not run local OSRM Docker for normal development.
 - Do not edit directly in the production app checkout.
 - Do not let staging and production share job directories.
-- Keep real secrets in `ops/env/local.env` on each machine/server, never in git.
+- Keep real secrets in `ops/env/local.env` for each environment, never in git.
 - Preserve `state/jobs`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
 - Keep Cloudflare Tunnel and OSRM long-running on the domestic server.
 - Use staging as the gate before production.

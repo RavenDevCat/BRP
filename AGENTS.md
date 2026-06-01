@@ -1,6 +1,7 @@
 # Codex Startup Card
 
-This repository is BRP / Bus Route Planner. Read this file first in every new Codex session, especially on a different machine.
+This repository is BRP / Bus Route Planner. Read this file first in every new
+Codex session.
 
 ## First Reads
 
@@ -8,22 +9,25 @@ This repository is BRP / Bus Route Planner. Read this file first in every new Co
 2. Read `docs/development-release-workflow.md` before running local services or deploying.
 3. Read `docs/deployment-overview.md` before fresh-server or environment setup.
 4. Read `docs/updates.md` before deciding whether a user-facing change needs a release note.
-5. If present, read ignored local file `docs/private/ops-inventory.local.md` for private server addresses and machine-specific handoff facts.
-6. If that local private inventory is missing, look in OneDrive at `OneDrive-EiM/BRP Private/ops-inventory.local.md`, then copy it to `docs/private/ops-inventory.local.md`.
+5. If present, read ignored local file `docs/private/ops-inventory.local.md`
+   for private server addresses and environment-specific handoff facts.
+6. If that local private inventory is missing, restore it from the approved
+   private backup outside Git before changing server access or tunnel settings.
 
 ## Server Names
 
-- KR server: South Korea Windows deployment. Real address/user/path belong in the ignored private inventory.
+- KR server: South Korea deployment. Real address/user/path belong in the
+  ignored private inventory.
 - CN server: domestic deployment. Real address/user/path belong in the ignored private inventory.
-- Do not confuse the KR operator access host with the CN server.
+- Do not confuse the KR host with the CN server.
 
-## Development Home
+## Development Source
 
-- Primary development, staging validation, and production deployment now happen
-  on CN.
-- The local Windows checkout and the Mac checkout are connection and code-record
-  workspaces only. Use them for Git visibility, SSH/Remote SSH access, and
-  emergency/light local checks, not as the main runtime source.
+- Primary development and staging validation happen on CN staging.
+- CN production and KR production are release targets only. Do not change them
+  during staging work unless the user explicitly asks for a production release.
+- Local checkouts are code-record and light-check workspaces only; they are not
+  the main runtime source.
 - KR is maintained as a separate production deployment that follows the Git
   revision intentionally; do not treat KR as the main development line.
 

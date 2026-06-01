@@ -3,7 +3,7 @@
 Copy this file to `docs/private/ops-inventory.local.md` and fill it locally.
 The `docs/private/` directory is ignored by Git.
 
-Use this for server addresses, usernames, private hostnames, machine-specific
+Use this for server addresses, usernames, private hostnames, environment-specific
 paths, and other handoff details that should not be shared with the repository.
 
 ## Server Aliases

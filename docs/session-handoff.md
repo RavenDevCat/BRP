@@ -158,9 +158,9 @@ Last verified KR runtime state in this session:
 - Cloudflared ingress on CN maps `staging.example.com` and
   `$CN_PROD_HOST` to the React staging frontend on `127.0.0.1:8501`.
   `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the ingress config and falls through to
-  404. As of this handoff, `staging.example.com` still needs a Cloudflare DNS
-  record/tunnel route created outside CN because CN has no origin cert/API token
-  for `cloudflared tunnel route dns`.
+  404. `staging.example.com` DNS is live. It still needs to be added to the
+  Cloudflare Access application; until then the origin guard returns 401 for
+  requests that do not include a Cloudflare Access user header.
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.
@@ -194,8 +194,8 @@ Local/Mac role:
 ## Known Gaps / Next Work
 
 - Domestic final React cutover is still separate from the KR React cutover.
-- Add the Cloudflare DNS/tunnel route for `staging.example.com` so the CN
-  staging React frontend is reachable publicly.
+- Add `staging.example.com` to the Cloudflare Access application so users get
+  the normal Access login flow instead of the origin-level 401 guard.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access.
   CN staging now supports token injection in the React static/proxy service.

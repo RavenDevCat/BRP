@@ -6,6 +6,14 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-01
 
+### React Static Proxy Access Guard
+
+- Added an optional `BRP_REQUIRE_CLOUDFLARE_ACCESS` guard for public React
+  static/proxy hosts.
+- When enabled, requests that reach the origin without the Cloudflare Access
+  user header return 401 instead of serving the app or API.
+- Existing jobs do not need to be rerun.
+
 ### Planner Job Concurrency Guard
 
 - Added an optional backend queue guard for planner jobs through

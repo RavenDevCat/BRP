@@ -142,6 +142,9 @@ Production-style React serving is different from Vite dev serving:
 
 Do not expose `apps/web/dist` without the `/api/*` proxy. The React app uses
 `/api` as its default API base URL so it can stay same-origin behind Cloudflare.
+For public hosts, keep the hostname inside a Cloudflare Access application and
+set `BRP_REQUIRE_CLOUDFLARE_ACCESS=true` on the static/proxy service as a
+server-side guardrail against DNS or Access app drift.
 
 Before publishing:
 

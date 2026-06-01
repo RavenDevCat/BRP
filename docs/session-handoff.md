@@ -148,6 +148,9 @@ Last verified KR runtime state in this session:
 - CN staging frontend service now serves React static/proxy from local
   `127.0.0.1:8501`, using `ops/scripts/serve_react_static.py` and
   `apps/web/dist`; `/api/*` proxies to `127.0.0.1:8001`.
+- Public React static/proxy hostnames should set
+  `BRP_REQUIRE_CLOUDFLARE_ACCESS=true` so the origin returns 401 if a request
+  reaches it without the Cloudflare Access user header.
 - CN staging backend has `BRP_BACKEND_SERVICE_TOKEN` set, so the React
   static/proxy service loads `ops/env/local.env` through systemd
   `EnvironmentFile` and injects the backend token server-side. Do not expose the

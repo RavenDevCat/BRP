@@ -25,36 +25,51 @@ HOP_BY_HOP_HEADERS = {
     "transfer-encoding",
     "upgrade",
 }
+ACCESS_EMAIL_HEADER = "Cf-Access-Authenticated-User-Email"
 
 
 class ReactStaticProxyHandler(BaseHTTPRequestHandler):
     server_version = "BRPReactStatic/1.0"
 
     def do_GET(self) -> None:
+        if not self._require_access_if_configured():
+            return
         if self._is_api_request():
             self._proxy_api()
             return
         self._serve_static(head_only=False)
 
     def do_HEAD(self) -> None:
+        if not self._require_access_if_configured():
+            return
         if self._is_api_request():
             self._proxy_api(head_only=True)
             return
         self._serve_static(head_only=True)
 
     def do_POST(self) -> None:
+        if not self._require_access_if_configured():
+            return
         self._proxy_api()
 
     def do_PUT(self) -> None:
+        if not self._require_access_if_configured():
+            return
         self._proxy_api()
 
     def do_PATCH(self) -> None:
+        if not self._require_access_if_configured():
+            return
         self._proxy_api()
 
     def do_DELETE(self) -> None:
+        if not self._require_access_if_configured():
+            return
         self._proxy_api()
 
     def do_OPTIONS(self) -> None:
+        if not self._require_access_if_configured():
+            return
         if self._is_api_request():
             self._proxy_api()
             return
@@ -65,6 +80,21 @@ class ReactStaticProxyHandler(BaseHTTPRequestHandler):
     def _is_api_request(self) -> bool:
         path = urllib.parse.urlsplit(self.path).path
         return path == "/api" or path.startswith("/api/")
+
+    def _require_access_if_configured(self) -> bool:
+        if not self.server.require_cloudflare_access:  # type: ignore[attr-defined]
+            return True
+        if self.headers.get(ACCESS_EMAIL_HEADER):
+            return True
+        body = b"Cloudflare Access authentication is required.\n"
+        self.send_response(401, "Unauthorized")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return False
 
     def _proxy_api(self, head_only: bool = False) -> None:
         if not self._is_api_request():
@@ -199,6 +229,10 @@ def main() -> int:
     server.dist_dir = dist_dir
     server.backend_url = args.backend_url
     server.backend_service_token = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
+    server.require_cloudflare_access = (
+        os.environ.get("BRP_REQUIRE_CLOUDFLARE_ACCESS", "").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     server.proxy_timeout_seconds = args.proxy_timeout
 
     print(

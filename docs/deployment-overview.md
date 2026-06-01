@@ -241,6 +241,16 @@ that default and configure the static host to proxy `/api/*` to the backend.
 Use `VITE_API_BASE_URL` only for special builds that intentionally target a
 different API origin.
 
+For public React static/proxy hosts behind Cloudflare Access, set:
+
+```bash
+export BRP_REQUIRE_CLOUDFLARE_ACCESS="true"
+```
+
+This makes the static/proxy service reject requests that reach the origin
+without the `Cf-Access-Authenticated-User-Email` header. It is a guardrail, not
+a replacement for adding the hostname to the Cloudflare Access application.
+
 ## Default Ports
 
 | Service | Port | Notes |

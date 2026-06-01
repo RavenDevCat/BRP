@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import mimetypes
+import os
 import shutil
 import sys
 import urllib.error
@@ -79,6 +80,10 @@ class ReactStaticProxyHandler(BaseHTTPRequestHandler):
             for key, value in self.headers.items()
             if key.lower() not in HOP_BY_HOP_HEADERS and key.lower() != "host"
         }
+        backend_service_token = self.server.backend_service_token  # type: ignore[attr-defined]
+        has_authorization = any(key.lower() == "authorization" for key in headers)
+        if backend_service_token and not has_authorization:
+            headers["Authorization"] = f"Bearer {backend_service_token}"
         request = urllib.request.Request(
             target_url,
             data=None if head_only else body,
@@ -193,6 +198,7 @@ def main() -> int:
     server = ReusableThreadingHTTPServer((args.host, args.port), ReactStaticProxyHandler)
     server.dist_dir = dist_dir
     server.backend_url = args.backend_url
+    server.backend_service_token = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
     server.proxy_timeout_seconds = args.proxy_timeout
 
     print(

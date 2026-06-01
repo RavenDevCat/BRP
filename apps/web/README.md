@@ -52,6 +52,10 @@ python ops/scripts/serve_react_static.py \
   --port 4173
 ```
 
+When `BRP_BACKEND_SERVICE_TOKEN` is set in the server environment, this proxy
+injects the backend bearer token server-side for `/api/*` requests. The browser
+does not receive the token.
+
 Lightweight servers without Node.js can use this static/proxy pattern after
 `apps/web/dist` is built elsewhere.
 

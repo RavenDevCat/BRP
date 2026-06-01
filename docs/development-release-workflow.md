@@ -228,7 +228,8 @@ Static server requirements:
 - serve `apps/web/dist/assets/*` as static files
 - serve `apps/web/dist/index.html` for unknown non-API paths
 - proxy `/api/*` to the staging backend on `127.0.0.1:8001`
-- keep Streamlit on the domestic client/app hostnames until the domestic React preview passes QA
+- if `BRP_BACKEND_SERVICE_TOKEN` is set for the backend, inject that token
+  server-side in the static/proxy process; never expose it to the browser
 
 For lightweight preview hosts, including Windows servers without Node.js, the
 repository includes a Python static/proxy server:

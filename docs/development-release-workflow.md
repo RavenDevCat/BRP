@@ -142,21 +142,33 @@ Provider safety checks:
 
 The React web frontend in `apps/web` runs locally through Vite on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001`. Production-style serving
-uses a static/proxy host instead of the Vite dev server. KR has already cut over
-to React; CN staging and CN production use separate frontend/backend origins.
+uses Nginx as the static/proxy host instead of the Vite dev server. KR has
+already cut over to React; CN staging and CN production use separate
+frontend/backend origins.
 
 Production-style React serving is different from Vite dev serving:
 
 - build static assets with `npm run build` in `apps/web`
-- serve `apps/web/dist` from a static web server
+- serve `apps/web/dist` from Nginx
 - configure SPA fallback so `/jobs`, `/fleet`, and `/distance` return `index.html`
 - reverse proxy `/api/*` from the same hostname to the backend service
 
 Do not expose `apps/web/dist` without the `/api/*` proxy. The React app uses
 `/api` as its default API base URL so it can stay same-origin behind Cloudflare.
-For public hosts, keep the hostname inside a Cloudflare Access application and
-set `BRP_REQUIRE_CLOUDFLARE_ACCESS=true` on the static/proxy service as a
-server-side guardrail against DNS or Access app drift.
+For public hosts, keep the hostname inside a Cloudflare Access application. The
+managed Nginx site returns 401 when the Cloudflare Access user header is missing
+as a server-side guardrail against DNS or Access app drift.
+
+Install or refresh a Linux Nginx React site from the app checkout:
+
+```bash
+sudo SITE_NAME=brp-staging \
+  APP_ROOT=/opt/brp/staging/app \
+  FRONTEND_PORT=8501 \
+  BACKEND_URL=http://127.0.0.1:8001 \
+  SERVER_NAMES="staging.example.com" \
+  ops/scripts/install_nginx_react_site.sh
+```
 
 Before publishing:
 

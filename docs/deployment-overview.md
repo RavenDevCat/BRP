@@ -237,32 +237,38 @@ export STREAMLIT_SERVER_PORT="8501"
 
 If the client reaches the backend through a tunnel or reverse proxy, set `BRP_BACKEND_BASE_URL` to that internal or public backend URL.
 
-React defaults to same-origin `/api`. In normal production-style serving, keep
-that default and configure the static host to proxy `/api/*` to the backend.
+React defaults to same-origin `/api`. In normal Linux production-style serving,
+keep that default and configure Nginx to proxy `/api/*` to the backend.
 Use `VITE_API_BASE_URL` only for special builds that intentionally target a
 different API origin.
 
-For public React static/proxy hosts behind Cloudflare Access, set:
+For public React static/proxy hosts behind Cloudflare Access, the managed Nginx
+site should reject requests that reach the origin without the
+`Cf-Access-Authenticated-User-Email` header. Install the site with:
 
 ```bash
-export BRP_REQUIRE_CLOUDFLARE_ACCESS="true"
+sudo SITE_NAME=brp-staging \
+  APP_ROOT=/opt/brp/staging/app \
+  FRONTEND_PORT=8501 \
+  BACKEND_URL=http://127.0.0.1:8001 \
+  SERVER_NAMES="staging.example.com" \
+  ops/scripts/install_nginx_react_site.sh
 ```
 
-This makes the static/proxy service reject requests that reach the origin
-without the `Cf-Access-Authenticated-User-Email` header. It is a guardrail, not
-a replacement for adding the hostname to the Cloudflare Access application.
+This guardrail is not a replacement for adding the hostname to the Cloudflare
+Access application.
 
 ## Default Ports
 
 | Service | Port | Notes |
 | --- | ---: | --- |
-| CN staging frontend | `8501` | Stage-only React/static proxy or legacy frontend |
+| CN staging frontend | `8501` | Stage-only React frontend served by Nginx |
 | CN staging backend | `8001` | Stage-only job API and health endpoint |
 | CN production frontend | `8500` | Domestic production endpoint origin |
 | CN production backend | `8000` | Domestic production job API and health endpoint |
 | Client Streamlit | chosen legacy port | Legacy/operator UI where still used |
 | React Vite dev | `5173` | Local development |
-| React static/proxy | `4173`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; KR public React uses local `8501` |
+| React static/proxy | `4173`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; Linux deployments should use Nginx |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -275,7 +281,7 @@ Start services in this order:
 
 1. OSRM containers
 2. Backend service
-3. Frontend service, either React static/proxy or Streamlit
+3. Frontend service, usually Nginx for React on Linux or a legacy frontend where still used
 4. Cloudflare Tunnel or the chosen public access layer
 
 See `docs/development-release-workflow.md` for concrete commands and health checks.

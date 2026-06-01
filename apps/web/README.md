@@ -34,30 +34,27 @@ The Vite dev server proxies `/api` to `http://127.0.0.1:8001`.
 
 ## Production-Style Serving
 
-Production-style serving is static assets plus an API proxy:
+Production-style serving is Nginx static hosting plus an API proxy:
 
 - build with `npm run build`
 - serve `apps/web/dist/assets/*` as static files
 - serve `apps/web/dist/index.html` for non-API paths so direct navigation works
 - proxy `/api/*` to the backend service
 
-The repository includes a lightweight static/proxy server for hosts that do not
-have Node.js in PATH:
+Linux deployments should install the managed Nginx site with:
 
 ```bash
-python ops/scripts/serve_react_static.py \
-  --dist-dir apps/web/dist \
-  --backend-url http://127.0.0.1:8001 \
-  --host 127.0.0.1 \
-  --port 4173
+sudo SITE_NAME=brp-staging \
+  APP_ROOT=/opt/brp/staging/app \
+  FRONTEND_PORT=8501 \
+  BACKEND_URL=http://127.0.0.1:8001 \
+  SERVER_NAMES="staging.example.com" \
+  ops/scripts/install_nginx_react_site.sh
 ```
 
-When `BRP_BACKEND_SERVICE_TOKEN` is set in the server environment, this proxy
-injects the backend bearer token server-side for `/api/*` requests. The browser
-does not receive the token.
-
-Lightweight servers without Node.js can use this static/proxy pattern after
-`apps/web/dist` is built elsewhere.
+When `BRP_BACKEND_SERVICE_TOKEN` is set in the server environment, the generated
+Nginx include injects the backend bearer token server-side for `/api/*`
+requests. The browser does not receive the token.
 
 ## API Surface
 

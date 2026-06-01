@@ -11,19 +11,9 @@ ingress:
   - hostname: brp.example.com
     service: http://127.0.0.1:8500
 
-  # Direct backend API hostname for clients and diagnostics when intentionally
-  # exposed behind access control.
-  - hostname: brp-api.example.com
-    service: http://127.0.0.1:8000
+  # React public hosts proxy same-origin /api to the backend; avoid exposing a separate backend API hostname unless a legacy integration explicitly needs it.
 
-  - hostname: osrm-shanghai.example.com
-    service: http://127.0.0.1:5002
-  - hostname: osrm-beijing.example.com
-    service: http://127.0.0.1:5003
-  - hostname: osrm-suzhou.example.com
-    service: http://127.0.0.1:5004
-  - hostname: osrm-xian.example.com
-    service: http://127.0.0.1:5005
-  - hostname: osrm-south-korea.example.com
-    service: http://127.0.0.1:5006
+  # Do not expose OSRM through public tunnel hostnames. Application services
+  # should call local OSRM endpoints directly; local development should use the
+  # private inventory's diagnostic loopback mapping when diagnostics need OSRM.
   - service: http_status:404

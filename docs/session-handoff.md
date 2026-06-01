@@ -55,7 +55,7 @@ Recent UX state:
   private inventory backup outside Git before changing server access or tunnel
   settings.
 - Operating model as of 2026-06-01: local checkouts are code-record and testing
-  workspaces only. Use them to test `staging.example.com` in a browser and
+  workspaces only. Use them to test `$CN_STAGING_HOST` in a browser and
   keep Git visibility. CN staging is the active dev/test environment. CN
   production and KR production are release targets only and should not change
   during staging work.
@@ -102,12 +102,13 @@ External provider QPS:
 - Real access details, active checkout, public hostname, and preview origin
   belong in `docs/private/ops-inventory.local.md`.
 - Backend service uses local port `8001`.
-- Public React static/proxy service uses local port `8501`.
+- Public React origin uses local Nginx on port `8501`.
 - Private React preview uses local port `4173`.
 - Persistent scheduled tasks:
   - `BRP-Backend-Preview`
   - `BRP-React-Preview`
-  - `BRP-React-Public`
+  - `BRP-Nginx-Public`
+  - `BRP-React-Public` is disabled after the Nginx public-origin cutover.
 - KR does not currently have Node/npm in PATH. Build React locally and copy
   `apps/web/dist` to KR when frontend assets change.
 - KR runtime migration is complete. The old checkout was removed after verifying
@@ -139,7 +140,7 @@ Last verified KR runtime state in this session:
   - staging: `/opt/brp/staging/data/jobs`
   - production: `/opt/brp/prod/data/jobs`
 - Current public environment boundary:
-  - `staging.example.com` -> CN staging frontend `127.0.0.1:8501`
+  - `$CN_STAGING_HOST` -> CN staging frontend `127.0.0.1:8501`
   - `$CN_PROD_HOST` -> CN production frontend `127.0.0.1:8500`
   - `$KR_PROD_HOST` -> KR production frontend on the KR host
 - CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
@@ -162,12 +163,16 @@ Last verified KR runtime state in this session:
   browser.
 - `brp-staging-frontend.service` and `brp-prod-frontend.service` are disabled on
   CN after the Nginx cutover. Use `nginx.service` as the frontend service on CN.
-- Cloudflared ingress on CN maps `staging.example.com` to the React staging
+- Cloudflared ingress on CN maps `$CN_STAGING_HOST` to the React staging
   frontend on `127.0.0.1:8501` and `$CN_PROD_HOST` to the CN production
   frontend on `127.0.0.1:8500`. `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the
-  ingress config and falls through to 404. `staging.example.com` DNS is live
-  and is now covered by the Cloudflare Access application; unauthenticated
-  requests redirect to the Access login flow.
+  ingress config and falls through to 404. `$CN_STAGING_HOST` is the
+  current staging hostname; unauthenticated requests redirect to the Access
+  login flow.
+- Public OSRM tunnel routes were retired on 2026-06-01. CN staging/production
+  and KR production call local OSRM endpoints directly. Local diagnostics should
+  use the private inventory's diagnostic loopback mapping instead of
+  `osrm-*.example.com` hostnames.
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.
@@ -178,7 +183,7 @@ For ordinary code changes:
 
 1. Connect through the approved access path.
 2. Work in the CN staging checkout.
-3. Validate against CN staging services and `staging.example.com`.
+3. Validate against CN staging services and `$CN_STAGING_HOST`.
 4. Commit and push the intended Git revision.
 5. Promote to CN production only when the user explicitly asks by pulling the
    intended revision into `/opt/brp/prod/app` and restarting production services.
@@ -200,7 +205,7 @@ Local checkout role:
 
 ## Known Gaps / Next Work
 
-- Validate the authenticated `staging.example.com` React session in a browser,
+- Validate the authenticated `$CN_STAGING_HOST` React session in a browser,
   including `/new`, `/jobs`, `/distance`, and `/fleet`.
 - Decide the next explicit release target before touching CN production or KR
   production. Staging work must not repoint or restart production hostnames.

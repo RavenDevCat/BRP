@@ -19,7 +19,7 @@ The live stack needs these services on each server:
 1. OSRM Docker containers
 2. Backend Python service
 3. Frontend service:
-   - Nginx for Linux React deployments
+   - Nginx for React deployments
    - Streamlit service where that deployment is still on the legacy UI
 4. Public access layer, currently Cloudflare Tunnel
 
@@ -175,8 +175,9 @@ export OSRM_LOCAL_DATA_DIR="/srv/brp/osrm-data"
 export OSRM_BIND_HOST="127.0.0.1"
 ```
 
-Use `OSRM_BIND_HOST=0.0.0.0` only when OSRM ports must be reachable from outside
-localhost through an approved access layer.
+Keep OSRM bound to `127.0.0.1` for production-style deployments. Use
+`OSRM_BIND_HOST=0.0.0.0` only for a deliberate diagnostic environment with a
+separate access-control plan.
 
 ### Backend settings
 
@@ -216,9 +217,12 @@ For a South Korea-only deployment, load the smaller endpoint set instead:
 source ops/scripts/export_osrm_south_korea_env.sh
 ```
 
-If a server uses different OSRM hostnames or ports, override the exported `OSRM_BASE_URL_*` values in that server's environment.
+If a server uses different OSRM ports, override the exported `OSRM_BASE_URL_*`
+values in that server's environment. These values should normally remain local
+loopback URLs, not public hostnames.
 
-For staging/production, keep only the `OSRM_BASE_URL_*` entries that this server can actually serve or proxy. Set:
+For staging/production, keep only the `OSRM_BASE_URL_*` entries that this server
+can actually serve locally. Set:
 
 ```bash
 export OSRM_USE_BUILTIN_DEFAULTS=false
@@ -268,7 +272,7 @@ Access application.
 | CN production backend | `8000` | Domestic production job API and health endpoint |
 | Client Streamlit | chosen legacy port | Legacy/operator UI where still used |
 | React Vite dev | `5173` | Local development |
-| React static/proxy | `4173`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; Linux deployments should use Nginx |
+| React static/proxy | `4173`, `8500`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; production-style deployments should use Nginx |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -281,7 +285,7 @@ Start services in this order:
 
 1. OSRM containers
 2. Backend service
-3. Frontend service, usually Nginx for React on Linux or a legacy frontend where still used
+3. Frontend service, usually Nginx for React or a legacy frontend where still used
 4. Cloudflare Tunnel or the chosen public access layer
 
 See `docs/development-release-workflow.md` for concrete commands and health checks.
@@ -300,18 +304,18 @@ Current public hostnames:
 - `staging.example.com` -> CN staging frontend
 - `brp.example.com` -> CN production frontend
 - `brp-kr.example.com` -> KR production frontend
-- `brp-api.example.com` -> CN backend API when intentionally exposed behind access control
-- `osrm-shanghai.example.com`
-- `osrm-beijing.example.com`
-- `osrm-suzhou.example.com`
-- `osrm-xian.example.com`
-- `osrm-south-korea.example.com`
+
+React frontend hostnames should proxy same-origin `/api` to the backend; do not
+create a separate public API hostname unless a legacy integration explicitly
+needs it. Do not publish OSRM hostnames through Cloudflare Tunnel or DNS.
+Application services should call local OSRM endpoints directly; local
+diagnostics should use the private inventory's diagnostic loopback mapping when
+needed.
 
 South Korea server hostnames:
 
-- `kr-brp.example.com` -> React frontend behind access control
+- `kr-brp.example.com` -> React frontend behind access control, served by local Nginx on the KR host
 - `kr-react-brp.example.com` -> optional React preview hostname
-- `kr-brp-api.example.com`
 
 For staging work, React should use the staging hostname, serve `apps/web/dist`
 as static assets, and route API calls to the staging backend. Production
@@ -340,11 +344,11 @@ curl -s http://127.0.0.1:8001/health
 curl -I http://127.0.0.1:8501
 ```
 
-If using Cloudflare Tunnel, also verify the public URLs:
+If using Cloudflare Tunnel, also verify the public frontend URLs:
 
 ```bash
-curl -i "https://${DOMESTIC_API_HOST}/health"
-curl -I "https://${DOMESTIC_CLIENT_HOST}"
+curl -I "https://${PUBLIC_FRONTEND_HOST}"
+curl -i "https://${PUBLIC_FRONTEND_HOST}/api/health"
 ```
 
 Then run one demo workbook through the client and confirm:

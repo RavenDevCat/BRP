@@ -15,6 +15,8 @@ paths, and other handoff details that should not be shared with the repository.
 - checkout:
 - backend origin:
 - public frontend origin:
+- public Nginx config:
+- public Nginx startup:
 - private preview origin:
 - supervisor/tasks:
 
@@ -25,6 +27,9 @@ paths, and other handoff details that should not be shared with the repository.
 - checkout:
 - backend origin:
 - frontend origin:
+- Nginx config:
+- cloudflared config:
+- OSRM local ports:
 - supervisor/services:
 
 ## Runtime Data To Preserve

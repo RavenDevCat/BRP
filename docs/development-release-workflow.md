@@ -9,7 +9,7 @@ production landing target.
 ## Current Roles
 
 - Local checkouts: code-record and test workspaces. Use them to validate
-  `staging.example.com` in a browser and keep Git visibility.
+  `$CN_STAGING_HOST` in a browser and keep Git visibility.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
   Cloudflare Tunnel. Development and test changes happen only in CN staging.
   CN production is a separate checkout and service pair; it should change only
@@ -19,7 +19,7 @@ production landing target.
   CN production promotion.
 
 Default posture: work directly in the CN staging checkout, validate through
-`staging.example.com`, commit and push the intended Git revision, then promote
+`$CN_STAGING_HOST`, commit and push the intended Git revision, then promote
 only when the user explicitly asks for a production update. Keep runtime data
 and server-local env files out of Git.
 
@@ -28,7 +28,7 @@ and server-local env files out of Git.
 Current hostnames and ports:
 
 ```text
-staging.example.com -> CN staging frontend 127.0.0.1:8501
+$CN_STAGING_HOST -> CN staging frontend 127.0.0.1:8501
 CN staging backend    -> 127.0.0.1:8001
 
 $CN_PROD_HOST     -> CN production frontend 127.0.0.1:8500
@@ -50,7 +50,8 @@ DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
 private inventory together.
 
 Local checkouts should not run OSRM Docker containers. Lightweight local checks
-can reach OSRM through the approved access path recorded in private inventory.
+can reach OSRM through the diagnostic loopback mapping recorded in private
+inventory.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
 That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.
 External API QPS is also persistent runtime coordination state. Kakao, Google,
@@ -75,8 +76,8 @@ prod app:    /opt/brp/prod/app  # release promotion only
 ```
 
 Local service startup remains useful only as a fallback or diagnostic path.
-When a local diagnostic run is needed, OSRM endpoints should be provided by the
-approved access path recorded in the private inventory:
+When a local diagnostic run is needed, OSRM endpoints should be provided as
+local loopback ports:
 
 ```text
 127.0.0.1:5002 -> Shanghai OSRM
@@ -94,10 +95,10 @@ Start local services:
 ./ops/scripts/run_web.sh
 ```
 
-In PowerShell, use the checked-in helpers:
+In PowerShell, start the diagnostic OSRM loopback mapping recorded in the
+private inventory first, then use the checked-in service helpers:
 
 ```powershell
-.\ops\scripts\start_osrm_tunnel.ps1
 .\ops\scripts\run_backend.ps1
 .\ops\scripts\run_client.ps1
 .\ops\scripts\run_web.ps1
@@ -139,6 +140,8 @@ Provider safety checks:
 - Keep `BRP_MAX_CONCURRENT_JOBS` and `BRP_JOB_CONCURRENCY_DIR` configured on
   shared servers so planner workers queue instead of exhausting memory.
 - OSRM capacity should be handled separately from external provider QPS.
+- Do not publish OSRM through Cloudflare Tunnel or DNS. Application services
+  should call local `127.0.0.1` OSRM endpoints directly.
 
 The React web frontend in `apps/web` runs locally through Vite on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001`. Production-style serving
@@ -188,7 +191,7 @@ app:      $BRP_STAGING_APP_ROOT
 jobs:     $BRP_STAGING_JOBS_ROOT
 backend:  127.0.0.1:8001
 frontend: 127.0.0.1:8501
-public:   https://staging.example.com
+public:   https://$CN_STAGING_HOST
 ```
 
 Staging deploys must not change `$CN_PROD_HOST`, `brp-prod-*` services, or
@@ -304,8 +307,8 @@ If preview passes, schedule a separate production promotion. Do not switch or
 repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move
 only during an explicit release window.
 
-KR is already in the post-cutover shape. Its public React service uses the KR
-server's local `8501` origin, and its preview uses local `4173`.
+KR is already in the post-cutover shape. Its public React service uses local
+Nginx on the KR server's `8501` origin, and its preview uses local `4173`.
 Because KR does not currently have Node/npm in PATH, build React locally and
 copy `apps/web/dist` to KR when frontend assets change.
 
@@ -326,7 +329,9 @@ High-level KR deploy flow:
 4. Pull the intended revision in the KR active checkout recorded in the private
    inventory.
 5. Copy the new `apps/web/dist` to KR when frontend assets changed.
-6. Restart scheduled tasks `BRP-Backend-Preview`, `BRP-React-Preview`, and `BRP-React-Public`.
+6. Restart `BRP-Backend-Preview` and `BRP-Nginx-Public`. Restart
+   `BRP-React-Preview` only when the private preview needs the new build.
+   `BRP-React-Public` is intentionally disabled after the public Nginx cutover.
 7. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
 
 ## Deploy To Production
@@ -468,5 +473,6 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
 - Do not let staging and production share job directories.
 - Keep real secrets in `ops/env/local.env` for each environment, never in git.
 - Preserve `state/jobs`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
-- Keep Cloudflare Tunnel and OSRM long-running on the domestic server.
+- Keep Cloudflare Tunnel and OSRM long-running on the server that owns each
+  deployment, but do not expose OSRM through public hostnames.
 - Use staging as the gate before production.

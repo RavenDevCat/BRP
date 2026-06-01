@@ -11,6 +11,4 @@ ingress:
   - hostname: kr-react-brp.example.com
     service: http://127.0.0.1:4173
 
-  - hostname: kr-brp-api.example.com
-    service: http://127.0.0.1:8001
   - service: http_status:404

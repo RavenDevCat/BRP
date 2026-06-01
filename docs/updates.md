@@ -15,6 +15,20 @@ It is not a code changelog. Record changes here when users or operators should k
   server-side, and returns 401 when the Cloudflare Access user header is absent.
 - Existing jobs do not need to be rerun.
 
+### KR Public Frontend Standardized On Nginx
+
+- Replaced the KR public React origin process with local Nginx on port `8501`.
+- The old public Python static/proxy task is disabled; KR public traffic now
+  reaches React and same-origin `/api/*` through Nginx.
+- Existing jobs do not need to be rerun.
+
+### Public OSRM Hostnames Retired
+
+- Removed public OSRM tunnel routes from the CN access configuration.
+- CN and KR application services already use local OSRM loopback endpoints, so
+  routing requests no longer need public OSRM hostnames.
+- Existing jobs do not need to be rerun.
+
 ### CN Production React Promotion
 
 - Promoted CN production to the current GitHub `main` revision and switched the
@@ -31,7 +45,7 @@ It is not a code changelog. Record changes here when users or operators should k
 - Redefined the operating model: local checkouts are code-record and testing
   workspaces, CN owns staging and domestic production, and KR is a separate
   final production landing target.
-- `staging.example.com` is the stage-only test endpoint.
+- `$CN_STAGING_HOST` is the stage-only test endpoint.
 - `$CN_PROD_HOST` and `$KR_PROD_HOST` are final production endpoints
   and should not be repointed or restarted during staging work.
 - Future domain replacement should be handled through DNS, Cloudflare Access,

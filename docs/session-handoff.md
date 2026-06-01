@@ -136,9 +136,13 @@ Last verified KR runtime state in this session:
 - Confirmed runtime job roots:
   - staging: `/opt/brp/staging/data/jobs`
   - production: `/opt/brp/prod/data/jobs`
-- CN staging and production should share `BRP_JOB_CONCURRENCY_DIR` with
+- CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
   `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
   running concurrently beside the shared OSRM stack.
+- CN staging is synced to GitHub `main` after the planner concurrency change.
+  CN production is still on the older production branch; the concurrency backend
+  files were backported there directly instead of resetting production to the
+  newer React/staging line.
 - CN staging checkout should be kept synced to the current GitHub `main` during
   release work.
 - CN staging frontend service now serves React static/proxy from local

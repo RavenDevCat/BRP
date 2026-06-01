@@ -1,19 +1,24 @@
 # Development And Release Workflow
 
-This is the day-to-day workflow for developing BRP from any local machine while using the domestic server for OSRM, staging, production, and Cloudflare Tunnel.
+This is the day-to-day workflow for developing BRP on the domestic CN server,
+which now owns active development, staging, production, OSRM, and Cloudflare
+Tunnel behavior. Local Windows and Mac checkouts are connection and code-record
+workspaces only.
 
 ## Current Roles
 
-- Local machine: code editing, local backend/frontend testing, git commits.
-- Domestic server: OSRM, staging, production, Cloudflare Tunnel, runtime jobs, caches, and generated outputs.
-- South Korea/KR server: Windows deployment reached through operator access access for operator work; public users enter the React frontend through the access-protected KR app hostname.
+- CN server: primary development, staging, production, OSRM, Cloudflare Tunnel,
+  runtime jobs, caches, generated outputs, and Git commits.
+- Local Windows and Mac checkouts: code-record and connection workspaces for
+  Git visibility, SSH/Remote SSH access, and emergency/light local checks.
+- South Korea/KR server: separate production deployment reached through
+  operator access access for operator work; public users enter the React
+  frontend through the access-protected KR app hostname.
 
-Planned workflow shift: once stable server access is available, prefer
-developing directly on the target server checkout for changes that depend on
-server env, OSRM, runtime caches, job history, or tunnel behavior. This avoids
-daily local/server pull cycles and keeps validation close to production. Continue
-to commit and push through Git, and keep runtime data and server-local env files
-out of Git.
+Default posture: work directly in the CN staging checkout, validate there, commit
+and push from CN, then promote the intended Git revision to CN production. KR
+follows intentionally as a separate production target. Keep runtime data and
+server-local env files out of Git.
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
@@ -22,7 +27,19 @@ External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, and DeepSeek calls use cross-process limiter files under
 `state/api_rate_limits` by default, or `BRP_API_RATE_LIMIT_DIR` when set.
 
-## Local Development
+## Local And Mac Connection Workspaces
+
+Local Windows and Mac checkouts should not be treated as the main runtime source.
+Use them to keep a code record, connect through SSH/Remote SSH, inspect Git, or
+perform a light emergency check when CN is unavailable. For normal BRP feature
+work, connect to CN and work in:
+
+```text
+staging app: /opt/brp/staging/app
+prod app:    /opt/brp/prod/app
+```
+
+Local service startup remains useful only as a fallback or diagnostic path.
 
 From the repository root on the local machine, confirm the OSRM tunnel is running:
 
@@ -249,17 +266,20 @@ copy `apps/web/dist` to KR when frontend assets change.
 
 ## Deploy To KR
 
-KR uses the same `main` branch as local development. Preserve its runtime data:
+KR is a separate production deployment that follows the intended Git revision
+after CN validation. Preserve its runtime data:
 `state/jobs`, `apps/client/cache`, `apps/backend/cache`, generated outputs,
 `ops/env/local.env`, `apps/client/cache/google_geocode_usage.json`, and
 `state/api_rate_limits`.
 
 High-level KR deploy flow:
 
-1. Validate locally.
-2. Commit and push `main`.
-3. Build React locally with `npm run build` in `apps/web` when frontend assets changed.
-4. Pull `main` in the KR active checkout recorded in the private inventory.
+1. Validate the intended revision on CN staging.
+2. Commit and push the intended revision.
+3. Build React from a local/connection workspace with `npm run build` in
+   `apps/web` when frontend assets changed and KR cannot build it itself.
+4. Pull the intended revision in the KR active checkout recorded in the private
+   inventory.
 5. Copy the new `apps/web/dist` to KR when frontend assets changed.
 6. Restart scheduled tasks `BRP-Backend-Preview`, `BRP-React-Preview`, and `BRP-React-Public`.
 7. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.

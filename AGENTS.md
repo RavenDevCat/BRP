@@ -17,6 +17,16 @@ This repository is BRP / Bus Route Planner. Read this file first in every new Co
 - CN server: domestic deployment. Real address/user/path belong in the ignored private inventory.
 - Do not confuse the KR operator access host with the CN server.
 
+## Development Home
+
+- Primary development, staging validation, and production deployment now happen
+  on CN.
+- The local Windows checkout and the Mac checkout are connection and code-record
+  workspaces only. Use them for Git visibility, SSH/Remote SSH access, and
+  emergency/light local checks, not as the main runtime source.
+- KR is maintained as a separate production deployment that follows the Git
+  revision intentionally; do not treat KR as the main development line.
+
 ## Runtime Data Safety
 
 Never overwrite, reset, or delete runtime data unless the user explicitly asks:

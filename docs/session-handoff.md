@@ -54,9 +54,11 @@ Recent UX state:
 - If that local private file is missing on a new machine, look in OneDrive at
   `OneDrive-EiM/BRP Private/ops-inventory.local.md` and copy it back to
   `docs/private/ops-inventory.local.md`.
-- Intended future workflow: move primary development and validation onto the
-  server once access is stable, so Codex works in the same runtime environment
-  instead of pushing/pulling between local and server checkouts every day.
+- Operating model as of 2026-06-01: CN is the primary place for development,
+  staging validation, and production deployment. The local Windows checkout and
+  the Mac checkout are code-record and connection workspaces only, mainly for
+  Git visibility, SSH/Remote SSH access, and emergency/light local checks. KR is
+  a separate production deployment, not the main development line.
 
 ## Runtime And Data Rules
 
@@ -126,9 +128,13 @@ Last verified KR runtime state in this session:
 - Real SSH host/user belong in `docs/private/ops-inventory.local.md`.
 - OS: Ubuntu 22.04 LTS
 - This is the CN server. Do not confuse it with the KR operator access host.
-- SSH was inaccessible from the current network; likely IP/network access policy.
-- Monday/next operator-approved task: install or configure operator access access on the CN
-  server if access permits.
+- Primary development, staging, and production work should happen here.
+- Confirmed code checkouts:
+  - staging: `/opt/brp/staging/app`
+  - production: `/opt/brp/prod/app`
+- Confirmed runtime job roots:
+  - staging: `/opt/brp/staging/data/jobs`
+  - production: `/opt/brp/prod/data/jobs`
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.
@@ -137,30 +143,30 @@ Last verified KR runtime state in this session:
 
 For ordinary code changes:
 
-1. Validate locally.
-2. Commit and push `main`.
-3. For KR, pull in the active checkout recorded in the private inventory.
-4. If React assets changed, build locally with `npm run build` in `apps/web` and
-   copy `apps/web/dist` to KR.
-5. Restart KR scheduled tasks.
+1. Work in the CN staging checkout.
+2. Validate against CN staging services and runtime data.
+3. Commit and push the Git revision from CN.
+4. Promote to CN production by pulling the intended revision into
+   `/opt/brp/prod/app` and restarting production services.
+5. Sync KR intentionally when that separate production deployment should receive
+   the same revision; KR may require a local React build copied to
+   `apps/web/dist` because Node/npm is not in its PATH.
 6. Verify health, `/new`, `/jobs`, job count, cache counts, and Google usage
-   continuity.
+   continuity for every environment touched.
 
 Docs-only changes do not need service restart.
 
-Near-term workflow direction:
+Local/Mac role:
 
-- Use local development only for disconnected editing or frontend builds that a
-  server cannot perform.
-- Prefer server-side development for changes that depend on server env, OSRM,
-  runtime caches, job history, or Cloudflare behavior.
+- Use the Windows and Mac checkouts as code-record, SSH/Remote SSH, and emergency
+  light-test workspaces only.
+- Do not make local or Mac runtime state the source of truth.
 - Keep Git commits and pushes as the source-of-truth record even when coding on
-  the server.
-- Never let server-side development overwrite runtime data or local env files.
+  CN.
+- Never let development overwrite runtime data or local/server env files.
 
 ## Known Gaps / Next Work
 
-- CN operator access access remains pending.
 - Domestic final React cutover is still separate from the KR React cutover.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access. A
@@ -181,15 +187,16 @@ know the work plan. It should ask the user only for the missing private
 connection facts:
 
 - CN SSH host and user, or confirmation that operator access access is available
-- CN active checkout path, if one already exists
+- CN active checkout path only if it differs from `/opt/brp/staging/app` or
+  `/opt/brp/prod/app`
 - CN runtime data paths, if they differ from the deployment docs
 - public/private hostnames only when configuring tunnels or smoke tests
 
-Monday/CN deployment sequence:
+CN development and promotion sequence:
 
-1. Confirm access to the CN Ubuntu 22.04 LTS server.
-2. Install or configure operator access access if normal SSH is blocked.
-3. Audit the existing CN filesystem before changing anything:
+1. Connect to the CN Ubuntu 22.04 LTS server.
+2. Work from staging checkout `/opt/brp/staging/app`.
+3. Before changing runtime behavior, confirm the relevant runtime paths:
    - code checkout
    - `ops/env/local.env`
    - `state/jobs` or `BRP_BACKEND_JOBS_DIR`
@@ -197,10 +204,10 @@ Monday/CN deployment sequence:
    - `apps/backend/cache`
    - generated outputs
    - OSRM data directory
-4. Back up runtime data before pulling or replacing code.
-5. Pull or clone latest `main`.
-6. Restore/confirm server-local env and runtime paths.
-7. Start or restart OSRM, backend, and frontend services.
+4. Back up runtime data before replacing code or changing deploy layout.
+5. Commit and push changes from CN staging.
+6. Promote the intended Git revision to `/opt/brp/prod/app`.
+7. Restart only the services for the environment being changed.
 8. Validate backend health, OSRM health, `/new`, `/jobs`, history visibility,
    cache continuity, AI Audit, Distance & Cost, and Google usage behavior if
    enabled for that deployment.

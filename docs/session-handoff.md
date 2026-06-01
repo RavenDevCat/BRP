@@ -135,6 +135,20 @@ Last verified KR runtime state in this session:
 - Confirmed runtime job roots:
   - staging: `/opt/brp/staging/data/jobs`
   - production: `/opt/brp/prod/data/jobs`
+- CN staging checkout is synced to GitHub `main` at `09eb9b4`.
+- CN staging frontend service now serves React static/proxy from local
+  `127.0.0.1:8501`, using `ops/scripts/serve_react_static.py` and
+  `apps/web/dist`; `/api/*` proxies to `127.0.0.1:8001`.
+- CN staging backend has `BRP_BACKEND_SERVICE_TOKEN` set, so the React
+  static/proxy service loads `ops/env/local.env` through systemd
+  `EnvironmentFile` and injects the backend token server-side. Do not expose the
+  token to the browser.
+- Cloudflared ingress on CN maps `staging.example.com` and
+  `$CN_PROD_HOST` to the React staging frontend on `127.0.0.1:8501`.
+  `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the ingress config and falls through to
+  404. As of this handoff, `staging.example.com` still needs a Cloudflare DNS
+  record/tunnel route created outside CN because CN has no origin cert/API token
+  for `cloudflared tunnel route dns`.
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.
@@ -168,10 +182,11 @@ Local/Mac role:
 ## Known Gaps / Next Work
 
 - Domestic final React cutover is still separate from the KR React cutover.
+- Add the Cloudflare DNS/tunnel route for `staging.example.com` so the CN
+  staging React frontend is reachable publicly.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
-  same-origin proxy deployment; public security relies on Cloudflare Access. A
-  hardened version should inject a backend token server-side or keep API hosts
-  fully behind Access.
+  same-origin proxy deployment; public security relies on Cloudflare Access.
+  CN staging now supports token injection in the React static/proxy service.
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.

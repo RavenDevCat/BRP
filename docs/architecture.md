@@ -27,9 +27,8 @@ Current domestic server services:
 ```text
 brp-osrm.service              # shared OSRM Docker stack
 brp-staging-backend.service   # 127.0.0.1:8001
-brp-staging-frontend.service  # 127.0.0.1:8501
 brp-prod-backend.service      # 127.0.0.1:8000
-brp-prod-frontend.service     # 127.0.0.1:8500
+nginx.service                 # React static host and /api proxy on 127.0.0.1:8501 and 127.0.0.1:8500
 cloudflared.service           # public access layer
 ```
 
@@ -81,10 +80,10 @@ Current status:
 - includes Side Tools:
   - Distance & Cost
   - Fleet Planner
-- production-style serving uses static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
+- production-style serving uses Nginx with static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
 - KR public frontend serves React from the KR server's local `8501` origin
 - KR private preview can serve the same static/proxy stack from local `4173`
-- CN staging uses the React static/proxy host for active testing
+- CN staging uses Nginx for active React testing
 - CN production and KR production are separate public production endpoints
 
 ## Backend

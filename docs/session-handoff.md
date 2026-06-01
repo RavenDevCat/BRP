@@ -150,17 +150,18 @@ Last verified KR runtime state in this session:
   production checkout before the promotion.
 - CN staging checkout should be kept synced to the current GitHub `main` during
   release work.
-- CN staging and CN production frontends serve React static/proxy from their
-  local frontend origins using `ops/scripts/serve_react_static.py` and
-  `apps/web/dist`. Staging proxies `/api/*` to `127.0.0.1:8001`; production
-  proxies `/api/*` to `127.0.0.1:8000`.
-- Public React static/proxy hostnames should set
-  `BRP_REQUIRE_CLOUDFLARE_ACCESS=true` so the origin returns 401 if a request
-  reaches it without the Cloudflare Access user header.
-- CN staging and CN production backends have `BRP_BACKEND_SERVICE_TOKEN` set, so the React
-  static/proxy service loads `ops/env/local.env` through systemd
-  `EnvironmentFile` and injects the backend token server-side. Do not expose the
-  token to the browser.
+- CN staging and CN production frontends serve React through Nginx. Nginx serves
+  `apps/web/dist`, performs SPA fallback, and proxies same-origin `/api/*`.
+  Staging proxies to `127.0.0.1:8001`; production proxies to
+  `127.0.0.1:8000`.
+- CN Nginx returns 401 when a request reaches the origin without the Cloudflare
+  Access user header.
+- CN staging and CN production backends have `BRP_BACKEND_SERVICE_TOKEN` set.
+  The Nginx installer reads `ops/env/local.env` and writes a root-only include
+  that injects the backend token server-side. Do not expose the token to the
+  browser.
+- `brp-staging-frontend.service` and `brp-prod-frontend.service` are disabled on
+  CN after the Nginx cutover. Use `nginx.service` as the frontend service on CN.
 - Cloudflared ingress on CN maps `staging.example.com` to the React staging
   frontend on `127.0.0.1:8501` and `$CN_PROD_HOST` to the CN production
   frontend on `127.0.0.1:8500`. `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the
@@ -205,7 +206,7 @@ Local checkout role:
   production. Staging work must not repoint or restart production hostnames.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access.
-  CN staging now supports token injection in the React static/proxy service.
+  CN staging and production now inject backend tokens through Nginx includes.
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.

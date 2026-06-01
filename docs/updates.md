@@ -6,6 +6,15 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-01
 
+### CN Frontend Standardized On Nginx
+
+- Replaced the CN React frontend origin process with Nginx for both staging and
+  production.
+- Nginx now serves `apps/web/dist`, handles direct navigation fallback, proxies
+  `/api/*` to the correct backend, injects the backend service token
+  server-side, and returns 401 when the Cloudflare Access user header is absent.
+- Existing jobs do not need to be rerun.
+
 ### CN Production React Promotion
 
 - Promoted CN production to the current GitHub `main` revision and switched the

@@ -210,7 +210,14 @@ Deploy:
 ssh "$CN_SSH_USER@$CN_SSH_HOST"
 cd "$BRP_STAGING_APP_ROOT"
 git pull --ff-only
-sudo systemctl restart brp-staging-backend.service brp-staging-frontend.service
+sudo systemctl restart brp-staging-backend.service
+sudo SITE_NAME=brp-staging \
+  APP_ROOT="$BRP_STAGING_APP_ROOT" \
+  FRONTEND_PORT=8501 \
+  BACKEND_URL=http://127.0.0.1:8001 \
+  SERVER_NAMES="staging.example.com" \
+  ops/scripts/install_nginx_react_site.sh
+sudo systemctl reload nginx
 curl -s http://127.0.0.1:8001/health
 curl -I http://127.0.0.1:8501
 ```
@@ -268,15 +275,15 @@ Static server requirements:
 - if `BRP_BACKEND_SERVICE_TOKEN` is set for the backend, inject that token
   server-side in the static/proxy process; never expose it to the browser
 
-For lightweight preview hosts without Node.js, the repository includes a Python
-static/proxy server:
+Linux preview and production hosts should use the managed Nginx installer:
 
 ```bash
-python ops/scripts/serve_react_static.py \
-  --dist-dir apps/web/dist \
-  --backend-url http://127.0.0.1:8001 \
-  --host 127.0.0.1 \
-  --port 4173
+sudo SITE_NAME=brp-staging \
+  APP_ROOT="$BRP_STAGING_APP_ROOT" \
+  FRONTEND_PORT=8501 \
+  BACKEND_URL=http://127.0.0.1:8001 \
+  SERVER_NAMES="staging.example.com" \
+  ops/scripts/install_nginx_react_site.sh
 ```
 
 React static/proxy smoke:
@@ -343,7 +350,14 @@ Deploy:
 ssh "$CN_SSH_USER@$CN_SSH_HOST"
 cd "$BRP_PROD_APP_ROOT"
 git pull --ff-only
-sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
+sudo systemctl restart brp-prod-backend.service
+sudo SITE_NAME=brp-prod \
+  APP_ROOT="$BRP_PROD_APP_ROOT" \
+  FRONTEND_PORT=8500 \
+  BACKEND_URL=http://127.0.0.1:8000 \
+  SERVER_NAMES="brp.example.com" \
+  ops/scripts/install_nginx_react_site.sh
+sudo systemctl reload nginx
 curl -s http://127.0.0.1:8000/health
 curl -I http://127.0.0.1:8500
 ```
@@ -361,7 +375,14 @@ Then on production:
 cd "$BRP_PROD_APP_ROOT"
 git fetch --tags
 git checkout vX.Y.Z
-sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
+sudo systemctl restart brp-prod-backend.service
+sudo SITE_NAME=brp-prod \
+  APP_ROOT="$BRP_PROD_APP_ROOT" \
+  FRONTEND_PORT=8500 \
+  BACKEND_URL=http://127.0.0.1:8000 \
+  SERVER_NAMES="brp.example.com" \
+  ops/scripts/install_nginx_react_site.sh
+sudo systemctl reload nginx
 ```
 
 Rollback example:
@@ -370,7 +391,14 @@ Rollback example:
 cd "$BRP_PROD_APP_ROOT"
 git fetch --tags
 git checkout vX.Y.PREVIOUS
-sudo systemctl restart brp-prod-backend.service brp-prod-frontend.service
+sudo systemctl restart brp-prod-backend.service
+sudo SITE_NAME=brp-prod \
+  APP_ROOT="$BRP_PROD_APP_ROOT" \
+  FRONTEND_PORT=8500 \
+  BACKEND_URL=http://127.0.0.1:8000 \
+  SERVER_NAMES="brp.example.com" \
+  ops/scripts/install_nginx_react_site.sh
+sudo systemctl reload nginx
 ```
 
 ## Server Status Checks
@@ -381,9 +409,8 @@ Check all core services:
 systemctl is-active \
   brp-osrm.service \
   brp-staging-backend.service \
-  brp-staging-frontend.service \
   brp-prod-backend.service \
-  brp-prod-frontend.service \
+  nginx.service \
   cloudflared.service
 ```
 
@@ -393,9 +420,8 @@ Check enabled-on-boot state:
 systemctl is-enabled \
   brp-osrm.service \
   brp-staging-backend.service \
-  brp-staging-frontend.service \
   brp-prod-backend.service \
-  brp-prod-frontend.service \
+  nginx.service \
   cloudflared.service
 ```
 

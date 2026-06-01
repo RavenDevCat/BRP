@@ -19,7 +19,7 @@ The live stack needs these services on each server:
 1. OSRM Docker containers
 2. Backend Python service
 3. Frontend service:
-   - React static/proxy service where that deployment has cut over
+   - Nginx for Linux React deployments
    - Streamlit service where that deployment is still on the legacy UI
 4. Public access layer, currently Cloudflare Tunnel
 

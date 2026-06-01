@@ -6,6 +6,18 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-01
 
+### Environment Workflow Reset
+
+- Redefined the four-machine operating model: Windows and Mac are operator access-first
+  remote development/testing workstations, CN owns staging and domestic
+  production, and KR is a separate final production landing target.
+- `staging.example.com` is the stage-only test endpoint.
+- `$CN_PROD_HOST` and `$KR_PROD_HOST` are final production endpoints
+  and should not be repointed or restarted during staging work.
+- Future domain replacement should be handled through DNS, Cloudflare Access,
+  tunnel ingress, environment variables, and private inventory rather than
+  hard-coded application behavior.
+
 ### React Static Proxy Access Guard
 
 - Added an optional `BRP_REQUIRE_CLOUDFLARE_ACCESS` guard for public React

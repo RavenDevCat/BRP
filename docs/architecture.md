@@ -15,11 +15,11 @@ This is the maintained high-level architecture note. For daily commands and rele
 Current domestic server layout:
 
 ```text
-/srv/brp/staging/app          # staging git checkout
-/srv/brp/staging/data/jobs    # staging job history
-/srv/brp/prod/app             # production git checkout
-/srv/brp/prod/data/jobs       # production job history
-/srv/brp/osrm-data            # shared read-only OSRM datasets
+/opt/brp/staging/app          # staging git checkout
+/opt/brp/staging/data/jobs    # staging job history
+/opt/brp/prod/app             # production git checkout
+/opt/brp/prod/data/jobs       # production job history
+/opt/brp/osrm-data            # shared read-only OSRM datasets
 ```
 
 Current domestic server services:
@@ -33,7 +33,26 @@ brp-prod-frontend.service     # 127.0.0.1:8500
 cloudflared.service           # public access layer
 ```
 
-Local development does not run OSRM Docker. Local `127.0.0.1:5002-5006` is an SSH port-forward into the domestic server.
+Local development does not run OSRM Docker. Local `127.0.0.1:5002-5006` is an
+SSH/operator access port-forward into the domestic server.
+
+## Environment Roles
+
+- Windows and Mac operation machines: operator access-first remote development and
+  testing clients. They connect to CN with Codex/VS Code Remote and use a browser
+  to test staging. They are not runtime authorities.
+- CN staging: active development and test environment. Public hostname:
+  `staging.example.com`; frontend `127.0.0.1:8501`; backend
+  `127.0.0.1:8001`.
+- CN production: domestic final production environment. Public hostname:
+  `$CN_PROD_HOST`; frontend `127.0.0.1:8500`; backend `127.0.0.1:8000`.
+- KR production: South Korea final production environment. Public hostname:
+  `$KR_PROD_HOST`; frontend `127.0.0.1:8501` on KR; backend
+  `127.0.0.1:8001` on KR.
+
+CN production and KR production are pull-and-restart release targets. Staging
+changes must not repoint production hostnames or restart production services
+unless the user explicitly asks for a production promotion.
 
 ## Streamlit Client And Python Helpers
 
@@ -66,7 +85,8 @@ Current status:
 - production-style serving uses static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
 - KR public frontend serves React from the KR server's local `8501` origin
 - KR private preview can serve the same static/proxy stack from local `4173`
-- domestic public hostnames still serve Streamlit until a separate domestic React cutover
+- CN staging uses the React static/proxy host for active testing
+- CN production and KR production are separate public production endpoints
 
 ## Backend
 
@@ -167,9 +187,10 @@ The domestic server runs Cloudflare Tunnel through `cloudflared.service`.
 
 Current public routes include:
 
-- `client.example.com` -> Streamlit
-- `brp.example.com` -> Streamlit until domestic React cutover
-- `brp-api.example.com` -> backend API
+- `staging.example.com` -> CN staging frontend
+- `brp.example.com` -> CN production frontend
+- `brp-kr.example.com` -> KR production frontend
+- `brp-api.example.com` -> CN backend API when intentionally exposed behind access control
 - `osrm-shanghai.example.com`
 - `osrm-beijing.example.com`
 - `osrm-suzhou.example.com`
@@ -178,6 +199,10 @@ Current public routes include:
 
 The South Korea server is special: operator access should use the operator access route. The KR app hostname is access-protected and currently serves the React frontend from the KR machine's local `8501` origin.
 
+The public domain is replaceable. Domain-specific values should stay in
+Cloudflare DNS, Cloudflare Access applications, tunnel ingress, environment
+files, and private inventory rather than in application logic.
+
 ## Runtime Data
 
 Do not commit runtime data or secrets.
@@ -185,22 +210,22 @@ Do not commit runtime data or secrets.
 Runtime data to preserve during server moves:
 
 ```text
-/srv/brp/staging/app/state/api_rate_limits
-/srv/brp/job-concurrency
-/srv/brp/osrm-data
-/srv/brp/staging/data/jobs
-/srv/brp/staging/app/apps/backend/cache
-/srv/brp/staging/app/apps/client/cache
-/srv/brp/staging/app/apps/client/cache/google_geocode_usage.json
-/srv/brp/staging/app/apps/backend/outputs
-/srv/brp/staging/app/apps/client/demodata
-/srv/brp/prod/app/state/api_rate_limits
-/srv/brp/prod/data/jobs
-/srv/brp/prod/app/apps/backend/cache
-/srv/brp/prod/app/apps/client/cache
-/srv/brp/prod/app/apps/client/cache/google_geocode_usage.json
-/srv/brp/prod/app/apps/backend/outputs
-/srv/brp/prod/app/apps/client/demodata
+/opt/brp/staging/app/state/api_rate_limits
+/opt/brp/job-concurrency
+/opt/brp/osrm-data
+/opt/brp/staging/data/jobs
+/opt/brp/staging/app/apps/backend/cache
+/opt/brp/staging/app/apps/client/cache
+/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
+/opt/brp/staging/app/apps/backend/outputs
+/opt/brp/staging/app/apps/client/demodata
+/opt/brp/prod/app/state/api_rate_limits
+/opt/brp/prod/data/jobs
+/opt/brp/prod/app/apps/backend/cache
+/opt/brp/prod/app/apps/client/cache
+/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
+/opt/brp/prod/app/apps/backend/outputs
+/opt/brp/prod/app/apps/client/demodata
 ```
 
 Lightweight deployments may keep job history under repository-level
@@ -213,4 +238,5 @@ both alongside caches, generated outputs, and server-local `ops/env/local.env`.
 - Secrets live in server-local `ops/env/local.env`.
 - OSRM data lives outside Git.
 - Staging and production have separate checkouts, env files, job stores, caches, and output folders.
+- Staging and production have separate public hostnames and local frontend/backend ports.
 - Cloudflare Tunnel and OSRM stay with the server that owns that deployment's runtime data.

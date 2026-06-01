@@ -54,11 +54,12 @@ Recent UX state:
 - If that local private file is missing on a new machine, look in OneDrive at
   `OneDrive-EiM/BRP Private/ops-inventory.local.md` and copy it back to
   `docs/private/ops-inventory.local.md`.
-- Operating model as of 2026-06-01: CN is the primary place for development,
-  staging validation, and production deployment. The local Windows checkout and
-  the Mac checkout are code-record and connection workspaces only, mainly for
-  Git visibility, SSH/Remote SSH access, and emergency/light local checks. KR is
-  a separate production deployment, not the main development line.
+- Operating model as of 2026-06-01: use operator access first across Windows, Mac,
+  CN, and KR. Windows and Mac are remote connection/development workstations:
+  use them to test `staging.example.com` in a browser and to connect by
+  Codex/VS Code Remote into CN. CN staging is the active dev/test environment.
+  CN production and KR production are release targets only and should not change
+  during staging work.
 
 ## Runtime And Data Rules
 
@@ -129,13 +130,19 @@ Last verified KR runtime state in this session:
 - Real SSH host/user belong in `docs/private/ops-inventory.local.md`.
 - OS: Ubuntu 22.04 LTS
 - This is the CN server. Do not confuse it with the KR operator access host.
-- Primary development, staging, and production work should happen here.
+- CN hosts both staging and domestic production, but development changes should
+  happen only in staging unless the user explicitly asks for a production
+  promotion.
 - Confirmed code checkouts:
   - staging: `/opt/brp/staging/app`
   - production: `/opt/brp/prod/app`
 - Confirmed runtime job roots:
   - staging: `/opt/brp/staging/data/jobs`
   - production: `/opt/brp/prod/data/jobs`
+- Current public environment boundary:
+  - `staging.example.com` -> CN staging frontend `127.0.0.1:8501`
+  - `$CN_PROD_HOST` -> CN production frontend `127.0.0.1:8500`
+  - `$KR_PROD_HOST` -> KR production frontend on the KR host
 - CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
   `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
   running concurrently beside the shared OSRM stack.
@@ -155,11 +162,12 @@ Last verified KR runtime state in this session:
   static/proxy service loads `ops/env/local.env` through systemd
   `EnvironmentFile` and injects the backend token server-side. Do not expose the
   token to the browser.
-- Cloudflared ingress on CN maps `staging.example.com` and
-  `$CN_PROD_HOST` to the React staging frontend on `127.0.0.1:8501`.
-  `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the ingress config and falls through to
-  404. `staging.example.com` DNS is live and is now covered by the Cloudflare
-  Access application; unauthenticated requests redirect to the Access login flow.
+- Cloudflared ingress on CN maps `staging.example.com` to the React staging
+  frontend on `127.0.0.1:8501` and `$CN_PROD_HOST` to the CN production
+  frontend on `127.0.0.1:8500`. `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the
+  ingress config and falls through to 404. `staging.example.com` DNS is live
+  and is now covered by the Cloudflare Access application; unauthenticated
+  requests redirect to the Access login flow.
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.
@@ -168,15 +176,16 @@ Last verified KR runtime state in this session:
 
 For ordinary code changes:
 
-1. Work in the CN staging checkout.
-2. Validate against CN staging services and runtime data.
-3. Commit and push the Git revision from CN.
-4. Promote to CN production by pulling the intended revision into
-   `/opt/brp/prod/app` and restarting production services.
-5. Sync KR intentionally when that separate production deployment should receive
+1. Connect by operator access when available.
+2. Work in the CN staging checkout.
+3. Validate against CN staging services and `staging.example.com`.
+4. Commit and push the intended Git revision.
+5. Promote to CN production only when the user explicitly asks by pulling the
+   intended revision into `/opt/brp/prod/app` and restarting production services.
+6. Sync KR intentionally when that separate production deployment should receive
    the same revision; KR may require a local React build copied to
    `apps/web/dist` because Node/npm is not in its PATH.
-6. Verify health, `/new`, `/jobs`, job count, cache counts, and Google usage
+7. Verify health, `/new`, `/jobs`, job count, cache counts, and Google usage
    continuity for every environment touched.
 
 Docs-only changes do not need service restart.
@@ -192,9 +201,10 @@ Local/Mac role:
 
 ## Known Gaps / Next Work
 
-- Domestic final React cutover is still separate from the KR React cutover.
 - Validate the authenticated `staging.example.com` React session in a browser,
   including `/new`, `/jobs`, `/distance`, and `/fleet`.
+- Decide the next explicit release target before touching CN production or KR
+  production. Staging work must not repoint or restart production hostnames.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access.
   CN staging now supports token injection in the React static/proxy service.
@@ -232,7 +242,8 @@ CN development and promotion sequence:
    - OSRM data directory
 4. Back up runtime data before replacing code or changing deploy layout.
 5. Commit and push changes from CN staging.
-6. Promote the intended Git revision to `/opt/brp/prod/app`.
+6. Promote the intended Git revision to `/opt/brp/prod/app` only after explicit
+   production approval.
 7. Restart only the services for the environment being changed.
 8. Validate backend health, OSRM health, `/new`, `/jobs`, history visibility,
    cache continuity, AI Audit, Distance & Cost, and Google usage behavior if

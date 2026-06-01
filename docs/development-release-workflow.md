@@ -1,24 +1,55 @@
 # Development And Release Workflow
 
-This is the day-to-day workflow for developing BRP on the domestic CN server,
-which now owns active development, staging, production, OSRM, and Cloudflare
-Tunnel behavior. Local Windows and Mac checkouts are connection and code-record
-workspaces only.
+This is the day-to-day workflow for developing BRP across the Windows/Mac
+operation machines, the domestic CN server, and the South Korea/KR production
+server. Local Windows and Mac checkouts are connection and code-record
+workspaces only. CN owns the development, staging, domestic production, OSRM,
+and Cloudflare Tunnel chain. KR is a separate final production landing target.
 
 ## Current Roles
 
-- CN server: primary development, staging, production, OSRM, Cloudflare Tunnel,
-  runtime jobs, caches, generated outputs, and Git commits.
-- Local Windows and Mac checkouts: code-record and connection workspaces for
-  Git visibility, SSH/Remote SSH access, and emergency/light local checks.
-- South Korea/KR server: separate production deployment reached through
-  operator access access for operator work; public users enter the React
-  frontend through the access-protected KR app hostname.
+- Windows operation machine and Mac operation machine: operator access-first remote
+  connection and development workstations. Use them to open
+  `staging.example.com` in a browser for testing, and to connect by
+  Codex/VS Code Remote into the CN staging checkout for code changes.
+- CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
+  Cloudflare Tunnel. Development and test changes happen only in CN staging.
+  CN production is a separate checkout and service pair; it should change only
+  during an explicit production promotion.
+- South Korea/KR server: final production landing target for KR. It should pull
+  only an intended release revision after CN staging validation and any required
+  CN production promotion.
 
-Default posture: work directly in the CN staging checkout, validate there, commit
-and push from CN, then promote the intended Git revision to CN production. KR
-follows intentionally as a separate production target. Keep runtime data and
-server-local env files out of Git.
+Default posture: connect over operator access where available, work directly in the CN
+staging checkout, validate through `staging.example.com`, commit and push the
+intended Git revision, then promote only when the user explicitly asks for a
+production update. Keep runtime data and server-local env files out of Git.
+
+## Environment Boundary Contract
+
+Current hostnames and ports:
+
+```text
+staging.example.com -> CN staging frontend 127.0.0.1:8501
+CN staging backend    -> 127.0.0.1:8001
+
+$CN_PROD_HOST     -> CN production frontend 127.0.0.1:8500
+CN production backend -> 127.0.0.1:8000
+
+$KR_PROD_HOST  -> KR production frontend 127.0.0.1:8501 on KR
+KR production backend -> 127.0.0.1:8001 on KR
+```
+
+Staging is the only place for active development and test traffic. Do not point
+`$CN_PROD_HOST` or `$KR_PROD_HOST` at staging ports as part of
+preview work. CN production and KR production should be pull-and-restart
+targets only after the staged version is accepted.
+
+The `example.com` domain is replaceable. Treat public hostnames as DNS,
+Cloudflare Tunnel, Cloudflare Access, and environment configuration, not product
+logic. When the company domain is ready, update domain references in Cloudflare
+DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
+private inventory together.
 
 The local machine should not run OSRM Docker containers. Local development reaches OSRM through SSH port forwarding to the domestic server.
 The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
@@ -36,13 +67,13 @@ after `BRP_JOB_SLOT_ATTACH_STALE_SECONDS`.
 ## Local And Mac Connection Workspaces
 
 Local Windows and Mac checkouts should not be treated as the main runtime source.
-Use them to keep a code record, connect through SSH/Remote SSH, inspect Git, or
-perform a light emergency check when CN is unavailable. For normal BRP feature
-work, connect to CN and work in:
+Use them to keep a code record, connect through SSH/Remote SSH, inspect Git, run
+Codex/VS Code Remote against CN, and test the staging site in a browser. For
+normal BRP feature work, connect to CN over operator access when possible and work in:
 
 ```text
 staging app: /opt/brp/staging/app
-prod app:    /opt/brp/prod/app
+prod app:    /opt/brp/prod/app  # release promotion only
 ```
 
 Local service startup remains useful only as a fallback or diagnostic path.
@@ -131,7 +162,7 @@ Provider safety checks:
 The React web frontend in `apps/web` runs locally through Vite on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001`. Production-style serving
 uses a static/proxy host instead of the Vite dev server. KR has already cut over
-to React; domestic public hostnames still use Streamlit until their own cutover.
+to React; CN staging and CN production use separate frontend/backend origins.
 
 Production-style React serving is different from Vite dev serving:
 
@@ -164,9 +195,11 @@ app:      $BRP_STAGING_APP_ROOT
 jobs:     $BRP_STAGING_JOBS_ROOT
 backend:  127.0.0.1:8001
 frontend: 127.0.0.1:8501
-public:   https://$DOMESTIC_API_HOST
-public:   https://$DOMESTIC_CLIENT_HOST
+public:   https://staging.example.com
 ```
+
+Staging deploys must not change `$CN_PROD_HOST`, `brp-prod-*` services, or
+CN production ports.
 
 Before restarting a server backend, confirm the job store is pinned to runtime
 storage:
@@ -261,15 +294,15 @@ curl -I "https://${DOMESTIC_REACT_PREVIEW_HOST}/jobs"
 curl -s "https://${DOMESTIC_REACT_PREVIEW_HOST}/api/health"
 ```
 
-Browser QA before switching the domestic app hostname:
+Browser QA before production promotion:
 
 - Route Audit dashboard, new audit submit, Job History, job detail, maps, and AI Audit
 - Distance & Cost workbook preview, reference distance, and route cost
 - Fleet Planner demand geocode, clustering, route preview, global plan, workbook download, and submit generated plan as job
 
-If preview passes, switch the public BRP hostname by moving the domestic app
-hostname from Streamlit to the React static service. Keep Streamlit on the domestic client hostname
-as a fallback/operator UI during the first React production window.
+If preview passes, schedule a separate production promotion. Do not switch or
+repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move
+only during an explicit release window.
 
 KR is already in the post-cutover shape. Its public React service uses the KR
 machine's local `8501` origin, and its private preview uses local `4173`.
@@ -305,9 +338,11 @@ app:      $BRP_PROD_APP_ROOT
 jobs:     $BRP_PROD_JOBS_ROOT
 backend:  127.0.0.1:8000
 frontend: 127.0.0.1:8500
+public:   https://$CN_PROD_HOST
 ```
 
 Only deploy to production after staging passes.
+Do not use production as a development or preview environment.
 
 Deploy:
 

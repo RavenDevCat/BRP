@@ -255,8 +255,11 @@ a replacement for adding the hostname to the Cloudflare Access application.
 
 | Service | Port | Notes |
 | --- | ---: | --- |
-| Client Streamlit | `8501` | Legacy/operator UI; still public on domestic hostnames until domestic React cutover |
-| Backend API | `8001` | Job API and health endpoint |
+| CN staging frontend | `8501` | Stage-only React/static proxy or legacy frontend |
+| CN staging backend | `8001` | Stage-only job API and health endpoint |
+| CN production frontend | `8500` | Domestic production endpoint origin |
+| CN production backend | `8000` | Domestic production job API and health endpoint |
+| Client Streamlit | chosen legacy port | Legacy/operator UI where still used |
 | React Vite dev | `5173` | Local development |
 | React static/proxy | `4173`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; KR public React uses local `8501` |
 | OSRM Shanghai | `5002` | Docker container |
@@ -287,9 +290,10 @@ Reference config:
 
 Current public hostnames:
 
-- `client.example.com` -> Streamlit
-- `brp.example.com` -> Streamlit until domestic React cutover
-- `brp-api.example.com` -> backend API
+- `staging.example.com` -> CN staging frontend
+- `brp.example.com` -> CN production frontend
+- `brp-kr.example.com` -> KR production frontend
+- `brp-api.example.com` -> CN backend API when intentionally exposed behind access control
 - `osrm-shanghai.example.com`
 - `osrm-beijing.example.com`
 - `osrm-suzhou.example.com`
@@ -302,10 +306,11 @@ South Korea server hostnames:
 - `kr-react-brp.example.com` -> optional React preview hostname
 - `kr-brp-api.example.com`
 
-For a deployment that has not cut over yet, React should use a separate preview
-hostname first, serve `apps/web/dist` as static assets, and route API calls to
-the appropriate backend before moving the main BRP hostname. KR has already
-switched its public frontend origin to React on local port `8501`.
+For staging work, React should use the staging hostname, serve `apps/web/dist`
+as static assets, and route API calls to the staging backend. Production
+hostnames should be moved or restarted only during an explicit release
+promotion. KR has already switched its public frontend origin to React on local
+port `8501`.
 
 Minimum React static routing rules:
 

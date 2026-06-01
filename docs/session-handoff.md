@@ -145,19 +145,19 @@ Last verified KR runtime state in this session:
 - CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
   `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
   running concurrently beside the shared OSRM stack.
-- CN staging is synced to GitHub `main` after the planner concurrency change.
-  CN production is still on the older production branch; the concurrency backend
-  files were backported there directly instead of resetting production to the
-  newer React/staging line.
+- CN staging and CN production are synced to GitHub `main` as of the CN
+  production React promotion on 2026-06-01. A backup branch was left on the CN
+  production checkout before the promotion.
 - CN staging checkout should be kept synced to the current GitHub `main` during
   release work.
-- CN staging frontend service now serves React static/proxy from local
-  `127.0.0.1:8501`, using `ops/scripts/serve_react_static.py` and
-  `apps/web/dist`; `/api/*` proxies to `127.0.0.1:8001`.
+- CN staging and CN production frontends serve React static/proxy from their
+  local frontend origins using `ops/scripts/serve_react_static.py` and
+  `apps/web/dist`. Staging proxies `/api/*` to `127.0.0.1:8001`; production
+  proxies `/api/*` to `127.0.0.1:8000`.
 - Public React static/proxy hostnames should set
   `BRP_REQUIRE_CLOUDFLARE_ACCESS=true` so the origin returns 401 if a request
   reaches it without the Cloudflare Access user header.
-- CN staging backend has `BRP_BACKEND_SERVICE_TOKEN` set, so the React
+- CN staging and CN production backends have `BRP_BACKEND_SERVICE_TOKEN` set, so the React
   static/proxy service loads `ops/env/local.env` through systemd
   `EnvironmentFile` and injects the backend token server-side. Do not expose the
   token to the browser.

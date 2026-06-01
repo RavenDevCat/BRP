@@ -6,6 +6,17 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-01
 
+### CN Production React Promotion
+
+- Promoted CN production to the current GitHub `main` revision and switched the
+  production frontend origin to the React static/proxy service.
+- `$CN_PROD_HOST` now serves the React frontend from the production origin
+  while keeping production jobs, caches, outputs, and environment files separate
+  from staging.
+- The origin access guard is enabled on production; requests that bypass the
+  access layer return 401.
+- Existing jobs do not need to be rerun.
+
 ### Environment Workflow Reset
 
 - Redefined the operating model: local checkouts are code-record and testing

@@ -78,7 +78,8 @@ Responsibilities:
 - expose the additive `/api/*` routes used by React
 - persist job history under `BRP_BACKEND_JOBS_DIR`
 - record job ownership through `owner_email`
-- start planner workers so multiple submitted jobs may run concurrently
+- queue planner workers through `BRP_MAX_CONCURRENT_JOBS` when a host-wide
+  capacity limit is configured
 - select OSRM endpoint by country/city from explicit environment variables
 - build OSRM time and distance matrices
 - solve and enrich routes
@@ -144,8 +145,9 @@ errors. This is intentionally conservative for budget protection.
 ## Managed Routing
 
 OSRM is BRP-managed routing infrastructure, not an external billed API. It is not
-paced through the external provider limiter. Future OSRM stability work should
-use job concurrency limits, queue policy, or OSRM service capacity controls.
+paced through the external provider limiter. OSRM memory protection is handled
+separately through job concurrency limits, queue policy, or OSRM service capacity
+controls.
 
 ## OSRM
 
@@ -184,6 +186,7 @@ Runtime data to preserve during server moves:
 
 ```text
 /srv/brp/staging/app/state/api_rate_limits
+/srv/brp/job-concurrency
 /srv/brp/osrm-data
 /srv/brp/staging/data/jobs
 /srv/brp/staging/app/apps/backend/cache

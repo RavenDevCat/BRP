@@ -12,10 +12,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
 from pathlib import Path
 import signal
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import traceback
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlparse
@@ -52,6 +54,23 @@ JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+try:
+    MAX_CONCURRENT_JOBS = max(0, int(os.environ.get("BRP_MAX_CONCURRENT_JOBS", "0") or "0"))
+except ValueError:
+    MAX_CONCURRENT_JOBS = 0
+RAW_JOB_CONCURRENCY_DIR = os.environ.get("BRP_JOB_CONCURRENCY_DIR", "").strip()
+JOB_CONCURRENCY_DIR = Path(RAW_JOB_CONCURRENCY_DIR or str(REPO_ROOT / "state" / "job_concurrency")).expanduser()
+try:
+    JOB_QUEUE_POLL_SECONDS = max(1.0, float(os.environ.get("BRP_JOB_QUEUE_POLL_SECONDS", "5") or "5"))
+except ValueError:
+    JOB_QUEUE_POLL_SECONDS = 5.0
+try:
+    JOB_SLOT_ATTACH_STALE_SECONDS = max(
+        30.0,
+        float(os.environ.get("BRP_JOB_SLOT_ATTACH_STALE_SECONDS", "300") or "300"),
+    )
+except ValueError:
+    JOB_SLOT_ATTACH_STALE_SECONDS = 300.0
 MAX_WORKBOOK_UPLOAD_BYTES = int(os.environ.get("BRP_MAX_WORKBOOK_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 ADMIN_EMAILS = {
     item.strip().lower()
@@ -1105,6 +1124,125 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
     }
 
 
+def _pid_is_alive(pid: int | None) -> bool:
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _safe_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value or default)
+    except Exception:
+        return default
+
+
+def _seconds_since_iso(value: object) -> float | None:
+    try:
+        timestamp = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+
+
+class JobConcurrencyGate:
+    def __init__(self, limit: int, slot_dir: Path) -> None:
+        self.limit = max(0, int(limit or 0))
+        self.slot_dir = slot_dir
+
+    @property
+    def enabled(self) -> bool:
+        return self.limit > 0
+
+    def acquire(self, job_id: str) -> Path | None:
+        if not self.enabled:
+            return None
+        self.slot_dir.mkdir(parents=True, exist_ok=True)
+        self.cleanup_stale_slots()
+        for slot_number in range(1, self.limit + 1):
+            slot_path = self.slot_dir / f"slot-{slot_number}"
+            try:
+                slot_path.mkdir()
+            except FileExistsError:
+                continue
+            metadata = {
+                "job_id": job_id,
+                "acquired_at": utc_now_iso(),
+                "launcher_pid": os.getpid(),
+                "worker_pid": None,
+            }
+            self._write_metadata(slot_path, metadata)
+            return slot_path
+        return None
+
+    def attach_worker(self, slot_path: Path | None, worker_pid: int) -> None:
+        if not slot_path:
+            return
+        if not slot_path.exists():
+            return
+        metadata = self._read_metadata(slot_path)
+        metadata["worker_pid"] = int(worker_pid)
+        metadata["attached_at"] = utc_now_iso()
+        try:
+            self._write_metadata(slot_path, metadata)
+        except FileNotFoundError:
+            return
+
+    def release(self, slot_path: str | Path | None) -> None:
+        if not slot_path:
+            return
+        try:
+            resolved_slot = Path(slot_path).resolve()
+            resolved_root = self.slot_dir.resolve()
+            resolved_slot.relative_to(resolved_root)
+            if resolved_slot.name.startswith("slot-"):
+                shutil.rmtree(resolved_slot, ignore_errors=True)
+        except Exception:
+            return
+
+    def cleanup_stale_slots(self) -> None:
+        if not self.slot_dir.exists():
+            return
+        for slot_path in self.slot_dir.glob("slot-*"):
+            if not slot_path.is_dir():
+                continue
+            metadata = self._read_metadata(slot_path)
+            worker_pid = _safe_int(metadata.get("worker_pid"))
+            if worker_pid and not _pid_is_alive(worker_pid):
+                self.release(slot_path)
+                continue
+            slot_age = _seconds_since_iso(metadata.get("acquired_at"))
+            if slot_age is None:
+                try:
+                    slot_age = time.time() - slot_path.stat().st_mtime
+                except OSError:
+                    slot_age = None
+            if not worker_pid and slot_age is not None and slot_age > JOB_SLOT_ATTACH_STALE_SECONDS:
+                self.release(slot_path)
+
+    def _metadata_path(self, slot_path: Path) -> Path:
+        return slot_path / "metadata.json"
+
+    def _read_metadata(self, slot_path: Path) -> dict[str, Any]:
+        try:
+            payload = json.loads(self._metadata_path(slot_path).read_text(encoding="utf-8"))
+            return payload if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _write_metadata(self, slot_path: Path, metadata: dict[str, Any]) -> None:
+        self._metadata_path(slot_path).write_text(
+            json.dumps(_json_safe(metadata), ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+
+
 class JobStore:
     def __init__(self, jobs_dir: Path) -> None:
         self.jobs_dir = jobs_dir
@@ -1209,6 +1347,7 @@ class JobStore:
             "started_at": None,
             "finished_at": None,
             "worker_pid": None,
+            "job_slot_path": None,
             "config": deepcopy(config_payload or {}),
             "prepared_payload": deepcopy(prepared_payload or {}),
             "prepared_payload_summary": _summarize_prepared_payload(prepared_payload or {}),
@@ -1277,6 +1416,31 @@ class JobStore:
                 if _normalize_email(entry.get("owner_email")) == normalized_user_email
             ]
 
+    def list_queued_jobs(self) -> list[dict[str, Any]]:
+        with self.lock:
+            records: list[dict[str, Any]] = []
+            seen_job_ids: set[str] = set()
+            index_entries = self._load_index_unlocked()
+            for entry in index_entries:
+                job_id = str(entry.get("job_id", "")).strip()
+                if not job_id or job_id in seen_job_ids:
+                    continue
+                seen_job_ids.add(job_id)
+                record = self._load_job_unlocked(job_id)
+                if record and str(record.get("status", "")).strip().lower() == "queued":
+                    records.append(deepcopy(record))
+            for job_path in self.jobs_dir.glob("*.json"):
+                if job_path.name == self.index_path.name:
+                    continue
+                job_id = job_path.stem
+                if job_id in seen_job_ids:
+                    continue
+                record = self._load_job_unlocked(job_id)
+                if record and str(record.get("status", "")).strip().lower() == "queued":
+                    records.append(deepcopy(record))
+            records.sort(key=lambda item: str(item.get("created_at") or ""))
+            return records
+
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
             job_path = self._job_path(job_id)
@@ -1301,12 +1465,19 @@ class JobStore:
                 record = self._load_job_unlocked(job_id)
                 if not record:
                     continue
-                if str(record.get("status", "")).strip() in {"queued", "running"}:
+                status = str(record.get("status", "")).strip().lower()
+                if status == "queued":
+                    record["worker_pid"] = None
+                    record["job_slot_path"] = None
+                    self._save_job_unlocked(job_id, record)
+                    continue
+                if status == "running":
                     record["status"] = "failed"
                     record["finished_at"] = utc_now_iso()
                     record["error"] = "Job was interrupted because the backend service restarted."
                     record["traceback"] = None
                     record["worker_pid"] = None
+                    record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
             refreshed_entries = []
             for entry in self._load_index_unlocked():
@@ -1330,29 +1501,76 @@ class JobStore:
 
 
 JOB_STORE = JobStore(JOBS_DIR)
+JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
+_SCHEDULER_LOCK = threading.Lock()
+_SCHEDULER_STARTED = False
 
 
 def _process_is_alive(pid: int | None) -> bool:
-    if not pid or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
+    return _pid_is_alive(pid)
 
 
 def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
     job_record = JOB_STORE.get_job(job_id)
     if not job_record:
         return None
-    process = subprocess.Popen(
-        [sys.executable, str(JOB_RUNNER_PATH), str(JOBS_DIR / f"{job_id}.json")],
-        cwd=str(BASE_DIR),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    return JOB_STORE.update_job(job_id, worker_pid=int(process.pid))
+    if str(job_record.get("status", "")).strip().lower() != "queued":
+        return None
+    slot_path = JOB_GATE.acquire(job_id)
+    if JOB_GATE.enabled and slot_path is None:
+        return None
+    env = os.environ.copy()
+    if slot_path:
+        env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
+        env["BRP_JOB_CONCURRENCY_ROOT"] = str(JOB_CONCURRENCY_DIR)
+    try:
+        process = subprocess.Popen(
+            [sys.executable, str(JOB_RUNNER_PATH), str(JOBS_DIR / f"{job_id}.json")],
+            cwd=str(BASE_DIR),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+        )
+    except Exception:
+        JOB_GATE.release(slot_path)
+        raise
+    JOB_GATE.attach_worker(slot_path, int(process.pid))
+    latest_record = JOB_STORE.get_job(job_id)
+    if not latest_record:
+        return None
+    if str(latest_record.get("status", "")).strip().lower() not in {"queued", "running"}:
+        return latest_record
+    return JOB_STORE.update_job(job_id, worker_pid=int(process.pid), job_slot_path=str(slot_path) if slot_path else None)
+
+
+def _schedule_queued_jobs() -> None:
+    if not _SCHEDULER_LOCK.acquire(blocking=False):
+        return
+    try:
+        JOB_GATE.cleanup_stale_slots()
+        for job_record in JOB_STORE.list_queued_jobs():
+            spawned = _spawn_job_worker(str(job_record.get("job_id", "")))
+            if spawned is None and JOB_GATE.enabled:
+                break
+    finally:
+        _SCHEDULER_LOCK.release()
+
+
+def _job_scheduler_loop() -> None:
+    while True:
+        try:
+            _schedule_queued_jobs()
+        except Exception:
+            traceback.print_exc()
+        time.sleep(JOB_QUEUE_POLL_SECONDS)
+
+
+def _start_job_scheduler() -> None:
+    global _SCHEDULER_STARTED
+    if _SCHEDULER_STARTED:
+        return
+    _SCHEDULER_STARTED = True
+    threading.Thread(target=_job_scheduler_loop, name="brp-job-scheduler", daemon=True).start()
 
 
 def _cancel_job(job_id: str) -> dict[str, Any] | None:
@@ -1368,15 +1586,20 @@ def _cancel_job(job_id: str) -> dict[str, Any] | None:
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
-    return JOB_STORE.update_job(
+    JOB_GATE.release(job_record.get("job_slot_path"))
+    JOB_GATE.cleanup_stale_slots()
+    updated = JOB_STORE.update_job(
         job_id,
         status="canceled",
         finished_at=utc_now_iso(),
         error="Job was canceled by the user.",
         traceback=None,
         worker_pid=None,
+        job_slot_path=None,
         result=None,
     )
+    _schedule_queued_jobs()
+    return updated
 
 
 def _can_access_job(job_record: dict[str, Any], user_email: str, include_all: bool = False) -> bool:
@@ -1898,6 +2121,7 @@ class BackendHandler(BaseHTTPRequestHandler):
 
 
 def main(host: str = "127.0.0.1", port: int = 8001) -> None:
+    _start_job_scheduler()
     server = ThreadingHTTPServer((host, port), BackendHandler)
     print(f"Backend listening on http://{host}:{port}")
     try:

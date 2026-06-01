@@ -27,6 +27,12 @@ External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, and DeepSeek calls use cross-process limiter files under
 `state/api_rate_limits` by default, or `BRP_API_RATE_LIMIT_DIR` when set.
 
+Planner job concurrency is separately gated by `BRP_MAX_CONCURRENT_JOBS`. On
+CN, keep staging and production pointed at the same `BRP_JOB_CONCURRENCY_DIR`
+so the limit is host-wide instead of per service. If a backend dies after
+claiming a queue slot but before starting the worker, the slot is reclaimed
+after `BRP_JOB_SLOT_ATTACH_STALE_SECONDS`.
+
 ## Local And Mac Connection Workspaces
 
 Local Windows and Mac checkouts should not be treated as the main runtime source.
@@ -118,6 +124,8 @@ Provider safety checks:
 - Do not write `apps/client/cache/google_geocode_usage.json` directly; use the atomic reservation helpers.
 - Keep `state/api_rate_limits` as runtime coordination state, or set `BRP_API_RATE_LIMIT_DIR` to an equivalent server-local runtime path.
 - Provider QPS limiting should gate only outbound requests, not whole jobs.
+- Keep `BRP_MAX_CONCURRENT_JOBS` and `BRP_JOB_CONCURRENCY_DIR` configured on
+  shared servers so planner workers queue instead of exhausting memory.
 - OSRM capacity should be handled separately from external provider QPS.
 
 The React web frontend in `apps/web` runs locally through Vite on port `5173`.

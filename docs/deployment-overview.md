@@ -190,6 +190,19 @@ at a Git-managed code directory. If it is omitted, the backend defaults to
 `state/jobs` under the repository root. The backend also rebuilds `index.json`
 from existing job JSON files when the index is missing or empty.
 
+Planner worker concurrency is optional. Leave it unlimited on isolated local
+machines, but set it on memory-constrained or shared staging/production hosts:
+
+```bash
+export BRP_MAX_CONCURRENT_JOBS="1"
+export BRP_JOB_CONCURRENCY_DIR="/srv/brp/job-concurrency"
+export BRP_JOB_QUEUE_POLL_SECONDS="5"
+export BRP_JOB_SLOT_ATTACH_STALE_SECONDS="300"
+```
+
+When staging and production share one machine, point both services at the same
+`BRP_JOB_CONCURRENCY_DIR` so the limit is host-wide.
+
 Then load city routing endpoints:
 
 ```bash

@@ -73,6 +73,7 @@ Critical paths:
 - server-local env: `ops/env/local.env`
 - Google usage: `apps/client/cache/google_geocode_usage.json`
 - provider rate-limit state: `state/api_rate_limits` or `BRP_API_RATE_LIMIT_DIR`
+- planner concurrency state: `BRP_JOB_CONCURRENCY_DIR`
 
 Google usage semantics:
 
@@ -90,8 +91,8 @@ External provider QPS:
 - Jobs can still run in parallel; only outbound provider request gates are
   paced.
 - OSRM is BRP-managed infrastructure and is not handled by the external provider
-  limiter. Future OSRM protection should use job concurrency limits or service
-  capacity controls.
+  limiter. OSRM protection should use job concurrency limits or service capacity
+  controls.
 
 ## Server Facts
 
@@ -135,7 +136,11 @@ Last verified KR runtime state in this session:
 - Confirmed runtime job roots:
   - staging: `/opt/brp/staging/data/jobs`
   - production: `/opt/brp/prod/data/jobs`
-- CN staging checkout is synced to GitHub `main` at `09eb9b4`.
+- CN staging and production should share `BRP_JOB_CONCURRENCY_DIR` with
+  `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
+  running concurrently beside the shared OSRM stack.
+- CN staging checkout should be kept synced to the current GitHub `main` during
+  release work.
 - CN staging frontend service now serves React static/proxy from local
   `127.0.0.1:8501`, using `ops/scripts/serve_react_static.py` and
   `apps/web/dist`; `/api/*` proxies to `127.0.0.1:8001`.

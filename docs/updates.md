@@ -4,6 +4,18 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-01
+
+### Planner Job Concurrency Guard
+
+- Added an optional backend queue guard for planner jobs through
+  `BRP_MAX_CONCURRENT_JOBS`.
+- On shared hosts, staging and production can point at the same
+  `BRP_JOB_CONCURRENCY_DIR` so the configured limit is host-wide.
+- This protects OSRM and server memory by keeping extra submitted jobs queued
+  instead of starting every heavy planner worker immediately.
+- Existing completed jobs do not need to be rerun.
+
 ## 2026-05-30
 
 ### Unprotected Domestic Client Host Disabled

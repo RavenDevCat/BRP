@@ -49,6 +49,14 @@ logic. When the company domain is ready, update domain references in Cloudflare
 DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
 private inventory together.
 
+Authentication is environment-configurable. Keep production environments on
+their current provider until an explicit migration is approved. CN staging may
+use `BRP_AUTH_PROVIDER=microsoft_sso_pending` while Microsoft SSO details are
+being prepared; this only changes the application-reported auth mode and shell
+auth links, not the job ownership model. Admin rights remain controlled by the
+server-local `BRP_ADMIN_EMAILS` value unless a future release deliberately moves
+admin authorization to group claims.
+
 Local checkouts should not run OSRM Docker containers. Lightweight local checks
 can reach OSRM through the diagnostic loopback mapping recorded in private
 inventory.

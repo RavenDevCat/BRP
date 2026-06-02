@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Gauge, History, LayoutDashboard, LogOut, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
-import { getCurrentUser, getGoogleGeocodeUsage, getHealth, type GoogleGeocodeUsage } from "@/lib/api";
+import { getAuthConfig, getCurrentUser, getGoogleGeocodeUsage, getHealth, type GoogleGeocodeUsage } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
@@ -32,6 +32,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
   const userQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser });
+  const authQuery = useQuery({ queryKey: ["auth-config"], queryFn: getAuthConfig });
   const googleUsageQuery = useQuery({
     queryKey: ["google-geocode-usage"],
     queryFn: getGoogleGeocodeUsage,
@@ -44,7 +45,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       ? Math.round((googleUsage.used / googleUsage.limit) * 100)
       : 0;
   const signOut = () => {
-    window.location.assign(getAccessLogoutUrl());
+    window.location.assign(resolveAuthUrl(authQuery.data?.logout_url || userQuery.data?.auth?.logout_url));
   };
 
   return (
@@ -72,11 +73,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
           <div className="flex items-start gap-2 text-xs text-muted-foreground">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-none text-primary" aria-hidden="true" />
-            <span className="break-all">
-              {userQuery.data?.email || "Resolving user"}
-              {userQuery.data?.is_admin ? " · admin" : ""}
-            </span>
+            <span className="break-all">{formatUserLabel(userQuery.data?.email, userQuery.data?.is_admin)}</span>
           </div>
+          {authQuery.data ? (
+            <div className="text-xs text-muted-foreground">
+              {authQuery.data.display_name}
+              {!authQuery.data.sso_ready ? " · setup pending" : ""}
+            </div>
+          ) : null}
           <Button
             type="button"
             variant="secondary"
@@ -106,6 +110,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               onClick={() => {
                 void healthQuery.refetch();
                 void userQuery.refetch();
+                void authQuery.refetch();
                 void googleUsageQuery.refetch();
               }}
             >
@@ -142,11 +147,20 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
 }
 
-function getAccessLogoutUrl() {
-  if (typeof window === "undefined") {
-    return "/cdn-cgi/access/logout";
+function formatUserLabel(email?: string, isAdmin?: boolean) {
+  const userLabel = email || "Resolving user";
+  return `${userLabel}${isAdmin ? " · admin" : ""}`;
+}
+
+function resolveAuthUrl(url?: string) {
+  const nextUrl = url || "/cdn-cgi/access/logout";
+  if (/^https?:\/\//i.test(nextUrl)) {
+    return nextUrl;
   }
-  return `${window.location.origin}/cdn-cgi/access/logout`;
+  if (typeof window === "undefined") {
+    return nextUrl;
+  }
+  return `${window.location.origin}${nextUrl.startsWith("/") ? nextUrl : `/${nextUrl}`}`;
 }
 
 function GoogleUsagePill({

@@ -46,6 +46,9 @@ Recent UX state:
 - Job detail shows job name, job seed, submitter, and status near the top.
 - Job History no longer takes over the whole screen on narrower viewports.
 - Sign out lives in the sidebar user panel.
+- React reads `/api/auth/config` so auth button targets and the displayed auth
+  provider can be driven by server-local environment. The default provider keeps
+  current header-based access behavior.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - Real server addresses, usernames, private hostnames, and environment-specific paths should
@@ -215,6 +218,9 @@ Local checkout role:
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.
+- CN staging is the only environment currently intended for Microsoft SSO
+  preparation. Keep production deployments on their current auth provider until
+  the user explicitly approves an auth migration.
 
 ## Next Session Without Private Inventory
 

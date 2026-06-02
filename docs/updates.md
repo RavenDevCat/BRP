@@ -4,6 +4,16 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-02
+
+### Staging SSO Preparation
+
+- Added environment-driven auth provider reporting through `/api/auth/config`.
+- The React shell now reads auth button targets and provider display text from
+  the backend instead of assuming one fixed logout path.
+- Admin authorization remains local through `BRP_ADMIN_EMAILS`.
+- Existing jobs do not need to be rerun.
+
 ## 2026-06-01
 
 ### CN Frontend Standardized On Nginx

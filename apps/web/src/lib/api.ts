@@ -4,10 +4,20 @@ export type ApiUser = {
   email: string;
   is_admin: boolean;
   auth_mode: string;
+  auth?: AuthConfig;
 };
 
 export type ApiHealth = {
   status: string;
+};
+
+export type AuthConfig = {
+  provider: string;
+  display_name: string;
+  login_url: string;
+  logout_url: string;
+  sso_ready: boolean;
+  admin_source: string;
 };
 
 export type GoogleGeocodeUsage = {
@@ -300,6 +310,10 @@ export function getHealth() {
 
 export function getCurrentUser() {
   return apiFetch<ApiUser>("/me");
+}
+
+export function getAuthConfig() {
+  return apiFetch<AuthConfig>("/auth/config");
 }
 
 export function getGoogleGeocodeUsage() {

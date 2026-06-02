@@ -211,6 +211,35 @@ Then load city routing endpoints:
 source ops/scripts/export_osrm_env.sh
 ```
 
+### Authentication settings
+
+BRP separates authentication from application authorization:
+
+- authentication answers which email is using the app
+- authorization decides whether that email is an admin or can access a job
+
+The default production-compatible provider reads the authenticated email from
+the request headers already supplied by the access layer:
+
+```bash
+export BRP_AUTH_PROVIDER="cloudflare_header"
+export BRP_AUTH_DISPLAY_NAME="Cloudflare Access"
+export BRP_DEV_USER_EMAIL="local@brp.dev"
+export BRP_ADMIN_EMAILS="admin@example.com"
+```
+
+For staging preparation before company SSO metadata is available, use:
+
+```bash
+export BRP_AUTH_PROVIDER="microsoft_sso_pending"
+export BRP_AUTH_DISPLAY_NAME="Microsoft SSO"
+```
+
+Do not enable a Microsoft/SAML/OIDC provider in production until the identity
+provider metadata, callback URLs, user email claim, and logout behavior have
+been tested in staging. Admin rights can stay local through `BRP_ADMIN_EMAILS`
+even after SSO is enabled.
+
 For a South Korea-only deployment, load the smaller endpoint set instead:
 
 ```bash

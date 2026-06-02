@@ -54,6 +54,14 @@ JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+AUTH_PROVIDER = (
+    os.environ.get("BRP_AUTH_PROVIDER")
+    or os.environ.get("BRP_AUTH_MODE")
+    or "cloudflare_header"
+).strip().lower()
+AUTH_LOGIN_URL = os.environ.get("BRP_AUTH_LOGIN_URL", "").strip()
+AUTH_LOGOUT_URL = os.environ.get("BRP_AUTH_LOGOUT_URL", "").strip()
+AUTH_DISPLAY_NAME = os.environ.get("BRP_AUTH_DISPLAY_NAME", "").strip()
 try:
     MAX_CONCURRENT_JOBS = max(0, int(os.environ.get("BRP_MAX_CONCURRENT_JOBS", "0") or "0"))
 except ValueError:
@@ -1056,6 +1064,45 @@ def _is_admin_email(email: str) -> bool:
     return bool(normalized_email and normalized_email in ADMIN_EMAILS)
 
 
+def _auth_display_name() -> str:
+    if AUTH_DISPLAY_NAME:
+        return AUTH_DISPLAY_NAME
+    if AUTH_PROVIDER in {"microsoft_sso_pending", "microsoft_oidc", "saml2"}:
+        return "Microsoft SSO"
+    if AUTH_PROVIDER in {"cloudflare", "cloudflare_header"}:
+        return "Cloudflare Access"
+    if AUTH_PROVIDER == "local":
+        return "Local development"
+    return AUTH_PROVIDER.replace("_", " ").title()
+
+
+def _auth_login_url() -> str:
+    if AUTH_LOGIN_URL:
+        return AUTH_LOGIN_URL
+    if AUTH_PROVIDER == "microsoft_sso_pending":
+        return "/api/auth/login"
+    return "/"
+
+
+def _auth_logout_url() -> str:
+    if AUTH_LOGOUT_URL:
+        return AUTH_LOGOUT_URL
+    if AUTH_PROVIDER in {"cloudflare", "cloudflare_header"}:
+        return "/cdn-cgi/access/logout"
+    return "/"
+
+
+def _auth_config_payload() -> dict[str, Any]:
+    return {
+        "provider": AUTH_PROVIDER,
+        "display_name": _auth_display_name(),
+        "login_url": _auth_login_url(),
+        "logout_url": _auth_logout_url(),
+        "sso_ready": AUTH_PROVIDER not in {"microsoft_sso_pending"},
+        "admin_source": "local_env",
+    }
+
+
 def _service_input_record_count(input_records: list[dict[str, Any]]) -> int:
     if not input_records:
         return 0
@@ -1758,6 +1805,18 @@ class BackendHandler(BaseHTTPRequestHandler):
             print(f"[WARN] Client disconnected before response was fully sent: {self.path}")
             return False
 
+    def _send_redirect(self, location: str, status_code: int = 302) -> bool:
+        try:
+            self.send_response(status_code)
+            self.send_header("Location", location)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return True
+        except (BrokenPipeError, ConnectionResetError):
+            print(f"[WARN] Client disconnected before redirect was sent: {self.path}")
+            return False
+
     def _read_json_body(self) -> dict[str, Any]:
         content_length = int(self.headers.get("Content-Length", "0") or 0)
         raw_body = self.rfile.read(content_length)
@@ -1765,6 +1824,8 @@ class BackendHandler(BaseHTTPRequestHandler):
         return payload if isinstance(payload, dict) else {}
 
     def _current_user_email(self) -> str:
+        if AUTH_PROVIDER == "local":
+            return _normalize_email(self.headers.get("X-BRP-User-Email")) or DEV_USER_EMAIL
         return (
             _normalize_email(self.headers.get("X-BRP-User-Email"))
             or _normalize_email(self.headers.get("Cf-Access-Authenticated-User-Email"))
@@ -1799,6 +1860,24 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
         if not self._require_authorized_request():
             return
+        if path == "/auth/config":
+            self._send_json(200, _auth_config_payload())
+            return
+        if path == "/auth/login":
+            if AUTH_PROVIDER == "microsoft_sso_pending":
+                self._send_json(
+                    501,
+                    {
+                        "error": "Microsoft SSO is not configured yet.",
+                        "auth": _auth_config_payload(),
+                    },
+                )
+                return
+            self._send_redirect(_auth_login_url())
+            return
+        if path == "/auth/logout":
+            self._send_redirect(_auth_logout_url())
+            return
         user_email = self._current_user_email()
         include_all = _is_admin_email(user_email)
         if path == "/me":
@@ -1807,7 +1886,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                 {
                     "email": user_email,
                     "is_admin": include_all,
-                    "auth_mode": "service-token" if SERVICE_TOKEN else "local",
+                    "auth_mode": AUTH_PROVIDER,
+                    "auth": _auth_config_payload(),
                 },
             )
             return

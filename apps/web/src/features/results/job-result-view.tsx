@@ -876,30 +876,33 @@ function RouteRiskTable({ routes }: { routes: Array<Record<string, unknown>> }) 
 }
 
 function MarkdownReport({ markdown }: { markdown: string }) {
-  const blocks = sanitizeReportMarkdown(markdown).split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const nodes = parseReportMarkdown(markdown);
   return (
     <div className="space-y-4 text-sm leading-6 text-foreground">
-      {blocks.map((block, blockIndex) => {
-        const lines = block.split(/\n/).map((line) => line.trim()).filter(Boolean);
-        const heading = parseMarkdownHeading(lines[0] || "");
-        const bodyLines = heading ? lines.slice(1) : lines;
-        const bulletItems = bodyLines.map(parseMarkdownBullet).filter(Boolean) as string[];
+      {nodes.map((node, nodeIndex) => {
+        if (node.type === "heading") {
+          return (
+            <h3 key={`${nodeIndex}-${node.text}`} className="text-base font-semibold text-foreground">
+              {node.text}
+            </h3>
+          );
+        }
+        if (node.type === "list") {
+          return (
+            <ul key={`${nodeIndex}-${node.items[0]}`} className="space-y-2 text-muted-foreground">
+              {node.items.map((item, itemIndex) => (
+                <li key={`${itemIndex}-${item}`} className="flex gap-2">
+                  <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-primary" />
+                  <span>{item}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        }
         return (
-          <section key={`${blockIndex}-${lines[0]}`} className="space-y-2">
-            {heading ? <h3 className="text-base font-semibold">{heading}</h3> : null}
-            {bulletItems.length === bodyLines.length && bulletItems.length ? (
-              <ul className="space-y-2 text-muted-foreground">
-                {bulletItems.map((item) => (
-                  <li key={item} className="flex gap-2">
-                    <span className="mt-2 h-1.5 w-1.5 flex-none rounded-full bg-primary" />
-                    <span>{cleanMarkdownText(item)}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              bodyLines.map((line) => <p key={line} className="text-muted-foreground">{cleanMarkdownText(line)}</p>)
-            )}
-          </section>
+          <p key={`${nodeIndex}-${node.text}`} className="text-muted-foreground">
+            {node.text}
+          </p>
         );
       })}
     </div>
@@ -1164,7 +1167,7 @@ function buildAiReportHtml({
 }
 
 function markdownToHtml(markdown: string) {
-  const lines = markdown.split(/\n/);
+  const lines = sanitizeReportMarkdown(markdown).split(/\n/);
   let html = "";
   let inList = false;
   for (const rawLine of lines) {
@@ -1200,6 +1203,50 @@ function markdownToHtml(markdown: string) {
   return html;
 }
 
+type ReportMarkdownNode =
+  | { type: "heading"; text: string }
+  | { type: "list"; items: string[] }
+  | { type: "paragraph"; text: string };
+
+function parseReportMarkdown(markdown: string): ReportMarkdownNode[] {
+  const nodes: ReportMarkdownNode[] = [];
+  let pendingItems: string[] = [];
+  const flushList = () => {
+    if (pendingItems.length) {
+      nodes.push({ type: "list", items: pendingItems });
+      pendingItems = [];
+    }
+  };
+
+  const lines = sanitizeReportMarkdown(markdown).split(/\n/);
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      flushList();
+      continue;
+    }
+
+    const heading = parseMarkdownHeading(line) || parseReportTitle(line);
+    if (heading) {
+      flushList();
+      nodes.push({ type: "heading", text: heading });
+      continue;
+    }
+
+    const bullet = parseMarkdownBullet(line);
+    if (bullet) {
+      pendingItems.push(cleanMarkdownText(bullet));
+      continue;
+    }
+
+    flushList();
+    nodes.push({ type: "paragraph", text: cleanMarkdownText(line) });
+  }
+
+  flushList();
+  return nodes;
+}
+
 function parseMarkdownHeading(line: string): string {
   const hashHeading = line.match(/^#{1,6}\s+(.+)$/);
   const numberedHeading = line.match(/^\d+\.\s+(.+)$/);
@@ -1212,6 +1259,11 @@ function parseMarkdownBullet(line: string): string {
 
 function cleanMarkdownText(value: string) {
   return value.replace(/\*\*/g, "").replace(/__/g, "").replace(/`/g, "").replace(/^>\s*/, "").trim();
+}
+
+function parseReportTitle(line: string) {
+  const cleaned = cleanMarkdownText(line);
+  return /^(audit report:|.+operations audit report$)/i.test(cleaned) ? cleaned : "";
 }
 
 function sanitizeReportMarkdown(markdown: string) {

@@ -6,6 +6,15 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-02
 
+### AI Audit Report Readability
+
+- Tightened the AI audit prompt so generated reports read more like concise
+  management briefings and less like raw model templates.
+- The React report viewer now strips common Markdown noise such as horizontal
+  rules and orphan quote markers.
+- Existing jobs do not need to be rerun, but regenerating an AI audit can use
+  the improved report style.
+
 ### Staging SSO Preparation
 
 - Added environment-driven auth provider reporting through `/api/auth/config`.

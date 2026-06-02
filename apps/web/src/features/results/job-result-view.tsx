@@ -876,7 +876,7 @@ function RouteRiskTable({ routes }: { routes: Array<Record<string, unknown>> }) 
 }
 
 function MarkdownReport({ markdown }: { markdown: string }) {
-  const blocks = markdown.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const blocks = sanitizeReportMarkdown(markdown).split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
   return (
     <div className="space-y-4 text-sm leading-6 text-foreground">
       {blocks.map((block, blockIndex) => {
@@ -1207,11 +1207,22 @@ function parseMarkdownHeading(line: string): string {
 }
 
 function parseMarkdownBullet(line: string): string {
-  return line.match(/^[-*]\s+(.+)$/)?.[1] || "";
+  return line.match(/^[-*•]\s+(.+)$/)?.[1] || "";
 }
 
 function cleanMarkdownText(value: string) {
-  return value.replace(/\*\*/g, "").replace(/__/g, "").replace(/`/g, "").trim();
+  return value.replace(/\*\*/g, "").replace(/__/g, "").replace(/`/g, "").replace(/^>\s*/, "").trim();
+}
+
+function sanitizeReportMarkdown(markdown: string) {
+  return markdown
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !/^(---|\*\*\*|___|>)$/.test(line))
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 function htmlEscape(value: string) {

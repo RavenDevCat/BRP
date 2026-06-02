@@ -134,6 +134,26 @@ def _compact_move(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _clean_report_markdown(markdown: str) -> str:
+    cleaned_lines: list[str] = []
+    previous_blank = False
+    for raw_line in markdown.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw_line.strip()
+        if not line:
+            if cleaned_lines and not previous_blank:
+                cleaned_lines.append("")
+            previous_blank = True
+            continue
+        if line in {"---", "***", "___", ">"}:
+            continue
+        line = line.lstrip(">").strip()
+        if not line:
+            continue
+        cleaned_lines.append(line)
+        previous_blank = False
+    return "\n".join(cleaned_lines).strip()
+
+
 def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     result = dict(job_record.get("result") or {})
     metadata = dict(job_record.get("metadata") or {})
@@ -243,22 +263,26 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
     system_prompt = (
         "You are a school bus operations audit analyst. Use only the supplied JSON facts. "
         "Do not invent addresses, route metrics, savings, or decisions. "
-        "Write a concise management-facing audit report. "
-        "Keep recommendations practical and distinguish fact from interpretation."
+        "Write a clean management briefing for operators. "
+        "Prefer readable business language over template language. "
+        "Keep recommendations practical and clearly separate measured facts from interpretation."
     )
     user_prompt = (
-        f"Write the report in {report_language}. Maximum 4,500 characters.\n"
-        "Use exactly these Markdown sections:\n"
-        "1. Executive Verdict\n"
-        "2. Current Scheme Facts\n"
-        "3. Comparison Against Baselines\n"
-        "4. Actionable Recommendations\n"
-        "5. Risks And Validation Questions\n\n"
-        "Rules:\n"
-        "- 2 to 4 bullets per section.\n"
-        "- Mention route IDs only when present in the facts.\n"
+        f"Write the report in {report_language}. Maximum 3,200 characters.\n"
+        "Format as a readable Markdown briefing with these section headings only:\n"
+        "## Executive Verdict\n"
+        "## Current Scheme Facts\n"
+        "## Baseline Comparison\n"
+        "## Priority Actions\n"
+        "## Validation Notes\n\n"
+        "Style rules:\n"
+        "- Start directly with the first heading; do not add a title line.\n"
+        "- Do not use horizontal rules, quote blocks, tables, code fences, or decorative separators.\n"
+        "- Use 2 to 3 short bullets per section, maximum 24 words per bullet.\n"
+        "- Use route IDs only when present in the facts.\n"
+        "- Make recommendations specific but do not repeat every candidate action.\n"
         "- Do not mention student names or full addresses.\n"
-        "- If evidence is insufficient, say what needs validation.\n\n"
+        "- If evidence is insufficient, state the validation question plainly.\n\n"
         f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
     )
     DEEPSEEK_LIMITER.wait()
@@ -285,7 +309,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
     if not choices:
         raise RuntimeError("DeepSeek returned no report choices.")
     message = dict(choices[0].get("message") or {})
-    report_markdown = str(message.get("content") or "").strip()
+    report_markdown = _clean_report_markdown(str(message.get("content") or ""))
     if not report_markdown:
         raise RuntimeError("DeepSeek returned an empty report.")
     return {

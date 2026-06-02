@@ -49,6 +49,9 @@ Recent UX state:
 - React reads `/api/auth/config` so auth button targets and the displayed auth
   provider can be driven by server-local environment. The default provider keeps
   current header-based access behavior.
+- AI Audit reports use a tighter briefing-style prompt as of 2026-06-02. Old
+  stored reports keep their content, but the React viewer strips common Markdown
+  noise and regenerated reports use the improved style.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - Real server addresses, usernames, private hostnames, and environment-specific paths should

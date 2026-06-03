@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, Save, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
+import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -162,18 +162,21 @@ export function FleetPlannerPage() {
         },
       });
     },
-    onSuccess: () => {
+    onSuccess: (globalPlan) => {
       setLoadedHistoryRecord(null);
       setActiveResultView("optimized");
+      saveHistoryMutation.reset();
+      saveHistoryMutation.mutate(globalPlan);
     },
   });
 
   const saveHistoryMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (globalPlanOverride?: FleetPlannerRoutePreviewResponse) => {
       if (!result) {
         throw new Error("Run Fleet preview before saving history.");
       }
-      if (!globalPlanResult) {
+      const planToSave = globalPlanOverride || globalPlanResult;
+      if (!planToSave) {
         throw new Error("Build an optimized plan before saving history.");
       }
       return saveFleetPlannerHistory({
@@ -188,7 +191,7 @@ export function FleetPlannerPage() {
         geocode_result: geocodeResult,
         cluster_result: clusterResult,
         route_preview_result: routePreviewResult,
-        global_plan_result: globalPlanResult,
+        global_plan_result: planToSave,
       });
     },
     onSuccess: async () => {
@@ -385,25 +388,34 @@ export function FleetPlannerPage() {
             </CardContent>
           </Card>
 
-          {result ? (
-            <FleetPreviewResult
-              result={result}
-              mixRows={mixRows}
-              geocodeResult={geocodeResult}
-              clusterResult={clusterResult}
-              routePreviewResult={routePreviewResult}
-              globalPlanResult={globalPlanResult}
-              mapOutputs={mapOutputs}
-              historyTitle={historyTitle}
-              onHistoryTitleChange={setHistoryTitle}
-              onSaveHistory={() => saveHistoryMutation.mutate()}
-              saveHistoryResult={saveHistoryMutation.data}
-              saveHistoryError={saveHistoryMutation.error as Error | null}
-              isSavingHistory={saveHistoryMutation.isPending}
-              activeView={activeResultView}
-              onActiveViewChange={setActiveResultView}
+          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+            <FleetPlannerHistoryPanel
+              jobs={historyQuery.data || []}
+              activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
+              isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
+              error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
+              onRefresh={() => void historyQuery.refetch()}
+              onOpen={(runId) => loadHistoryMutation.mutate(runId)}
             />
-          ) : null}
+            {result ? (
+              <FleetPreviewResult
+                result={result}
+                mixRows={mixRows}
+                geocodeResult={geocodeResult}
+                clusterResult={clusterResult}
+                routePreviewResult={routePreviewResult}
+                globalPlanResult={globalPlanResult}
+                mapOutputs={mapOutputs}
+                saveHistoryResult={saveHistoryMutation.data}
+                saveHistoryError={saveHistoryMutation.error as Error | null}
+                isSavingHistory={saveHistoryMutation.isPending}
+                activeView={activeResultView}
+                onActiveViewChange={setActiveResultView}
+              />
+            ) : (
+              <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
+            )}
+          </div>
         </div>
 
         <aside className="space-y-4">
@@ -415,6 +427,14 @@ export function FleetPlannerPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              <Field label="Job Name">
+                <input
+                  className={fieldClassName}
+                  value={historyTitle}
+                  placeholder={defaultFleetHistoryTitle()}
+                  onChange={(event) => setHistoryTitle(event.target.value)}
+                />
+              </Field>
               <Field label="Market">
                 <div className="grid grid-cols-2 gap-2">
                   <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
@@ -485,7 +505,7 @@ export function FleetPlannerPage() {
                 <Button
                   type="button"
                   variant="secondary"
-                  disabled={!geocodeResult || globalPlanMutation.isPending}
+                  disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
                   icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
                   onClick={() => {
                     saveHistoryMutation.reset();
@@ -545,14 +565,6 @@ export function FleetPlannerPage() {
               </details>
             </CardContent>
           </Card>
-          <FleetPlannerHistoryPanel
-            jobs={historyQuery.data || []}
-            activeRunId={loadedHistoryRecord?.run_id}
-            isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
-            error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
-            onRefresh={() => void historyQuery.refetch()}
-            onOpen={(runId) => loadHistoryMutation.mutate(runId)}
-          />
         </aside>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
@@ -568,9 +580,6 @@ function FleetPreviewResult({
   routePreviewResult,
   globalPlanResult,
   mapOutputs,
-  historyTitle,
-  onHistoryTitleChange,
-  onSaveHistory,
   saveHistoryResult,
   saveHistoryError,
   isSavingHistory,
@@ -584,9 +593,6 @@ function FleetPreviewResult({
   routePreviewResult?: FleetPlannerRoutePreviewResponse;
   globalPlanResult?: FleetPlannerRoutePreviewResponse;
   mapOutputs: ToolMapOutput[];
-  historyTitle: string;
-  onHistoryTitleChange: (value: string) => void;
-  onSaveHistory: () => void;
   saveHistoryResult?: FleetPlannerHistoryCreateResponse;
   saveHistoryError?: Error | null;
   isSavingHistory: boolean;
@@ -705,10 +711,7 @@ function FleetPreviewResult({
           globalPlanResult ? (
             <div className="space-y-4">
               <RoutePreviewResult result={globalPlanResult} title="Optimized Plan" framed={false} />
-              <FleetHistorySavePanel
-                title={historyTitle}
-                onTitleChange={onHistoryTitleChange}
-                onSave={onSaveHistory}
+              <FleetHistoryAutoSaveStatus
                 saveResult={saveHistoryResult}
                 saveError={saveHistoryError}
                 isSaving={isSavingHistory}
@@ -950,41 +953,30 @@ function RoutePreviewResult({
   return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
 }
 
-function FleetHistorySavePanel({
-  title,
-  onTitleChange,
-  onSave,
+function FleetHistoryAutoSaveStatus({
   saveResult,
   saveError,
   isSaving,
 }: {
-  title: string;
-  onTitleChange: (value: string) => void;
-  onSave: () => void;
   saveResult?: FleetPlannerHistoryCreateResponse;
   saveError?: Error | null;
   isSaving: boolean;
 }) {
+  if (!isSaving && !saveError && !saveResult?.job) {
+    return null;
+  }
+
   return (
     <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
-      <Field label="History Name">
-        <input
-          className={fieldClassName}
-          value={title}
-          placeholder={defaultFleetHistoryTitle()}
-          onChange={(event) => onTitleChange(event.target.value)}
-        />
-      </Field>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">Fleet Planner History</h3>
+          <p className="mt-1 text-xs text-muted-foreground">Optimized plans are saved automatically after a successful run.</p>
+        </div>
+        {isSaving ? <Badge tone="info">Saving</Badge> : null}
+        {saveResult?.job ? <Badge tone="success">Saved</Badge> : null}
+      </div>
       {saveError ? <InlineError message={saveError.message} /> : null}
-      {saveResult?.job ? <Badge tone="success">Saved to Fleet Planner History</Badge> : null}
-      <Button
-        type="button"
-        disabled={isSaving}
-        icon={isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-        onClick={onSave}
-      >
-        Save to Fleet Planner History
-      </Button>
     </div>
   );
 }

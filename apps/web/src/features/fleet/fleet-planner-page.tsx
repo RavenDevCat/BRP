@@ -347,157 +347,168 @@ export function FleetPlannerPage() {
         />
 
         <div className="min-w-0 space-y-4">
-          <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-            <div>
-              <p className="text-sm font-medium text-primary">Side tools</p>
-              <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-                Preview vehicle choices from rider groups or a demand workbook before running address clustering and routing.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
-                <CircleHelp className="h-4 w-4" aria-hidden="true" />
-                How to use
-              </button>
-              <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
-                <Download className="h-4 w-4" aria-hidden="true" />
-                Demand template
-              </a>
-            </div>
-          </section>
-
-          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-            <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
-                <h2 className="text-sm font-semibold">Demand Input</h2>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
-                <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
-                <span className="text-sm font-medium">{file?.name || "Select demand workbook"}</span>
-                <span className="mt-1 text-xs text-muted-foreground">Optional .xlsx demand template</span>
-                <input
-                  className="sr-only"
-                  type="file"
-                  accept=".xlsx"
-                  onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
-                />
-              </label>
-              {fileError ? <InlineError message={fileError} /> : null}
-              <Field label="Manual Rider Groups">
-                <textarea
-                  className={textareaClassName}
-                  value={riderCounts}
-                  onChange={(event) => handleRiderCountsChange(event.target.value)}
-                  disabled={Boolean(fileBase64)}
-                />
-              </Field>
-            </CardContent>
-          </Card>
-
           <Card>
             <CardHeader>
-              <div className="flex items-center gap-2">
-                <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
-                <h2 className="text-sm font-semibold">Scenario</h2>
+              <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+                <div>
+                  <p className="text-sm font-medium text-primary">Side tools</p>
+                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                    Create a demand-based fleet plan, validate addresses, and save the optimized result to Fleet Planner History.
+                  </p>
+                </div>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
+                    <CircleHelp className="h-4 w-4" aria-hidden="true" />
+                    How to use
+                  </button>
+                  <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    Demand template
+                  </a>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Field label="Job Name">
-                <input
-                  className={fieldClassName}
-                  value={historyTitle}
-                  placeholder={defaultFleetHistoryTitle()}
-                  onChange={(event) => setHistoryTitle(event.target.value)}
-                />
-              </Field>
-              <Field label="Market">
-                <div className="grid grid-cols-2 gap-2">
-                  <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
-                    KR
-                  </ModeButton>
-                  <ModeButton active={market === "CN"} onClick={() => handleMarketChange("CN")}>
-                    CN
-                  </ModeButton>
-                </div>
-              </Field>
-              <Field label="Planning Mode">
-                <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
-                  <option value="balanced">Balanced</option>
-                  <option value="cost_saver">Cost Saver</option>
-                  <option value="comfort_saver">Comfort Saver</option>
-                </select>
-              </Field>
-              <Field label="Bus Monitor Seats">
-                <input
-                  className={fieldClassName}
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="1"
-                  value={monitorSeats}
-                  onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
-                />
-              </Field>
-              <Field label="Service Direction">
-                <div className="grid grid-cols-2 gap-2">
-                  <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
-                    To School
-                  </ModeButton>
-                  <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
-                    From School
-                  </ModeButton>
-                </div>
-              </Field>
-              {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
-              {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
-              {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
-              {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
-              {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
-              <div className="grid gap-2">
-                <Button
-                  type="button"
-                  disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
-                  icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
-                  onClick={() => previewMutation.mutate()}
-                >
-                  Preview fleet
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={!fileBase64 || geocodeMutation.isPending}
-                  icon={geocodeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
-                  onClick={() => {
-                    clusterMutation.reset();
-                    routePreviewMutation.reset();
-                    globalPlanMutation.reset();
-                    saveHistoryMutation.reset();
-                    geocodeMutation.mutate();
-                  }}
-                >
-                  Validate & geocode
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
-                  icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
-                  onClick={() => {
-                    saveHistoryMutation.reset();
-                    globalPlanMutation.mutate();
-                  }}
-                >
-                  Build optimized plan
-                </Button>
+              <div className="grid gap-4 2xl:grid-cols-[minmax(240px,0.9fr)_minmax(320px,1.2fr)_minmax(260px,0.8fr)]">
+                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <h2 className="text-sm font-semibold">Run setup</h2>
+                  </div>
+                  <Field label="Job Name">
+                    <input
+                      className={fieldClassName}
+                      value={historyTitle}
+                      placeholder={defaultFleetHistoryTitle()}
+                      onChange={(event) => setHistoryTitle(event.target.value)}
+                    />
+                  </Field>
+                  <Field label="Market">
+                    <div className="grid grid-cols-2 gap-2">
+                      <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
+                        KR
+                      </ModeButton>
+                      <ModeButton active={market === "CN"} onClick={() => handleMarketChange("CN")}>
+                        CN
+                      </ModeButton>
+                    </div>
+                  </Field>
+                  <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
+                    <Field label="Planning Mode">
+                      <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
+                        <option value="balanced">Balanced</option>
+                        <option value="cost_saver">Cost Saver</option>
+                        <option value="comfort_saver">Comfort Saver</option>
+                      </select>
+                    </Field>
+                    <Field label="Bus Monitor Seats">
+                      <input
+                        className={fieldClassName}
+                        type="number"
+                        min="0"
+                        max="10"
+                        step="1"
+                        value={monitorSeats}
+                        onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Service Direction">
+                    <div className="grid grid-cols-2 gap-2">
+                      <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
+                        To School
+                      </ModeButton>
+                      <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
+                        From School
+                      </ModeButton>
+                    </div>
+                  </Field>
+                </section>
+
+                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <h2 className="text-sm font-semibold">Demand source</h2>
+                  </div>
+                  <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
+                    <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="min-w-0 text-left">
+                      <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Optional .xlsx template; manual groups stay available without a file.</span>
+                    </span>
+                    <input
+                      className="sr-only"
+                      type="file"
+                      accept=".xlsx"
+                      onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                    />
+                  </label>
+                  {fileError ? <InlineError message={fileError} /> : null}
+                  <Field label="Manual Rider Groups">
+                    <textarea
+                      className={cn(textareaClassName, "min-h-20")}
+                      value={riderCounts}
+                      onChange={(event) => handleRiderCountsChange(event.target.value)}
+                      disabled={Boolean(fileBase64)}
+                    />
+                  </Field>
+                </section>
+
+                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2">
+                    <Route className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <h2 className="text-sm font-semibold">Run workflow</h2>
+                  </div>
+                  {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
+                  {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
+                  {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
+                  {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
+                  {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
+                  <WorkflowAction
+                    step="1"
+                    title="Preview fleet"
+                    description="Check vehicle choices from manual groups or the uploaded workbook."
+                    disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
+                    pending={previewMutation.isPending}
+                    icon={<UsersRound className="h-4 w-4" />}
+                    onClick={() => previewMutation.mutate()}
+                  />
+                  <WorkflowAction
+                    step="2"
+                    title="Validate & geocode"
+                    description="Resolve addresses and prepare map-ready demand points."
+                    disabled={!fileBase64 || geocodeMutation.isPending}
+                    pending={geocodeMutation.isPending}
+                    icon={<MapPinned className="h-4 w-4" />}
+                    variant="secondary"
+                    onClick={() => {
+                      clusterMutation.reset();
+                      routePreviewMutation.reset();
+                      globalPlanMutation.reset();
+                      saveHistoryMutation.reset();
+                      geocodeMutation.mutate();
+                    }}
+                  />
+                  <WorkflowAction
+                    step="3"
+                    title="Build optimized plan"
+                    description="Create routes and auto-save the run to history."
+                    disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
+                    pending={globalPlanMutation.isPending || saveHistoryMutation.isPending}
+                    icon={<Route className="h-4 w-4" />}
+                    variant="secondary"
+                    onClick={() => {
+                      saveHistoryMutation.reset();
+                      globalPlanMutation.mutate();
+                    }}
+                  />
+                </section>
               </div>
+
               <details className="rounded-md border border-border bg-muted/40">
                 <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Advanced diagnostics</summary>
-                <div className="space-y-3 border-t border-border p-3">
+                <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,280px)_minmax(220px,280px)]">
                   <p className="text-xs leading-5 text-muted-foreground">
                     Directional grouping is only a diagnostic preview. It is not used by the optimized plan.
                   </p>
@@ -522,16 +533,18 @@ export function FleetPlannerPage() {
                   >
                     Preview groups
                   </Button>
-                  <Field label="Grouped Route Direction">
-                    <div className="grid grid-cols-2 gap-2">
-                      <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
-                        To School
-                      </ModeButton>
-                      <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
-                        From School
-                      </ModeButton>
-                    </div>
-                  </Field>
+                  <div className="lg:col-start-2">
+                    <Field label="Grouped Route Direction">
+                      <div className="grid grid-cols-2 gap-2">
+                        <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
+                          To School
+                        </ModeButton>
+                        <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
+                          From School
+                        </ModeButton>
+                      </div>
+                    </Field>
+                  </div>
                   <Button
                     type="button"
                     variant="secondary"
@@ -545,7 +558,6 @@ export function FleetPlannerPage() {
               </details>
             </CardContent>
           </Card>
-          </div>
 
           {result ? (
             <FleetPreviewResult
@@ -1171,6 +1183,50 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
     >
       {children}
     </button>
+  );
+}
+
+function WorkflowAction({
+  step,
+  title,
+  description,
+  icon,
+  pending,
+  disabled,
+  variant = "primary",
+  onClick,
+}: {
+  step: string;
+  title: string;
+  description: string;
+  icon: ReactNode;
+  pending?: boolean;
+  disabled?: boolean;
+  variant?: "primary" | "secondary";
+  onClick: () => void;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-surface p-2">
+      <div className="mb-2 flex items-start gap-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+          {step}
+        </span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">{title}</div>
+          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</div>
+        </div>
+      </div>
+      <Button
+        type="button"
+        variant={variant}
+        className="w-full"
+        disabled={disabled}
+        icon={pending ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
+        onClick={onClick}
+      >
+        {title}
+      </Button>
+    </div>
   );
 }
 

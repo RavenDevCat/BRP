@@ -58,6 +58,7 @@ export function FleetPlannerPage() {
   const [historyTitle, setHistoryTitle] = useState("");
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
 
   const historyQuery = useQuery({
@@ -374,13 +375,20 @@ export function FleetPlannerPage() {
 
   return (
     <div className="pb-16 lg:pb-0">
-      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
+      <div
+        className={cn(
+          "grid gap-4 lg:items-start",
+          historyCollapsed ? "lg:grid-cols-[56px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
+        )}
+      >
         <FleetPlannerHistoryPanel
-          className="min-w-0 xl:sticky xl:top-20 xl:self-start"
+          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
           jobs={historyQuery.data || []}
           activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
           isLoading={historyQuery.isLoading || loadHistoryMutation.isPending || deleteHistoryMutation.isPending}
           error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error) as Error | null}
+          collapsed={historyCollapsed}
+          onCollapsedChange={setHistoryCollapsed}
           onRefresh={() => void historyQuery.refetch()}
           onOpen={(runId) => loadHistoryMutation.mutate(runId)}
           onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
@@ -1110,6 +1118,8 @@ function FleetPlannerHistoryPanel({
   deletingRunId,
   isLoading,
   error,
+  collapsed,
+  onCollapsedChange,
   onRefresh,
   onOpen,
   onDelete,
@@ -1120,10 +1130,43 @@ function FleetPlannerHistoryPanel({
   deletingRunId?: string;
   isLoading: boolean;
   error?: Error | null;
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
   onRefresh: () => void;
   onOpen: (runId: string) => void;
   onDelete: (runId: string) => void;
 }) {
+  if (collapsed) {
+    return (
+      <Card className={cn("overflow-hidden", className)}>
+        <div className="flex items-center justify-between gap-2 p-2 lg:min-h-[280px] lg:flex-col lg:justify-start">
+          <button
+            type="button"
+            className={buttonClassName("ghost")}
+            aria-label="Open Fleet Planner history"
+            onClick={() => onCollapsedChange(false)}
+          >
+            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+          </button>
+          <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
+          <div className="flex items-center gap-1 lg:mt-auto lg:flex-col">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
+              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              aria-label="Expand Fleet Planner history"
+              onClick={() => onCollapsedChange(false)}
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card className={className}>
       <CardHeader>
@@ -1132,9 +1175,19 @@ function FleetPlannerHistoryPanel({
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">Fleet Planner History</h2>
           </div>
-          <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
-            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-          </button>
+          <div className="flex items-center gap-1">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
+              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              aria-label="Collapse Fleet Planner history"
+              onClick={() => onCollapsedChange(true)}
+            >
+              <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -1144,7 +1197,7 @@ function FleetPlannerHistoryPanel({
             Saved Fleet Planner runs will appear here.
           </div>
         ) : null}
-        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 xl:max-h-[calc(100vh-220px)]">
+        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
             const isActive = activeRunId === job.run_id;

@@ -49,6 +49,21 @@ The Google geocode usage counter is persistent runtime state. The value `134` wa
 Google usage updates are protected with a cross-process lock and atomic reservation in `apps/client/client_runtime.py`; do not bypass this by writing the usage JSON directly.
 External provider QPS is protected with a cross-process rate limiter under `state/api_rate_limits` by default. Do not replace it with per-process-only throttling when touching Kakao, Google, AMap, or DeepSeek API calls.
 
+## Public Repository Hygiene
+
+Private deployment values belong only in ignored private files or approved
+private backups outside Git. Public docs and examples must use placeholders such
+as `$CN_STAGING_HOST`, `$CN_PROD_HOST`, and `$KR_PROD_HOST`.
+
+Before committing or pushing changes that touch docs, README files, environment
+examples, ops scripts, Cloudflare examples, or handoff notes:
+
+- read the `Public Repository Guardrails` section in
+  `docs/private/ops-inventory.local.md` when the private inventory is available
+- run the private denylist scan from that section
+- treat any hit in committed files, reachable Git history, or commit messages as
+  a blocker until it is replaced with a placeholder
+
 ## KR Deploy Pattern
 
 - If frontend assets changed, build React locally from `apps/web` with `npm run build`.

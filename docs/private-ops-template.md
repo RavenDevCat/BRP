@@ -47,3 +47,22 @@ paths, and other handoff details that should not be shared with the repository.
 - SSH/access-control notes:
 - Monday/next access task:
 - Known blockers:
+
+## Public Repository Guardrails
+
+- placeholder names to use in public docs:
+  - `$CN_STAGING_HOST`
+  - `$CN_PROD_HOST`
+  - `$KR_PROD_HOST`
+  - `$LEGACY_DOMESTIC_CLIENT_HOST`
+  - `$CN_SSH_HOST`
+  - `$CN_SSH_USER`
+  - `$KR_PRIVATE_HOST`
+  - `$KR_USER`
+  - `$KR_APP_ROOT`
+- private denylist file:
+  - local checkout: `docs/private/public-denylist.local.txt`
+  - private backup: `BRP Private/public-denylist.local.txt`
+- before commits touching docs, README files, env examples, ops scripts,
+  Cloudflare examples, or handoff notes, run the private denylist scan described
+  in the local inventory against tracked public files and reachable Git history

@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     queryFn: getGoogleGeocodeUsage,
     staleTime: 60_000,
   });
-  const isJobsWorkspace = pathname.startsWith("/jobs");
+  const isWideWorkspace = pathname.startsWith("/jobs") || pathname.startsWith("/fleet");
   const googleUsage = googleUsageQuery.data;
   const googleUsagePct =
     googleUsage?.enabled && googleUsage.limit && googleUsage.used !== undefined
@@ -119,7 +119,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className={cn("mx-auto w-full px-4 py-6 lg:px-6", isJobsWorkspace ? "max-w-none" : "max-w-7xl")}>
+        <main className={cn("mx-auto w-full px-4 py-6 lg:px-6", isWideWorkspace ? "max-w-none" : "max-w-7xl")}>
           {children}
         </main>
 

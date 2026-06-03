@@ -76,6 +76,7 @@ Never reset or delete runtime data unless the user explicitly asks.
 Critical paths:
 
 - job store: `state/jobs` or `BRP_BACKEND_JOBS_DIR`
+- side tool history store: `state/side_tools` or `BRP_SIDE_TOOLS_DIR`
 - client cache: `apps/client/cache`
 - backend cache: `apps/backend/cache`
 - generated outputs
@@ -195,8 +196,8 @@ For ordinary code changes:
 4. Commit and push the intended Git revision.
 5. Promote to CN production only when the user explicitly asks by pulling the
    intended revision into `/opt/brp/prod/app` and restarting production services.
-6. Sync KR intentionally when that separate production deployment should receive
-   the same revision; KR may require a local React build copied to
+6. Sync KR production to the same release unless the user explicitly excludes
+   KR; KR may require a local React build copied to
    `apps/web/dist` because Node/npm is not in its PATH.
 7. Verify health, `/new`, `/jobs`, job count, cache counts, and Google usage
    continuity for every environment touched.

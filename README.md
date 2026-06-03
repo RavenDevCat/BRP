@@ -133,6 +133,7 @@ Do not commit:
 - `ops/env/local.env` or any real `.env` file
 - provider keys, passwords, tunnel tokens, or service credentials
 - `state/jobs` or a server's `BRP_BACKEND_JOBS_DIR`
+- `state/side_tools` or a server's `BRP_SIDE_TOOLS_DIR`
 - `state/api_rate_limits` or a server's `BRP_API_RATE_LIMIT_DIR`
 - `apps/client/cache` and `apps/backend/cache`
 - generated outputs under `apps/client/outputs` or `apps/backend/outputs`

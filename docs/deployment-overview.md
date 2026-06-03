@@ -185,12 +185,14 @@ separate access-control plan.
 export BRP_BACKEND_HOST="127.0.0.1"
 export BRP_BACKEND_PORT="8001"
 export BRP_BACKEND_JOBS_DIR="/srv/brp/runtime/jobs"
+export BRP_SIDE_TOOLS_DIR="/srv/brp/runtime/side_tools"
 ```
 
-`BRP_BACKEND_JOBS_DIR` should always point at server-local runtime storage, not
-at a Git-managed code directory. If it is omitted, the backend defaults to
-`state/jobs` under the repository root. The backend also rebuilds `index.json`
-from existing job JSON files when the index is missing or empty.
+`BRP_BACKEND_JOBS_DIR` and `BRP_SIDE_TOOLS_DIR` should always point at
+server-local runtime storage, not at a Git-managed code directory. If omitted,
+the backend defaults to `state/jobs` and `state/side_tools` under the repository
+root. The backend also rebuilds the job `index.json` from existing job JSON
+files when the index is missing or empty.
 
 Planner worker concurrency is optional. Leave it unlimited on isolated local
 environments, but set it on memory-constrained or shared staging/production hosts:

@@ -38,6 +38,7 @@ Never overwrite, reset, or delete runtime data unless the user explicitly asks:
 - `state/jobs`
 - `apps/client/cache`
 - `apps/backend/cache`
+- `state/side_tools`
 - generated output folders
 - `ops/env/local.env`
 - `apps/client/cache/google_geocode_usage.json`

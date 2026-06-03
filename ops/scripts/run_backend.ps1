@@ -29,7 +29,11 @@ if (-not $env:BRP_BACKEND_PORT) {
 if (-not $env:BRP_BACKEND_JOBS_DIR) {
     $env:BRP_BACKEND_JOBS_DIR = Join-Path $RootDir "state\jobs"
 }
+if (-not $env:BRP_SIDE_TOOLS_DIR) {
+    $env:BRP_SIDE_TOOLS_DIR = Join-Path $RootDir "state\side_tools"
+}
 New-Item -ItemType Directory -Force $env:BRP_BACKEND_JOBS_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_SIDE_TOOLS_DIR | Out-Null
 
 Set-Location (Join-Path $RootDir "apps\backend")
 Write-Host "Starting BRP backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT)"

@@ -11,6 +11,7 @@ AI Audit integration.
 - expose `/api/*` routes consumed by `apps/web`
 - validate and submit Route Audit workbooks
 - persist job records under `BRP_BACKEND_JOBS_DIR` or `state/jobs`
+- persist side tool history under `BRP_SIDE_TOOLS_DIR` or `state/side_tools`
 - run planner workers and enrich route results
 - select OSRM endpoints from environment configuration
 - serve generated map/report artifacts
@@ -37,6 +38,7 @@ Common variables:
 BRP_BACKEND_HOST=127.0.0.1
 BRP_BACKEND_PORT=8001
 BRP_BACKEND_JOBS_DIR=
+BRP_SIDE_TOOLS_DIR=
 BRP_API_RATE_LIMIT_DIR=
 OSRM_USE_BUILTIN_DEFAULTS=true
 ```
@@ -60,6 +62,7 @@ curl -s http://127.0.0.1:8001/health
 Do not commit backend runtime data:
 
 - job history
+- side tool history
 - generated outputs
 - backend cache
 - provider rate-limit state

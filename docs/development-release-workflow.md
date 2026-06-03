@@ -334,10 +334,10 @@ copy `apps/web/dist` to KR when frontend assets change.
 ## Deploy To KR
 
 KR is a separate production deployment that follows the intended Git revision
-after CN validation. Preserve its runtime data:
-`state/jobs`, `apps/client/cache`, `apps/backend/cache`, generated outputs,
-`ops/env/local.env`, `apps/client/cache/google_geocode_usage.json`, and
-`state/api_rate_limits`.
+after CN production unless the user explicitly excludes KR. Preserve its runtime
+data: `state/jobs`, `state/side_tools`, `apps/client/cache`,
+`apps/backend/cache`, generated outputs, `ops/env/local.env`,
+`apps/client/cache/google_geocode_usage.json`, and `state/api_rate_limits`.
 
 High-level KR deploy flow:
 
@@ -491,7 +491,7 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
 - Do not edit directly in the production app checkout.
 - Do not let staging and production share job directories.
 - Keep real secrets in `ops/env/local.env` for each environment, never in git.
-- Preserve `state/jobs`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
+- Preserve `state/jobs`, `state/side_tools`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
 - Keep Cloudflare Tunnel and OSRM long-running on the server that owns each
   deployment, but do not expose OSRM through public hostnames.
 - Use staging as the gate before production.

@@ -334,28 +334,8 @@ export function FleetPlannerPage() {
   }
 
   return (
-    <div className="space-y-6 pb-16 lg:pb-0">
-      <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-        <div>
-          <p className="text-sm font-medium text-primary">Side tools</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Preview vehicle choices from rider groups or a demand workbook before running address clustering and routing.
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
-            <CircleHelp className="h-4 w-4" aria-hidden="true" />
-            How to use
-          </button>
-          <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
-            <Download className="h-4 w-4" aria-hidden="true" />
-            Demand template
-          </a>
-        </div>
-      </section>
-
-      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
+    <div className="pb-16 lg:pb-0">
+      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
         <FleetPlannerHistoryPanel
           className="min-w-0 xl:sticky xl:top-20 xl:self-start"
           jobs={historyQuery.data || []}
@@ -366,8 +346,29 @@ export function FleetPlannerPage() {
           onOpen={(runId) => loadHistoryMutation.mutate(runId)}
         />
 
-        <div className="space-y-4">
-          <Card>
+        <div className="min-w-0 space-y-4">
+          <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
+            <div>
+              <p className="text-sm font-medium text-primary">Side tools</p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
+                Preview vehicle choices from rider groups or a demand workbook before running address clustering and routing.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
+                <CircleHelp className="h-4 w-4" aria-hidden="true" />
+                How to use
+              </button>
+              <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
+                <Download className="h-4 w-4" aria-hidden="true" />
+                Demand template
+              </a>
+            </div>
+          </section>
+
+          <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
+            <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
@@ -398,27 +399,6 @@ export function FleetPlannerPage() {
             </CardContent>
           </Card>
 
-          {result ? (
-            <FleetPreviewResult
-              result={result}
-              mixRows={mixRows}
-              geocodeResult={geocodeResult}
-              clusterResult={clusterResult}
-              routePreviewResult={routePreviewResult}
-              globalPlanResult={globalPlanResult}
-              mapOutputs={mapOutputs}
-              saveHistoryResult={saveHistoryMutation.data}
-              saveHistoryError={saveHistoryMutation.error as Error | null}
-              isSavingHistory={saveHistoryMutation.isPending}
-              activeView={activeResultView}
-              onActiveViewChange={setActiveResultView}
-            />
-          ) : (
-            <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
-          )}
-        </div>
-
-        <aside className="space-y-4">
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
@@ -565,7 +545,27 @@ export function FleetPlannerPage() {
               </details>
             </CardContent>
           </Card>
-        </aside>
+          </div>
+
+          {result ? (
+            <FleetPreviewResult
+              result={result}
+              mixRows={mixRows}
+              geocodeResult={geocodeResult}
+              clusterResult={clusterResult}
+              routePreviewResult={routePreviewResult}
+              globalPlanResult={globalPlanResult}
+              mapOutputs={mapOutputs}
+              saveHistoryResult={saveHistoryMutation.data}
+              saveHistoryError={saveHistoryMutation.error as Error | null}
+              isSavingHistory={saveHistoryMutation.isPending}
+              activeView={activeResultView}
+              onActiveViewChange={setActiveResultView}
+            />
+          ) : (
+            <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
+          )}
+        </div>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
     </div>

@@ -355,7 +355,17 @@ export function FleetPlannerPage() {
         </div>
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)_360px]">
+        <FleetPlannerHistoryPanel
+          className="min-w-0 xl:sticky xl:top-20 xl:self-start"
+          jobs={historyQuery.data || []}
+          activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
+          isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
+          error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
+          onRefresh={() => void historyQuery.refetch()}
+          onOpen={(runId) => loadHistoryMutation.mutate(runId)}
+        />
+
         <div className="space-y-4">
           <Card>
             <CardHeader>
@@ -388,34 +398,24 @@ export function FleetPlannerPage() {
             </CardContent>
           </Card>
 
-          <div className="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-            <FleetPlannerHistoryPanel
-              jobs={historyQuery.data || []}
-              activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
-              isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
-              error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
-              onRefresh={() => void historyQuery.refetch()}
-              onOpen={(runId) => loadHistoryMutation.mutate(runId)}
+          {result ? (
+            <FleetPreviewResult
+              result={result}
+              mixRows={mixRows}
+              geocodeResult={geocodeResult}
+              clusterResult={clusterResult}
+              routePreviewResult={routePreviewResult}
+              globalPlanResult={globalPlanResult}
+              mapOutputs={mapOutputs}
+              saveHistoryResult={saveHistoryMutation.data}
+              saveHistoryError={saveHistoryMutation.error as Error | null}
+              isSavingHistory={saveHistoryMutation.isPending}
+              activeView={activeResultView}
+              onActiveViewChange={setActiveResultView}
             />
-            {result ? (
-              <FleetPreviewResult
-                result={result}
-                mixRows={mixRows}
-                geocodeResult={geocodeResult}
-                clusterResult={clusterResult}
-                routePreviewResult={routePreviewResult}
-                globalPlanResult={globalPlanResult}
-                mapOutputs={mapOutputs}
-                saveHistoryResult={saveHistoryMutation.data}
-                saveHistoryError={saveHistoryMutation.error as Error | null}
-                isSavingHistory={saveHistoryMutation.isPending}
-                activeView={activeResultView}
-                onActiveViewChange={setActiveResultView}
-              />
-            ) : (
-              <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
-            )}
-          </div>
+          ) : (
+            <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
+          )}
         </div>
 
         <aside className="space-y-4">
@@ -982,6 +982,7 @@ function FleetHistoryAutoSaveStatus({
 }
 
 function FleetPlannerHistoryPanel({
+  className,
   jobs,
   activeRunId,
   isLoading,
@@ -989,6 +990,7 @@ function FleetPlannerHistoryPanel({
   onRefresh,
   onOpen,
 }: {
+  className?: string;
   jobs: FleetPlannerHistorySummary[];
   activeRunId?: string;
   isLoading: boolean;
@@ -997,7 +999,7 @@ function FleetPlannerHistoryPanel({
   onOpen: (runId: string) => void;
 }) {
   return (
-    <Card>
+    <Card className={className}>
       <CardHeader>
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
@@ -1016,7 +1018,7 @@ function FleetPlannerHistoryPanel({
             Saved Fleet Planner runs will appear here.
           </div>
         ) : null}
-        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 xl:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
             return (

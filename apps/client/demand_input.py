@@ -380,6 +380,18 @@ def demand_geocode_results_to_dataframe(geocode_result: dict[str, Any]) -> pd.Da
     return pd.DataFrame(rows)
 
 
+def _render_full_height_map_html(fmap: folium.Map) -> str:
+    fmap.get_root().header.add_child(
+        Element(
+            "<style>"
+            "html,body{width:100%;height:100%;margin:0;padding:0;overflow:hidden;background:#fff;}"
+            ".folium-map{width:100%;height:100%;}"
+            "</style>"
+        )
+    )
+    return fmap.get_root().render()
+
+
 def build_demand_geocode_map_html(geocode_result: dict[str, Any]) -> str:
     school = dict(geocode_result.get("school") or {})
     points = [
@@ -445,4 +457,4 @@ def build_demand_geocode_map_html(geocode_result: dict[str, Any]) -> str:
         "</div>"
     )
     fmap.get_root().html.add_child(Element(panel))
-    return fmap._repr_html_()
+    return _render_full_height_map_html(fmap)

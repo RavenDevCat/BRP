@@ -376,14 +376,6 @@ export function FleetPlannerPage() {
                     <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
                     <h2 className="text-sm font-semibold">Run setup</h2>
                   </div>
-                  <Field label="Job Name">
-                    <input
-                      className={fieldClassName}
-                      value={historyTitle}
-                      placeholder={defaultFleetHistoryTitle()}
-                      onChange={(event) => setHistoryTitle(event.target.value)}
-                    />
-                  </Field>
                   <Field label="Market">
                     <div className="grid grid-cols-2 gap-2">
                       <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
@@ -393,6 +385,14 @@ export function FleetPlannerPage() {
                         CN
                       </ModeButton>
                     </div>
+                  </Field>
+                  <Field label="Job Name">
+                    <input
+                      className={fieldClassName}
+                      value={historyTitle}
+                      placeholder={defaultFleetHistoryTitle()}
+                      onChange={(event) => setHistoryTitle(event.target.value)}
+                    />
                   </Field>
                   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
                     <Field label="Planning Mode">

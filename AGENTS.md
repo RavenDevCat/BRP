@@ -54,6 +54,9 @@ External provider QPS is protected with a cross-process rate limiter under `stat
 Private deployment values belong only in ignored private files or approved
 private backups outside Git. Public docs and examples must use placeholders such
 as `$CN_STAGING_HOST`, `$CN_PROD_HOST`, and `$KR_PROD_HOST`.
+Do not include connectivity details, operator network assumptions, or connection
+failure modes in public docs. Keep public deployment instructions to role,
+order, validation, and rollback behavior.
 
 Before committing or pushing changes that touch docs, README files, environment
 examples, ops scripts, Cloudflare examples, or handoff notes:
@@ -80,6 +83,22 @@ examples, ops scripts, Cloudflare examples, or handoff notes:
   - job count
   - client/backend cache file counts
   - Google usage endpoint when KR has `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`
+
+## CN Deploy Pattern
+
+- Work and validate on CN staging first; promote CN production only after the
+  user explicitly approves.
+- Confirm operator access to the target environment before deployment, but keep
+  connection details out of public handoff notes.
+- If a server checkout cannot fast-forward after a public-history rewrite,
+  confirm there are no tracked local changes, create a local backup branch, then
+  realign the checkout to `origin/main`. Preserve untracked env backup files.
+- If CN does not have Node/npm available, build React from a machine that does
+  and copy `apps/web/dist` into the CN checkout. After copying, make the `dist`
+  tree readable/executable by Nginx and reload `nginx.service`.
+- Verify each touched CN environment with backend health, frontend origin
+  behavior (`401` without Access header and `200` with one), same-origin
+  `/api/health`, current Git revision, and runtime data counts where relevant.
 
 ## Product Naming
 

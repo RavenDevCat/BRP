@@ -52,6 +52,9 @@ Recent UX state:
 - AI Audit reports use a tighter briefing-style prompt as of 2026-06-02. Old
   stored reports keep their content, but the React viewer strips common Markdown
   noise and regenerated reports use the improved style.
+- Fleet Planner History now collapses into a narrow left-side rail by default,
+  preserving the original right-side Fleet Planner workspace layout while
+  giving narrower desktop windows more room.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - Real server addresses, usernames, private hostnames, and environment-specific paths should
@@ -152,9 +155,9 @@ Last verified KR runtime state in this session:
 - CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
   `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
   running concurrently beside the shared OSRM stack.
-- CN staging and CN production are synced to GitHub `main` as of the CN
-  production React promotion on 2026-06-01. A backup branch was left on the CN
-  production checkout before the promotion.
+- CN staging and CN production are synced to GitHub `main` as of the Fleet
+  Planner History rail release on 2026-06-03. Backup branches were left before
+  realigning old server checkouts after the public-history rewrite.
 - CN staging checkout should be kept synced to the current GitHub `main` during
   release work.
 - CN staging and CN production frontends serve React through Nginx. Nginx serves
@@ -186,7 +189,7 @@ Last verified KR runtime state in this session:
 
 For ordinary code changes:
 
-1. Connect through the approved access path.
+1. Confirm operator access to the target environment.
 2. Work in the CN staging checkout.
 3. Validate against CN staging services and `$CN_STAGING_HOST`.
 4. Commit and push the intended Git revision.
@@ -199,6 +202,20 @@ For ordinary code changes:
    continuity for every environment touched.
 
 Docs-only changes do not need service restart.
+
+CN deployment notes from 2026-06-03:
+
+- If a server checkout predates a public-history rewrite, `git pull --ff-only`
+  can fail even when tracked files are clean. Confirm there are no tracked local
+  changes, leave a local backup branch, then realign the checkout to
+  `origin/main`. Preserve untracked env backup files.
+- CN staging and production did not have `npm` available during this deploy.
+  Build React from a machine that has Node, copy `apps/web/dist` to the target
+  checkout, ensure the copied `dist` tree is readable/executable by Nginx, and
+  reload `nginx.service`.
+- For CN Nginx origin checks, no Cloudflare Access user header should return
+  `401`; the same route with an Access user header should return `200`. Also
+  verify same-origin `/api/health`.
 
 Local checkout role:
 
@@ -217,8 +234,8 @@ Local checkout role:
 
 - Validate the authenticated `$CN_STAGING_HOST` React session in a browser,
   including `/new`, `/jobs`, `/distance`, and `/fleet`.
-- Decide the next explicit release target before touching CN production or KR
-  production. Staging work must not repoint or restart production hostnames.
+- Decide the next explicit release target before touching KR production.
+  Staging work must not repoint or restart production hostnames.
 - `BRP_BACKEND_SERVICE_TOKEN` is intentionally empty on the current KR
   same-origin proxy deployment; public security relies on Cloudflare Access.
   CN staging and production now inject backend tokens through Nginx includes.

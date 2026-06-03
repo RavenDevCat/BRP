@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { Download, FileSpreadsheet, Loader2, MapPinned, Route, SlidersHorizontal, Upload, UsersRound } from "lucide-react";
+import { CircleHelp, Download, FileSpreadsheet, Loader2, MapPinned, Route, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,7 @@ export function FleetPlannerPage() {
   const [routeDirection, setRouteDirection] = useState<"to_school" | "from_school">("to_school");
   const [globalDirection, setGlobalDirection] = useState<"to_school" | "from_school">("to_school");
   const [generatedJobName, setGeneratedJobName] = useState("");
+  const [howToUseOpen, setHowToUseOpen] = useState(false);
 
   const previewMutation = useMutation({
     mutationFn: async () =>
@@ -264,10 +265,16 @@ export function FleetPlannerPage() {
             Preview vehicle choices from rider groups or a demand workbook before running address clustering and routing.
           </p>
         </div>
-        <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
-          <Download className="h-4 w-4" aria-hidden="true" />
-          Demand template
-        </a>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
+            <CircleHelp className="h-4 w-4" aria-hidden="true" />
+            How to use
+          </button>
+          <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
+            <Download className="h-4 w-4" aria-hidden="true" />
+            Demand template
+          </a>
+        </div>
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -330,7 +337,7 @@ export function FleetPlannerPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <Field label="Market" description="Selects the vehicle catalog, capacity assumptions, and routing market. Use CN for China demand workbooks.">
+              <Field label="Market">
                 <div className="grid grid-cols-2 gap-2">
                   <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
                     KR
@@ -340,17 +347,14 @@ export function FleetPlannerPage() {
                   </ModeButton>
                 </div>
               </Field>
-              <Field
-                label="Planning Mode"
-                description="Changes how aggressively BRP fills vehicles: Balanced is neutral, Cost Saver favors fewer fuller buses, Comfort Saver leaves more spare seats."
-              >
+              <Field label="Planning Mode">
                 <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
                   <option value="balanced">Balanced</option>
                   <option value="cost_saver">Cost Saver</option>
                   <option value="comfort_saver">Comfort Saver</option>
                 </select>
               </Field>
-              <Field label="Bus Monitor Seats" description="Reserves seats for adults or monitors before calculating student capacity and load factor.">
+              <Field label="Bus Monitor Seats">
                 <input
                   className={fieldClassName}
                   type="number"
@@ -361,13 +365,22 @@ export function FleetPlannerPage() {
                   onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
                 />
               </Field>
+              <Field label="Service Direction">
+                <div className="grid grid-cols-2 gap-2">
+                  <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
+                    To School
+                  </ModeButton>
+                  <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
+                    From School
+                  </ModeButton>
+                </div>
+              </Field>
               {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
               {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
               {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
               {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
-              <ActionBlock
-                help="Reads manual rider groups or the uploaded workbook and recommends vehicle sizes. It does not geocode addresses or build routes."
-              >
+              {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
+              <div className="grid gap-2">
                 <Button
                   type="button"
                   disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
@@ -376,10 +389,6 @@ export function FleetPlannerPage() {
                 >
                   Preview fleet
                 </Button>
-              </ActionBlock>
-              <ActionBlock
-                help="Validates the demand workbook, resolves the school and pickup addresses, and unlocks clustering and routing steps."
-              >
                 <Button
                   type="button"
                   variant="secondary"
@@ -395,69 +404,6 @@ export function FleetPlannerPage() {
                 >
                   Validate & geocode
                 </Button>
-              </ActionBlock>
-              <div className="border-t border-border pt-4">
-                <div className="mb-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Cluster route preview</div>
-              </div>
-              <Field label="Direction Sectors" description="Splits geocoded demand around the school into directional groups before route preview. More sectors make smaller, more directional clusters.">
-                <select className={fieldClassName} value={sectorCount} onChange={(event) => handleSectorCountChange(Number(event.target.value) as 4 | 8 | 12)}>
-                  <option value={4}>4 sectors</option>
-                  <option value={8}>8 sectors</option>
-                  <option value={12}>12 sectors</option>
-                </select>
-              </Field>
-              <ActionBlock help="Groups resolved pickup points into directional demand clusters and recommends a vehicle for each cluster.">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={!geocodeResult || clusterMutation.isPending}
-                  icon={clusterMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
-                  onClick={() => {
-                    routePreviewMutation.reset();
-                    globalPlanMutation.reset();
-                    submitGeneratedPlanMutation.reset();
-                    clusterMutation.mutate();
-                  }}
-                >
-                  Build clusters
-                </Button>
-              </ActionBlock>
-              <Field label="Route Direction" description="Sets the stop order for the cluster route preview: pickups before school, or school before drop-offs.">
-                <div className="grid grid-cols-2 gap-2">
-                  <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
-                    To School
-                  </ModeButton>
-                  <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
-                    From School
-                  </ModeButton>
-                </div>
-              </Field>
-              <ActionBlock help="Builds OSRM route lines from the cluster result. This previews clustered routes; it does not submit a job.">
-                <Button
-                  type="button"
-                  variant="secondary"
-                  disabled={!clusterResult || routePreviewMutation.isPending}
-                  icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
-                  onClick={() => routePreviewMutation.mutate()}
-                >
-                  Build route preview
-                </Button>
-              </ActionBlock>
-              <div className="border-t border-border pt-4">
-                <div className="mb-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Full routing plan</div>
-              </div>
-              <Field label="Global Plan Direction" description="Sets the service direction for a full OR-Tools plan across all resolved pickup points, not just sector clusters.">
-                <div className="grid grid-cols-2 gap-2">
-                  <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
-                    To School
-                  </ModeButton>
-                  <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
-                    From School
-                  </ModeButton>
-                </div>
-              </Field>
-              {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
-              <ActionBlock help="Runs the full solver on all resolved demand points and creates a downloadable plan that can be submitted as a Route Audit job.">
                 <Button
                   type="button"
                   variant="secondary"
@@ -468,13 +414,62 @@ export function FleetPlannerPage() {
                     globalPlanMutation.mutate();
                   }}
                 >
-                  Build global plan
+                  Build optimized plan
                 </Button>
-              </ActionBlock>
+              </div>
+              <details className="rounded-md border border-border bg-muted/40">
+                <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Advanced diagnostics</summary>
+                <div className="space-y-3 border-t border-border p-3">
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    Directional grouping is only a diagnostic preview. It is not used by the optimized plan.
+                  </p>
+                  <Field label="Grouping Granularity">
+                    <select className={fieldClassName} value={sectorCount} onChange={(event) => handleSectorCountChange(Number(event.target.value) as 4 | 8 | 12)}>
+                      <option value={4}>4 sectors</option>
+                      <option value={8}>8 sectors</option>
+                      <option value={12}>12 sectors</option>
+                    </select>
+                  </Field>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!geocodeResult || clusterMutation.isPending}
+                    icon={clusterMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+                    onClick={() => {
+                      routePreviewMutation.reset();
+                      globalPlanMutation.reset();
+                      submitGeneratedPlanMutation.reset();
+                      clusterMutation.mutate();
+                    }}
+                  >
+                    Preview groups
+                  </Button>
+                  <Field label="Grouped Route Direction">
+                    <div className="grid grid-cols-2 gap-2">
+                      <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
+                        To School
+                      </ModeButton>
+                      <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
+                        From School
+                      </ModeButton>
+                    </div>
+                  </Field>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    disabled={!clusterResult || routePreviewMutation.isPending}
+                    icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+                    onClick={() => routePreviewMutation.mutate()}
+                  >
+                    Preview grouped routes
+                  </Button>
+                </div>
+              </details>
             </CardContent>
           </Card>
         </aside>
       </div>
+      <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
     </div>
   );
 }
@@ -827,6 +822,49 @@ function RoutePreviewResult({
   );
 }
 
+function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) {
+    return null;
+  }
+  return (
+    <div className="fixed inset-0 z-40">
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close how to use" onClick={onClose} />
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-xl">
+        <div className="flex items-center justify-between border-b border-border px-4 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-foreground">How to use Fleet Planner</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Use the main actions first; diagnostics are optional.</p>
+          </div>
+          <button type="button" className={buttonClassName("ghost")} aria-label="Close how to use" onClick={onClose}>
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="space-y-5 overflow-y-auto px-4 py-4 text-sm leading-6 text-muted-foreground">
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Main flow</h3>
+            <ol className="list-decimal space-y-2 pl-5">
+              <li>Upload a demand workbook or enter manual rider groups.</li>
+              <li>Use Preview fleet to check vehicle recommendations and active assumptions.</li>
+              <li>Use Validate & geocode to resolve school and pickup locations.</li>
+              <li>Use Build optimized plan to run the full solver and generate routes.</li>
+            </ol>
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Scenario settings</h3>
+            <p>Market selects vehicle catalog and local routing assumptions. Planning Mode changes how tightly vehicles are filled. Bus Monitor Seats reserves adult seats before student capacity is calculated.</p>
+            <p>Service Direction controls pickup/drop-off order for the optimized plan.</p>
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Advanced diagnostics</h3>
+            <p>Directional grouping previews demand distribution around the school. It is not used by the optimized plan.</p>
+            <p>Grouping Granularity only affects that diagnostic preview. If most students are in one direction, the optimized solver can still split them into multiple routes based on capacity, travel time, and distance.</p>
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function Field({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
@@ -834,15 +872,6 @@ function Field({ label, description, children }: { label: string; description?: 
       {description ? <span className="block text-xs leading-5 text-muted-foreground">{description}</span> : null}
       {children}
     </label>
-  );
-}
-
-function ActionBlock({ help, children }: { help: string; children: ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      {children}
-      <p className="text-xs leading-5 text-muted-foreground">{help}</p>
-    </div>
   );
 }
 

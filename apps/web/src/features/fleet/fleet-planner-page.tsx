@@ -386,7 +386,7 @@ export function FleetPlannerPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 xl:grid-cols-[minmax(320px,1.1fr)_28px_minmax(260px,0.85fr)_28px_minmax(260px,0.85fr)]">
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_28px_minmax(0,1fr)_28px_minmax(0,1fr)]">
                 <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
@@ -1128,12 +1128,22 @@ function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{selected.name}</h2>
           </div>
-          {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} maps</Badge> : null}
+          <div className="flex items-center gap-2">
+            {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} maps</Badge> : null}
+            <Button
+              type="button"
+              variant="secondary"
+              icon={<Download className="h-4 w-4" />}
+              onClick={() => downloadTextFile(selected.html, `${slugifyFileName(selected.name || selected.key)}.html`, "text/html;charset=utf-8")}
+            >
+              Download HTML
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1472,4 +1482,23 @@ function downloadBase64Workbook(base64Value: string, fileName: string) {
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+function downloadTextFile(content: string, fileName: string, contentType: string) {
+  const blob = new Blob([content], { type: contentType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function slugifyFileName(value: string) {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "fleet-planner-map";
 }

@@ -1181,7 +1181,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
           <div>
             <h2 className="text-base font-semibold text-foreground">How to use Fleet Planner</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Use the main actions first; diagnostics are optional.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Follow the setup flow from left to right; diagnostics are optional.</p>
           </div>
           <button type="button" className={buttonClassName("ghost")} aria-label="Close how to use" onClick={onClose}>
             <X className="h-4 w-4" aria-hidden="true" />
@@ -1189,23 +1189,29 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
         </div>
         <div className="space-y-5 overflow-y-auto px-4 py-4 text-sm leading-6 text-muted-foreground">
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Main flow</h3>
+            <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Upload a demand workbook or enter manual rider groups.</li>
-              <li>Use Preview fleet to check vehicle recommendations and active assumptions.</li>
-              <li>Use Validate & geocode to resolve school and pickup locations.</li>
-              <li>Use Build optimized plan to run the full solver and generate routes.</li>
+              <li>Demand source: upload a demand workbook, or keep using manual rider groups for a quick capacity preview.</li>
+              <li>Run settings: choose the market, job name, planning mode, monitor seats, and service direction before running.</li>
+              <li>Preview fleet: checks vehicle choices from the current demand source without geocoding addresses.</li>
+              <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
+              <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
             </ol>
           </section>
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Scenario settings</h3>
-            <p>Market selects vehicle catalog and local routing assumptions. Planning Mode changes how tightly vehicles are filled. Bus Monitor Seats reserves adult seats before student capacity is calculated.</p>
-            <p>Service Direction controls pickup/drop-off order for the optimized plan.</p>
+            <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
+            <ul className="list-disc space-y-2 pl-5">
+              <li>Market selects the vehicle catalog, capacity rules, and local routing assumptions.</li>
+              <li>Job Name controls the title saved in Fleet Planner History.</li>
+              <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
+              <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
+              <li>Service Direction controls whether routes are built toward school pickup or away from school drop-off.</li>
+            </ul>
           </section>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Advanced diagnostics</h3>
-            <p>Directional grouping previews demand distribution around the school. It is not used by the optimized plan.</p>
-            <p>Grouping Granularity only affects that diagnostic preview. If most students are in one direction, the optimized solver can still split them into multiple routes based on capacity, travel time, and distance.</p>
+            <p>Preview groups is a diagnostic view for demand distribution around the school; it does not drive the optimized plan.</p>
+            <p>Grouping Granularity only changes that diagnostic grouping. The optimized solver still splits routes by capacity, travel time, distance, and service direction.</p>
           </section>
         </div>
       </aside>

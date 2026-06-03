@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
+import { ArrowRight, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -386,11 +386,42 @@ export function FleetPlannerPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-4 2xl:grid-cols-[minmax(240px,0.9fr)_minmax(320px,1.2fr)_minmax(260px,0.8fr)]">
+              <div className="grid gap-3 xl:grid-cols-[minmax(320px,1.1fr)_28px_minmax(260px,0.85fr)_28px_minmax(260px,0.85fr)]">
+                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
+                    <h2 className="text-sm font-semibold">Demand source</h2>
+                  </div>
+                  <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
+                    <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                    <span className="min-w-0 text-left">
+                      <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Optional .xlsx template; manual groups stay available without a file.</span>
+                    </span>
+                    <input
+                      className="sr-only"
+                      type="file"
+                      accept=".xlsx"
+                      onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                    />
+                  </label>
+                  {fileError ? <InlineError message={fileError} /> : null}
+                  <Field label="Manual Rider Groups">
+                    <textarea
+                      className={cn(textareaClassName, "min-h-20")}
+                      value={riderCounts}
+                      onChange={(event) => handleRiderCountsChange(event.target.value)}
+                      disabled={Boolean(fileBase64)}
+                    />
+                  </Field>
+                </section>
+
+                <SetupFlowArrow />
+
                 <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Run setup</h2>
+                    <h2 className="text-sm font-semibold">Run settings</h2>
                   </div>
                   <Field label="Market">
                     <div className="grid grid-cols-2 gap-2">
@@ -442,34 +473,7 @@ export function FleetPlannerPage() {
                   </Field>
                 </section>
 
-                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
-                  <div className="flex items-center gap-2">
-                    <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Demand source</h2>
-                  </div>
-                  <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
-                    <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                    <span className="min-w-0 text-left">
-                      <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Optional .xlsx template; manual groups stay available without a file.</span>
-                    </span>
-                    <input
-                      className="sr-only"
-                      type="file"
-                      accept=".xlsx"
-                      onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
-                    />
-                  </label>
-                  {fileError ? <InlineError message={fileError} /> : null}
-                  <Field label="Manual Rider Groups">
-                    <textarea
-                      className={cn(textareaClassName, "min-h-20")}
-                      value={riderCounts}
-                      onChange={(event) => handleRiderCountsChange(event.target.value)}
-                      disabled={Boolean(fileBase64)}
-                    />
-                  </Field>
-                </section>
+                <SetupFlowArrow />
 
                 <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
@@ -1231,6 +1235,16 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
     >
       {children}
     </button>
+  );
+}
+
+function SetupFlowArrow() {
+  return (
+    <div className="hidden items-center justify-center xl:flex" aria-hidden="true">
+      <div className="flex h-7 w-7 items-center justify-center rounded-full border border-border bg-surface text-primary shadow-sm">
+        <ArrowRight className="h-4 w-4" />
+      </div>
+    </div>
   );
 }
 

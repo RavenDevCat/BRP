@@ -30,8 +30,6 @@ import { cn } from "@/lib/cn";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
-const textareaClassName =
-  "min-h-28 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-primary";
 
 type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "maps" | "diagnostics";
 type ToolMapOutput = {
@@ -39,13 +37,18 @@ type ToolMapOutput = {
   name: string;
   html: string;
 };
+type PreviewVariables = {
+  file?: File | null;
+  fileBase64?: string;
+  market?: "KR" | "CN";
+};
 
 export function FleetPlannerPage() {
   const queryClient = useQueryClient();
   const [market, setMarket] = useState<"KR" | "CN">("KR");
   const [mode, setMode] = useState<"balanced" | "cost_saver" | "comfort_saver">("balanced");
   const [monitorSeats, setMonitorSeats] = useState(1);
-  const [riderCounts, setRiderCounts] = useState("8, 22, 34, 44");
+  const riderCounts = "8, 22, 34, 44";
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
@@ -64,16 +67,40 @@ export function FleetPlannerPage() {
   });
 
   const previewMutation = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (variables?: PreviewVariables) => {
+      const selectedFile = variables?.file === undefined ? file : variables.file;
+      const selectedFileBase64 = variables?.fileBase64 ?? fileBase64;
+      const selectedMarket = variables?.market ?? market;
+      return (
       previewFleetPlanner({
-        market,
+        market: selectedMarket,
         mode,
         monitor_seats: monitorSeats,
         rider_counts: riderCounts,
-        file_name: file?.name,
-        file_base64: fileBase64 || undefined,
-      }),
-    onSuccess: () => {
+        file_name: selectedFile?.name,
+        file_base64: selectedFileBase64 || undefined,
+      })
+      );
+    },
+    onSuccess: (preview, variables) => {
+      const inferredMarket = inferMarketFromDemandWorkbook(preview.demand_workbook);
+      const selectedMarket = variables?.market ?? market;
+      if (inferredMarket && inferredMarket !== selectedMarket) {
+        setMarket(inferredMarket);
+        geocodeMutation.reset();
+        clusterMutation.reset();
+        routePreviewMutation.reset();
+        globalPlanMutation.reset();
+        saveHistoryMutation.reset();
+        setLoadedHistoryRecord(null);
+        previewMutation.mutate({
+          ...variables,
+          file: variables?.file === undefined ? file : variables.file,
+          fileBase64: variables?.fileBase64 ?? fileBase64,
+          market: inferredMarket,
+        });
+        return;
+      }
       setLoadedHistoryRecord(null);
       setActiveResultView("fleet");
     },
@@ -273,13 +300,16 @@ export function FleetPlannerPage() {
       return;
     }
     try {
-      setFileBase64(await fileToBase64(nextFile));
+      const encoded = await fileToBase64(nextFile);
+      setFileBase64(encoded);
+      previewMutation.mutate({ file: nextFile, fileBase64: encoded });
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
     }
   }
 
   const result = previewMutation.data || loadedHistoryRecord?.preview_result;
+  const demandWorkbook = result?.demand_workbook || null;
   const geocodeResult = geocodeMutation.data || loadedHistoryRecord?.geocode_result;
   const clusterResult = clusterMutation.data || loadedHistoryRecord?.cluster_result;
   const routePreviewResult = routePreviewMutation.data || loadedHistoryRecord?.route_preview_result;
@@ -316,11 +346,6 @@ export function FleetPlannerPage() {
   function handleMonitorSeatsChange(nextMonitorSeats: number) {
     setMonitorSeats(nextMonitorSeats);
     resetScenarioResults();
-  }
-
-  function handleRiderCountsChange(nextRiderCounts: string) {
-    setRiderCounts(nextRiderCounts);
-    previewMutation.reset();
   }
 
   function handleSectorCountChange(nextSectorCount: 4 | 8 | 12) {
@@ -396,7 +421,7 @@ export function FleetPlannerPage() {
                     <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                     <span className="min-w-0 text-left">
                       <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Optional .xlsx template; manual groups stay available without a file.</span>
+                      <span className="mt-1 block text-xs text-muted-foreground">Upload an .xlsx demand workbook to parse city, school, address count, and students.</span>
                     </span>
                     <input
                       className="sr-only"
@@ -406,14 +431,7 @@ export function FleetPlannerPage() {
                     />
                   </label>
                   {fileError ? <InlineError message={fileError} /> : null}
-                  <Field label="Manual Rider Groups">
-                    <textarea
-                      className={cn(textareaClassName, "min-h-20")}
-                      value={riderCounts}
-                      onChange={(event) => handleRiderCountsChange(event.target.value)}
-                      disabled={Boolean(fileBase64)}
-                    />
-                  </Field>
+                  <DemandWorkbookSummaryCard workbook={demandWorkbook} fileName={file?.name} isLoading={previewMutation.isPending && Boolean(file)} />
                 </section>
 
                 <SetupFlowArrow />
@@ -488,11 +506,11 @@ export function FleetPlannerPage() {
                   <WorkflowAction
                     step="1"
                     title="Preview fleet"
-                    description="Check vehicle choices from manual groups or the uploaded workbook."
-                    disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
+                    description="Check vehicle choices from the uploaded workbook."
+                    disabled={!fileBase64 || previewMutation.isPending}
                     pending={previewMutation.isPending}
                     icon={<UsersRound className="h-4 w-4" />}
-                    onClick={() => previewMutation.mutate()}
+                    onClick={() => previewMutation.mutate(undefined)}
                   />
                   <WorkflowAction
                     step="2"
@@ -600,6 +618,70 @@ export function FleetPlannerPage() {
         </div>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
+    </div>
+  );
+}
+
+function DemandWorkbookSummaryCard({
+  workbook,
+  fileName,
+  isLoading,
+}: {
+  workbook?: NonNullable<FleetPlannerPreviewResponse["demand_workbook"]> | null;
+  fileName?: string;
+  isLoading: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex min-h-24 items-center justify-center rounded-md border border-border bg-surface px-3 py-4 text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+        Parsing workbook
+      </div>
+    );
+  }
+
+  if (!workbook) {
+    return (
+      <div className="rounded-md border border-dashed border-border bg-surface px-3 py-4 text-sm text-muted-foreground">
+        Upload a demand workbook to review its parsed city, school, address count, and total students.
+      </div>
+    );
+  }
+
+  const summary = workbook.summary || {};
+  const school = workbook.school || {};
+  const city = String(summary.city || school.city || "N/A");
+  const schoolName = String(summary.school_name || school.school_name || "N/A");
+  const addressCount = summary.unique_address_count ?? summary.row_count;
+  const studentCount = summary.student_count;
+
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-surface p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">{fileName || workbook.source_label || "Demand workbook"}</div>
+          <div className="mt-1 text-xs text-muted-foreground">Parsed workbook summary</div>
+        </div>
+        <Badge tone="success">Ready</Badge>
+      </div>
+      <div className="grid gap-2 text-sm sm:grid-cols-2">
+        <WorkbookSummaryItem label="City" value={city} />
+        <WorkbookSummaryItem label="School" value={schoolName} />
+        <WorkbookSummaryItem label="Addresses" value={formatNumber(addressCount)} />
+        <WorkbookSummaryItem label="Students" value={formatNumber(studentCount)} />
+      </div>
+      {(workbook.warnings || []).map((warning) => (
+        <InlineError key={warning} message={warning} />
+      ))}
+    </div>
+  );
+}
+
+function WorkbookSummaryItem({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="mt-1 truncate font-semibold text-foreground">{value}</div>
     </div>
   );
 }
@@ -1201,9 +1283,9 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Demand source: upload a demand workbook, or keep using manual rider groups for a quick capacity preview.</li>
-              <li>Run settings: choose the market, job name, planning mode, monitor seats, and service direction before running.</li>
-              <li>Preview fleet: checks vehicle choices from the current demand source without geocoding addresses.</li>
+              <li>Demand source: upload a demand workbook and confirm the parsed city, school, address count, and students.</li>
+              <li>Run settings: confirm the auto-selected market, then choose job name, planning mode, monitor seats, and service direction.</li>
+              <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
               <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
               <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
             </ol>
@@ -1211,7 +1293,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
             <ul className="list-disc space-y-2 pl-5">
-              <li>Market selects the vehicle catalog, capacity rules, and local routing assumptions.</li>
+              <li>Market is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
               <li>Job Name controls the title saved in Fleet Planner History.</li>
               <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
               <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
@@ -1440,6 +1522,22 @@ function collectFleetMapOutputs({
   return [
     { key: "optimized-plan", name: "Optimized Plan", html: globalPlanResult?.map_html || "" },
   ].filter((item) => item.html.trim()) as ToolMapOutput[];
+}
+
+function inferMarketFromDemandWorkbook(workbook?: FleetPlannerPreviewResponse["demand_workbook"] | null): "KR" | "CN" | null {
+  const summary = workbook?.summary || {};
+  const school = workbook?.school || {};
+  const country = String(summary.country || school.country || "").trim().toLowerCase();
+  if (!country) {
+    return null;
+  }
+  if (country.includes("china") || country.includes("中国")) {
+    return "CN";
+  }
+  if (country.includes("korea") || country.includes("대한민국") || country.includes("한국")) {
+    return "KR";
+  }
+  return null;
 }
 
 function formatDateTime(value: unknown) {

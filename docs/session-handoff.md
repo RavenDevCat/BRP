@@ -208,6 +208,11 @@ Local checkout role:
 - Keep Git commits and pushes as the source-of-truth record even when coding on
   CN.
 - Never let development overwrite runtime data or local/server env files.
+- On the Windows local checkout, prefer Git Bash at
+  `C:\Program Files\Git\bin\bash.exe` for complex local `ssh`, `scp`, and Git
+  command composition. Keep PowerShell for Windows-specific npm/Python helper
+  commands. For remote Windows service work, prefer encoded PowerShell or
+  uploaded scripts over deeply nested one-line quoting.
 
 ## Known Gaps / Next Work
 

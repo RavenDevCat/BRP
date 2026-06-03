@@ -117,6 +117,16 @@ keep `BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Python
 environment, and keep `BRP_DEV_USER_EMAIL` set to a development email that
 should own or administer local jobs.
 
+Windows shell habit:
+
+- Use Git Bash at `C:\Program Files\Git\bin\bash.exe` for complex local `ssh`,
+  `scp`, and Git command composition, especially when sending shell snippets to
+  Linux hosts.
+- Use PowerShell for Windows-specific local helper commands, such as npm/Python
+  invocations that rely on Windows paths.
+- For remote Windows service work, avoid deeply nested one-line quoting. Prefer
+  encoded PowerShell or an uploaded script, then run that script remotely.
+
 If historical jobs were generated in another environment, do not rely on their persisted absolute
 map-output paths. The client rerenders historical maps into the current checkout under
 `apps/client/outputs/<job_id>/`.

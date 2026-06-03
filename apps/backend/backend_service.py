@@ -1557,6 +1557,20 @@ class SideToolHistoryStore:
                 if _normalize_email(entry.get("owner_email")) == normalized_user_email
             ]
 
+    def delete(self, run_id: str) -> bool:
+        with self.lock:
+            record_path = self._record_path(run_id)
+            if not record_path.exists():
+                return False
+            record_path.unlink(missing_ok=True)
+            entries = [
+                entry
+                for entry in self._load_index_unlocked()
+                if str(entry.get("run_id") or "").strip() != run_id
+            ]
+            self._save_index_unlocked(entries)
+            return True
+
 
 JOB_STORE = JobStore(JOBS_DIR)
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
@@ -2198,6 +2212,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             user_email = self._current_user_email()
             include_all = _is_admin_email(user_email)
+            if path.startswith("/fleet-planner/history/"):
+                parts = [part for part in path.split("/") if part]
+                if len(parts) != 3:
+                    self._send_json(404, {"error": f"Unknown path: {path}"})
+                    return
+                run_id = unquote(parts[2]).strip()
+                record = FLEET_PLANNER_HISTORY_STORE.get(run_id)
+                if not record:
+                    self._send_json(404, {"error": f"Fleet Planner history run not found: {run_id}"})
+                    return
+                if not _can_access_job(record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Fleet Planner history run is not available for user: {user_email}"})
+                    return
+                FLEET_PLANNER_HISTORY_STORE.delete(run_id)
+                self._send_json(200, {"deleted": True, "run_id": run_id})
+                return
             if not path.startswith("/jobs/"):
                 self._send_json(404, {"error": f"Unknown path: {path}"})
                 return

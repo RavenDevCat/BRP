@@ -574,6 +574,12 @@ export function getFleetPlannerHistory(runId: string) {
   return apiFetch<FleetPlannerHistoryRecord>(`/fleet-planner/history/${encodeURIComponent(runId)}`);
 }
 
+export function deleteFleetPlannerHistory(runId: string) {
+  return apiFetch<{ deleted: boolean; run_id: string }>(`/fleet-planner/history/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+  });
+}
+
 export function saveFleetPlannerHistory(payload: {
   title?: string;
   scenario: Record<string, unknown>;

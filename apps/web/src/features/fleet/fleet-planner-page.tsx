@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
+import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import {
   buildFleetPlannerClusters,
   buildFleetPlannerGlobalPlan,
   buildFleetPlannerRoutePreview,
+  deleteFleetPlannerHistory,
   geocodeFleetPlannerDemand,
   getFleetPlannerHistory,
   getDemandTemplateUrl,
@@ -214,6 +215,19 @@ export function FleetPlannerPage() {
     },
   });
 
+  const deleteHistoryMutation = useMutation({
+    mutationFn: (runId: string) => deleteFleetPlannerHistory(runId),
+    onSuccess: async (payload) => {
+      if (loadedHistoryRecord?.run_id === payload.run_id || saveHistoryMutation.data?.job.run_id === payload.run_id) {
+        setLoadedHistoryRecord(null);
+        saveHistoryMutation.reset();
+        setHistoryTitle(defaultFleetHistoryTitle());
+        setActiveResultView("fleet");
+      }
+      await queryClient.invalidateQueries({ queryKey: ["fleet-planner-history"] });
+    },
+  });
+
   function resetScenarioResults() {
     previewMutation.reset();
     geocodeMutation.reset();
@@ -340,10 +354,12 @@ export function FleetPlannerPage() {
           className="min-w-0 xl:sticky xl:top-20 xl:self-start"
           jobs={historyQuery.data || []}
           activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
-          isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
-          error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
+          isLoading={historyQuery.isLoading || loadHistoryMutation.isPending || deleteHistoryMutation.isPending}
+          error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error) as Error | null}
           onRefresh={() => void historyQuery.refetch()}
           onOpen={(runId) => loadHistoryMutation.mutate(runId)}
+          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+          deletingRunId={deleteHistoryMutation.variables}
         />
 
         <div className="min-w-0 space-y-4">
@@ -997,18 +1013,22 @@ function FleetPlannerHistoryPanel({
   className,
   jobs,
   activeRunId,
+  deletingRunId,
   isLoading,
   error,
   onRefresh,
   onOpen,
+  onDelete,
 }: {
   className?: string;
   jobs: FleetPlannerHistorySummary[];
   activeRunId?: string;
+  deletingRunId?: string;
   isLoading: boolean;
   error?: Error | null;
   onRefresh: () => void;
   onOpen: (runId: string) => void;
+  onDelete: (runId: string) => void;
 }) {
   return (
     <Card className={className}>
@@ -1033,30 +1053,50 @@ function FleetPlannerHistoryPanel({
         <div className="max-h-72 space-y-2 overflow-y-auto pr-1 xl:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
+            const isActive = activeRunId === job.run_id;
+            const isDeleting = deletingRunId === job.run_id;
             return (
-              <button
+              <div
                 key={job.run_id}
-                type="button"
                 className={cn(
-                  "w-full rounded-md border px-3 py-3 text-left transition",
-                  activeRunId === job.run_id ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
+                  "flex items-stretch gap-1 rounded-md border p-2 transition",
+                  isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
                 )}
-                onClick={() => onOpen(job.run_id)}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{job.title || "Fleet Planner Run"}</div>
-                    <div className={cn("mt-1 text-xs", activeRunId === job.run_id ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                      {formatDateTime(job.created_at)}
+                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{job.title || "Fleet Planner Run"}</div>
+                      <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                        {formatDateTime(job.created_at)}
+                      </div>
                     </div>
+                    <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
                   </div>
-                  <Badge tone={activeRunId === job.run_id ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
-                </div>
-                <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", activeRunId === job.run_id ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                  <span>{formatNumber(summary.students)} students</span>
-                  <span>{formatNumber(summary.total_distance_km)} km</span>
-                </div>
-              </button>
+                  <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                    <span>{formatNumber(summary.students)} students</span>
+                    <span>{formatNumber(summary.total_distance_km)} km</span>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                    isActive
+                      ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+                  )}
+                  aria-label={`Delete ${job.title || "Fleet Planner Run"}`}
+                  disabled={isDeleting}
+                  onClick={() => {
+                    if (window.confirm("Delete this Fleet Planner history run? This cannot be undone.")) {
+                      onDelete(job.run_id);
+                    }
+                  }}
+                >
+                  {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              </div>
             );
           })}
         </div>

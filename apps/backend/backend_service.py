@@ -51,6 +51,7 @@ DEMO_DATA_DIR = CLIENT_DIR / "demodata"
 DEFAULT_JOBS_DIR = REPO_ROOT / "state" / "jobs"
 RAW_JOBS_DIR = os.environ.get("BRP_BACKEND_JOBS_DIR", "").strip()
 JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
+SIDE_TOOLS_DIR = REPO_ROOT / "state" / "side_tools"
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
@@ -730,123 +731,37 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
     return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx")
 
 
-def _generated_plan_config_payload(route_preview: dict[str, Any], max_route_duration_minutes: int) -> dict[str, Any]:
-    fleet_items: dict[str, dict[str, int | str]] = {}
-    for route in list(route_preview.get("routes") or []):
-        vehicle = dict(route.get("selected_vehicle") or {})
-        bus_type = str(vehicle.get("display_name") or "").strip() or "Generated Bus"
-        capacity = int(vehicle.get("student_capacity", vehicle.get("capacity", 0)) or 0)
-        fleet_item = fleet_items.setdefault(
-            bus_type,
-            {
-                "bus_type": bus_type,
-                "seat_count": capacity,
-                "vehicle_count": 0,
-            },
-        )
-        fleet_item["vehicle_count"] = int(fleet_item["vehicle_count"]) + 1
+def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    preview_result = dict(payload.get("preview_result") or {})
+    global_plan_result = dict(payload.get("global_plan_result") or {})
+    if not preview_result:
+        raise ValueError("Run Fleet preview before saving history.")
+    if not global_plan_result:
+        raise ValueError("Build an optimized plan before saving history.")
 
-    sorted_fleet = sorted(
-        fleet_items.values(),
-        key=lambda item: (int(item.get("seat_count", 0) or 0), str(item.get("bus_type", "")).lower()),
-        reverse=True,
-    )
-    slots = list(sorted_fleet[:3])
-    while len(slots) < 3:
-        slots.append({"bus_type": f"Generated Slot {len(slots) + 1}", "seat_count": 0, "vehicle_count": 0})
-
-    large, mid, small = slots[0], slots[1], slots[2]
-    service_direction = str(dict(route_preview.get("summary") or {}).get("service_direction") or "to_school")
-    return _planner_config_payload(
-        {
-            "large_bus_name": str(large["bus_type"]),
-            "mid_bus_name": str(mid["bus_type"]),
-            "small_bus_name": str(small["bus_type"]),
-            "large_bus_capacity": int(large["seat_count"]),
-            "mid_bus_capacity": int(mid["seat_count"]),
-            "small_bus_capacity": int(small["seat_count"]),
-            "large_bus_max_count": int(large["vehicle_count"]),
-            "mid_bus_max_count": int(mid["vehicle_count"]),
-            "small_bus_max_count": int(small["vehicle_count"]),
-            "free_baseline_large_bus_ratio": float(max(0, int(large["vehicle_count"]))),
-            "free_baseline_mid_bus_ratio": float(max(0, int(mid["vehicle_count"]))),
-            "free_baseline_small_bus_ratio": float(max(0, int(small["vehicle_count"]))),
-            "max_route_duration_minutes": int(max_route_duration_minutes),
-            "service_direction": _service_direction_label(service_direction),
-            "include_subway_aggregation_scenario": False,
-            "include_nearby_aggregation_scenario": False,
-        }
-    )
-
-
-def _handle_fleet_planner_submit_generated_plan(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
-    client_core = _client_core_module()
-    demand_routing = _client_module("demand_routing")
-    route_preview = dict(payload.get("route_preview") or {})
-    if not route_preview:
-        raise ValueError("Build a global plan before submitting it as a job.")
-    summary = dict(route_preview.get("summary") or {})
-    max_route_duration_minutes = int(
-        payload.get("max_route_duration_minutes")
-        or summary.get("max_route_duration_minutes")
-        or 60
-    )
-    job_name = str(payload.get("job_name") or "").strip() or f"Demand Auto Plan - {datetime.now().strftime('%Y-%m-%d %H%M')}"
-    service_direction = str(summary.get("service_direction") or "to_school")
-    workbook_bytes = demand_routing.build_legacy_route_plan_workbook_bytes(route_preview)
-    temp_path = ""
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as temp_file:
-            temp_file.write(workbook_bytes)
-            temp_path = temp_file.name
-        current_plan = client_core.read_current_plan_from_excel(
-            temp_path,
-            service_direction=_service_direction_label(service_direction),
-        )
-        input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
-        config_payload = _generated_plan_config_payload(route_preview, max_route_duration_minutes)
-        client_config = _build_client_planner_config(client_core, config_payload)
-        client_prep = client_core.prepare_client_payload(
-            input_records,
-            current_plan_data=current_plan,
-            config=client_config,
-        )
-        metadata = {
-            "job_name": job_name,
-            "job_default_name": "Fleet Planner Global OR-Tools Plan",
-            "job_custom_name": job_name,
-            "source_mode": "fleet_planner_preview",
-            "source_label": "Fleet Planner Global OR-Tools Plan",
-            "generated_from": "Fleet Planner Preview",
-            "service_direction": _service_direction_label(service_direction),
-            "plan_type": "generated_auto_plan",
-            "planner_config": dict(config_payload),
-            "client_prep": {
-                "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
-                "excluded_stops": list(client_prep.get("excluded_stops") or []),
-                "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
-                "logs": str(client_prep.get("logs", "") or ""),
-            },
-        }
-        job_summary = JOB_STORE.create_job(
-            config_payload,
-            dict(client_prep["prepared_payload"]),
-            metadata=metadata,
-            owner_email=user_email,
-        )
-        spawned = _spawn_job_worker(str(job_summary["job_id"]))
-        if spawned:
-            job_summary["worker_pid"] = spawned.get("worker_pid")
-        return {
-            "job": job_summary,
-            "client_prep": metadata["client_prep"],
-        }
-    finally:
-        if temp_path:
-            try:
-                Path(temp_path).unlink(missing_ok=True)
-            except OSError:
-                pass
+    scenario = dict(payload.get("scenario") or {})
+    plan_summary = dict(global_plan_result.get("summary") or {})
+    preview_summary = dict(preview_result.get("summary") or {})
+    history_payload = {
+        "title": str(payload.get("title") or "").strip(),
+        "scenario": scenario,
+        "preview_result": preview_result,
+        "geocode_result": dict(payload.get("geocode_result") or {}),
+        "cluster_result": dict(payload.get("cluster_result") or {}),
+        "route_preview_result": dict(payload.get("route_preview_result") or {}),
+        "global_plan_result": global_plan_result,
+        "summary": {
+            "market": scenario.get("market") or preview_summary.get("market"),
+            "mode": scenario.get("mode") or preview_summary.get("mode"),
+            "monitor_seats": scenario.get("monitor_seats") or preview_summary.get("monitor_seats"),
+            "service_direction": scenario.get("service_direction") or plan_summary.get("service_direction"),
+            "routes": plan_summary.get("route_count"),
+            "students": preview_summary.get("total_riders"),
+            "total_distance_km": plan_summary.get("total_distance_km"),
+            "total_duration_min": plan_summary.get("total_duration_min"),
+        },
+    }
+    return {"job": FLEET_PLANNER_HISTORY_STORE.create(history_payload, owner_email=user_email)}
 
 
 def _list_demo_workbooks() -> list[dict[str, Any]]:
@@ -1547,7 +1462,104 @@ class JobStore:
             self._save_index_unlocked(refreshed_entries)
 
 
+class SideToolHistoryStore:
+    def __init__(self, root_dir: Path, tool_key: str) -> None:
+        self.tool_key = tool_key
+        self.tool_dir = root_dir / tool_key
+        self.index_path = self.tool_dir / "index.json"
+        self.lock = threading.Lock()
+        self.tool_dir.mkdir(parents=True, exist_ok=True)
+        if not self.index_path.exists():
+            self.index_path.write_text("[]", encoding="utf-8")
+
+    def _record_path(self, run_id: str) -> Path:
+        return self.tool_dir / f"{run_id}.json"
+
+    def _load_index_unlocked(self) -> list[dict[str, Any]]:
+        try:
+            payload = json.loads(self.index_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                return payload
+        except Exception:
+            pass
+        return []
+
+    def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
+        self.index_path.write_text(
+            json.dumps(_json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False),
+            encoding="utf-8",
+        )
+
+    def _summary_for_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "run_id": str(record.get("run_id") or ""),
+            "tool_key": self.tool_key,
+            "owner_email": _normalize_email(record.get("owner_email")),
+            "title": str(record.get("title") or ""),
+            "created_at": record.get("created_at"),
+            "summary": deepcopy(record.get("summary") or {}),
+        }
+
+    def create(self, payload: dict[str, Any], owner_email: str) -> dict[str, Any]:
+        run_id = uuid4().hex[:12]
+        created_at = utc_now_iso()
+        normalized_owner_email = _normalize_email(owner_email)
+        title = str(payload.get("title") or "").strip() or f"Fleet Planner Run - {datetime.now().strftime('%Y-%m-%d %H%M')}"
+        record = {
+            "run_id": run_id,
+            "tool_key": self.tool_key,
+            "owner_email": normalized_owner_email,
+            "title": title,
+            "created_at": created_at,
+            "scenario": deepcopy(payload.get("scenario") or {}),
+            "preview_result": deepcopy(payload.get("preview_result") or {}),
+            "geocode_result": deepcopy(payload.get("geocode_result") or {}),
+            "cluster_result": deepcopy(payload.get("cluster_result") or {}),
+            "route_preview_result": deepcopy(payload.get("route_preview_result") or {}),
+            "global_plan_result": deepcopy(payload.get("global_plan_result") or {}),
+            "summary": deepcopy(payload.get("summary") or {}),
+        }
+        summary = self._summary_for_record(record)
+        with self.lock:
+            self._record_path(run_id).write_text(
+                json.dumps(_json_safe(record), ensure_ascii=False, indent=2, allow_nan=False),
+                encoding="utf-8",
+            )
+            entries = [
+                entry
+                for entry in self._load_index_unlocked()
+                if str(entry.get("run_id") or "") != run_id
+            ]
+            entries.insert(0, summary)
+            self._save_index_unlocked(entries[:100])
+        return summary
+
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        with self.lock:
+            record_path = self._record_path(run_id)
+            if not record_path.exists():
+                return None
+            try:
+                payload = json.loads(record_path.read_text(encoding="utf-8"))
+                return deepcopy(payload) if isinstance(payload, dict) else None
+            except Exception:
+                return None
+
+    def list(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
+        with self.lock:
+            entries = self._load_index_unlocked()
+            if include_all:
+                return deepcopy(entries)
+            normalized_user_email = _normalize_email(user_email)
+            return [
+                deepcopy(entry)
+                for entry in entries
+                if _normalize_email(entry.get("owner_email")) == normalized_user_email
+            ]
+
+
 JOB_STORE = JobStore(JOBS_DIR)
+FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
 JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
@@ -1913,6 +1925,20 @@ class BackendHandler(BaseHTTPRequestHandler):
                 inline=False,
             )
             return
+        if path == "/fleet-planner/history":
+            self._send_json(200, {"jobs": FLEET_PLANNER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})
+            return
+        if path.startswith("/fleet-planner/history/"):
+            run_id = unquote(path.rsplit("/", 1)[-1]).strip()
+            record = FLEET_PLANNER_HISTORY_STORE.get(run_id)
+            if not record:
+                self._send_json(404, {"error": f"Fleet Planner history run not found: {run_id}"})
+                return
+            if not _can_access_job(record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Fleet Planner history run is not available for user: {user_email}"})
+                return
+            self._send_json(200, record)
+            return
         if path == "/workbooks/demos":
             self._send_json(200, {"demos": _list_demo_workbooks()})
             return
@@ -2046,8 +2072,8 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path == "/fleet-planner/global-plan":
                 self._send_json(200, _handle_fleet_planner_global_plan(payload))
                 return
-            if path == "/fleet-planner/submit-generated-plan":
-                self._send_json(202, _handle_fleet_planner_submit_generated_plan(payload, user_email=user_email))
+            if path == "/fleet-planner/history":
+                self._send_json(201, _handle_fleet_planner_history_create(payload, user_email=user_email))
                 return
             if path == "/jobs":
                 config_payload = payload.get("config") or {}

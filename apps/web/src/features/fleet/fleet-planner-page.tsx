@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { CircleHelp, Download, FileSpreadsheet, Loader2, MapPinned, Route, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, Save, SlidersHorizontal, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -11,14 +11,18 @@ import {
   buildFleetPlannerGlobalPlan,
   buildFleetPlannerRoutePreview,
   geocodeFleetPlannerDemand,
+  getFleetPlannerHistory,
   getDemandTemplateUrl,
+  listFleetPlannerHistory,
   previewFleetPlanner,
-  submitFleetPlannerGeneratedPlan,
+  saveFleetPlannerHistory,
   type FleetPlannerClusterResponse,
   type FleetPlannerGeocodeResponse,
+  type FleetPlannerHistoryRecord,
+  type FleetPlannerHistorySummary,
   type FleetPlannerPreviewResponse,
   type FleetPlannerRoutePreviewResponse,
-  type FleetPlannerSubmitGeneratedPlanResponse,
+  type FleetPlannerHistoryCreateResponse,
 } from "@/lib/api";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -28,9 +32,15 @@ const fieldClassName =
 const textareaClassName =
   "min-h-28 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-primary";
 
-type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "diagnostics";
+type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "maps" | "diagnostics";
+type ToolMapOutput = {
+  key: string;
+  name: string;
+  html: string;
+};
 
 export function FleetPlannerPage() {
+  const queryClient = useQueryClient();
   const [market, setMarket] = useState<"KR" | "CN">("KR");
   const [mode, setMode] = useState<"balanced" | "cost_saver" | "comfort_saver">("balanced");
   const [monitorSeats, setMonitorSeats] = useState(1);
@@ -41,9 +51,16 @@ export function FleetPlannerPage() {
   const [sectorCount, setSectorCount] = useState<4 | 8 | 12>(8);
   const [routeDirection, setRouteDirection] = useState<"to_school" | "from_school">("to_school");
   const [globalDirection, setGlobalDirection] = useState<"to_school" | "from_school">("to_school");
-  const [generatedJobName, setGeneratedJobName] = useState("");
+  const [historyTitle, setHistoryTitle] = useState("");
+  const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
+
+  const historyQuery = useQuery({
+    queryKey: ["fleet-planner-history"],
+    queryFn: listFleetPlannerHistory,
+    staleTime: 15_000,
+  });
 
   const previewMutation = useMutation({
     mutationFn: async () =>
@@ -55,7 +72,10 @@ export function FleetPlannerPage() {
         file_name: file?.name,
         file_base64: fileBase64 || undefined,
       }),
-    onSuccess: () => setActiveResultView("fleet"),
+    onSuccess: () => {
+      setLoadedHistoryRecord(null);
+      setActiveResultView("fleet");
+    },
   });
 
   const geocodeMutation = useMutation({
@@ -68,7 +88,10 @@ export function FleetPlannerPage() {
         file_base64: fileBase64,
       });
     },
-    onSuccess: () => setActiveResultView("geocode"),
+    onSuccess: () => {
+      setLoadedHistoryRecord(null);
+      setActiveResultView("geocode");
+    },
   });
 
   const clusterMutation = useMutation({
@@ -89,7 +112,10 @@ export function FleetPlannerPage() {
         },
       });
     },
-    onSuccess: () => setActiveResultView("diagnostics"),
+    onSuccess: () => {
+      setLoadedHistoryRecord(null);
+      setActiveResultView("diagnostics");
+    },
   });
 
   const routePreviewMutation = useMutation({
@@ -112,7 +138,10 @@ export function FleetPlannerPage() {
         },
       });
     },
-    onSuccess: () => setActiveResultView("diagnostics"),
+    onSuccess: () => {
+      setLoadedHistoryRecord(null);
+      setActiveResultView("diagnostics");
+    },
   });
 
   const globalPlanMutation = useMutation({
@@ -133,24 +162,52 @@ export function FleetPlannerPage() {
         },
       });
     },
-    onSuccess: () => setActiveResultView("optimized"),
+    onSuccess: () => {
+      setLoadedHistoryRecord(null);
+      setActiveResultView("optimized");
+    },
   });
 
-  const submitGeneratedPlanMutation = useMutation({
+  const saveHistoryMutation = useMutation({
     mutationFn: async () => {
-      const globalPlan = globalPlanMutation.data;
-      if (!globalPlan) {
-        throw new Error("Build a global plan before submitting it as a job.");
+      if (!result) {
+        throw new Error("Run Fleet preview before saving history.");
       }
-      return submitFleetPlannerGeneratedPlan({
-        job_name: generatedJobName.trim() || defaultGeneratedJobName(),
-        max_route_duration_minutes: Number(globalPlan.summary.max_route_duration_minutes || result?.assumptions.max_route_duration_minutes || 0) || undefined,
-        route_preview: {
-          summary: globalPlan.summary,
-          school: globalPlan.school,
-          routes: globalPlan.routes,
+      if (!globalPlanResult) {
+        throw new Error("Build an optimized plan before saving history.");
+      }
+      return saveFleetPlannerHistory({
+        title: historyTitle.trim() || defaultFleetHistoryTitle(),
+        scenario: {
+          market,
+          mode,
+          monitor_seats: monitorSeats,
+          service_direction: globalDirection,
         },
+        preview_result: result,
+        geocode_result: geocodeResult,
+        cluster_result: clusterResult,
+        route_preview_result: routePreviewResult,
+        global_plan_result: globalPlanResult,
       });
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["fleet-planner-history"] });
+    },
+  });
+
+  const loadHistoryMutation = useMutation({
+    mutationFn: (runId: string) => getFleetPlannerHistory(runId),
+    onSuccess: (record) => {
+      previewMutation.reset();
+      geocodeMutation.reset();
+      clusterMutation.reset();
+      routePreviewMutation.reset();
+      globalPlanMutation.reset();
+      saveHistoryMutation.reset();
+      setLoadedHistoryRecord(record);
+      setHistoryTitle(record.title || "");
+      setActiveResultView("optimized");
     },
   });
 
@@ -160,7 +217,8 @@ export function FleetPlannerPage() {
     clusterMutation.reset();
     routePreviewMutation.reset();
     globalPlanMutation.reset();
-    submitGeneratedPlanMutation.reset();
+    saveHistoryMutation.reset();
+    setLoadedHistoryRecord(null);
     setActiveResultView("fleet");
   }
 
@@ -168,7 +226,8 @@ export function FleetPlannerPage() {
     clusterMutation.reset();
     routePreviewMutation.reset();
     globalPlanMutation.reset();
-    submitGeneratedPlanMutation.reset();
+    saveHistoryMutation.reset();
+    setLoadedHistoryRecord(null);
     setActiveResultView("geocode");
   }
 
@@ -178,7 +237,8 @@ export function FleetPlannerPage() {
 
   function resetGlobalPlanResults() {
     globalPlanMutation.reset();
-    submitGeneratedPlanMutation.reset();
+    saveHistoryMutation.reset();
+    setLoadedHistoryRecord(null);
     setActiveResultView("fleet");
   }
 
@@ -202,11 +262,15 @@ export function FleetPlannerPage() {
     }
   }
 
-  const result = previewMutation.data;
-  const geocodeResult = geocodeMutation.data;
-  const clusterResult = clusterMutation.data;
-  const routePreviewResult = routePreviewMutation.data;
-  const globalPlanResult = globalPlanMutation.data;
+  const result = previewMutation.data || loadedHistoryRecord?.preview_result;
+  const geocodeResult = geocodeMutation.data || loadedHistoryRecord?.geocode_result;
+  const clusterResult = clusterMutation.data || loadedHistoryRecord?.cluster_result;
+  const routePreviewResult = routePreviewMutation.data || loadedHistoryRecord?.route_preview_result;
+  const globalPlanResult = globalPlanMutation.data || loadedHistoryRecord?.global_plan_result;
+  const mapOutputs = useMemo(
+    () => collectFleetMapOutputs({ geocodeResult, clusterResult, routePreviewResult, globalPlanResult }),
+    [geocodeResult, clusterResult, routePreviewResult, globalPlanResult],
+  );
   const mixRows = useMemo(
     () =>
       Object.entries(result?.mix_summary.vehicle_mix || {}).map(([vehicle, count]) => ({
@@ -329,12 +393,13 @@ export function FleetPlannerPage() {
               clusterResult={clusterResult}
               routePreviewResult={routePreviewResult}
               globalPlanResult={globalPlanResult}
-              generatedJobName={generatedJobName}
-              onGeneratedJobNameChange={setGeneratedJobName}
-              onSubmitGeneratedPlan={() => submitGeneratedPlanMutation.mutate()}
-              submitGeneratedPlanResult={submitGeneratedPlanMutation.data}
-              submitGeneratedPlanError={submitGeneratedPlanMutation.error as Error | null}
-              isSubmittingGeneratedPlan={submitGeneratedPlanMutation.isPending}
+              mapOutputs={mapOutputs}
+              historyTitle={historyTitle}
+              onHistoryTitleChange={setHistoryTitle}
+              onSaveHistory={() => saveHistoryMutation.mutate()}
+              saveHistoryResult={saveHistoryMutation.data}
+              saveHistoryError={saveHistoryMutation.error as Error | null}
+              isSavingHistory={saveHistoryMutation.isPending}
               activeView={activeResultView}
               onActiveViewChange={setActiveResultView}
             />
@@ -411,7 +476,7 @@ export function FleetPlannerPage() {
                     clusterMutation.reset();
                     routePreviewMutation.reset();
                     globalPlanMutation.reset();
-                    submitGeneratedPlanMutation.reset();
+                    saveHistoryMutation.reset();
                     geocodeMutation.mutate();
                   }}
                 >
@@ -423,7 +488,7 @@ export function FleetPlannerPage() {
                   disabled={!geocodeResult || globalPlanMutation.isPending}
                   icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
                   onClick={() => {
-                    submitGeneratedPlanMutation.reset();
+                    saveHistoryMutation.reset();
                     globalPlanMutation.mutate();
                   }}
                 >
@@ -451,7 +516,7 @@ export function FleetPlannerPage() {
                     onClick={() => {
                       routePreviewMutation.reset();
                       globalPlanMutation.reset();
-                      submitGeneratedPlanMutation.reset();
+                      saveHistoryMutation.reset();
                       clusterMutation.mutate();
                     }}
                   >
@@ -480,6 +545,14 @@ export function FleetPlannerPage() {
               </details>
             </CardContent>
           </Card>
+          <FleetPlannerHistoryPanel
+            jobs={historyQuery.data || []}
+            activeRunId={loadedHistoryRecord?.run_id}
+            isLoading={historyQuery.isLoading || loadHistoryMutation.isPending}
+            error={(historyQuery.error || loadHistoryMutation.error) as Error | null}
+            onRefresh={() => void historyQuery.refetch()}
+            onOpen={(runId) => loadHistoryMutation.mutate(runId)}
+          />
         </aside>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
@@ -494,12 +567,13 @@ function FleetPreviewResult({
   clusterResult,
   routePreviewResult,
   globalPlanResult,
-  generatedJobName,
-  onGeneratedJobNameChange,
-  onSubmitGeneratedPlan,
-  submitGeneratedPlanResult,
-  submitGeneratedPlanError,
-  isSubmittingGeneratedPlan,
+  mapOutputs,
+  historyTitle,
+  onHistoryTitleChange,
+  onSaveHistory,
+  saveHistoryResult,
+  saveHistoryError,
+  isSavingHistory,
   activeView,
   onActiveViewChange,
 }: {
@@ -509,12 +583,13 @@ function FleetPreviewResult({
   clusterResult?: FleetPlannerClusterResponse;
   routePreviewResult?: FleetPlannerRoutePreviewResponse;
   globalPlanResult?: FleetPlannerRoutePreviewResponse;
-  generatedJobName: string;
-  onGeneratedJobNameChange: (value: string) => void;
-  onSubmitGeneratedPlan: () => void;
-  submitGeneratedPlanResult?: FleetPlannerSubmitGeneratedPlanResponse;
-  submitGeneratedPlanError?: Error | null;
-  isSubmittingGeneratedPlan: boolean;
+  mapOutputs: ToolMapOutput[];
+  historyTitle: string;
+  onHistoryTitleChange: (value: string) => void;
+  onSaveHistory: () => void;
+  saveHistoryResult?: FleetPlannerHistoryCreateResponse;
+  saveHistoryError?: Error | null;
+  isSavingHistory: boolean;
   activeView: FleetResultView;
   onActiveViewChange: (view: FleetResultView) => void;
 }) {
@@ -538,6 +613,12 @@ function FleetPreviewResult({
       label: "Optimized plan",
       badge: globalPlanResult ? `${formatNumber(globalPlanResult.summary.route_count)} routes` : undefined,
       available: Boolean(globalPlanResult),
+    },
+    {
+      key: "maps",
+      label: "Maps",
+      badge: mapOutputs.length ? `${formatNumber(mapOutputs.length)} maps` : undefined,
+      available: mapOutputs.length > 0,
     },
     {
       key: "diagnostics",
@@ -622,20 +703,27 @@ function FleetPreviewResult({
 
         {activeView === "optimized" ? (
           globalPlanResult ? (
-            <RoutePreviewResult
-              result={globalPlanResult}
-              title="Optimized Plan"
-              framed={false}
-              generatedJobName={generatedJobName}
-              onGeneratedJobNameChange={onGeneratedJobNameChange}
-              onSubmitGeneratedPlan={onSubmitGeneratedPlan}
-              submitGeneratedPlanResult={submitGeneratedPlanResult}
-              submitGeneratedPlanError={submitGeneratedPlanError}
-              isSubmittingGeneratedPlan={isSubmittingGeneratedPlan}
-              showGeneratedJobSubmit
-            />
+            <div className="space-y-4">
+              <RoutePreviewResult result={globalPlanResult} title="Optimized Plan" framed={false} />
+              <FleetHistorySavePanel
+                title={historyTitle}
+                onTitleChange={onHistoryTitleChange}
+                onSave={onSaveHistory}
+                saveResult={saveHistoryResult}
+                saveError={saveHistoryError}
+                isSaving={isSavingHistory}
+              />
+            </div>
           ) : (
             <EmptyResultState title="Optimized plan not built" detail="Validate addresses first, then use Build optimized plan." />
+          )
+        ) : null}
+
+        {activeView === "maps" ? (
+          mapOutputs.length ? (
+            <ToolMapsPanel mapOutputs={mapOutputs} />
+          ) : (
+            <EmptyResultState title="No maps available" detail="Run address validation or build an optimized plan to render maps here." />
           )
         ) : null}
 
@@ -695,14 +783,6 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
           rows={result.rows}
           columns={["Role", "Row", "Address", "Students", "Status", "Cache Hit", "Provider", "Formatted Address", "Lat", "Lng", "Warning"]}
         />
-        {result.map_html ? (
-          <iframe
-            className="h-[520px] w-full rounded-md border border-border"
-            title="Demand geocode map"
-            srcDoc={result.map_html}
-            sandbox="allow-scripts allow-same-origin"
-          />
-        ) : null}
       </div>
     </>
   );
@@ -766,14 +846,6 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
             </div>
           </details>
         ) : null}
-        {result.map_html ? (
-          <iframe
-            className="h-[560px] w-full rounded-md border border-border"
-            title="Demand group map"
-            srcDoc={result.map_html}
-            sandbox="allow-scripts allow-same-origin"
-          />
-        ) : null}
       </div>
     </>
   );
@@ -784,24 +856,10 @@ function RoutePreviewResult({
   result,
   title,
   framed = true,
-  showGeneratedJobSubmit = false,
-  generatedJobName = "",
-  onGeneratedJobNameChange,
-  onSubmitGeneratedPlan,
-  submitGeneratedPlanResult,
-  submitGeneratedPlanError,
-  isSubmittingGeneratedPlan = false,
 }: {
   result: FleetPlannerRoutePreviewResponse;
   title: string;
   framed?: boolean;
-  showGeneratedJobSubmit?: boolean;
-  generatedJobName?: string;
-  onGeneratedJobNameChange?: (value: string) => void;
-  onSubmitGeneratedPlan?: () => void;
-  submitGeneratedPlanResult?: FleetPlannerSubmitGeneratedPlanResponse;
-  submitGeneratedPlanError?: Error | null;
-  isSubmittingGeneratedPlan?: boolean;
 }) {
   const content = (
     <>
@@ -886,42 +944,170 @@ function RoutePreviewResult({
             </div>
           </details>
         ) : null}
-        {result.map_html ? (
-          <iframe
-            className="h-[560px] w-full rounded-md border border-border"
-            title="Route preview map"
-            srcDoc={result.map_html}
-            sandbox="allow-scripts allow-same-origin"
-          />
-        ) : null}
-        {showGeneratedJobSubmit ? (
-          <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
-            <Field label="Generated Job Name">
-              <input
-                className={fieldClassName}
-                value={generatedJobName}
-                placeholder={defaultGeneratedJobName()}
-                onChange={(event) => onGeneratedJobNameChange?.(event.target.value)}
-              />
-            </Field>
-            {submitGeneratedPlanError ? <InlineError message={submitGeneratedPlanError.message} /> : null}
-            {submitGeneratedPlanResult?.job ? (
-              <Badge tone="success">Submitted job {submitGeneratedPlanResult.job.job_id}</Badge>
-            ) : null}
-            <Button
-              type="button"
-              disabled={isSubmittingGeneratedPlan}
-              icon={isSubmittingGeneratedPlan ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-              onClick={onSubmitGeneratedPlan}
-            >
-              Submit global plan as job
-            </Button>
-          </div>
-        ) : null}
       </div>
     </>
   );
   return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
+}
+
+function FleetHistorySavePanel({
+  title,
+  onTitleChange,
+  onSave,
+  saveResult,
+  saveError,
+  isSaving,
+}: {
+  title: string;
+  onTitleChange: (value: string) => void;
+  onSave: () => void;
+  saveResult?: FleetPlannerHistoryCreateResponse;
+  saveError?: Error | null;
+  isSaving: boolean;
+}) {
+  return (
+    <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
+      <Field label="History Name">
+        <input
+          className={fieldClassName}
+          value={title}
+          placeholder={defaultFleetHistoryTitle()}
+          onChange={(event) => onTitleChange(event.target.value)}
+        />
+      </Field>
+      {saveError ? <InlineError message={saveError.message} /> : null}
+      {saveResult?.job ? <Badge tone="success">Saved to Fleet Planner History</Badge> : null}
+      <Button
+        type="button"
+        disabled={isSaving}
+        icon={isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+        onClick={onSave}
+      >
+        Save to Fleet Planner History
+      </Button>
+    </div>
+  );
+}
+
+function FleetPlannerHistoryPanel({
+  jobs,
+  activeRunId,
+  isLoading,
+  error,
+  onRefresh,
+  onOpen,
+}: {
+  jobs: FleetPlannerHistorySummary[];
+  activeRunId?: string;
+  isLoading: boolean;
+  error?: Error | null;
+  onRefresh: () => void;
+  onOpen: (runId: string) => void;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Fleet Planner History</h2>
+          </div>
+          <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
+            <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
+          </button>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {error ? <InlineError message={error.message} /> : null}
+        {!jobs.length && !isLoading ? (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+            Saved Fleet Planner runs will appear here.
+          </div>
+        ) : null}
+        <div className="max-h-[420px] space-y-2 overflow-y-auto pr-1">
+          {jobs.map((job) => {
+            const summary = job.summary || {};
+            return (
+              <button
+                key={job.run_id}
+                type="button"
+                className={cn(
+                  "w-full rounded-md border px-3 py-3 text-left transition",
+                  activeRunId === job.run_id ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
+                )}
+                onClick={() => onOpen(job.run_id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">{job.title || "Fleet Planner Run"}</div>
+                    <div className={cn("mt-1 text-xs", activeRunId === job.run_id ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                      {formatDateTime(job.created_at)}
+                    </div>
+                  </div>
+                  <Badge tone={activeRunId === job.run_id ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
+                </div>
+                <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", activeRunId === job.run_id ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                  <span>{formatNumber(summary.students)} students</span>
+                  <span>{formatNumber(summary.total_distance_km)} km</span>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
+  const [selectedKey, setSelectedKey] = useState("");
+  const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
+
+  if (!selected) {
+    return <EmptyResultState title="No maps available" detail="This Fleet Planner run has no rendered maps." />;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Map className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Planner maps</h2>
+          </div>
+          <Badge tone="info">{selected.name}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2">
+          {mapOutputs.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={cn(
+                "h-9 rounded-md border px-3 text-sm font-medium transition",
+                selected.key === item.key
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => setSelectedKey(item.key)}
+            >
+              {item.name}
+            </button>
+          ))}
+        </div>
+        <div className="overflow-hidden rounded-md border border-border bg-muted">
+          <iframe
+            key={selected.key}
+            title={selected.name}
+            srcDoc={selected.html}
+            sandbox="allow-scripts allow-same-origin"
+            className="h-[720px] min-h-[560px] max-h-[75vh] w-full border-0"
+          />
+        </div>
+      </CardContent>
+    </Card>
+  );
 }
 
 function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -1113,11 +1299,48 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-function defaultGeneratedJobName() {
+function collectFleetMapOutputs({
+  geocodeResult,
+  clusterResult,
+  routePreviewResult,
+  globalPlanResult,
+}: {
+  geocodeResult?: FleetPlannerGeocodeResponse;
+  clusterResult?: FleetPlannerClusterResponse;
+  routePreviewResult?: FleetPlannerRoutePreviewResponse;
+  globalPlanResult?: FleetPlannerRoutePreviewResponse;
+}) {
+  return [
+    { key: "address-validation", name: "Address Validation", html: geocodeResult?.map_html || "" },
+    { key: "demand-groups", name: "Demand Groups", html: clusterResult?.map_html || "" },
+    { key: "grouped-routes", name: "Grouped Route Preview", html: routePreviewResult?.map_html || "" },
+    { key: "optimized-plan", name: "Optimized Plan", html: globalPlanResult?.map_html || "" },
+  ].filter((item) => item.html.trim()) as ToolMapOutput[];
+}
+
+function formatDateTime(value: unknown) {
+  const text = String(value || "").trim();
+  if (!text) {
+    return "Unknown time";
+  }
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) {
+    return text;
+  }
+  return date.toLocaleString([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function defaultFleetHistoryTitle() {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  return `Demand Auto Plan - ${date} ${time}`;
+  return `Fleet Planner Run - ${date} ${time}`;
 }
 
 function downloadBase64Workbook(base64Value: string, fileName: string) {

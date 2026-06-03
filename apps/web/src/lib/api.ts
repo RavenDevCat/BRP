@@ -261,18 +261,34 @@ export type FleetPlannerRoutePreviewResponse = {
   workbook_base64?: string;
 };
 
-export type FleetPlannerSubmitGeneratedPlanResponse = {
-  job: JobSummary & { worker_pid?: number };
-  client_prep: {
-    geocode_warnings: Array<Record<string, unknown>>;
-    excluded_stops: Array<Record<string, unknown>>;
-    elapsed_seconds: number;
-    logs: string;
-  };
+export type FleetPlannerHistorySummary = {
+  run_id: string;
+  tool_key: string;
+  owner_email?: string;
+  title: string;
+  created_at?: string | null;
+  summary: Record<string, unknown>;
+};
+
+export type FleetPlannerHistoryRecord = FleetPlannerHistorySummary & {
+  scenario?: Record<string, unknown>;
+  preview_result?: FleetPlannerPreviewResponse;
+  geocode_result?: FleetPlannerGeocodeResponse;
+  cluster_result?: FleetPlannerClusterResponse;
+  route_preview_result?: FleetPlannerRoutePreviewResponse;
+  global_plan_result?: FleetPlannerRoutePreviewResponse;
+};
+
+export type FleetPlannerHistoryCreateResponse = {
+  job: FleetPlannerHistorySummary;
 };
 
 type JobsResponse = {
   jobs: JobSummary[];
+};
+
+type FleetPlannerHistoryResponse = {
+  jobs: FleetPlannerHistorySummary[];
 };
 
 type DemoWorkbooksResponse = {
@@ -549,16 +565,25 @@ export function buildFleetPlannerGlobalPlan(payload: {
   });
 }
 
-export function submitFleetPlannerGeneratedPlan(payload: {
-  job_name: string;
-  max_route_duration_minutes?: number;
-  route_preview: {
-    summary: Record<string, unknown>;
-    school: Record<string, unknown>;
-    routes: Array<Record<string, unknown>>;
-  };
+export async function listFleetPlannerHistory() {
+  const payload = await apiFetch<FleetPlannerHistoryResponse>("/fleet-planner/history");
+  return payload.jobs;
+}
+
+export function getFleetPlannerHistory(runId: string) {
+  return apiFetch<FleetPlannerHistoryRecord>(`/fleet-planner/history/${encodeURIComponent(runId)}`);
+}
+
+export function saveFleetPlannerHistory(payload: {
+  title?: string;
+  scenario: Record<string, unknown>;
+  preview_result: FleetPlannerPreviewResponse;
+  geocode_result?: FleetPlannerGeocodeResponse;
+  cluster_result?: FleetPlannerClusterResponse;
+  route_preview_result?: FleetPlannerRoutePreviewResponse;
+  global_plan_result: FleetPlannerRoutePreviewResponse;
 }) {
-  return apiFetch<FleetPlannerSubmitGeneratedPlanResponse>("/fleet-planner/submit-generated-plan", {
+  return apiFetch<FleetPlannerHistoryCreateResponse>("/fleet-planner/history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

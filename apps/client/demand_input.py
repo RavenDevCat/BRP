@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import folium
+from folium import Element
 import pandas as pd
 
 import client_runtime as runtime
@@ -391,7 +392,12 @@ def build_demand_geocode_map_html(geocode_result: dict[str, Any]) -> str:
 
     center_lat = sum(float(point["lat"]) for point in points) / len(points)
     center_lng = sum(float(point["lng"]) for point in points) / len(points)
-    fmap = folium.Map(location=[center_lat, center_lng], zoom_start=12, tiles="OpenStreetMap")
+    fmap = folium.Map(
+        location=[center_lat, center_lng],
+        zoom_start=12,
+        tiles="https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    )
     bounds: list[list[float]] = []
 
     if school.get("status") == "ok":
@@ -423,4 +429,20 @@ def build_demand_geocode_map_html(geocode_result: dict[str, Any]) -> str:
 
     if len(bounds) > 1:
         fmap.fit_bounds(bounds, padding=(20, 20))
+    panel = (
+        "<div style='position:fixed;top:12px;right:12px;z-index:9999;width:300px;max-height:72vh;overflow:auto;"
+        "background:rgba(255,255,255,0.94);padding:12px 14px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.15);"
+        "font-family:Arial,sans-serif;font-size:14px;line-height:1.45;'>"
+        "<h3 style='margin:0 0 8px 0;'>Demand Map Summary</h3>"
+        f"<div><b>Resolved rows:</b> {len([point for point in list(geocode_result.get('demand_points') or []) if point.get('status') == 'ok'])}</div>"
+        f"<div><b>Students:</b> {sum(int(point.get('student_count', 0) or 0) for point in list(geocode_result.get('demand_points') or []) if point.get('status') == 'ok')}</div>"
+        "<div style='margin-top:8px;display:flex;align-items:center;gap:8px;'>"
+        "<span style='display:inline-block;width:12px;height:12px;border-radius:999px;background:#ff922b;border:1px solid #d9480f;'></span>"
+        "<span>Pickup demand point</span></div>"
+        "<div style='display:flex;align-items:center;gap:8px;'>"
+        "<span style='display:inline-block;width:12px;height:12px;border-radius:999px;background:#2563eb;border:1px solid #1d4ed8;'></span>"
+        "<span>School</span></div>"
+        "</div>"
+    )
+    fmap.get_root().html.add_child(Element(panel))
     return fmap._repr_html_()

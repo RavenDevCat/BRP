@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import io
+import tempfile
+from pathlib import Path
 from typing import Any
 
-import folium
 import pandas as pd
 
+import client_runtime as runtime
 from distance_tool import compute_osrm_metrics_from_origin
 
 
@@ -332,49 +334,80 @@ def build_legacy_route_plan_workbook_bytes(route_preview: dict[str, Any]) -> byt
 
 
 def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
-    school = dict(route_preview.get("school") or {})
-    if school.get("status") != "ok" or school.get("lat") is None or school.get("lng") is None:
+    routes = list(route_preview.get("routes") or [])
+    if not routes:
         return ""
 
-    colors = ("#e03131", "#2f9e44", "#1971c2", "#f08c00", "#862e9c", "#0c8599")
-    school_location = [float(school["lat"]), float(school["lng"])]
-    fmap = folium.Map(location=school_location, zoom_start=12, tiles="OpenStreetMap")
-    bounds = [school_location]
-    folium.Marker(
-        location=school_location,
-        tooltip="School",
-        popup=str(school.get("formatted_address") or school.get("address") or "School"),
-        icon=folium.Icon(color="blue", icon="home"),
-    ).add_to(fmap)
+    map_points: list[dict[str, Any]] = []
+    map_routes: list[dict[str, Any]] = []
+    school = dict(route_preview.get("school") or {})
+    school_lat = float(school["lat"]) if school.get("lat") is not None else None
+    school_lng = float(school["lng"]) if school.get("lng") is not None else None
+    service_direction = str(dict(route_preview.get("summary") or {}).get("service_direction") or "to_school")
+    service_direction_label = "To School" if service_direction == "to_school" else "From School"
 
-    for route_index, route in enumerate(list(route_preview.get("routes") or [])):
-        color = colors[route_index % len(colors)]
-        route_id = str(route.get("cluster_id", f"Route {route_index + 1}"))
+    for route_index, route in enumerate(routes):
+        node_indexes: list[int] = []
         ordered_points = list(route.get("ordered_points") or [])
-        polyline_points: list[list[float]] = []
-        for stop_index, point in enumerate(ordered_points):
-            location = [float(point["lat"]), float(point["lng"])]
-            bounds.append(location)
-            polyline_points.append(location)
-            folium.CircleMarker(
-                location=location,
-                radius=7 if stop_index else 9,
-                color=color,
-                fill=True,
-                fill_color=color,
-                fill_opacity=0.78,
-                tooltip=f"{route_id} stop {stop_index + 1}",
-                popup=str(point.get("address", "")),
-            ).add_to(fmap)
-        if len(polyline_points) >= 2:
-            folium.PolyLine(
-                polyline_points,
-                color=color,
-                weight=4,
-                opacity=0.72,
-                tooltip=f"{route_id} preview order",
-            ).add_to(fmap)
+        for point in ordered_points:
+            if point.get("lat") is None or point.get("lng") is None:
+                continue
+            lat = float(point["lat"])
+            lng = float(point["lng"])
+            node_indexes.append(len(map_points))
+            is_school = (
+                school_lat is not None
+                and school_lng is not None
+                and abs(lat - school_lat) < 0.000001
+                and abs(lng - school_lng) < 0.000001
+            )
+            map_points.append(
+                {
+                    "address": str(point.get("formatted_address") or point.get("address") or "School").strip(),
+                    "plot_lat": lat,
+                    "plot_lng": lng,
+                    "is_depot": is_school,
+                }
+            )
+        if len(node_indexes) < 2:
+            continue
 
-    if len(bounds) > 1:
-        fmap.fit_bounds(bounds, padding=(20, 20))
-    return fmap._repr_html_()
+        vehicle = dict(route.get("selected_vehicle") or {})
+        bus_capacity = int(vehicle.get("student_capacity", vehicle.get("capacity", 0)) or 0)
+        load = sum(
+            int(point.get("student_count", 0) or 0)
+            for point in ordered_points
+            if point.get("student_count") is not None
+        )
+        map_routes.append(
+            {
+                "route_id": str(route.get("cluster_id") or f"Route {route_index + 1}"),
+                "vehicle_id": route_index + 1,
+                "bus_type_name": str(vehicle.get("display_name") or "Selected vehicle"),
+                "bus_capacity": bus_capacity,
+                "load": load,
+                "time_s": float(route.get("duration_s", 0.0) or 0.0),
+                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "nodes": node_indexes,
+                "leg_details": [],
+            }
+        )
+
+    if not map_points or not map_routes:
+        return ""
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as temp_file:
+        temp_path = temp_file.name
+    try:
+        runtime.render_map(
+            map_points,
+            map_routes,
+            temp_path,
+            service_direction=service_direction_label,
+        )
+        return Path(temp_path).read_text(encoding="utf-8")
+    finally:
+        try:
+            Path(temp_path).unlink(missing_ok=True)
+        except OSError:
+            pass

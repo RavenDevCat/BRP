@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 import folium
+from folium import Element
 import pandas as pd
 
 import client_runtime as runtime
@@ -320,7 +321,12 @@ def build_demand_cluster_map_html(cluster_result: dict[str, Any]) -> str:
         return ""
 
     school_location = [float(school["lat"]), float(school["lng"])]
-    fmap = folium.Map(location=school_location, zoom_start=12, tiles="OpenStreetMap")
+    fmap = folium.Map(
+        location=school_location,
+        zoom_start=12,
+        tiles="https://{s}.tile.openstreetmap.de/{z}/{x}/{y}.png",
+        attr='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    )
     bounds: list[list[float]] = [school_location]
     folium.Marker(
         location=school_location,
@@ -356,4 +362,27 @@ def build_demand_cluster_map_html(cluster_result: dict[str, Any]) -> str:
 
     if len(bounds) > 1:
         fmap.fit_bounds(bounds, padding=(20, 20))
+    legend_rows = []
+    for index, cluster in enumerate(list(cluster_result.get("clusters") or [])[:12]):
+        color = CLUSTER_COLORS[index % len(CLUSTER_COLORS)]
+        cluster_id = str(cluster.get("cluster_id", "Cluster"))
+        legend_rows.append(
+            "<div style='display:flex;align-items:center;gap:8px;margin-top:4px;'>"
+            f"<span style='display:inline-block;width:12px;height:12px;border-radius:999px;background:{color};"
+            "border:1px solid rgba(17,24,39,0.22);'></span>"
+            f"<span>{cluster_id}: {int(cluster.get('student_count', 0) or 0)} students</span>"
+            "</div>"
+        )
+    panel = (
+        "<div style='position:fixed;top:12px;right:12px;z-index:9999;width:320px;max-height:72vh;overflow:auto;"
+        "background:rgba(255,255,255,0.94);padding:12px 14px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.15);"
+        "font-family:Arial,sans-serif;font-size:14px;line-height:1.45;'>"
+        "<h3 style='margin:0 0 8px 0;'>Demand Group Summary</h3>"
+        f"<div><b>Groups:</b> {len(list(cluster_result.get('clusters') or []))}</div>"
+        f"<div><b>Students:</b> {sum(int(cluster.get('student_count', 0) or 0) for cluster in list(cluster_result.get('clusters') or []))}</div>"
+        "<div style='margin-top:8px;'><b>Group colors</b></div>"
+        f"{''.join(legend_rows)}"
+        "</div>"
+    )
+    fmap.get_root().html.add_child(Element(panel))
     return fmap._repr_html_()

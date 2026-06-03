@@ -20,13 +20,15 @@ import {
   type FleetPlannerRoutePreviewResponse,
   type FleetPlannerSubmitGeneratedPlanResponse,
 } from "@/lib/api";
-import { formatNumber, formatPercent, toTitle } from "@/lib/format";
+import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
 const textareaClassName =
   "min-h-28 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-primary";
+
+type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "diagnostics";
 
 export function FleetPlannerPage() {
   const [market, setMarket] = useState<"KR" | "CN">("KR");
@@ -41,6 +43,7 @@ export function FleetPlannerPage() {
   const [globalDirection, setGlobalDirection] = useState<"to_school" | "from_school">("to_school");
   const [generatedJobName, setGeneratedJobName] = useState("");
   const [howToUseOpen, setHowToUseOpen] = useState(false);
+  const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
 
   const previewMutation = useMutation({
     mutationFn: async () =>
@@ -52,6 +55,7 @@ export function FleetPlannerPage() {
         file_name: file?.name,
         file_base64: fileBase64 || undefined,
       }),
+    onSuccess: () => setActiveResultView("fleet"),
   });
 
   const geocodeMutation = useMutation({
@@ -64,6 +68,7 @@ export function FleetPlannerPage() {
         file_base64: fileBase64,
       });
     },
+    onSuccess: () => setActiveResultView("geocode"),
   });
 
   const clusterMutation = useMutation({
@@ -84,6 +89,7 @@ export function FleetPlannerPage() {
         },
       });
     },
+    onSuccess: () => setActiveResultView("diagnostics"),
   });
 
   const routePreviewMutation = useMutation({
@@ -106,6 +112,7 @@ export function FleetPlannerPage() {
         },
       });
     },
+    onSuccess: () => setActiveResultView("diagnostics"),
   });
 
   const globalPlanMutation = useMutation({
@@ -126,6 +133,7 @@ export function FleetPlannerPage() {
         },
       });
     },
+    onSuccess: () => setActiveResultView("optimized"),
   });
 
   const submitGeneratedPlanMutation = useMutation({
@@ -153,6 +161,7 @@ export function FleetPlannerPage() {
     routePreviewMutation.reset();
     globalPlanMutation.reset();
     submitGeneratedPlanMutation.reset();
+    setActiveResultView("fleet");
   }
 
   function resetClusterResults() {
@@ -160,6 +169,7 @@ export function FleetPlannerPage() {
     routePreviewMutation.reset();
     globalPlanMutation.reset();
     submitGeneratedPlanMutation.reset();
+    setActiveResultView("geocode");
   }
 
   function resetRoutePreviewResults() {
@@ -169,6 +179,7 @@ export function FleetPlannerPage() {
   function resetGlobalPlanResults() {
     globalPlanMutation.reset();
     submitGeneratedPlanMutation.reset();
+    setActiveResultView("fleet");
   }
 
   async function handleFileChange(nextFile: File | null) {
@@ -324,6 +335,8 @@ export function FleetPlannerPage() {
               submitGeneratedPlanResult={submitGeneratedPlanMutation.data}
               submitGeneratedPlanError={submitGeneratedPlanMutation.error as Error | null}
               isSubmittingGeneratedPlan={submitGeneratedPlanMutation.isPending}
+              activeView={activeResultView}
+              onActiveViewChange={setActiveResultView}
             />
           ) : null}
         </div>
@@ -487,6 +500,8 @@ function FleetPreviewResult({
   submitGeneratedPlanResult,
   submitGeneratedPlanError,
   isSubmittingGeneratedPlan,
+  activeView,
+  onActiveViewChange,
 }: {
   result: FleetPlannerPreviewResponse;
   mixRows: Array<Record<string, unknown>>;
@@ -500,113 +515,175 @@ function FleetPreviewResult({
   submitGeneratedPlanResult?: FleetPlannerSubmitGeneratedPlanResponse;
   submitGeneratedPlanError?: Error | null;
   isSubmittingGeneratedPlan: boolean;
+  activeView: FleetResultView;
+  onActiveViewChange: (view: FleetResultView) => void;
 }) {
   const assumptions = result.assumptions;
-  return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">Active Assumptions</h2>
-            <Badge tone="info">{toTitle(result.summary.mode)}</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="grid gap-3 md:grid-cols-4">
-          <Metric label="Max Route Time" value={`${formatNumber(assumptions.max_route_duration_minutes)} min`} />
-          <Metric label="Max Stops" value={formatNumber(assumptions.max_stops_per_route)} />
-          <Metric label="Target Load" value={formatPercent(assumptions.target_load_factor, 100)} />
-          <Metric label="Min Load" value={formatPercent(assumptions.min_reasonable_load_factor, 100)} />
-        </CardContent>
-      </Card>
+  const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
+    { key: "fleet", label: "Fleet preview", badge: `${formatNumber(result.summary.total_riders)} riders`, available: true },
+    {
+      key: "demand",
+      label: "Demand input",
+      badge: result.demand_workbook ? `${formatNumber(result.demand_workbook.summary.student_count)} students` : undefined,
+      available: Boolean(result.demand_workbook),
+    },
+    {
+      key: "geocode",
+      label: "Address validation",
+      badge: geocodeResult ? `${formatNumber(geocodeResult.summary.resolved_student_rows)} resolved` : undefined,
+      available: Boolean(geocodeResult),
+    },
+    {
+      key: "optimized",
+      label: "Optimized plan",
+      badge: globalPlanResult ? `${formatNumber(globalPlanResult.summary.route_count)} routes` : undefined,
+      available: Boolean(globalPlanResult),
+    },
+    {
+      key: "diagnostics",
+      label: "Diagnostics",
+      badge: clusterResult ? `${formatNumber(clusterResult.summary.cluster_count)} groups` : undefined,
+      available: true,
+    },
+  ];
 
-      {result.demand_workbook ? (
-        <Card>
-          <CardHeader>
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm font-semibold">Demand Workbook Preview</h2>
-              <Badge tone="success">{formatNumber(result.demand_workbook.summary.student_count)} students</Badge>
-            </div>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
-              <Metric label="Rows" value={formatNumber(result.demand_workbook.summary.row_count)} />
-              <Metric label="Students" value={formatNumber(result.demand_workbook.summary.student_count)} />
-              <Metric label="Unique Addresses" value={formatNumber(result.demand_workbook.summary.unique_address_count)} />
-              <Metric label="City" value={String(result.demand_workbook.summary.city || "N/A")} />
-            </div>
-            {result.demand_workbook.warnings.map((warning) => (
-              <InlineError key={warning} message={warning} />
-            ))}
-            <ResultTable rows={result.demand_workbook.riders} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
-          </CardContent>
-        </Card>
-      ) : null}
-
-      {geocodeResult ? <DemandGeocodePreview result={geocodeResult} /> : null}
-      {clusterResult ? <DemandClusterPreview result={clusterResult} /> : null}
-      {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Route Preview" /> : null}
-      {globalPlanResult ? (
-        <RoutePreviewResult
-          result={globalPlanResult}
-          title="Global OR-Tools Plan"
-          generatedJobName={generatedJobName}
-          onGeneratedJobNameChange={onGeneratedJobNameChange}
-          onSubmitGeneratedPlan={onSubmitGeneratedPlan}
-          submitGeneratedPlanResult={submitGeneratedPlanResult}
-          submitGeneratedPlanError={submitGeneratedPlanError}
-          isSubmittingGeneratedPlan={isSubmittingGeneratedPlan}
-          showGeneratedJobSubmit
-        />
-      ) : null}
-
-      <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">Recommended Vehicles</h2>
-            <Badge tone="info">{formatNumber(result.summary.group_count)} groups</Badge>
-          </div>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <ResultTable
-            rows={result.recommendations}
-            columns={["riders", "recommended_vehicle", "student_capacity", "load_factor", "empty_seats", "feasible_options", "rejected_options"]}
-          />
-          {mixRows.length ? (
-            <div>
-              <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
-              <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
-            </div>
-          ) : null}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardHeader>
-          <h2 className="text-sm font-semibold">Vehicle Catalog</h2>
-        </CardHeader>
-        <CardContent>
-          <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "notes"]} />
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-function DemandGeocodePreview({ result }: { result: FleetPlannerGeocodeResponse }) {
   return (
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold">Results workspace</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Each tab shows one stage of output so previews and final plans stay separate.</p>
+          </div>
+          <Badge tone={globalPlanResult ? "success" : "info"}>{globalPlanResult ? "Plan ready" : "Preview mode"}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+          {tabs.map((tab) => (
+            <ResultTabButton
+              key={tab.key}
+              active={activeView === tab.key}
+              available={tab.available}
+              label={tab.label}
+              badge={tab.badge}
+              onClick={() => onActiveViewChange(tab.key)}
+            />
+          ))}
+        </div>
+
+        {activeView === "fleet" ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <Metric label="Max Route Time" value={`${formatNumber(assumptions.max_route_duration_minutes)} min`} />
+              <Metric label="Max Stops" value={formatNumber(assumptions.max_stops_per_route)} />
+              <Metric label="Target Load" value={formatPercent(assumptions.target_load_factor, 100)} />
+              <Metric label="Min Load" value={formatPercent(assumptions.min_reasonable_load_factor, 100)} />
+            </div>
+            <ResultTable
+              rows={result.recommendations}
+              columns={["riders", "recommended_vehicle", "student_capacity", "load_factor", "empty_seats", "feasible_options", "rejected_options"]}
+            />
+            {mixRows.length ? (
+              <div>
+                <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
+                <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {activeView === "demand" ? (
+          result.demand_workbook ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <Metric label="Rows" value={formatNumber(result.demand_workbook.summary.row_count)} />
+                <Metric label="Students" value={formatNumber(result.demand_workbook.summary.student_count)} />
+                <Metric label="Unique Addresses" value={formatNumber(result.demand_workbook.summary.unique_address_count)} />
+                <Metric label="City" value={String(result.demand_workbook.summary.city || "N/A")} />
+              </div>
+              {result.demand_workbook.warnings.map((warning) => (
+                <InlineError key={warning} message={warning} />
+              ))}
+              <ResultTable rows={result.demand_workbook.riders} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
+            </div>
+          ) : (
+            <EmptyResultState title="No workbook preview" detail="Upload a demand workbook and run Preview fleet to review parsed rows here." />
+          )
+        ) : null}
+
+        {activeView === "geocode" ? (
+          geocodeResult ? (
+            <DemandGeocodePreview result={geocodeResult} framed={false} />
+          ) : (
+            <EmptyResultState title="Address validation not run" detail="Use Validate & geocode after uploading a demand workbook." />
+          )
+        ) : null}
+
+        {activeView === "optimized" ? (
+          globalPlanResult ? (
+            <RoutePreviewResult
+              result={globalPlanResult}
+              title="Optimized Plan"
+              framed={false}
+              generatedJobName={generatedJobName}
+              onGeneratedJobNameChange={onGeneratedJobNameChange}
+              onSubmitGeneratedPlan={onSubmitGeneratedPlan}
+              submitGeneratedPlanResult={submitGeneratedPlanResult}
+              submitGeneratedPlanError={submitGeneratedPlanError}
+              isSubmittingGeneratedPlan={isSubmittingGeneratedPlan}
+              showGeneratedJobSubmit
+            />
+          ) : (
+            <EmptyResultState title="Optimized plan not built" detail="Validate addresses first, then use Build optimized plan." />
+          )
+        ) : null}
+
+        {activeView === "diagnostics" ? (
+          <div className="space-y-4">
+            {clusterResult ? <DemandClusterPreview result={clusterResult} framed={false} /> : null}
+            {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Grouped Route Preview" framed={false} /> : null}
+            {!clusterResult && !routePreviewResult ? (
+              <EmptyResultState title="No diagnostic preview yet" detail="Open Advanced diagnostics and run Preview groups if you need spatial grouping diagnostics." />
+            ) : null}
+            <div>
+              <h3 className="mb-2 text-sm font-semibold">Vehicle Catalog</h3>
+              <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "notes"]} />
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerGeocodeResponse; framed?: boolean }) {
+  const content = (
+    <>
+      {framed ? (
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
+              <h2 className="text-sm font-semibold">Address Validation</h2>
+            </div>
+            <Badge tone={result.summary.failed_student_rows ? "warning" : "success"}>
+              {formatNumber(result.summary.resolved_student_rows)} resolved
+            </Badge>
+          </div>
+        </CardHeader>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Demand Geocode Preview</h2>
+            <h2 className="text-sm font-semibold">Address Validation</h2>
           </div>
           <Badge tone={result.summary.failed_student_rows ? "warning" : "success"}>
             {formatNumber(result.summary.resolved_student_rows)} resolved
           </Badge>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      )}
+      <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
           <Metric label="School" value={String(result.summary.school_status || "unknown")} />
           <Metric label="Resolved Rows" value={formatNumber(result.summary.resolved_student_rows)} />
@@ -626,26 +703,37 @@ function DemandGeocodePreview({ result }: { result: FleetPlannerGeocodeResponse 
             sandbox="allow-scripts allow-same-origin"
           />
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </>
   );
+  return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
 }
 
-function DemandClusterPreview({ result }: { result: FleetPlannerClusterResponse }) {
-  return (
-    <Card>
-      <CardHeader>
+function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerClusterResponse; framed?: boolean }) {
+  const content = (
+    <>
+      {framed ? (
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
+              <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
+            </div>
+            <Badge tone="success">{formatNumber(result.summary.cluster_count)} groups</Badge>
+          </div>
+        </CardHeader>
+      ) : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Demand Clustering Preview</h2>
+            <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
           </div>
-          <Badge tone="success">{formatNumber(result.summary.cluster_count)} clusters</Badge>
+          <Badge tone="success">{formatNumber(result.summary.cluster_count)} groups</Badge>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      )}
+      <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
-          <Metric label="Clusters" value={formatNumber(result.summary.cluster_count)} />
+          <Metric label="Groups" value={formatNumber(result.summary.cluster_count)} />
           <Metric label="Resolved Points" value={formatNumber(result.summary.resolved_points)} />
           <Metric label="Resolved Students" value={formatNumber(result.summary.resolved_students)} />
           <Metric label="Failed Points" value={formatNumber(result.summary.failed_points)} />
@@ -669,7 +757,7 @@ function DemandClusterPreview({ result }: { result: FleetPlannerClusterResponse 
         />
         {result.stop_rows.length ? (
           <details className="rounded-md border border-border bg-muted/40">
-            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Cluster stop detail</summary>
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Group stop detail</summary>
             <div className="border-t border-border">
               <ResultTable
                 rows={result.stop_rows}
@@ -681,19 +769,21 @@ function DemandClusterPreview({ result }: { result: FleetPlannerClusterResponse 
         {result.map_html ? (
           <iframe
             className="h-[560px] w-full rounded-md border border-border"
-            title="Demand cluster map"
+            title="Demand group map"
             srcDoc={result.map_html}
             sandbox="allow-scripts allow-same-origin"
           />
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </>
   );
+  return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
 }
 
 function RoutePreviewResult({
   result,
   title,
+  framed = true,
   showGeneratedJobSubmit = false,
   generatedJobName = "",
   onGeneratedJobNameChange,
@@ -704,6 +794,7 @@ function RoutePreviewResult({
 }: {
   result: FleetPlannerRoutePreviewResponse;
   title: string;
+  framed?: boolean;
   showGeneratedJobSubmit?: boolean;
   generatedJobName?: string;
   onGeneratedJobNameChange?: (value: string) => void;
@@ -712,9 +803,19 @@ function RoutePreviewResult({
   submitGeneratedPlanError?: Error | null;
   isSubmittingGeneratedPlan?: boolean;
 }) {
-  return (
-    <Card>
-      <CardHeader>
+  const content = (
+    <>
+      {framed ? (
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <Route className="h-4 w-4 text-primary" aria-hidden="true" />
+              <h2 className="text-sm font-semibold">{title}</h2>
+            </div>
+            <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(result.summary.route_count)} routes</Badge>
+          </div>
+        </CardHeader>
+      ) : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
@@ -722,8 +823,8 @@ function RoutePreviewResult({
           </div>
           <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(result.summary.route_count)} routes</Badge>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
+      )}
+      <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
           <Metric label="Routes" value={formatNumber(result.summary.route_count)} />
           <Metric label="Distance" value={`${formatNumber(result.summary.total_distance_km)} km`} />
@@ -817,9 +918,10 @@ function RoutePreviewResult({
             </Button>
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </>
   );
+  return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
 }
 
 function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -887,6 +989,53 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
     >
       {children}
     </button>
+  );
+}
+
+function ResultTabButton({
+  active,
+  available,
+  label,
+  badge,
+  onClick,
+}: {
+  active: boolean;
+  available: boolean;
+  label: string;
+  badge?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex h-9 items-center gap-2 rounded-md border px-3 text-sm font-medium transition",
+        active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface text-foreground hover:bg-muted",
+        !available && "opacity-70",
+      )}
+      onClick={onClick}
+    >
+      <span>{label}</span>
+      {badge ? (
+        <span
+          className={cn(
+            "rounded border px-1.5 py-0.5 text-[11px] leading-none",
+            active ? "border-primary-foreground/50 text-primary-foreground" : "border-border text-muted-foreground",
+          )}
+        >
+          {badge}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+function EmptyResultState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-8 text-center">
+      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{detail}</p>
+    </div>
   );
 }
 

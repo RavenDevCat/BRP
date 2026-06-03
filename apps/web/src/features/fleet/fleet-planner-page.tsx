@@ -1073,29 +1073,31 @@ function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Planner maps</h2>
+            <h2 className="text-sm font-semibold">{selected.name}</h2>
           </div>
-          <Badge tone="info">{selected.name}</Badge>
+          {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} maps</Badge> : null}
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          {mapOutputs.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={cn(
-                "h-9 rounded-md border px-3 text-sm font-medium transition",
-                selected.key === item.key
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-              onClick={() => setSelectedKey(item.key)}
-            >
-              {item.name}
-            </button>
-          ))}
-        </div>
+        {mapOutputs.length > 1 ? (
+          <div className="flex flex-wrap gap-2">
+            {mapOutputs.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={cn(
+                  "h-9 rounded-md border px-3 text-sm font-medium transition",
+                  selected.key === item.key
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                )}
+                onClick={() => setSelectedKey(item.key)}
+              >
+                {item.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="overflow-hidden rounded-md border border-border bg-muted">
           <iframe
             key={selected.key}

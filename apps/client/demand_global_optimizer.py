@@ -140,6 +140,58 @@ def _build_extended_matrices(
     return extended_duration, extended_distance, dummy_index
 
 
+def _format_infeasible_diagnostics(
+    points: list[dict[str, Any]],
+    demand_points: list[dict[str, Any]],
+    duration_matrix: list[list[float]],
+    *,
+    service_direction: str,
+    max_route_duration_minutes: int,
+) -> str:
+    direction = str(service_direction or "").strip().lower()
+    max_duration_s = float(max_route_duration_minutes * 60)
+    unreachable: list[str] = []
+    over_limit: list[tuple[float, str]] = []
+
+    for point_index, point in enumerate(demand_points, start=1):
+        single_stop_duration_s = (
+            float(duration_matrix[point_index][0])
+            if direction == "to_school"
+            else float(duration_matrix[0][point_index])
+        )
+        address = str(
+            point.get("formatted_address")
+            or point.get("address")
+            or points[point_index].get("address")
+            or f"Demand point {point_index}"
+        ).strip()
+        if single_stop_duration_s >= HUGE_COST / 2:
+            unreachable.append(address)
+            continue
+        if single_stop_duration_s > max_duration_s:
+            over_limit.append((single_stop_duration_s, address))
+
+    hints = []
+    if unreachable:
+        sample = "; ".join(unreachable[:3])
+        hints.append(f"OSRM could not route {len(unreachable)} demand point(s), e.g. {sample}.")
+    if over_limit:
+        over_limit.sort(reverse=True, key=lambda item: item[0])
+        sample = "; ".join(
+            f"{address} ({duration_s / 60.0:.1f} min one-stop)"
+            for duration_s, address in over_limit[:3]
+        )
+        hints.append(
+            f"{len(over_limit)} demand point(s) exceed the {max_route_duration_minutes} min route limit even alone, e.g. {sample}."
+        )
+    if not hints:
+        hints.append(
+            f"All single-stop routes fit within {max_route_duration_minutes} min, but the combined capacity/time/stop constraints still had no solution."
+        )
+    hints.append("Try Cost Saver mode, reduce bus monitor seats, or review far/high-density addresses.")
+    return " ".join(hints)
+
+
 def build_global_ortools_plan(
     geocode_result: dict[str, Any],
     *,
@@ -252,9 +304,14 @@ def build_global_ortools_plan(
 
     solution = routing.SolveWithParameters(search_parameters)
     if solution is None:
-        raise RuntimeError(
-            "Global OR-Tools plan was infeasible. Try Comfort Saver mode, more relaxed max duration, or review high-density addresses."
+        diagnostics = _format_infeasible_diagnostics(
+            points,
+            demand_points,
+            duration_matrix,
+            service_direction=service_direction,
+            max_route_duration_minutes=assumptions.max_route_duration_minutes,
         )
+        raise RuntimeError(f"Global OR-Tools plan was infeasible. {diagnostics}")
 
     route_rows: list[dict[str, Any]] = []
     route_details: list[dict[str, Any]] = []

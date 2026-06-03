@@ -329,8 +329,8 @@ export function FleetPlannerPage() {
                 <h2 className="text-sm font-semibold">Scenario</h2>
               </div>
             </CardHeader>
-            <CardContent className="space-y-3">
-              <Field label="Market">
+            <CardContent className="space-y-4">
+              <Field label="Market" description="Selects the vehicle catalog, capacity assumptions, and routing market. Use CN for China demand workbooks.">
                 <div className="grid grid-cols-2 gap-2">
                   <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
                     KR
@@ -340,14 +340,17 @@ export function FleetPlannerPage() {
                   </ModeButton>
                 </div>
               </Field>
-              <Field label="Planning Mode">
+              <Field
+                label="Planning Mode"
+                description="Changes how aggressively BRP fills vehicles: Balanced is neutral, Cost Saver favors fewer fuller buses, Comfort Saver leaves more spare seats."
+              >
                 <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
                   <option value="balanced">Balanced</option>
                   <option value="cost_saver">Cost Saver</option>
                   <option value="comfort_saver">Comfort Saver</option>
                 </select>
               </Field>
-              <Field label="Bus Monitor Seats">
+              <Field label="Bus Monitor Seats" description="Reserves seats for adults or monitors before calculating student capacity and load factor.">
                 <input
                   className={fieldClassName}
                   type="number"
@@ -362,51 +365,64 @@ export function FleetPlannerPage() {
               {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
               {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
               {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
-              <Button
-                type="button"
-                disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
-                icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
-                onClick={() => previewMutation.mutate()}
+              <ActionBlock
+                help="Reads manual rider groups or the uploaded workbook and recommends vehicle sizes. It does not geocode addresses or build routes."
               >
-                Preview fleet
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!fileBase64 || geocodeMutation.isPending}
-                icon={geocodeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
-                onClick={() => {
-                  clusterMutation.reset();
-                  routePreviewMutation.reset();
-                  globalPlanMutation.reset();
-                  submitGeneratedPlanMutation.reset();
-                  geocodeMutation.mutate();
-                }}
+                <Button
+                  type="button"
+                  disabled={previewMutation.isPending || Boolean(file && !fileBase64)}
+                  icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <UsersRound className="h-4 w-4" />}
+                  onClick={() => previewMutation.mutate()}
+                >
+                  Preview fleet
+                </Button>
+              </ActionBlock>
+              <ActionBlock
+                help="Validates the demand workbook, resolves the school and pickup addresses, and unlocks clustering and routing steps."
               >
-                Validate & geocode
-              </Button>
-              <Field label="Direction Sectors">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!fileBase64 || geocodeMutation.isPending}
+                  icon={geocodeMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+                  onClick={() => {
+                    clusterMutation.reset();
+                    routePreviewMutation.reset();
+                    globalPlanMutation.reset();
+                    submitGeneratedPlanMutation.reset();
+                    geocodeMutation.mutate();
+                  }}
+                >
+                  Validate & geocode
+                </Button>
+              </ActionBlock>
+              <div className="border-t border-border pt-4">
+                <div className="mb-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Cluster route preview</div>
+              </div>
+              <Field label="Direction Sectors" description="Splits geocoded demand around the school into directional groups before route preview. More sectors make smaller, more directional clusters.">
                 <select className={fieldClassName} value={sectorCount} onChange={(event) => handleSectorCountChange(Number(event.target.value) as 4 | 8 | 12)}>
                   <option value={4}>4 sectors</option>
                   <option value={8}>8 sectors</option>
                   <option value={12}>12 sectors</option>
                 </select>
               </Field>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!geocodeResult || clusterMutation.isPending}
-                icon={clusterMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
-                onClick={() => {
-                  routePreviewMutation.reset();
-                  globalPlanMutation.reset();
-                  submitGeneratedPlanMutation.reset();
-                  clusterMutation.mutate();
-                }}
-              >
-                Build clusters
-              </Button>
-              <Field label="Route Direction">
+              <ActionBlock help="Groups resolved pickup points into directional demand clusters and recommends a vehicle for each cluster.">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!geocodeResult || clusterMutation.isPending}
+                  icon={clusterMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <MapPinned className="h-4 w-4" />}
+                  onClick={() => {
+                    routePreviewMutation.reset();
+                    globalPlanMutation.reset();
+                    submitGeneratedPlanMutation.reset();
+                    clusterMutation.mutate();
+                  }}
+                >
+                  Build clusters
+                </Button>
+              </ActionBlock>
+              <Field label="Route Direction" description="Sets the stop order for the cluster route preview: pickups before school, or school before drop-offs.">
                 <div className="grid grid-cols-2 gap-2">
                   <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
                     To School
@@ -416,16 +432,21 @@ export function FleetPlannerPage() {
                   </ModeButton>
                 </div>
               </Field>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!clusterResult || routePreviewMutation.isPending}
-                icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
-                onClick={() => routePreviewMutation.mutate()}
-              >
-                Build route preview
-              </Button>
-              <Field label="Global Plan Direction">
+              <ActionBlock help="Builds OSRM route lines from the cluster result. This previews clustered routes; it does not submit a job.">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!clusterResult || routePreviewMutation.isPending}
+                  icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+                  onClick={() => routePreviewMutation.mutate()}
+                >
+                  Build route preview
+                </Button>
+              </ActionBlock>
+              <div className="border-t border-border pt-4">
+                <div className="mb-3 text-xs font-semibold uppercase tracking-normal text-muted-foreground">Full routing plan</div>
+              </div>
+              <Field label="Global Plan Direction" description="Sets the service direction for a full OR-Tools plan across all resolved pickup points, not just sector clusters.">
                 <div className="grid grid-cols-2 gap-2">
                   <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
                     To School
@@ -436,18 +457,20 @@ export function FleetPlannerPage() {
                 </div>
               </Field>
               {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!geocodeResult || globalPlanMutation.isPending}
-                icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
-                onClick={() => {
-                  submitGeneratedPlanMutation.reset();
-                  globalPlanMutation.mutate();
-                }}
-              >
-                Build global plan
-              </Button>
+              <ActionBlock help="Runs the full solver on all resolved demand points and creates a downloadable plan that can be submitted as a Route Audit job.">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={!geocodeResult || globalPlanMutation.isPending}
+                  icon={globalPlanMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
+                  onClick={() => {
+                    submitGeneratedPlanMutation.reset();
+                    globalPlanMutation.mutate();
+                  }}
+                >
+                  Build global plan
+                </Button>
+              </ActionBlock>
             </CardContent>
           </Card>
         </aside>
@@ -804,12 +827,22 @@ function RoutePreviewResult({
   );
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }) {
+function Field({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
       <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {description ? <span className="block text-xs leading-5 text-muted-foreground">{description}</span> : null}
       {children}
     </label>
+  );
+}
+
+function ActionBlock({ help, children }: { help: string; children: ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      {children}
+      <p className="text-xs leading-5 text-muted-foreground">{help}</p>
+    </div>
   );
 }
 

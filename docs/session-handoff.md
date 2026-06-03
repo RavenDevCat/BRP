@@ -61,10 +61,10 @@ Recent UX state:
   private inventory backup outside Git before changing server access or tunnel
   settings.
 - Operating model as of 2026-06-01: local checkouts are code-record and testing
-  workspaces only. Use them to test `$CN_STAGING_HOST` in a browser and
-  keep Git visibility. CN staging is the active dev/test environment. CN
-  production and KR production are release targets only and should not change
-  during staging work.
+  workspaces only. Use them to test the staging host recorded in the private
+  inventory and keep Git visibility. CN staging is the active dev/test
+  environment. CN production and KR production are release targets only and
+  should not change during staging work.
 
 ## Runtime And Data Rules
 
@@ -171,14 +171,13 @@ Last verified KR runtime state in this session:
   CN after the Nginx cutover. Use `nginx.service` as the frontend service on CN.
 - Cloudflared ingress on CN maps `$CN_STAGING_HOST` to the React staging
   frontend on `127.0.0.1:8501` and `$CN_PROD_HOST` to the CN production
-  frontend on `127.0.0.1:8500`. `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in the
-  ingress config and falls through to 404. `$CN_STAGING_HOST` is the
-  current staging hostname; unauthenticated requests redirect to the Access
-  login flow.
+  frontend on `127.0.0.1:8500`. `$LEGACY_DOMESTIC_CLIENT_HOST` is no longer in
+  the ingress config and falls through to 404. `$CN_STAGING_HOST` is the current
+  staging hostname; unauthenticated requests redirect to the Access login flow.
 - Public OSRM tunnel routes were retired on 2026-06-01. CN staging/production
   and KR production call local OSRM endpoints directly. Local diagnostics should
-  use the private inventory's diagnostic loopback mapping instead of
-  `osrm-*.example.com` hostnames.
+  use the private inventory's diagnostic loopback mapping instead of public OSRM
+  hostnames.
 - The old direct domestic legacy client hostname was disabled at DNS level on
   2026-06-01 because it exposed Streamlit without access control. The protected
   domestic app hostname remains available behind Cloudflare Access.

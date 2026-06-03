@@ -8,8 +8,9 @@ production landing target.
 
 ## Current Roles
 
-- Local checkouts: code-record and test workspaces. Use them to validate
-  `$CN_STAGING_HOST` in a browser and keep Git visibility.
+- Local checkouts: code-record and test workspaces. Use them to validate the
+  staging host recorded in the private inventory in a browser and keep Git
+  visibility.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
   Cloudflare Tunnel. Development and test changes happen only in CN staging.
   CN production is a separate checkout and service pair; it should change only
@@ -19,9 +20,9 @@ production landing target.
   CN production promotion.
 
 Default posture: work directly in the CN staging checkout, validate through
-`$CN_STAGING_HOST`, commit and push the intended Git revision, then promote
-only when the user explicitly asks for a production update. Keep runtime data
-and server-local env files out of Git.
+`$CN_STAGING_HOST`, commit and push the intended Git revision, then promote only
+when the user explicitly asks for a production update. Keep runtime data and
+server-local env files out of Git.
 
 ## Environment Boundary Contract
 
@@ -34,16 +35,16 @@ CN staging backend    -> 127.0.0.1:8001
 $CN_PROD_HOST     -> CN production frontend 127.0.0.1:8500
 CN production backend -> 127.0.0.1:8000
 
-$KR_PROD_HOST  -> KR production frontend 127.0.0.1:8501 on KR
+$KR_PROD_HOST     -> KR production frontend 127.0.0.1:8501 on KR
 KR production backend -> 127.0.0.1:8001 on KR
 ```
 
 Staging is the only place for active development and test traffic. Do not point
-`$CN_PROD_HOST` or `$KR_PROD_HOST` at staging ports as part of
-preview work. CN production and KR production should be pull-and-restart
+`$CN_PROD_HOST` or `$KR_PROD_HOST` at staging ports as part of preview work. CN
+production and KR production should be pull-and-restart
 targets only after the staged version is accepted.
 
-The `example.com` domain is replaceable. Treat public hostnames as DNS,
+The public domain is replaceable. Treat public hostnames as DNS,
 Cloudflare Tunnel, Cloudflare Access, and environment configuration, not product
 logic. When the company domain is ready, update domain references in Cloudflare
 DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
@@ -322,8 +323,8 @@ Browser QA before production promotion:
 - Fleet Planner demand geocode, clustering, route preview, global plan, workbook download, and submit generated plan as job
 
 If preview passes, schedule a separate production promotion. Do not switch or
-repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move
-only during an explicit release window.
+repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move only
+during an explicit release window.
 
 KR is already in the post-cutover shape. Its public React service uses local
 Nginx on the KR server's `8501` origin, and its preview uses local `4173`.

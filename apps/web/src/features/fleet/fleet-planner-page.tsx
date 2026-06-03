@@ -1352,9 +1352,6 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 function collectFleetMapOutputs({
-  geocodeResult,
-  clusterResult,
-  routePreviewResult,
   globalPlanResult,
 }: {
   geocodeResult?: FleetPlannerGeocodeResponse;
@@ -1363,9 +1360,6 @@ function collectFleetMapOutputs({
   globalPlanResult?: FleetPlannerRoutePreviewResponse;
 }) {
   return [
-    { key: "address-validation", name: "Address Validation", html: geocodeResult?.map_html || "" },
-    { key: "demand-groups", name: "Demand Groups", html: clusterResult?.map_html || "" },
-    { key: "grouped-routes", name: "Grouped Route Preview", html: routePreviewResult?.map_html || "" },
     { key: "optimized-plan", name: "Optimized Plan", html: globalPlanResult?.map_html || "" },
   ].filter((item) => item.html.trim()) as ToolMapOutput[];
 }

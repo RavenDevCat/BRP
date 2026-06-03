@@ -8,7 +8,7 @@ from typing import Any
 import pandas as pd
 
 import client_runtime as runtime
-from distance_tool import compute_osrm_metrics_from_origin
+from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details
 
 
 HUGE_COST = 10**9
@@ -165,6 +165,11 @@ def _route_metrics_for_order(
     return total_duration_s, total_distance_m
 
 
+def _route_leg_details_for_order(points: list[dict[str, Any]], order: list[int]) -> list[dict[str, Any]]:
+    ordered_points = [points[index] for index in order]
+    return compute_osrm_route_leg_details(ordered_points)
+
+
 def build_osrm_route_preview(
     cluster_result: dict[str, Any],
     *,
@@ -214,6 +219,7 @@ def build_osrm_route_preview(
                 "service_direction": service_direction,
                 "order": order,
                 "ordered_points": ordered_points,
+                "leg_details": _route_leg_details_for_order(points, order),
                 "duration_s": total_duration_s,
                 "distance_m": total_distance_m,
                 "selected_vehicle": selected_vehicle,
@@ -379,6 +385,17 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
             for point in ordered_points
             if point.get("student_count") is not None
         )
+        leg_details = []
+        for leg_index, detail in enumerate(list(route.get("leg_details") or [])):
+            if leg_index + 1 >= len(node_indexes):
+                break
+            leg_details.append(
+                {
+                    **dict(detail),
+                    "from_node": node_indexes[leg_index],
+                    "to_node": node_indexes[leg_index + 1],
+                }
+            )
         map_routes.append(
             {
                 "route_id": str(route.get("cluster_id") or f"Route {route_index + 1}"),
@@ -389,7 +406,7 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
                 "time_s": float(route.get("duration_s", 0.0) or 0.0),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
                 "nodes": node_indexes,
-                "leg_details": [],
+                "leg_details": leg_details,
             }
         )
 

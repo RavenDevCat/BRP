@@ -6,6 +6,7 @@ from typing import Any
 from demand_routing import (
     _build_osrm_matrix,
     _point_payload,
+    _route_leg_details_for_order,
     _route_metrics_for_order,
 )
 from planning_assumptions import PlanningAssumptions, get_planning_assumptions
@@ -359,6 +360,7 @@ def build_global_ortools_plan(
                 "service_direction": service_direction,
                 "order": order,
                 "ordered_points": ordered_points,
+                "leg_details": _route_leg_details_for_order(points, order),
                 "duration_s": total_duration_s,
                 "distance_m": total_distance_m,
                 "selected_vehicle": {

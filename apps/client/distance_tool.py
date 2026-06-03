@@ -201,6 +201,72 @@ def compute_osrm_route_leg_metrics(points: list[dict[str, Any]]) -> list[dict[st
     return metrics
 
 
+def _straight_leg_geometry(origin_point: dict[str, Any], destination_point: dict[str, Any]) -> list[tuple[float, float]]:
+    return [
+        (float(origin_point["lat"]), float(origin_point["lng"])),
+        (float(destination_point["lat"]), float(destination_point["lng"])),
+    ]
+
+
+def _request_osrm_route_leg_detail(
+    origin_point: dict[str, Any],
+    destination_point: dict[str, Any],
+) -> dict[str, Any]:
+    points = [origin_point, destination_point]
+    response = requests.get(
+        f"{resolve_osrm_base_url(points)}/route/v1/driving/{_osrm_coordinates(points)}",
+        params={
+            "overview": "full",
+            "geometries": "geojson",
+            "steps": "false",
+        },
+        timeout=OSRM_REQUEST_TIMEOUT,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("code") != "Ok":
+        raise RuntimeError(f"OSRM route request failed: {payload}")
+
+    route = dict((payload.get("routes") or [{}])[0])
+    coordinates = list((route.get("geometry") or {}).get("coordinates") or [])
+    geometry = [
+        (float(lat_lng[1]), float(lat_lng[0]))
+        for lat_lng in coordinates
+        if isinstance(lat_lng, (list, tuple)) and len(lat_lng) >= 2
+    ]
+    if len(geometry) < 2:
+        geometry = _straight_leg_geometry(origin_point, destination_point)
+    return {
+        "duration_s": float(route["duration"]) if route.get("duration") is not None else None,
+        "distance_m": float(route["distance"]) if route.get("distance") is not None else None,
+        "geometry": geometry,
+    }
+
+
+def compute_osrm_route_leg_details(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    details: list[dict[str, Any]] = []
+    if len(points) < 2:
+        return details
+    for origin_point, destination_point in zip(points[:-1], points[1:]):
+        try:
+            detail = _request_osrm_route_leg_detail(origin_point, destination_point)
+        except Exception:
+            try:
+                durations, distances = _request_osrm_table(origin_point, [destination_point])
+                duration_s = durations[0] if durations else None
+                distance_m = distances[0] if distances else None
+            except Exception:
+                duration_s = None
+                distance_m = None
+            detail = {
+                "duration_s": float(duration_s) if duration_s is not None else None,
+                "distance_m": float(distance_m) if distance_m is not None else None,
+                "geometry": _straight_leg_geometry(origin_point, destination_point),
+            }
+        details.append(detail)
+    return details
+
+
 def _row_value(row: pd.Series, column_name: str | None, fallback: str = "") -> str:
     if not column_name:
         return fallback.strip()

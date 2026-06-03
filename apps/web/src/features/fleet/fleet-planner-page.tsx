@@ -627,25 +627,30 @@ function FleetPreviewResult({
   activeView: FleetResultView;
   onActiveViewChange: (view: FleetResultView) => void;
 }) {
-  const assumptions = result.assumptions;
+  const assumptions = result.assumptions || {};
+  const previewSummary = result.summary || {};
+  const demandWorkbookSummary = result.demand_workbook?.summary || {};
+  const clusterSummary = clusterResult?.summary || {};
+  const geocodeSummary = geocodeResult?.summary || {};
+  const globalPlanSummary = globalPlanResult?.summary || {};
   const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
-    { key: "fleet", label: "Fleet preview", badge: `${formatNumber(result.summary.total_riders)} riders`, available: true },
+    { key: "fleet", label: "Fleet preview", badge: `${formatNumber(previewSummary.total_riders)} riders`, available: true },
     {
       key: "demand",
       label: "Demand input",
-      badge: result.demand_workbook ? `${formatNumber(result.demand_workbook.summary.student_count)} students` : undefined,
+      badge: result.demand_workbook ? `${formatNumber(demandWorkbookSummary.student_count)} students` : undefined,
       available: Boolean(result.demand_workbook),
     },
     {
       key: "geocode",
       label: "Address validation",
-      badge: geocodeResult ? `${formatNumber(geocodeResult.summary.resolved_student_rows)} resolved` : undefined,
+      badge: geocodeResult ? `${formatNumber(geocodeSummary.resolved_student_rows)} resolved` : undefined,
       available: Boolean(geocodeResult),
     },
     {
       key: "optimized",
       label: "Optimized plan",
-      badge: globalPlanResult ? `${formatNumber(globalPlanResult.summary.route_count)} routes` : undefined,
+      badge: globalPlanResult ? `${formatNumber(globalPlanSummary.route_count)} routes` : undefined,
       available: Boolean(globalPlanResult),
     },
     {
@@ -657,7 +662,7 @@ function FleetPreviewResult({
     {
       key: "diagnostics",
       label: "Diagnostics",
-      badge: clusterResult ? `${formatNumber(clusterResult.summary.cluster_count)} groups` : undefined,
+      badge: clusterResult ? `${formatNumber(clusterSummary.cluster_count)} groups` : undefined,
       available: true,
     },
   ];
@@ -712,15 +717,15 @@ function FleetPreviewResult({
           result.demand_workbook ? (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-4">
-                <Metric label="Rows" value={formatNumber(result.demand_workbook.summary.row_count)} />
-                <Metric label="Students" value={formatNumber(result.demand_workbook.summary.student_count)} />
-                <Metric label="Unique Addresses" value={formatNumber(result.demand_workbook.summary.unique_address_count)} />
-                <Metric label="City" value={String(result.demand_workbook.summary.city || "N/A")} />
+                <Metric label="Rows" value={formatNumber(demandWorkbookSummary.row_count)} />
+                <Metric label="Students" value={formatNumber(demandWorkbookSummary.student_count)} />
+                <Metric label="Unique Addresses" value={formatNumber(demandWorkbookSummary.unique_address_count)} />
+                <Metric label="City" value={String(demandWorkbookSummary.city || "N/A")} />
               </div>
-              {result.demand_workbook.warnings.map((warning) => (
+              {(result.demand_workbook.warnings || []).map((warning) => (
                 <InlineError key={warning} message={warning} />
               ))}
-              <ResultTable rows={result.demand_workbook.riders} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
+              <ResultTable rows={result.demand_workbook.riders || []} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
             </div>
           ) : (
             <EmptyResultState title="No workbook preview" detail="Upload a demand workbook and run Preview fleet to review parsed rows here." />
@@ -777,6 +782,7 @@ function FleetPreviewResult({
 }
 
 function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerGeocodeResponse; framed?: boolean }) {
+  const summary = result.summary || {};
   const content = (
     <>
       {framed ? (
@@ -786,8 +792,8 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
               <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
               <h2 className="text-sm font-semibold">Address Validation</h2>
             </div>
-            <Badge tone={result.summary.failed_student_rows ? "warning" : "success"}>
-              {formatNumber(result.summary.resolved_student_rows)} resolved
+            <Badge tone={summary.failed_student_rows ? "warning" : "success"}>
+              {formatNumber(summary.resolved_student_rows)} resolved
             </Badge>
           </div>
         </CardHeader>
@@ -797,21 +803,21 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">Address Validation</h2>
           </div>
-          <Badge tone={result.summary.failed_student_rows ? "warning" : "success"}>
-            {formatNumber(result.summary.resolved_student_rows)} resolved
+          <Badge tone={summary.failed_student_rows ? "warning" : "success"}>
+            {formatNumber(summary.resolved_student_rows)} resolved
           </Badge>
         </div>
       )}
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
-          <Metric label="School" value={String(result.summary.school_status || "unknown")} />
-          <Metric label="Resolved Rows" value={formatNumber(result.summary.resolved_student_rows)} />
-          <Metric label="Failed Rows" value={formatNumber(result.summary.failed_student_rows)} />
-          <Metric label="Resolved Students" value={formatNumber(result.summary.resolved_students)} />
-          <Metric label="Cache Hits" value={formatNumber(result.summary.cache_hits)} />
+          <Metric label="School" value={String(summary.school_status || "unknown")} />
+          <Metric label="Resolved Rows" value={formatNumber(summary.resolved_student_rows)} />
+          <Metric label="Failed Rows" value={formatNumber(summary.failed_student_rows)} />
+          <Metric label="Resolved Students" value={formatNumber(summary.resolved_students)} />
+          <Metric label="Cache Hits" value={formatNumber(summary.cache_hits)} />
         </div>
         <ResultTable
-          rows={result.rows}
+          rows={result.rows || []}
           columns={["Role", "Row", "Address", "Students", "Status", "Cache Hit", "Provider", "Formatted Address", "Lat", "Lng", "Warning"]}
         />
       </div>
@@ -821,6 +827,7 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
 }
 
 function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerClusterResponse; framed?: boolean }) {
+  const summary = result.summary || {};
   const content = (
     <>
       {framed ? (
@@ -830,7 +837,7 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
               <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
               <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
             </div>
-            <Badge tone="success">{formatNumber(result.summary.cluster_count)} groups</Badge>
+            <Badge tone="success">{formatNumber(summary.cluster_count)} groups</Badge>
           </div>
         </CardHeader>
       ) : (
@@ -839,19 +846,19 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
           </div>
-          <Badge tone="success">{formatNumber(result.summary.cluster_count)} groups</Badge>
+          <Badge tone="success">{formatNumber(summary.cluster_count)} groups</Badge>
         </div>
       )}
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
-          <Metric label="Groups" value={formatNumber(result.summary.cluster_count)} />
-          <Metric label="Resolved Points" value={formatNumber(result.summary.resolved_points)} />
-          <Metric label="Resolved Students" value={formatNumber(result.summary.resolved_students)} />
-          <Metric label="Failed Points" value={formatNumber(result.summary.failed_points)} />
-          <Metric label="Max Capacity" value={formatNumber(result.summary.max_vehicle_student_capacity)} />
+          <Metric label="Groups" value={formatNumber(summary.cluster_count)} />
+          <Metric label="Resolved Points" value={formatNumber(summary.resolved_points)} />
+          <Metric label="Resolved Students" value={formatNumber(summary.resolved_students)} />
+          <Metric label="Failed Points" value={formatNumber(summary.failed_points)} />
+          <Metric label="Max Capacity" value={formatNumber(summary.max_vehicle_student_capacity)} />
         </div>
         <ResultTable
-          rows={result.rows}
+          rows={result.rows || []}
           columns={[
             "Cluster",
             "Sector",
@@ -866,12 +873,12 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
             "Warnings",
           ]}
         />
-        {result.stop_rows.length ? (
+        {(result.stop_rows || []).length ? (
           <details className="rounded-md border border-border bg-muted/40">
             <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Group stop detail</summary>
             <div className="border-t border-border">
               <ResultTable
-                rows={result.stop_rows}
+                rows={result.stop_rows || []}
                 columns={["Cluster", "Sector", "Students", "Address", "Formatted Address", "Distance From School km", "Lat", "Lng"]}
               />
             </div>
@@ -892,6 +899,7 @@ function RoutePreviewResult({
   title: string;
   framed?: boolean;
 }) {
+  const summary = result.summary || {};
   const content = (
     <>
       {framed ? (
@@ -901,7 +909,7 @@ function RoutePreviewResult({
               <Route className="h-4 w-4 text-primary" aria-hidden="true" />
               <h2 className="text-sm font-semibold">{title}</h2>
             </div>
-            <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(result.summary.route_count)} routes</Badge>
+            <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(summary.route_count)} routes</Badge>
           </div>
         </CardHeader>
       ) : (
@@ -910,21 +918,21 @@ function RoutePreviewResult({
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{title}</h2>
           </div>
-          <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(result.summary.route_count)} routes</Badge>
+          <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(summary.route_count)} routes</Badge>
         </div>
       )}
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
-          <Metric label="Routes" value={formatNumber(result.summary.route_count)} />
-          <Metric label="Distance" value={`${formatNumber(result.summary.total_distance_km)} km`} />
-          <Metric label="Time" value={`${formatNumber(result.summary.total_duration_min)} min`} />
-          <Metric label="Direction" value={result.summary.service_direction === "from_school" ? "From School" : "To School"} />
-          <Metric label="Target" value={result.summary.max_route_duration_minutes ? `${formatNumber(result.summary.max_route_duration_minutes)} min` : "N/A"} />
+          <Metric label="Routes" value={formatNumber(summary.route_count)} />
+          <Metric label="Distance" value={`${formatNumber(summary.total_distance_km)} km`} />
+          <Metric label="Time" value={`${formatNumber(summary.total_duration_min)} min`} />
+          <Metric label="Direction" value={summary.service_direction === "from_school" ? "From School" : "To School"} />
+          <Metric label="Target" value={summary.max_route_duration_minutes ? `${formatNumber(summary.max_route_duration_minutes)} min` : "N/A"} />
         </div>
-        {result.summary.candidate_vehicle_count || result.summary.solver ? (
+        {summary.candidate_vehicle_count || summary.solver ? (
           <div className="grid gap-3 md:grid-cols-2">
-            <Metric label="Candidates" value={formatNumber(result.summary.candidate_vehicle_count)} />
-            <Metric label="Solver" value={String(result.summary.solver || "global_ortools")} />
+            <Metric label="Candidates" value={formatNumber(summary.candidate_vehicle_count)} />
+            <Metric label="Solver" value={String(summary.solver || "global_ortools")} />
           </div>
         ) : null}
         {result.refinement_note ? <InlineError message={result.refinement_note} /> : null}
@@ -939,7 +947,7 @@ function RoutePreviewResult({
           </Button>
         ) : null}
         <ResultTable
-          rows={result.rows}
+          rows={result.rows || []}
           columns={[
             "cluster_id",
             "solver",
@@ -953,12 +961,12 @@ function RoutePreviewResult({
             "warnings",
           ]}
         />
-        {result.stop_rows.length ? (
+        {(result.stop_rows || []).length ? (
           <details className="rounded-md border border-border bg-muted/40">
             <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Route stop detail</summary>
             <div className="border-t border-border">
               <ResultTable
-                rows={result.stop_rows}
+                rows={result.stop_rows || []}
                 columns={[
                   "route_id",
                   "stop_sequence",

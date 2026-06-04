@@ -922,7 +922,7 @@ def _handle_distance_checker_history_create(payload: dict[str, Any], user_email:
         "route_cost_result": route_cost_result,
         "summary": summary,
     }
-    return {"job": DISTANCE_CHECKER_HISTORY_STORE.create(history_payload, owner_email=user_email)}
+    return {"job": _distance_history_store_for_mode(tool_mode).create(history_payload, owner_email=user_email)}
 
 
 def _list_demo_workbooks() -> list[dict[str, Any]]:
@@ -1678,6 +1678,9 @@ class SideToolHistoryStore:
             "cluster_result": deepcopy(payload.get("cluster_result") or {}),
             "route_preview_result": deepcopy(payload.get("route_preview_result") or {}),
             "global_plan_result": deepcopy(payload.get("global_plan_result") or {}),
+            "preview": deepcopy(payload.get("preview") or {}),
+            "reference_result": deepcopy(payload.get("reference_result") or {}),
+            "route_cost_result": deepcopy(payload.get("route_cost_result") or {}),
             "summary": deepcopy(payload.get("summary") or {}),
         }
         summary = self._summary_for_record(record)
@@ -1735,10 +1738,80 @@ class SideToolHistoryStore:
 
 JOB_STORE = JobStore(JOBS_DIR)
 DISTANCE_CHECKER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "distance_checker")
+REFERENCE_DISTANCE_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "reference_distance")
+ROUTE_COST_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "route_cost")
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
 JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_STARTED = False
+
+
+def _normalize_distance_history_mode(value: Any) -> str:
+    return "route_cost" if str(value or "").strip().lower() == "route_cost" else "reference"
+
+
+def _distance_history_store_for_mode(tool_mode: str) -> SideToolHistoryStore:
+    return ROUTE_COST_HISTORY_STORE if _normalize_distance_history_mode(tool_mode) == "route_cost" else REFERENCE_DISTANCE_HISTORY_STORE
+
+
+def _distance_history_mode_for_summary(entry: dict[str, Any]) -> str:
+    summary = dict(entry.get("summary") or {})
+    return _normalize_distance_history_mode(summary.get("tool_mode"))
+
+
+def _distance_history_mode_for_record(record: dict[str, Any]) -> str:
+    summary = dict(record.get("summary") or {})
+    scenario = dict(record.get("scenario") or {})
+    mode_value = summary.get("tool_mode") or scenario.get("tool_mode")
+    if not mode_value and record.get("route_cost_result"):
+        mode_value = "route_cost"
+    return _normalize_distance_history_mode(mode_value)
+
+
+def _list_distance_history(tool_mode: str, *, user_email: str, include_all: bool) -> list[dict[str, Any]]:
+    mode = _normalize_distance_history_mode(tool_mode) if tool_mode else ""
+    stores = (
+        [REFERENCE_DISTANCE_HISTORY_STORE, ROUTE_COST_HISTORY_STORE]
+        if not mode
+        else [_distance_history_store_for_mode(mode)]
+    )
+    entries: list[dict[str, Any]] = []
+    for store in stores:
+        entries.extend(store.list(user_email=user_email, include_all=include_all))
+    legacy_entries = [
+        entry
+        for entry in DISTANCE_CHECKER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)
+        if not mode or _distance_history_mode_for_summary(entry) == mode
+    ]
+    entries.extend(legacy_entries)
+
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for entry in sorted(entries, key=lambda item: str(item.get("created_at") or ""), reverse=True):
+        run_id = str(entry.get("run_id") or "").strip()
+        if not run_id or run_id in seen:
+            continue
+        seen.add(run_id)
+        deduped.append(entry)
+    return deduped
+
+
+def _get_distance_history_record(run_id: str, tool_mode: str = "") -> tuple[dict[str, Any] | None, SideToolHistoryStore | None]:
+    mode = _normalize_distance_history_mode(tool_mode) if tool_mode else ""
+    stores = (
+        [REFERENCE_DISTANCE_HISTORY_STORE, ROUTE_COST_HISTORY_STORE]
+        if not mode
+        else [_distance_history_store_for_mode(mode)]
+    )
+    stores = [*stores, DISTANCE_CHECKER_HISTORY_STORE]
+    for store in stores:
+        record = store.get(run_id)
+        if not record:
+            continue
+        if mode and _distance_history_mode_for_record(record) != mode:
+            continue
+        return record, store
+    return None, None
 
 
 def _process_is_alive(pid: int | None) -> bool:
@@ -2105,12 +2178,40 @@ class BackendHandler(BaseHTTPRequestHandler):
             query_params = dict(parse_qsl(parsed.query))
             self._send_json(200, _handle_fleet_planner_vehicle_catalog(query_params))
             return
+        if path == "/distance-checker/reference-history":
+            self._send_json(200, {"jobs": _list_distance_history("reference", user_email=user_email, include_all=include_all)})
+            return
+        if path.startswith("/distance-checker/reference-history/"):
+            run_id = unquote(path.rsplit("/", 1)[-1]).strip()
+            record, _store = _get_distance_history_record(run_id, "reference")
+            if not record:
+                self._send_json(404, {"error": f"Reference Distance history run not found: {run_id}"})
+                return
+            if not _can_access_job(record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Reference Distance history run is not available for user: {user_email}"})
+                return
+            self._send_json(200, record)
+            return
+        if path == "/distance-checker/route-cost-history":
+            self._send_json(200, {"jobs": _list_distance_history("route_cost", user_email=user_email, include_all=include_all)})
+            return
+        if path.startswith("/distance-checker/route-cost-history/"):
+            run_id = unquote(path.rsplit("/", 1)[-1]).strip()
+            record, _store = _get_distance_history_record(run_id, "route_cost")
+            if not record:
+                self._send_json(404, {"error": f"Route Cost history run not found: {run_id}"})
+                return
+            if not _can_access_job(record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Route Cost history run is not available for user: {user_email}"})
+                return
+            self._send_json(200, record)
+            return
         if path == "/distance-checker/history":
-            self._send_json(200, {"jobs": DISTANCE_CHECKER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})
+            self._send_json(200, {"jobs": _list_distance_history("", user_email=user_email, include_all=include_all)})
             return
         if path.startswith("/distance-checker/history/"):
             run_id = unquote(path.rsplit("/", 1)[-1]).strip()
-            record = DISTANCE_CHECKER_HISTORY_STORE.get(run_id)
+            record, _store = _get_distance_history_record(run_id)
             if not record:
                 self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
                 return
@@ -2251,7 +2352,7 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path == "/distance-checker/route-cost":
                 self._send_json(200, _handle_current_plan_route_cost(payload))
                 return
-            if path == "/distance-checker/history":
+            if path in {"/distance-checker/history", "/distance-checker/reference-history", "/distance-checker/route-cost-history"}:
                 self._send_json(201, _handle_distance_checker_history_create(payload, user_email=user_email))
                 return
             if path == "/fleet-planner/preview":
@@ -2395,20 +2496,52 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             user_email = self._current_user_email()
             include_all = _is_admin_email(user_email)
+            if path.startswith("/distance-checker/reference-history/"):
+                parts = [part for part in path.split("/") if part]
+                if len(parts) != 3:
+                    self._send_json(404, {"error": f"Unknown path: {path}"})
+                    return
+                run_id = unquote(parts[2]).strip()
+                record, store = _get_distance_history_record(run_id, "reference")
+                if not record or not store:
+                    self._send_json(404, {"error": f"Reference Distance history run not found: {run_id}"})
+                    return
+                if not _can_access_job(record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Reference Distance history run is not available for user: {user_email}"})
+                    return
+                store.delete(run_id)
+                self._send_json(200, {"deleted": True, "run_id": run_id})
+                return
+            if path.startswith("/distance-checker/route-cost-history/"):
+                parts = [part for part in path.split("/") if part]
+                if len(parts) != 3:
+                    self._send_json(404, {"error": f"Unknown path: {path}"})
+                    return
+                run_id = unquote(parts[2]).strip()
+                record, store = _get_distance_history_record(run_id, "route_cost")
+                if not record or not store:
+                    self._send_json(404, {"error": f"Route Cost history run not found: {run_id}"})
+                    return
+                if not _can_access_job(record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Route Cost history run is not available for user: {user_email}"})
+                    return
+                store.delete(run_id)
+                self._send_json(200, {"deleted": True, "run_id": run_id})
+                return
             if path.startswith("/distance-checker/history/"):
                 parts = [part for part in path.split("/") if part]
                 if len(parts) != 3:
                     self._send_json(404, {"error": f"Unknown path: {path}"})
                     return
                 run_id = unquote(parts[2]).strip()
-                record = DISTANCE_CHECKER_HISTORY_STORE.get(run_id)
-                if not record:
+                record, store = _get_distance_history_record(run_id)
+                if not record or not store:
                     self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
                     return
                 if not _can_access_job(record, user_email, include_all=include_all):
                     self._send_json(403, {"error": f"Distance & Cost history run is not available for user: {user_email}"})
                     return
-                DISTANCE_CHECKER_HISTORY_STORE.delete(run_id)
+                store.delete(run_id)
                 self._send_json(200, {"deleted": True, "run_id": run_id})
                 return
             if path.startswith("/fleet-planner/history/"):

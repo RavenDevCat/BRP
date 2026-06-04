@@ -6,11 +6,11 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-04
 
-### Distance & Cost History
+### Distance & Cost Histories
 
-- Distance & Cost now has its own React history panel for saved side-tool runs.
-- Reference-distance checks and route-cost calculations auto-save after a successful run.
-- Saved Distance & Cost runs can be reopened or deleted from the side-tool workspace, and include submitter metadata.
+- Distance & Cost now keeps separate React history panels for Reference Distance and Route Cost runs.
+- Reference-distance checks and route-cost calculations auto-save to their matching history after a successful run.
+- Saved Reference Distance and Route Cost runs can be reopened or deleted from the side-tool workspace, and include submitter metadata.
 - Existing Route Audit and Fleet Planner jobs do not need to be rerun.
 
 ### Fleet Planner Generated Workbook Sheet Names

@@ -17,6 +17,7 @@ import {
   type DistanceCheckerHistoryCreateResponse,
   type DistanceCheckerHistoryRecord,
   type DistanceCheckerHistorySummary,
+  type DistanceCheckerToolMode,
   type DistanceWorkbookPreview,
   type ReferenceDistanceResponse,
   type RouteCostResponse,
@@ -51,7 +52,7 @@ const routeCostProfiles = {
 
 export function DistanceCheckerPage() {
   const queryClient = useQueryClient();
-  const [activeTool, setActiveTool] = useState<"reference" | "route_cost">("reference");
+  const [activeTool, setActiveTool] = useState<DistanceCheckerToolMode>("reference");
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
@@ -79,8 +80,8 @@ export function DistanceCheckerPage() {
   const [deletingRunId, setDeletingRunId] = useState("");
 
   const historyQuery = useQuery({
-    queryKey: ["distance-checker-history"],
-    queryFn: listDistanceCheckerHistory,
+    queryKey: ["distance-checker-history", activeTool],
+    queryFn: () => listDistanceCheckerHistory(activeTool),
   });
 
   const previewMutation = useMutation({
@@ -111,26 +112,26 @@ export function DistanceCheckerPage() {
 
   const saveHistoryMutation = useMutation({
     mutationFn: saveDistanceCheckerHistory,
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history"] });
+    onSuccess: async (_payload, variables) => {
+      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history", variables.tool_mode] });
     },
   });
 
   const openHistoryMutation = useMutation({
-    mutationFn: (runId: string) => getDistanceCheckerHistory(runId),
+    mutationFn: ({ toolMode, runId }: { toolMode: DistanceCheckerToolMode; runId: string }) => getDistanceCheckerHistory(toolMode, runId),
     onSuccess: (record) => applyHistoryRecord(record),
   });
 
   const deleteHistoryMutation = useMutation({
-    mutationFn: (runId: string) => deleteDistanceCheckerHistory(runId),
-    onMutate: (runId) => setDeletingRunId(runId),
-    onSuccess: async (payload) => {
+    mutationFn: ({ toolMode, runId }: { toolMode: DistanceCheckerToolMode; runId: string }) => deleteDistanceCheckerHistory(toolMode, runId),
+    onMutate: ({ runId }) => setDeletingRunId(runId),
+    onSuccess: async (payload, variables) => {
       if (loadedHistoryRecord?.run_id === payload.run_id) {
         setLoadedHistoryRecord(null);
         setResult(null);
         setRouteCostResult(null);
       }
-      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history"] });
+      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history", variables.toolMode] });
     },
     onSettled: () => setDeletingRunId(""),
   });
@@ -261,7 +262,16 @@ export function DistanceCheckerPage() {
     }
   }
 
-  function buildScenario(toolMode: "reference" | "route_cost") {
+  function handleToolChange(nextTool: DistanceCheckerToolMode) {
+    if (nextTool === activeTool) {
+      return;
+    }
+    setActiveTool(nextTool);
+    setLoadedHistoryRecord(null);
+    saveHistoryMutation.reset();
+  }
+
+  function buildScenario(toolMode: DistanceCheckerToolMode) {
     return {
       tool_mode: toolMode,
       file_name: file?.name || preview?.source_label || "",
@@ -290,7 +300,7 @@ export function DistanceCheckerPage() {
 
   function saveHistory(toolMode: "reference", payload: ReferenceDistanceResponse): void;
   function saveHistory(toolMode: "route_cost", payload: RouteCostResponse): void;
-  function saveHistory(toolMode: "reference" | "route_cost", payload: ReferenceDistanceResponse | RouteCostResponse) {
+  function saveHistory(toolMode: DistanceCheckerToolMode, payload: ReferenceDistanceResponse | RouteCostResponse) {
     saveHistoryMutation.mutate({
       title: payload.job?.label || defaultDistanceHistoryTitle(toolMode),
       tool_mode: toolMode,
@@ -383,6 +393,22 @@ export function DistanceCheckerPage() {
   );
 
   const busy = previewMutation.isPending || runMutation.isPending || routeCostMutation.isPending;
+  const activeLoadedRunId =
+    loadedHistoryRecord && normalizeDistanceToolMode(loadedHistoryRecord.summary?.tool_mode || loadedHistoryRecord.scenario?.tool_mode) === activeTool
+      ? loadedHistoryRecord.run_id
+      : undefined;
+  const activeSaveResult =
+    saveHistoryMutation.data && normalizeDistanceToolMode(saveHistoryMutation.data.job.summary?.tool_mode) === activeTool
+      ? saveHistoryMutation.data
+      : undefined;
+  const activeSavePending = saveHistoryMutation.isPending && saveHistoryMutation.variables?.tool_mode === activeTool;
+  const activeSaveError = saveHistoryMutation.variables?.tool_mode === activeTool ? (saveHistoryMutation.error as Error | null) : null;
+  const activeSavedRunId = activeSaveResult?.job.run_id;
+  const activeHistoryTitle = activeTool === "route_cost" ? "Route Cost History" : "Reference Distance History";
+  const activeHistoryEmpty =
+    activeTool === "route_cost"
+      ? "Saved Route Cost calculations will appear here."
+      : "Saved Reference Distance checks will appear here.";
 
   return (
     <div className="pb-16 lg:pb-0">
@@ -394,16 +420,19 @@ export function DistanceCheckerPage() {
       >
         <DistanceCheckerHistoryPanel
           className="min-w-0 lg:sticky lg:top-20 lg:self-start"
+          title={activeHistoryTitle}
+          emptyMessage={activeHistoryEmpty}
+          toolMode={activeTool}
           jobs={historyQuery.data || []}
-          activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
+          activeRunId={activeLoadedRunId || activeSavedRunId}
           deletingRunId={deletingRunId}
           isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending}
           error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null)}
           collapsed={historyCollapsed}
           onCollapsedChange={setHistoryCollapsed}
           onRefresh={() => void historyQuery.refetch()}
-          onOpen={(runId) => openHistoryMutation.mutate(runId)}
-          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+          onOpen={(runId) => openHistoryMutation.mutate({ toolMode: activeTool, runId })}
+          onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
         />
 
         <div className="min-w-0 space-y-4">
@@ -418,10 +447,10 @@ export function DistanceCheckerPage() {
                   </p>
                 </div>
                 <div className="inline-grid shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-1">
-                  <ToolTab active={activeTool === "reference"} onClick={() => setActiveTool("reference")}>
+                  <ToolTab active={activeTool === "reference"} onClick={() => handleToolChange("reference")}>
                     Reference Distance
                   </ToolTab>
-                  <ToolTab active={activeTool === "route_cost"} onClick={() => setActiveTool("route_cost")}>
+                  <ToolTab active={activeTool === "route_cost"} onClick={() => handleToolChange("route_cost")}>
                     Route Cost
                   </ToolTab>
                 </div>
@@ -551,9 +580,10 @@ export function DistanceCheckerPage() {
                   <Metric label="Blank" value={result.summary.blank_count} />
                 </div>
                 <DistanceHistoryAutoSaveStatus
-                  isSaving={saveHistoryMutation.isPending}
-                  saveError={saveHistoryMutation.error as Error | null}
-                  saveResult={saveHistoryMutation.data}
+                  historyTitle={activeHistoryTitle}
+                  isSaving={activeSavePending}
+                  saveError={activeSaveError}
+                  saveResult={activeSaveResult}
                 />
                 <ResultTable rows={resultRows} columns={resultColumns} />
               </CardContent>
@@ -579,9 +609,10 @@ export function DistanceCheckerPage() {
                   <Metric label="Electric Routes Skipped" value={routeCostResult.summary.electric_routes_skipped} />
                 </div>
                 <DistanceHistoryAutoSaveStatus
-                  isSaving={saveHistoryMutation.isPending}
-                  saveError={saveHistoryMutation.error as Error | null}
-                  saveResult={saveHistoryMutation.data}
+                  historyTitle={activeHistoryTitle}
+                  isSaving={activeSavePending}
+                  saveError={activeSaveError}
+                  saveResult={activeSaveResult}
                 />
                 <ResultTable rows={routeRows} columns={routeColumns} />
                 {legRows.length ? (
@@ -747,6 +778,9 @@ export function DistanceCheckerPage() {
 
 function DistanceCheckerHistoryPanel({
   className,
+  title,
+  emptyMessage,
+  toolMode,
   jobs,
   activeRunId,
   deletingRunId,
@@ -759,6 +793,9 @@ function DistanceCheckerHistoryPanel({
   onDelete,
 }: {
   className?: string;
+  title: string;
+  emptyMessage: string;
+  toolMode: DistanceCheckerToolMode;
   jobs: DistanceCheckerHistorySummary[];
   activeRunId?: string;
   deletingRunId?: string;
@@ -777,20 +814,20 @@ function DistanceCheckerHistoryPanel({
           <button
             type="button"
             className={buttonClassName("ghost")}
-            aria-label="Open Distance & Cost history"
+            aria-label={`Open ${title}`}
             onClick={() => onCollapsedChange(false)}
           >
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
           </button>
           <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
           <div className="flex items-center gap-1 lg:mt-auto lg:flex-col">
-            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Distance & Cost history" onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={`Refresh ${title}`} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
             <button
               type="button"
               className={buttonClassName("ghost")}
-              aria-label="Expand Distance & Cost history"
+              aria-label={`Expand ${title}`}
               onClick={() => onCollapsedChange(false)}
             >
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
@@ -807,16 +844,16 @@ function DistanceCheckerHistoryPanel({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Distance & Cost History</h2>
+            <h2 className="text-sm font-semibold">{title}</h2>
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Distance & Cost history" onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={`Refresh ${title}`} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
             <button
               type="button"
               className={buttonClassName("ghost")}
-              aria-label="Collapse Distance & Cost history"
+              aria-label={`Collapse ${title}`}
               onClick={() => onCollapsedChange(true)}
             >
               <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
@@ -828,16 +865,16 @@ function DistanceCheckerHistoryPanel({
         {error ? <InlineError message={error.message} /> : null}
         {!jobs.length && !isLoading ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-            Saved Distance & Cost runs will appear here.
+            {emptyMessage}
           </div>
         ) : null}
         <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
-            const toolMode = normalizeDistanceToolMode(summary.tool_mode);
             const isReference = toolMode === "reference";
             const isActive = activeRunId === job.run_id;
             const isDeleting = deletingRunId === job.run_id;
+            const badgeLabel = isReference ? distanceModeLabel(summary.distance_mode) : String(summary.currency_label || summary.currency_code || "Cost");
             return (
               <div
                 key={job.run_id}
@@ -857,7 +894,7 @@ function DistanceCheckerHistoryPanel({
                         Submitted by {job.owner_email || "Unknown"}
                       </div>
                     </div>
-                    <Badge tone={isActive ? "neutral" : isReference ? "info" : "success"}>{isReference ? "Reference" : "Route Cost"}</Badge>
+                    <Badge tone={isActive ? "neutral" : isReference ? "info" : "success"}>{badgeLabel}</Badge>
                   </div>
                   <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                     {isReference ? (
@@ -901,10 +938,12 @@ function DistanceCheckerHistoryPanel({
 }
 
 function DistanceHistoryAutoSaveStatus({
+  historyTitle,
   isSaving,
   saveError,
   saveResult,
 }: {
+  historyTitle: string;
   isSaving: boolean;
   saveError?: Error | null;
   saveResult?: DistanceCheckerHistoryCreateResponse;
@@ -913,7 +952,7 @@ function DistanceHistoryAutoSaveStatus({
     return (
       <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-        Saving to Distance & Cost History...
+        Saving to {historyTitle}...
       </div>
     );
   }
@@ -923,7 +962,7 @@ function DistanceHistoryAutoSaveStatus({
   if (saveResult?.job?.run_id) {
     return (
       <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        Saved to Distance & Cost History.
+        Saved to {historyTitle}.
       </div>
     );
   }
@@ -1117,6 +1156,10 @@ function normalizeDistanceToolMode(value: unknown): "reference" | "route_cost" {
 
 function normalizeDistanceMode(value: unknown): "road" | "straight_line" {
   return String(value || "").toLowerCase() === "straight_line" ? "straight_line" : "road";
+}
+
+function distanceModeLabel(value: unknown) {
+  return normalizeDistanceMode(value) === "straight_line" ? "Straight" : "Road";
 }
 
 function normalizeRouteCostProfileKey(value: unknown, currencyCode?: unknown): keyof typeof routeCostProfiles {

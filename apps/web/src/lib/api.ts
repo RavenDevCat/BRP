@@ -193,6 +193,8 @@ export type DistanceCheckerHistoryCreateResponse = {
   job: DistanceCheckerHistorySummary;
 };
 
+export type DistanceCheckerToolMode = "reference" | "route_cost";
+
 export type FleetPlannerPreviewResponse = {
   summary: {
     market: string;
@@ -532,30 +534,34 @@ type DistanceCheckerHistoryResponse = {
   jobs: DistanceCheckerHistorySummary[];
 };
 
-export async function listDistanceCheckerHistory() {
-  const payload = await apiFetch<DistanceCheckerHistoryResponse>("/distance-checker/history");
+function distanceCheckerHistoryPath(toolMode: DistanceCheckerToolMode) {
+  return toolMode === "route_cost" ? "/distance-checker/route-cost-history" : "/distance-checker/reference-history";
+}
+
+export async function listDistanceCheckerHistory(toolMode: DistanceCheckerToolMode) {
+  const payload = await apiFetch<DistanceCheckerHistoryResponse>(distanceCheckerHistoryPath(toolMode));
   return payload.jobs;
 }
 
-export function getDistanceCheckerHistory(runId: string) {
-  return apiFetch<DistanceCheckerHistoryRecord>(`/distance-checker/history/${encodeURIComponent(runId)}`);
+export function getDistanceCheckerHistory(toolMode: DistanceCheckerToolMode, runId: string) {
+  return apiFetch<DistanceCheckerHistoryRecord>(`${distanceCheckerHistoryPath(toolMode)}/${encodeURIComponent(runId)}`);
 }
 
-export function deleteDistanceCheckerHistory(runId: string) {
-  return apiFetch<{ deleted: boolean; run_id: string }>(`/distance-checker/history/${encodeURIComponent(runId)}`, {
+export function deleteDistanceCheckerHistory(toolMode: DistanceCheckerToolMode, runId: string) {
+  return apiFetch<{ deleted: boolean; run_id: string }>(`${distanceCheckerHistoryPath(toolMode)}/${encodeURIComponent(runId)}`, {
     method: "DELETE",
   });
 }
 
 export function saveDistanceCheckerHistory(payload: {
   title: string;
-  tool_mode: "reference" | "route_cost";
+  tool_mode: DistanceCheckerToolMode;
   scenario: Record<string, unknown>;
   preview?: DistanceWorkbookPreview | null;
   reference_result?: ReferenceDistanceResponse | null;
   route_cost_result?: RouteCostResponse | null;
 }) {
-  return apiFetch<DistanceCheckerHistoryCreateResponse>("/distance-checker/history", {
+  return apiFetch<DistanceCheckerHistoryCreateResponse>(distanceCheckerHistoryPath(payload.tool_mode), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

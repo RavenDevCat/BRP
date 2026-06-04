@@ -268,6 +268,11 @@ export function DistanceCheckerPage() {
     }
     setActiveTool(nextTool);
     setLoadedHistoryRecord(null);
+    if (nextTool === "reference") {
+      setRouteCostResult(null);
+    } else {
+      setResult(null);
+    }
     saveHistoryMutation.reset();
   }
 
@@ -345,8 +350,10 @@ export function DistanceCheckerPage() {
     setDieselPrice(numberOrDefault(scenario.diesel_price_per_liter, routeProfile.dieselPrice));
     setFuelEfficiency(numberOrDefault(scenario.fuel_efficiency_km_per_liter, 3));
 
-    setResult(record.reference_result || null);
-    setRouteCostResult(record.route_cost_result || null);
+    const referenceResult = normalizeReferenceDistanceResult(record.reference_result);
+    const costResult = normalizeRouteCostResult(record.route_cost_result);
+    setResult(toolMode === "reference" ? referenceResult : null);
+    setRouteCostResult(toolMode === "route_cost" ? costResult : null);
   }
 
   const routeCostProfile = routeCostProfiles[routeCostProfileKey];
@@ -1152,6 +1159,24 @@ function defaultDistanceHistoryTitle(toolMode: "reference" | "route_cost") {
 
 function normalizeDistanceToolMode(value: unknown): "reference" | "route_cost" {
   return String(value || "").toLowerCase() === "route_cost" ? "route_cost" : "reference";
+}
+
+function normalizeReferenceDistanceResult(value: unknown): ReferenceDistanceResponse | null {
+  const record = asRecord(value);
+  const summary = asRecord(record.summary);
+  if (!("resolved_count" in summary) || !Array.isArray(record.results)) {
+    return null;
+  }
+  return value as ReferenceDistanceResponse;
+}
+
+function normalizeRouteCostResult(value: unknown): RouteCostResponse | null {
+  const record = asRecord(value);
+  const summary = asRecord(record.summary);
+  if (!("route_count" in summary) || !Array.isArray(record.route_results) || !Array.isArray(record.leg_results)) {
+    return null;
+  }
+  return value as RouteCostResponse;
 }
 
 function normalizeDistanceMode(value: unknown): "road" | "straight_line" {

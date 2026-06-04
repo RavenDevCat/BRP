@@ -15,8 +15,8 @@ const primaryNavItems = [
 ];
 
 const sideToolNavItems = [
-  { to: "/distance", label: "Distance & Cost", icon: Ruler },
   { to: "/fleet", label: "Fleet Planner", icon: UsersRound },
+  { to: "/distance", label: "Distance & Cost", icon: Ruler },
 ];
 
 const mobileNavItems = [

@@ -522,6 +522,37 @@ export function FleetPlannerPage() {
                     </label>
                     {fileError ? <InlineError message={fileError} /> : null}
                     <DemandWorkbookSummaryCard workbook={demandWorkbook} fileName={file?.name} isLoading={previewMutation.isPending && Boolean(file)} />
+                    <Field label="Job Name">
+                      <input
+                        className={fieldClassName}
+                        value={historyTitle}
+                        placeholder={defaultFleetHistoryTitle()}
+                        onChange={(event) => setHistoryTitle(event.target.value)}
+                      />
+                    </Field>
+                    <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
+                      <Field label="Bus Monitor Seats">
+                        <input
+                          className={fieldClassName}
+                          type="number"
+                          min="0"
+                          max="10"
+                          step="1"
+                          value={monitorSeats}
+                          onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
+                        />
+                      </Field>
+                      <Field label="Service Direction">
+                        <div className="grid grid-cols-2 gap-2">
+                          <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
+                            To School
+                          </ModeButton>
+                          <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
+                            From School
+                          </ModeButton>
+                        </div>
+                      </Field>
+                    </div>
                   </div>
                 </section>
 
@@ -562,14 +593,6 @@ export function FleetPlannerPage() {
                     onManage={() => setVehicleConfigOpen(true)}
                     onReset={handleVehicleCatalogReset}
                   />
-                  <Field label="Job Name">
-                    <input
-                      className={fieldClassName}
-                      value={historyTitle}
-                      placeholder={defaultFleetHistoryTitle()}
-                      onChange={(event) => setHistoryTitle(event.target.value)}
-                    />
-                  </Field>
                   <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
                     <Field label="Planning Mode">
                       <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
@@ -581,28 +604,7 @@ export function FleetPlannerPage() {
                     <Field label="Route Time Target">
                       <RouteTimeTargetControl value={routeTimeTargetMinutes} onChange={handleRouteTimeTargetChange} />
                     </Field>
-                    <Field label="Bus Monitor Seats">
-                      <input
-                        className={fieldClassName}
-                        type="number"
-                        min="0"
-                        max="10"
-                        step="1"
-                        value={monitorSeats}
-                        onChange={(event) => handleMonitorSeatsChange(Number(event.target.value))}
-                      />
-                    </Field>
                   </div>
-                  <Field label="Service Direction">
-                    <div className="grid grid-cols-2 gap-2">
-                      <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
-                        To School
-                      </ModeButton>
-                      <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
-                        From School
-                      </ModeButton>
-                    </div>
-                  </Field>
                 </section>
 
                 <SetupFlowArrow />
@@ -1691,23 +1693,29 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Demand source: upload a demand workbook and confirm the parsed city, school, address count, and students.</li>
-              <li>Run settings: confirm the auto-selected fleet setting and vehicle profile, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
+              <li>Demand source: upload a demand workbook, name the run, reserve monitor seats, choose service direction, and confirm the parsed city, school, address count, and students.</li>
+              <li>Run settings: confirm the auto-selected Fleet Setting and vehicle profile, then choose planning mode and route time target.</li>
               <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
               <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
               <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
             </ol>
           </section>
           <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Demand source</h3>
+            <ul className="list-disc space-y-2 pl-5">
+              <li>Upload the demand workbook first so Fleet Planner can parse city, school, address count, and total students.</li>
+              <li>Job Name controls the title saved in Fleet Planner History.</li>
+              <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
+              <li>Service Direction controls whether routes are built toward school pickup or away from school drop-off.</li>
+            </ul>
+          </section>
+          <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
             <ul className="list-disc space-y-2 pl-5">
               <li>Fleet Setting is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
               <li>Vehicle profile controls which vehicle types, seat counts, energy types, and available counts are used by this run.</li>
-              <li>Job Name controls the title saved in Fleet Planner History.</li>
               <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
               <li>Route Time Target caps each route's one-way completion time. Tighter targets may need more vehicles or become infeasible when individual demand points are too far from school.</li>
-              <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
-              <li>Service Direction controls whether routes are built toward school pickup or away from school drop-off.</li>
             </ul>
           </section>
           <section className="space-y-2">
@@ -1743,7 +1751,7 @@ function FleetSettingGuide({ open, onClose }: { open: boolean; onClose: () => vo
             <h3 className="text-sm font-semibold text-foreground">Default behavior</h3>
             <p>
               After a workbook is uploaded, Fleet Setting is inferred from the workbook country. If nothing is changed, Fleet Planner uses that market's
-              default vehicle catalog and subtracts Bus Monitor Seats from each listed seat count before assigning students.
+              default vehicle catalog. Demand source settings still control the saved job name, monitor-seat reservation, and service direction for the run.
             </p>
             <p>
               Preview fleet chooses the best feasible vehicle for each rider group from the active catalog. The optimized plan may add routes or vehicles
@@ -1757,8 +1765,6 @@ function FleetSettingGuide({ open, onClose }: { open: boolean; onClose: () => vo
               <li>Vehicle profile: use Manage when the operator needs custom seat counts, vehicle availability, diesel/electric mix, or disabled vehicle types.</li>
               <li>Planning Mode: use Balanced for normal planning, Cost Saver for fuller vehicles, and Comfort Saver when lower loads are acceptable.</li>
               <li>Route Time Target: tighten it for shorter routes; loosen it if the plan becomes infeasible or requires too many vehicles.</li>
-              <li>Bus Monitor Seats: reserve adult seats before student capacity is calculated.</li>
-              <li>Service Direction: choose To School for morning pickup and From School for afternoon drop-off.</li>
             </ul>
           </section>
         </div>

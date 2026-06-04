@@ -58,6 +58,10 @@ Recent UX state:
 - Distance & Cost now has separate React histories for Reference Distance and
   Route Cost. Successful runs auto-save to the matching history, can be
   reopened, and can be deleted from `/distance`.
+- Distance & Cost history tab switching was hardened on 2026-06-04. Opening a
+  Route Cost history run and then switching to Reference Distance no longer
+  renders incompatible saved-result payloads; the fix is on GitHub `main` at
+  `81febde` and has been deployed to CN staging only.
 - Fleet Planner now exposes a `Route Time Target` in React run settings. The
   value is saved in Fleet Planner History, restored when a history run is
   opened, and passed to backend fleet preview, clustering diagnostics, grouped
@@ -181,7 +185,8 @@ Last verified KR runtime state in this session:
   Planner History rail release on 2026-06-03. Backup branches were left before
   realigning old server checkouts after the public-history rewrite.
 - CN staging checkout should be kept synced to the current GitHub `main` during
-  release work.
+  release work. As of the Distance & Cost history tab-switch fix on 2026-06-04,
+  CN staging is at `81febde`.
 - CN staging and CN production frontends serve React through Nginx. Nginx serves
   `apps/web/dist`, performs SPA fallback, and proxies same-origin `/api/*`.
   Staging proxies to `127.0.0.1:8001`; production proxies to
@@ -264,6 +269,9 @@ Local checkout role:
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.
+- The latest Distance & Cost history split and tab-switch fix has not been
+  promoted to production in this session. Promote CN production and KR
+  production together only after explicit production approval.
 - CN staging is the only environment currently intended for Microsoft SSO
   preparation. Keep production deployments on their current auth provider until
   the user explicitly approves an auth migration.

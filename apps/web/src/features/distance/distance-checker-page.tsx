@@ -75,7 +75,7 @@ export function DistanceCheckerPage() {
   const [fuelEfficiency, setFuelEfficiency] = useState(3);
   const [routeCostResult, setRouteCostResult] = useState<RouteCostResponse | null>(null);
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<DistanceCheckerHistoryRecord | null>(null);
-  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [deletingRunId, setDeletingRunId] = useState("");
 
   const historyQuery = useQuery({
@@ -385,25 +385,20 @@ export function DistanceCheckerPage() {
   const busy = previewMutation.isPending || runMutation.isPending || routeCostMutation.isPending;
 
   return (
-    <div className="space-y-6 pb-16 lg:pb-0">
-      <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
-        <div>
-          <p className="text-sm font-medium text-primary">Side tools</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">Distance & Cost</h1>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            Measure reference-stop distance or estimate current-plan route distance and one-way diesel cost.
-          </p>
-        </div>
-      </section>
-
-      <div className="grid gap-4 2xl:grid-cols-[340px_minmax(0,1fr)]">
+    <div className="pb-16 lg:pb-0">
+      <div
+        className={cn(
+          "grid gap-4 lg:items-start",
+          historyCollapsed ? "lg:grid-cols-[56px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
+        )}
+      >
         <DistanceCheckerHistoryPanel
-          className="2xl:sticky 2xl:top-20 2xl:self-start"
+          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
           jobs={historyQuery.data || []}
-          activeRunId={loadedHistoryRecord?.run_id}
+          activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
           deletingRunId={deletingRunId}
-          isLoading={historyQuery.isLoading}
-          error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null)}
+          isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending}
+          error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null)}
           collapsed={historyCollapsed}
           onCollapsedChange={setHistoryCollapsed}
           onRefresh={() => void historyQuery.refetch()}
@@ -412,14 +407,27 @@ export function DistanceCheckerPage() {
         />
 
         <div className="min-w-0 space-y-4">
-          <div className="inline-grid grid-cols-2 rounded-md border border-border bg-muted p-1">
-            <ToolTab active={activeTool === "reference"} onClick={() => setActiveTool("reference")}>
-              Reference Distance
-            </ToolTab>
-            <ToolTab active={activeTool === "route_cost"} onClick={() => setActiveTool("route_cost")}>
-              Route Cost
-            </ToolTab>
-          </div>
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+                <div>
+                  <p className="text-sm font-medium text-primary">Side tools</p>
+                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">Distance & Cost</h1>
+                  <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+                    Measure reference-stop distance or estimate current-plan route distance and one-way diesel cost.
+                  </p>
+                </div>
+                <div className="inline-grid shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-1">
+                  <ToolTab active={activeTool === "reference"} onClick={() => setActiveTool("reference")}>
+                    Reference Distance
+                  </ToolTab>
+                  <ToolTab active={activeTool === "route_cost"} onClick={() => setActiveTool("route_cost")}>
+                    Route Cost
+                  </ToolTab>
+                </div>
+              </div>
+            </CardHeader>
+          </Card>
 
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
             <div className="space-y-4">
@@ -765,7 +773,7 @@ function DistanceCheckerHistoryPanel({
   if (collapsed) {
     return (
       <Card className={cn("overflow-hidden", className)}>
-        <div className="flex items-center justify-between gap-2 p-2 2xl:min-h-[280px] 2xl:flex-col 2xl:justify-start">
+        <div className="flex items-center justify-between gap-2 p-2 lg:min-h-[280px] lg:flex-col lg:justify-start">
           <button
             type="button"
             className={buttonClassName("ghost")}
@@ -775,7 +783,7 @@ function DistanceCheckerHistoryPanel({
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
           </button>
           <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
-          <div className="flex items-center gap-1 2xl:mt-auto 2xl:flex-col">
+          <div className="flex items-center gap-1 lg:mt-auto lg:flex-col">
             <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Distance & Cost history" onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
@@ -823,7 +831,7 @@ function DistanceCheckerHistoryPanel({
             Saved Distance & Cost runs will appear here.
           </div>
         ) : null}
-        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 2xl:max-h-[calc(100vh-220px)]">
+        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
             const toolMode = normalizeDistanceToolMode(summary.tool_mode);

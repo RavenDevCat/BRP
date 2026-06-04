@@ -845,6 +845,86 @@ def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: st
     return {"job": FLEET_PLANNER_HISTORY_STORE.create(history_payload, owner_email=user_email)}
 
 
+def _handle_distance_checker_history_create(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    tool_mode = str(payload.get("tool_mode") or "").strip()
+    reference_result = dict(payload.get("reference_result") or {})
+    route_cost_result = dict(payload.get("route_cost_result") or {})
+    if not tool_mode:
+        tool_mode = "route_cost" if route_cost_result else "reference"
+    if tool_mode not in {"reference", "route_cost"}:
+        raise ValueError("tool_mode must be reference or route_cost.")
+    if tool_mode == "reference" and not reference_result:
+        raise ValueError("Run a reference distance check before saving history.")
+    if tool_mode == "route_cost" and not route_cost_result:
+        raise ValueError("Run a route cost calculation before saving history.")
+
+    preview = dict(payload.get("preview") or {})
+    scenario = dict(payload.get("scenario") or {})
+    result = route_cost_result if tool_mode == "route_cost" else reference_result
+    result_job = dict(result.get("job") or {})
+    result_summary = dict(result.get("summary") or {})
+    metadata = dict(result_job.get("metadata") or {})
+    source_label = str(
+        scenario.get("file_name")
+        or preview.get("source_label")
+        or metadata.get("source_label")
+        or ""
+    ).strip()
+    selected_sheet = str(
+        scenario.get("selected_sheet")
+        or preview.get("selected_sheet")
+        or metadata.get("selected_sheet")
+        or ""
+    ).strip()
+    title = str(payload.get("title") or result_job.get("label") or "").strip()
+    if not title:
+        title = f"{'Route Cost' if tool_mode == 'route_cost' else 'Reference Distance'} - {datetime.now().strftime('%Y-%m-%d %H%M')}"
+
+    summary: dict[str, Any] = {
+        "tool_mode": tool_mode,
+        "source_label": source_label,
+        "selected_sheet": selected_sheet,
+    }
+    if tool_mode == "reference":
+        summary.update(
+            {
+                "row_count": result_summary.get("row_count"),
+                "resolved_count": result_summary.get("resolved_count"),
+                "failed_count": result_summary.get("failed_count"),
+                "blank_count": result_summary.get("blank_count"),
+                "distance_mode": result_summary.get("distance_mode") or scenario.get("distance_mode"),
+                "origin_address": (
+                    dict(scenario.get("origin") or {}).get("address")
+                    or metadata.get("origin_address")
+                    or ""
+                ),
+            }
+        )
+    else:
+        summary.update(
+            {
+                "route_count": result_summary.get("route_count"),
+                "leg_count": result_summary.get("leg_count"),
+                "total_one_way_distance_km": result_summary.get("total_one_way_distance_km"),
+                "estimated_one_way_fuel_cost": result_summary.get("estimated_one_way_fuel_cost"),
+                "currency_code": result_summary.get("currency_code"),
+                "currency_label": result_summary.get("currency_label"),
+                "routes_with_unresolved_stops": result_summary.get("routes_with_unresolved_stops"),
+                "electric_routes_skipped": result_summary.get("electric_routes_skipped"),
+            }
+        )
+
+    history_payload = {
+        "title": title,
+        "scenario": scenario,
+        "preview": preview,
+        "reference_result": reference_result,
+        "route_cost_result": route_cost_result,
+        "summary": summary,
+    }
+    return {"job": DISTANCE_CHECKER_HISTORY_STORE.create(history_payload, owner_email=user_email)}
+
+
 def _list_demo_workbooks() -> list[dict[str, Any]]:
     if not DEMO_DATA_DIR.exists():
         return []
@@ -1654,6 +1734,7 @@ class SideToolHistoryStore:
 
 
 JOB_STORE = JobStore(JOBS_DIR)
+DISTANCE_CHECKER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "distance_checker")
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
 JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
 _SCHEDULER_LOCK = threading.Lock()
@@ -2024,6 +2105,20 @@ class BackendHandler(BaseHTTPRequestHandler):
             query_params = dict(parse_qsl(parsed.query))
             self._send_json(200, _handle_fleet_planner_vehicle_catalog(query_params))
             return
+        if path == "/distance-checker/history":
+            self._send_json(200, {"jobs": DISTANCE_CHECKER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})
+            return
+        if path.startswith("/distance-checker/history/"):
+            run_id = unquote(path.rsplit("/", 1)[-1]).strip()
+            record = DISTANCE_CHECKER_HISTORY_STORE.get(run_id)
+            if not record:
+                self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
+                return
+            if not _can_access_job(record, user_email, include_all=include_all):
+                self._send_json(403, {"error": f"Distance & Cost history run is not available for user: {user_email}"})
+                return
+            self._send_json(200, record)
+            return
         if path == "/fleet-planner/history":
             self._send_json(200, {"jobs": FLEET_PLANNER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})
             return
@@ -2155,6 +2250,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             if path == "/distance-checker/route-cost":
                 self._send_json(200, _handle_current_plan_route_cost(payload))
+                return
+            if path == "/distance-checker/history":
+                self._send_json(201, _handle_distance_checker_history_create(payload, user_email=user_email))
                 return
             if path == "/fleet-planner/preview":
                 self._send_json(200, _handle_fleet_planner_preview(payload))
@@ -2297,6 +2395,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             user_email = self._current_user_email()
             include_all = _is_admin_email(user_email)
+            if path.startswith("/distance-checker/history/"):
+                parts = [part for part in path.split("/") if part]
+                if len(parts) != 3:
+                    self._send_json(404, {"error": f"Unknown path: {path}"})
+                    return
+                run_id = unquote(parts[2]).strip()
+                record = DISTANCE_CHECKER_HISTORY_STORE.get(run_id)
+                if not record:
+                    self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
+                    return
+                if not _can_access_job(record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Distance & Cost history run is not available for user: {user_email}"})
+                    return
+                DISTANCE_CHECKER_HISTORY_STORE.delete(run_id)
+                self._send_json(200, {"deleted": True, "run_id": run_id})
+                return
             if path.startswith("/fleet-planner/history/"):
                 parts = [part for part in path.split("/") if part]
                 if len(parts) != 3:

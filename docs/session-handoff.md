@@ -55,6 +55,9 @@ Recent UX state:
 - Fleet Planner History now collapses into a narrow left-side rail by default,
   preserving the original right-side Fleet Planner workspace layout while
   giving narrower desktop windows more room.
+- Distance & Cost now has its own React history panel. Reference-distance checks
+  and route-cost calculations auto-save after successful runs, can be reopened,
+  and can be deleted from `/distance`.
 - Fleet Planner now exposes a `Route Time Target` in React run settings. The
   value is saved in Fleet Planner History, restored when a history run is
   opened, and passed to backend fleet preview, clustering diagnostics, grouped

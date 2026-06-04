@@ -173,6 +173,26 @@ export type RouteCostResponse = {
   leg_results: Array<Record<string, unknown>>;
 };
 
+export type DistanceCheckerHistorySummary = {
+  run_id: string;
+  tool_key: string;
+  owner_email?: string;
+  title: string;
+  created_at?: string | null;
+  summary: Record<string, unknown>;
+};
+
+export type DistanceCheckerHistoryRecord = DistanceCheckerHistorySummary & {
+  scenario?: Record<string, unknown>;
+  preview?: DistanceWorkbookPreview;
+  reference_result?: ReferenceDistanceResponse;
+  route_cost_result?: RouteCostResponse;
+};
+
+export type DistanceCheckerHistoryCreateResponse = {
+  job: DistanceCheckerHistorySummary;
+};
+
 export type FleetPlannerPreviewResponse = {
   summary: {
     market: string;
@@ -502,6 +522,40 @@ export function runCurrentPlanRouteCost(payload: {
   fuel_efficiency_km_per_liter: number;
 }) {
   return apiFetch<RouteCostResponse>("/distance-checker/route-cost", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+type DistanceCheckerHistoryResponse = {
+  jobs: DistanceCheckerHistorySummary[];
+};
+
+export async function listDistanceCheckerHistory() {
+  const payload = await apiFetch<DistanceCheckerHistoryResponse>("/distance-checker/history");
+  return payload.jobs;
+}
+
+export function getDistanceCheckerHistory(runId: string) {
+  return apiFetch<DistanceCheckerHistoryRecord>(`/distance-checker/history/${encodeURIComponent(runId)}`);
+}
+
+export function deleteDistanceCheckerHistory(runId: string) {
+  return apiFetch<{ deleted: boolean; run_id: string }>(`/distance-checker/history/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+  });
+}
+
+export function saveDistanceCheckerHistory(payload: {
+  title: string;
+  tool_mode: "reference" | "route_cost";
+  scenario: Record<string, unknown>;
+  preview?: DistanceWorkbookPreview | null;
+  reference_result?: ReferenceDistanceResponse | null;
+  route_cost_result?: RouteCostResponse | null;
+}) {
+  return apiFetch<DistanceCheckerHistoryCreateResponse>("/distance-checker/history", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),

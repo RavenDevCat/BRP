@@ -1,20 +1,28 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Calculator, FileSpreadsheet, Fuel, Loader2, MapPinned, Ruler, Upload } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, Calculator, FileSpreadsheet, Fuel, History, Loader2, MapPinned, RefreshCw, Ruler, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
+  deleteDistanceCheckerHistory,
+  getDistanceCheckerHistory,
+  listDistanceCheckerHistory,
   previewDistanceWorkbook,
   runCurrentPlanRouteCost,
   runReferenceDistanceCheck,
+  saveDistanceCheckerHistory,
+  type DistanceCheckerHistoryCreateResponse,
+  type DistanceCheckerHistoryRecord,
+  type DistanceCheckerHistorySummary,
   type DistanceWorkbookPreview,
   type ReferenceDistanceResponse,
   type RouteCostResponse,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { formatNumber } from "@/lib/format";
+import { formatDateTime, formatNumber } from "@/lib/format";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
@@ -42,6 +50,7 @@ const routeCostProfiles = {
 };
 
 export function DistanceCheckerPage() {
+  const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<"reference" | "route_cost">("reference");
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
@@ -65,6 +74,14 @@ export function DistanceCheckerPage() {
   const [dieselPrice, setDieselPrice] = useState(routeCostProfiles.korea.dieselPrice);
   const [fuelEfficiency, setFuelEfficiency] = useState(3);
   const [routeCostResult, setRouteCostResult] = useState<RouteCostResponse | null>(null);
+  const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<DistanceCheckerHistoryRecord | null>(null);
+  const [historyCollapsed, setHistoryCollapsed] = useState(false);
+  const [deletingRunId, setDeletingRunId] = useState("");
+
+  const historyQuery = useQuery({
+    queryKey: ["distance-checker-history"],
+    queryFn: listDistanceCheckerHistory,
+  });
 
   const previewMutation = useMutation({
     mutationFn: async (sheetName?: string) => {
@@ -88,7 +105,34 @@ export function DistanceCheckerPage() {
       setCountryColumn(payload.suggested_columns.country || "");
       setResult(null);
       setRouteCostResult(null);
+      setLoadedHistoryRecord(null);
     },
+  });
+
+  const saveHistoryMutation = useMutation({
+    mutationFn: saveDistanceCheckerHistory,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history"] });
+    },
+  });
+
+  const openHistoryMutation = useMutation({
+    mutationFn: (runId: string) => getDistanceCheckerHistory(runId),
+    onSuccess: (record) => applyHistoryRecord(record),
+  });
+
+  const deleteHistoryMutation = useMutation({
+    mutationFn: (runId: string) => deleteDistanceCheckerHistory(runId),
+    onMutate: (runId) => setDeletingRunId(runId),
+    onSuccess: async (payload) => {
+      if (loadedHistoryRecord?.run_id === payload.run_id) {
+        setLoadedHistoryRecord(null);
+        setResult(null);
+        setRouteCostResult(null);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history"] });
+    },
+    onSettled: () => setDeletingRunId(""),
   });
 
   const runMutation = useMutation({
@@ -111,7 +155,12 @@ export function DistanceCheckerPage() {
         },
       });
     },
-    onSuccess: (payload) => setResult(payload),
+    onSuccess: (payload) => {
+      setResult(payload);
+      setRouteCostResult(null);
+      setLoadedHistoryRecord(null);
+      saveHistory("reference", payload);
+    },
   });
 
   const routeCostMutation = useMutation({
@@ -138,7 +187,12 @@ export function DistanceCheckerPage() {
         fuel_efficiency_km_per_liter: fuelEfficiency,
       });
     },
-    onSuccess: (payload) => setRouteCostResult(payload),
+    onSuccess: (payload) => {
+      setRouteCostResult(payload);
+      setResult(null);
+      setLoadedHistoryRecord(null);
+      saveHistory("route_cost", payload);
+    },
   });
 
   useEffect(() => {
@@ -149,19 +203,26 @@ export function DistanceCheckerPage() {
   }, [selectedSheet]);
 
   useEffect(() => {
+    if (loadedHistoryRecord) {
+      return;
+    }
     const profile = routeCostProfiles[routeCostProfileKey];
     setRouteDefaultCity(profile.defaultCity);
     setRouteDefaultCountry(profile.defaultCountry);
     setDieselPrice(profile.dieselPrice);
     setRouteCostResult(null);
-  }, [routeCostProfileKey]);
+  }, [routeCostProfileKey, loadedHistoryRecord]);
 
   function clearDistanceResult() {
     setResult(null);
+    setLoadedHistoryRecord(null);
+    saveHistoryMutation.reset();
   }
 
   function clearRouteCostResult() {
     setRouteCostResult(null);
+    setLoadedHistoryRecord(null);
+    saveHistoryMutation.reset();
   }
 
   function handleSheetChange(nextSheet: string) {
@@ -181,6 +242,8 @@ export function DistanceCheckerPage() {
     setPreview(null);
     setResult(null);
     setRouteCostResult(null);
+    setLoadedHistoryRecord(null);
+    saveHistoryMutation.reset();
     setFileError("");
     setFileBase64("");
     if (!nextFile) {
@@ -196,6 +259,84 @@ export function DistanceCheckerPage() {
     } catch (error) {
       setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
     }
+  }
+
+  function buildScenario(toolMode: "reference" | "route_cost") {
+    return {
+      tool_mode: toolMode,
+      file_name: file?.name || preview?.source_label || "",
+      selected_sheet: selectedSheet,
+      address_column: addressColumn,
+      city_column: cityColumn,
+      country_column: countryColumn,
+      route_column: routeColumn,
+      sequence_column: sequenceColumn,
+      bus_type_column: busTypeColumn,
+      origin: {
+        country: originCountry,
+        city: originCity,
+        address: originAddress,
+      },
+      distance_mode: distanceMode,
+      route_cost_profile_key: routeCostProfileKey,
+      default_city: routeDefaultCity,
+      default_country: routeDefaultCountry,
+      currency_code: routeCostProfiles[routeCostProfileKey].currencyCode,
+      currency_label: routeCostProfiles[routeCostProfileKey].currencyLabel,
+      diesel_price_per_liter: dieselPrice,
+      fuel_efficiency_km_per_liter: fuelEfficiency,
+    };
+  }
+
+  function saveHistory(toolMode: "reference", payload: ReferenceDistanceResponse): void;
+  function saveHistory(toolMode: "route_cost", payload: RouteCostResponse): void;
+  function saveHistory(toolMode: "reference" | "route_cost", payload: ReferenceDistanceResponse | RouteCostResponse) {
+    saveHistoryMutation.mutate({
+      title: payload.job?.label || defaultDistanceHistoryTitle(toolMode),
+      tool_mode: toolMode,
+      scenario: buildScenario(toolMode),
+      preview,
+      reference_result: toolMode === "reference" ? (payload as ReferenceDistanceResponse) : null,
+      route_cost_result: toolMode === "route_cost" ? (payload as RouteCostResponse) : null,
+    });
+  }
+
+  function applyHistoryRecord(record: DistanceCheckerHistoryRecord) {
+    const scenario = record.scenario || {};
+    const summary = record.summary || {};
+    const toolMode = normalizeDistanceToolMode(scenario.tool_mode || summary.tool_mode || (record.route_cost_result ? "route_cost" : "reference"));
+    const recordPreview = record.preview || null;
+    saveHistoryMutation.reset();
+    setLoadedHistoryRecord(record);
+    setActiveTool(toolMode);
+    setFile(null);
+    setFileBase64("");
+    setFileError("");
+    setPreview(recordPreview);
+    setSelectedSheet(String(scenario.selected_sheet || recordPreview?.selected_sheet || summary.selected_sheet || ""));
+    setRouteColumn(String(scenario.route_column || recordPreview?.suggested_columns?.route || ""));
+    setAddressColumn(String(scenario.address_column || recordPreview?.suggested_columns?.address || recordPreview?.columns?.[0] || ""));
+    setSequenceColumn(String(scenario.sequence_column || recordPreview?.suggested_columns?.sequence || ""));
+    setBusTypeColumn(String(scenario.bus_type_column || recordPreview?.suggested_columns?.bus_type || ""));
+    setCityColumn(String(scenario.city_column || recordPreview?.suggested_columns?.city || ""));
+    setCountryColumn(String(scenario.country_column || recordPreview?.suggested_columns?.country || ""));
+
+    const origin = asRecord(scenario.origin);
+    setOriginCountry(String(origin.country || "South Korea"));
+    setOriginCity(String(origin.city || "Seoul"));
+    setOriginAddress(String(origin.address || summary.origin_address || ""));
+    setDistanceMode(normalizeDistanceMode(scenario.distance_mode || summary.distance_mode));
+
+    const routeProfileKey = normalizeRouteCostProfileKey(scenario.route_cost_profile_key, record.route_cost_result?.summary.currency_code);
+    const routeProfile = routeCostProfiles[routeProfileKey];
+    setRouteCostProfileKey(routeProfileKey);
+    setRouteDefaultCity(String(scenario.default_city || routeProfile.defaultCity));
+    setRouteDefaultCountry(String(scenario.default_country || routeProfile.defaultCountry));
+    setDieselPrice(numberOrDefault(scenario.diesel_price_per_liter, routeProfile.dieselPrice));
+    setFuelEfficiency(numberOrDefault(scenario.fuel_efficiency_km_per_liter, 3));
+
+    setResult(record.reference_result || null);
+    setRouteCostResult(record.route_cost_result || null);
   }
 
   const routeCostProfile = routeCostProfiles[routeCostProfileKey];
@@ -255,17 +396,33 @@ export function DistanceCheckerPage() {
         </div>
       </section>
 
-      <div className="inline-grid grid-cols-2 rounded-md border border-border bg-muted p-1">
-        <ToolTab active={activeTool === "reference"} onClick={() => setActiveTool("reference")}>
-          Reference Distance
-        </ToolTab>
-        <ToolTab active={activeTool === "route_cost"} onClick={() => setActiveTool("route_cost")}>
-          Route Cost
-        </ToolTab>
-      </div>
+      <div className="grid gap-4 2xl:grid-cols-[340px_minmax(0,1fr)]">
+        <DistanceCheckerHistoryPanel
+          className="2xl:sticky 2xl:top-20 2xl:self-start"
+          jobs={historyQuery.data || []}
+          activeRunId={loadedHistoryRecord?.run_id}
+          deletingRunId={deletingRunId}
+          isLoading={historyQuery.isLoading}
+          error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null)}
+          collapsed={historyCollapsed}
+          onCollapsedChange={setHistoryCollapsed}
+          onRefresh={() => void historyQuery.refetch()}
+          onOpen={(runId) => openHistoryMutation.mutate(runId)}
+          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+        />
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
+          <div className="inline-grid grid-cols-2 rounded-md border border-border bg-muted p-1">
+            <ToolTab active={activeTool === "reference"} onClick={() => setActiveTool("reference")}>
+              Reference Distance
+            </ToolTab>
+            <ToolTab active={activeTool === "route_cost"} onClick={() => setActiveTool("route_cost")}>
+              Route Cost
+            </ToolTab>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="space-y-4">
           <Card>
             <CardHeader>
               <div className="flex items-center gap-2">
@@ -385,6 +542,11 @@ export function DistanceCheckerPage() {
                   <Metric label="Failed" value={result.summary.failed_count} />
                   <Metric label="Blank" value={result.summary.blank_count} />
                 </div>
+                <DistanceHistoryAutoSaveStatus
+                  isSaving={saveHistoryMutation.isPending}
+                  saveError={saveHistoryMutation.error as Error | null}
+                  saveResult={saveHistoryMutation.data}
+                />
                 <ResultTable rows={resultRows} columns={resultColumns} />
               </CardContent>
             </Card>
@@ -408,6 +570,11 @@ export function DistanceCheckerPage() {
                   <Metric label="Routes With Failed Stops" value={routeCostResult.summary.routes_with_unresolved_stops} />
                   <Metric label="Electric Routes Skipped" value={routeCostResult.summary.electric_routes_skipped} />
                 </div>
+                <DistanceHistoryAutoSaveStatus
+                  isSaving={saveHistoryMutation.isPending}
+                  saveError={saveHistoryMutation.error as Error | null}
+                  saveResult={saveHistoryMutation.data}
+                />
                 <ResultTable rows={routeRows} columns={routeColumns} />
                 {legRows.length ? (
                   <details className="rounded-md border border-border bg-muted/40">
@@ -498,7 +665,10 @@ export function DistanceCheckerPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <Field label="Market">
-                  <select className={fieldClassName} value={routeCostProfileKey} onChange={(event) => setRouteCostProfileKey(event.target.value as keyof typeof routeCostProfiles)}>
+                  <select className={fieldClassName} value={routeCostProfileKey} onChange={(event) => {
+                    setRouteCostProfileKey(event.target.value as keyof typeof routeCostProfiles);
+                    clearRouteCostResult();
+                  }}>
                     {Object.entries(routeCostProfiles).map(([key, profile]) => (
                       <option key={key} value={key}>
                         {profile.label}
@@ -559,10 +729,197 @@ export function DistanceCheckerPage() {
               </CardContent>
             </Card>
           )}
-        </aside>
+          </aside>
+          </div>
+        </div>
       </div>
     </div>
   );
+}
+
+function DistanceCheckerHistoryPanel({
+  className,
+  jobs,
+  activeRunId,
+  deletingRunId,
+  isLoading,
+  error,
+  collapsed,
+  onCollapsedChange,
+  onRefresh,
+  onOpen,
+  onDelete,
+}: {
+  className?: string;
+  jobs: DistanceCheckerHistorySummary[];
+  activeRunId?: string;
+  deletingRunId?: string;
+  isLoading: boolean;
+  error?: Error | null;
+  collapsed: boolean;
+  onCollapsedChange: (collapsed: boolean) => void;
+  onRefresh: () => void;
+  onOpen: (runId: string) => void;
+  onDelete: (runId: string) => void;
+}) {
+  if (collapsed) {
+    return (
+      <Card className={cn("overflow-hidden", className)}>
+        <div className="flex items-center justify-between gap-2 p-2 2xl:min-h-[280px] 2xl:flex-col 2xl:justify-start">
+          <button
+            type="button"
+            className={buttonClassName("ghost")}
+            aria-label="Open Distance & Cost history"
+            onClick={() => onCollapsedChange(false)}
+          >
+            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+          </button>
+          <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
+          <div className="flex items-center gap-1 2xl:mt-auto 2xl:flex-col">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Distance & Cost history" onClick={onRefresh}>
+              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              aria-label="Expand Distance & Cost history"
+              onClick={() => onCollapsedChange(false)}
+            >
+              <ArrowRight className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className={className}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Distance & Cost History</h2>
+          </div>
+          <div className="flex items-center gap-1">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Distance & Cost history" onClick={onRefresh}>
+              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              aria-label="Collapse Distance & Cost history"
+              onClick={() => onCollapsedChange(true)}
+            >
+              <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {error ? <InlineError message={error.message} /> : null}
+        {!jobs.length && !isLoading ? (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
+            Saved Distance & Cost runs will appear here.
+          </div>
+        ) : null}
+        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 2xl:max-h-[calc(100vh-220px)]">
+          {jobs.map((job) => {
+            const summary = job.summary || {};
+            const toolMode = normalizeDistanceToolMode(summary.tool_mode);
+            const isReference = toolMode === "reference";
+            const isActive = activeRunId === job.run_id;
+            const isDeleting = deletingRunId === job.run_id;
+            return (
+              <div
+                key={job.run_id}
+                className={cn(
+                  "flex items-stretch gap-1 rounded-md border p-2 transition",
+                  isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
+                )}
+              >
+                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold">{job.title || "Distance & Cost Run"}</div>
+                      <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                        {formatDateTime(job.created_at)}
+                      </div>
+                      <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                        Submitted by {job.owner_email || "Unknown"}
+                      </div>
+                    </div>
+                    <Badge tone={isActive ? "neutral" : isReference ? "info" : "success"}>{isReference ? "Reference" : "Route Cost"}</Badge>
+                  </div>
+                  <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                    {isReference ? (
+                      <>
+                        <span>{formatNumber(summary.resolved_count)} resolved</span>
+                        <span>{formatNumber(summary.failed_count)} failed</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{formatNumber(summary.route_count)} routes</span>
+                        <span>{formatNumber(summary.total_one_way_distance_km)} km</span>
+                      </>
+                    )}
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                    isActive
+                      ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+                  )}
+                  aria-label={`Delete ${job.title || "Distance & Cost Run"}`}
+                  disabled={isDeleting}
+                  onClick={() => {
+                    if (window.confirm("Delete this Distance & Cost history run? This cannot be undone.")) {
+                      onDelete(job.run_id);
+                    }
+                  }}
+                >
+                  {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DistanceHistoryAutoSaveStatus({
+  isSaving,
+  saveError,
+  saveResult,
+}: {
+  isSaving: boolean;
+  saveError?: Error | null;
+  saveResult?: DistanceCheckerHistoryCreateResponse;
+}) {
+  if (isSaving) {
+    return (
+      <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+        Saving to Distance & Cost History...
+      </div>
+    );
+  }
+  if (saveError) {
+    return <InlineError message={`History autosave failed: ${saveError.message}`} />;
+  }
+  if (saveResult?.job?.run_id) {
+    return (
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+        Saved to Distance & Cost History.
+      </div>
+    );
+  }
+  return null;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -732,6 +1089,43 @@ function formatCell(value: unknown) {
     return formatNumber(value);
   }
   return String(value);
+}
+
+function defaultDistanceHistoryTitle(toolMode: "reference" | "route_cost") {
+  const label = toolMode === "route_cost" ? "Route Cost Run" : "Reference Distance Run";
+  const timestamp = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date());
+  return `${label} - ${timestamp}`;
+}
+
+function normalizeDistanceToolMode(value: unknown): "reference" | "route_cost" {
+  return String(value || "").toLowerCase() === "route_cost" ? "route_cost" : "reference";
+}
+
+function normalizeDistanceMode(value: unknown): "road" | "straight_line" {
+  return String(value || "").toLowerCase() === "straight_line" ? "straight_line" : "road";
+}
+
+function normalizeRouteCostProfileKey(value: unknown, currencyCode?: unknown): keyof typeof routeCostProfiles {
+  const normalized = String(value || "").toLowerCase();
+  if (normalized === "china" || normalized === "korea") {
+    return normalized;
+  }
+  return String(currencyCode || "").toUpperCase() === "CNY" ? "china" : "korea";
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function numberOrDefault(value: unknown, fallback: number) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
 }
 
 async function fileToBase64(file: File): Promise<string> {

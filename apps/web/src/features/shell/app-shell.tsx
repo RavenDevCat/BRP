@@ -38,7 +38,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     queryFn: getGoogleGeocodeUsage,
     staleTime: 60_000,
   });
-  const isWideWorkspace = pathname.startsWith("/jobs") || pathname.startsWith("/fleet");
+  const isWideWorkspace = pathname.startsWith("/jobs") || pathname.startsWith("/fleet") || pathname.startsWith("/distance");
   const googleUsage = googleUsageQuery.data;
   const googleUsagePct =
     googleUsage?.enabled && googleUsage.limit && googleUsage.used !== undefined

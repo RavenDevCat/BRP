@@ -530,7 +530,7 @@ export function FleetPlannerPage() {
                         onChange={(event) => setHistoryTitle(event.target.value)}
                       />
                     </Field>
-                    <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
+                    <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-1">
                       <Field label="Bus Monitor Seats">
                         <input
                           className={fieldClassName}
@@ -593,7 +593,7 @@ export function FleetPlannerPage() {
                     onManage={() => setVehicleConfigOpen(true)}
                     onReset={handleVehicleCatalogReset}
                   />
-                  <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-1">
+                  <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-1">
                     <Field label="Planning Mode">
                       <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
                         <option value="balanced">Balanced</option>
@@ -836,9 +836,9 @@ function VehicleProfileSummary({
   const maxSeats = Math.max(0, ...enabledConfigs.map((config) => Number(config.listed_seats) || 0));
   return (
     <div className="space-y-2 rounded-md border border-border bg-surface p-3">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 min-[1680px]:flex-row min-[1680px]:items-start min-[1680px]:justify-between">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Bus className="h-4 w-4 text-primary" aria-hidden="true" />
             <h3 className="text-sm font-semibold">Vehicle profile</h3>
             <Badge tone={edited ? "warning" : "neutral"}>{edited ? "custom" : "default"}</Badge>
@@ -1802,7 +1802,7 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
     <button
       type="button"
       className={cn(
-        "h-9 rounded-md border px-3 text-sm font-medium transition",
+        "inline-flex h-9 min-w-0 items-center justify-center whitespace-nowrap rounded-md border px-3 text-sm font-medium transition",
         active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface text-foreground hover:bg-muted",
       )}
       onClick={onClick}
@@ -1835,7 +1835,7 @@ function RouteTimeTargetControl({ value, onChange }: { value: number; onChange: 
           </ModeButton>
         ))}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
         <input
           className={fieldClassName}
           type="number"

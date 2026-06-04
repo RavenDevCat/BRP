@@ -74,6 +74,7 @@ export function FleetPlannerPage() {
   const [vehicleConfigOpen, setVehicleConfigOpen] = useState(false);
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
+  const [fleetSettingHelpOpen, setFleetSettingHelpOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
 
@@ -500,26 +501,28 @@ export function FleetPlannerPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_28px_minmax(0,1fr)_28px_minmax(0,1fr)]">
-                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <section className="flex h-full flex-col rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
                     <h2 className="text-sm font-semibold">Demand source</h2>
                   </div>
-                  <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
-                    <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-                    <span className="min-w-0 text-left">
-                      <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
-                      <span className="mt-1 block text-xs text-muted-foreground">Upload an .xlsx demand workbook to parse city, school, address count, and students.</span>
-                    </span>
-                    <input
-                      className="sr-only"
-                      type="file"
-                      accept=".xlsx"
-                      onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
-                    />
-                  </label>
-                  {fileError ? <InlineError message={fileError} /> : null}
-                  <DemandWorkbookSummaryCard workbook={demandWorkbook} fileName={file?.name} isLoading={previewMutation.isPending && Boolean(file)} />
+                  <div className="flex flex-1 flex-col justify-center space-y-3 pt-3">
+                    <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
+                      <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                      <span className="min-w-0 text-left">
+                        <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">Upload an .xlsx demand workbook to parse city, school, address count, and students.</span>
+                      </span>
+                      <input
+                        className="sr-only"
+                        type="file"
+                        accept=".xlsx"
+                        onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                      />
+                    </label>
+                    {fileError ? <InlineError message={fileError} /> : null}
+                    <DemandWorkbookSummaryCard workbook={demandWorkbook} fileName={file?.name} isLoading={previewMutation.isPending && Boolean(file)} />
+                  </div>
                 </section>
 
                 <SetupFlowArrow />
@@ -529,7 +532,19 @@ export function FleetPlannerPage() {
                     <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
                     <h2 className="text-sm font-semibold">Run settings</h2>
                   </div>
-                  <Field label="Fleet Setting">
+                  <div className="block space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-medium text-muted-foreground">Fleet Setting</span>
+                      <button
+                        type="button"
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface text-muted-foreground transition hover:border-primary/50 hover:text-primary"
+                        aria-label="Fleet Setting guide"
+                        title="Fleet Setting guide"
+                        onClick={() => setFleetSettingHelpOpen(true)}
+                      >
+                        <CircleHelp className="h-4 w-4" aria-hidden="true" />
+                      </button>
+                    </div>
                     <div className="grid grid-cols-2 gap-2">
                       <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
                         KR
@@ -538,7 +553,7 @@ export function FleetPlannerPage() {
                         CN
                       </ModeButton>
                     </div>
-                  </Field>
+                  </div>
                   <VehicleProfileSummary
                     configs={activeVehicleConfigs}
                     edited={vehicleCatalogEdited}
@@ -592,54 +607,56 @@ export function FleetPlannerPage() {
 
                 <SetupFlowArrow />
 
-                <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
+                <section className="flex h-full flex-col rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <Route className="h-4 w-4 text-primary" aria-hidden="true" />
                     <h2 className="text-sm font-semibold">Run workflow</h2>
                   </div>
-                  {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
-                  {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
-                  {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
-                  {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
-                  {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
-                  <WorkflowAction
-                    step="1"
-                    title="Preview fleet"
-                    description="Check vehicle choices from the uploaded workbook."
-                    disabled={!fileBase64 || previewMutation.isPending}
-                    pending={previewMutation.isPending}
-                    icon={<UsersRound className="h-4 w-4" />}
-                    onClick={() => previewMutation.mutate(undefined)}
-                  />
-                  <WorkflowAction
-                    step="2"
-                    title="Validate & geocode"
-                    description="Resolve addresses and prepare map-ready demand points."
-                    disabled={!fileBase64 || geocodeMutation.isPending}
-                    pending={geocodeMutation.isPending}
-                    icon={<MapPinned className="h-4 w-4" />}
-                    variant="secondary"
-                    onClick={() => {
-                      clusterMutation.reset();
-                      routePreviewMutation.reset();
-                      globalPlanMutation.reset();
-                      saveHistoryMutation.reset();
-                      geocodeMutation.mutate();
-                    }}
-                  />
-                  <WorkflowAction
-                    step="3"
-                    title="Build optimized plan"
-                    description="Create routes within the time target and auto-save the run to history."
-                    disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
-                    pending={globalPlanMutation.isPending || saveHistoryMutation.isPending}
-                    icon={<Route className="h-4 w-4" />}
-                    variant="secondary"
-                    onClick={() => {
-                      saveHistoryMutation.reset();
-                      globalPlanMutation.mutate();
-                    }}
-                  />
+                  <div className="flex flex-1 flex-col justify-center space-y-3 pt-3">
+                    {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
+                    {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
+                    {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}
+                    {routePreviewMutation.error ? <InlineError message={(routePreviewMutation.error as Error).message} /> : null}
+                    {globalPlanMutation.error ? <InlineError message={(globalPlanMutation.error as Error).message} /> : null}
+                    <WorkflowAction
+                      step="1"
+                      title="Preview fleet"
+                      description="Check vehicle choices from the uploaded workbook."
+                      disabled={!fileBase64 || previewMutation.isPending}
+                      pending={previewMutation.isPending}
+                      icon={<UsersRound className="h-4 w-4" />}
+                      onClick={() => previewMutation.mutate(undefined)}
+                    />
+                    <WorkflowAction
+                      step="2"
+                      title="Validate & geocode"
+                      description="Resolve addresses and prepare map-ready demand points."
+                      disabled={!fileBase64 || geocodeMutation.isPending}
+                      pending={geocodeMutation.isPending}
+                      icon={<MapPinned className="h-4 w-4" />}
+                      variant="secondary"
+                      onClick={() => {
+                        clusterMutation.reset();
+                        routePreviewMutation.reset();
+                        globalPlanMutation.reset();
+                        saveHistoryMutation.reset();
+                        geocodeMutation.mutate();
+                      }}
+                    />
+                    <WorkflowAction
+                      step="3"
+                      title="Build optimized plan"
+                      description="Create routes within the time target and auto-save the run to history."
+                      disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
+                      pending={globalPlanMutation.isPending || saveHistoryMutation.isPending}
+                      icon={<Route className="h-4 w-4" />}
+                      variant="secondary"
+                      onClick={() => {
+                        saveHistoryMutation.reset();
+                        globalPlanMutation.mutate();
+                      }}
+                    />
+                  </div>
                 </section>
               </div>
 
@@ -717,6 +734,7 @@ export function FleetPlannerPage() {
         </div>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
+      <FleetSettingGuide open={fleetSettingHelpOpen} onClose={() => setFleetSettingHelpOpen(false)} />
       <VehicleConfigModal
         open={vehicleConfigOpen}
         market={market}
@@ -1696,6 +1714,52 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
             <h3 className="text-sm font-semibold text-foreground">Advanced diagnostics</h3>
             <p>Preview groups is a diagnostic view for demand distribution around the school; it does not drive the optimized plan.</p>
             <p>Grouping Granularity only changes that diagnostic grouping. The optimized solver still splits routes by capacity, travel time, distance, and service direction.</p>
+          </section>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function FleetSettingGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) {
+    return null;
+  }
+  return (
+    <div className="fixed inset-0 z-40">
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close Fleet Setting guide" onClick={onClose} />
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-xl">
+        <div className="flex items-center justify-between border-b border-border px-4 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Fleet Setting guide</h2>
+            <p className="mt-1 text-xs text-muted-foreground">Use defaults first; adjust only when the uploaded demand or available fleet requires it.</p>
+          </div>
+          <button type="button" className={buttonClassName("ghost")} aria-label="Close Fleet Setting guide" onClick={onClose}>
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="space-y-5 overflow-y-auto px-4 py-4 text-sm leading-6 text-muted-foreground">
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">Default behavior</h3>
+            <p>
+              After a workbook is uploaded, Fleet Setting is inferred from the workbook country. If nothing is changed, Fleet Planner uses that market's
+              default vehicle catalog and subtracts Bus Monitor Seats from each listed seat count before assigning students.
+            </p>
+            <p>
+              Preview fleet chooses the best feasible vehicle for each rider group from the active catalog. The optimized plan may add routes or vehicles
+              when needed to satisfy capacity and Route Time Target.
+            </p>
+          </section>
+          <section className="space-y-2">
+            <h3 className="text-sm font-semibold text-foreground">When to adjust</h3>
+            <ul className="list-disc space-y-2 pl-5">
+              <li>Fleet Setting: change KR/CN only if the workbook country was inferred incorrectly.</li>
+              <li>Vehicle profile: use Manage when the operator needs custom seat counts, vehicle availability, diesel/electric mix, or disabled vehicle types.</li>
+              <li>Planning Mode: use Balanced for normal planning, Cost Saver for fuller vehicles, and Comfort Saver when lower loads are acceptable.</li>
+              <li>Route Time Target: tighten it for shorter routes; loosen it if the plan becomes infeasible or requires too many vehicles.</li>
+              <li>Bus Monitor Seats: reserve adult seats before student capacity is calculated.</li>
+              <li>Service Direction: choose To School for morning pickup and From School for afternoon drop-off.</li>
+            </ul>
           </section>
         </div>
       </aside>

@@ -60,8 +60,8 @@ Recent UX state:
   reopened, and can be deleted from `/distance`.
 - Distance & Cost history tab switching was hardened on 2026-06-04. Opening a
   Route Cost history run and then switching to Reference Distance no longer
-  renders incompatible saved-result payloads; the fix is on GitHub `main` at
-  `81febde` and has been deployed to CN staging only.
+  renders incompatible saved-result payloads; the fix is on GitHub `main`
+  starting with `81febde` and has been deployed to CN staging only.
 - Fleet Planner now exposes a `Route Time Target` in React run settings. The
   value is saved in Fleet Planner History, restored when a history run is
   opened, and passed to backend fleet preview, clustering diagnostics, grouped
@@ -185,8 +185,8 @@ Last verified KR runtime state in this session:
   Planner History rail release on 2026-06-03. Backup branches were left before
   realigning old server checkouts after the public-history rewrite.
 - CN staging checkout should be kept synced to the current GitHub `main` during
-  release work. As of the Distance & Cost history tab-switch fix on 2026-06-04,
-  CN staging is at `81febde`.
+  release work. CN staging includes the Distance & Cost history tab-switch fix
+  introduced in `81febde`.
 - CN staging and CN production frontends serve React through Nginx. Nginx serves
   `apps/web/dist`, performs SPA fallback, and proxies same-origin `/api/*`.
   Staging proxies to `127.0.0.1:8001`; production proxies to

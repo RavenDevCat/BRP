@@ -22,7 +22,7 @@ from api_rate_limit import CrossProcessRateLimiter
 
 
 BASE_DIR = Path(__file__).resolve().parent
-CACHE_DIR = BASE_DIR / "cache"
+CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
 SUBWAY_CACHE_PATH = CACHE_DIR / "subway_search_cache.json"
 GOOGLE_GEOCODE_USAGE_PATH = CACHE_DIR / "google_geocode_usage.json"

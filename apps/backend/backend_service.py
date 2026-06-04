@@ -106,9 +106,10 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "further_most_nearby": "further_most_nearby_html",
 }
 WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-DISTANCE_CHECKER_JOBS_PATH = CLIENT_DIR / "cache" / "distance_checker_jobs.json"
 MAX_DISTANCE_CHECKER_JOBS = 80
-GOOGLE_GEOCODE_USAGE_PATH = CLIENT_DIR / "cache" / "google_geocode_usage.json"
+CLIENT_CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(CLIENT_DIR / "cache"))).expanduser()
+DISTANCE_CHECKER_JOBS_PATH = CLIENT_CACHE_DIR / "distance_checker_jobs.json"
+GOOGLE_GEOCODE_USAGE_PATH = CLIENT_CACHE_DIR / "google_geocode_usage.json"
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
 
 

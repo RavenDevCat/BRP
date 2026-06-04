@@ -529,7 +529,7 @@ export function FleetPlannerPage() {
                     <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
                     <h2 className="text-sm font-semibold">Run settings</h2>
                   </div>
-                  <Field label="Market">
+                  <Field label="Fleet Setting">
                     <div className="grid grid-cols-2 gap-2">
                       <ModeButton active={market === "KR"} onClick={() => handleMarketChange("KR")}>
                         KR
@@ -1674,7 +1674,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
             <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
               <li>Demand source: upload a demand workbook and confirm the parsed city, school, address count, and students.</li>
-              <li>Run settings: confirm the auto-selected market and vehicle profile, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
+              <li>Run settings: confirm the auto-selected fleet setting and vehicle profile, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
               <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
               <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
               <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
@@ -1683,7 +1683,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
           <section className="space-y-2">
             <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
             <ul className="list-disc space-y-2 pl-5">
-              <li>Market is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
+              <li>Fleet Setting is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
               <li>Vehicle profile controls which vehicle types, seat counts, energy types, and available counts are used by this run.</li>
               <li>Job Name controls the title saved in Fleet Planner History.</li>
               <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>

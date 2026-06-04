@@ -6,6 +6,12 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-04
 
+### Shared Runtime History And Cache Paths
+
+- Added configurable `BRP_CLIENT_CACHE_DIR` and `BRP_BACKEND_CACHE_DIR` runtime paths.
+- CN staging and CN production can share Route Audit history, side-tool history, Distance & Cost history, provider caches, and backend route caches while keeping separate code checkouts and services.
+- Added an ops merge helper for moving existing runtime data into shared directories without deleting the original folders.
+
 ### Fleet Planner Vehicle Profile Preview
 
 - Added a staging React vehicle profile editor to Fleet Planner run settings.

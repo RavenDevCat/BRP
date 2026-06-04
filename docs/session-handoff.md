@@ -89,8 +89,8 @@ Critical paths:
 
 - job store: `state/jobs` or `BRP_BACKEND_JOBS_DIR`
 - side tool history store: `state/side_tools` or `BRP_SIDE_TOOLS_DIR`
-- client cache: `apps/client/cache`
-- backend cache: `apps/backend/cache`
+- client cache: `apps/client/cache` or `BRP_CLIENT_CACHE_DIR`
+- backend cache: `apps/backend/cache` or `BRP_BACKEND_CACHE_DIR`
 - generated outputs
 - server-local env: `ops/env/local.env`
 - Google usage: `apps/client/cache/google_geocode_usage.json`
@@ -168,6 +168,12 @@ Last verified KR runtime state in this session:
 - CN staging and production share `BRP_JOB_CONCURRENCY_DIR` with
   `BRP_MAX_CONCURRENT_JOBS=1` so heavy planner jobs queue host-wide instead of
   running concurrently beside the shared OSRM stack.
+- CN staging and production should share runtime data roots for job history,
+  side-tool history, client cache, backend cache, and provider rate-limit state
+  through `BRP_BACKEND_JOBS_DIR`, `BRP_SIDE_TOOLS_DIR`,
+  `BRP_CLIENT_CACHE_DIR`, `BRP_BACKEND_CACHE_DIR`, and
+  `BRP_API_RATE_LIMIT_DIR`. Keep code checkouts, ports, services, and env files
+  separate.
 - CN staging and CN production are synced to GitHub `main` as of the Fleet
   Planner History rail release on 2026-06-03. Backup branches were left before
   realigning old server checkouts after the public-history rewrite.
@@ -282,8 +288,8 @@ CN development and promotion sequence:
    - code checkout
    - `ops/env/local.env`
    - `state/jobs` or `BRP_BACKEND_JOBS_DIR`
-   - `apps/client/cache`
-   - `apps/backend/cache`
+   - `apps/client/cache` or `BRP_CLIENT_CACHE_DIR`
+   - `apps/backend/cache` or `BRP_BACKEND_CACHE_DIR`
    - generated outputs
    - OSRM data directory
 4. Back up runtime data before replacing code or changing deploy layout.

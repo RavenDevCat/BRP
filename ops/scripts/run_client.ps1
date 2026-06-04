@@ -27,6 +27,14 @@ if (-not $env:STREAMLIT_SERVER_ADDRESS) {
 if (-not $env:STREAMLIT_SERVER_PORT) {
     $env:STREAMLIT_SERVER_PORT = "8501"
 }
+if (-not $env:BRP_CLIENT_CACHE_DIR) {
+    $env:BRP_CLIENT_CACHE_DIR = Join-Path $RootDir "apps\client\cache"
+}
+if (-not $env:BRP_BACKEND_CACHE_DIR) {
+    $env:BRP_BACKEND_CACHE_DIR = Join-Path $RootDir "apps\backend\cache"
+}
+New-Item -ItemType Directory -Force $env:BRP_CLIENT_CACHE_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_BACKEND_CACHE_DIR | Out-Null
 
 $streamlitArgs = @(
     "-m", "streamlit", "run", "app.py",

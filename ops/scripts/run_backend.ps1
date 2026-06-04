@@ -32,8 +32,16 @@ if (-not $env:BRP_BACKEND_JOBS_DIR) {
 if (-not $env:BRP_SIDE_TOOLS_DIR) {
     $env:BRP_SIDE_TOOLS_DIR = Join-Path $RootDir "state\side_tools"
 }
+if (-not $env:BRP_CLIENT_CACHE_DIR) {
+    $env:BRP_CLIENT_CACHE_DIR = Join-Path $RootDir "apps\client\cache"
+}
+if (-not $env:BRP_BACKEND_CACHE_DIR) {
+    $env:BRP_BACKEND_CACHE_DIR = Join-Path $RootDir "apps\backend\cache"
+}
 New-Item -ItemType Directory -Force $env:BRP_BACKEND_JOBS_DIR | Out-Null
 New-Item -ItemType Directory -Force $env:BRP_SIDE_TOOLS_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_CLIENT_CACHE_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_BACKEND_CACHE_DIR | Out-Null
 
 Set-Location (Join-Path $RootDir "apps\backend")
 Write-Host "Starting BRP backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT)"

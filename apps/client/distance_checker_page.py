@@ -26,7 +26,10 @@ from distance_tool import (
 DEFAULT_KOREA_DIESEL_KRW_PER_LITER = 2006.19
 DEFAULT_CHINA_DIESEL_CNY_PER_LITER = 8.402
 DEFAULT_BUS_FUEL_EFFICIENCY_KM_PER_LITER = 3.0
-DISTANCE_CHECKER_JOBS_PATH = Path(__file__).resolve().parent / "cache" / "distance_checker_jobs.json"
+CLIENT_CACHE_DIR = Path(
+    os.environ.get("BRP_CLIENT_CACHE_DIR", str(Path(__file__).resolve().parent / "cache"))
+).expanduser()
+DISTANCE_CHECKER_JOBS_PATH = CLIENT_CACHE_DIR / "distance_checker_jobs.json"
 MAX_DISTANCE_CHECKER_JOBS = 80
 
 

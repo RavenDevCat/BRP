@@ -69,6 +69,21 @@ External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, and DeepSeek calls use cross-process limiter files under
 `state/api_rate_limits` by default, or `BRP_API_RATE_LIMIT_DIR` when set.
 
+CN staging and CN production intentionally share runtime history and caches
+through server-local env paths. Keep these variables pointed at the same shared
+runtime roots on both CN service pairs:
+
+```text
+BRP_BACKEND_JOBS_DIR
+BRP_SIDE_TOOLS_DIR
+BRP_CLIENT_CACHE_DIR
+BRP_BACKEND_CACHE_DIR
+BRP_API_RATE_LIMIT_DIR
+```
+
+Use separate checkouts, ports, service names, and `ops/env/local.env` files for
+staging and production; only the runtime data roots above should be shared.
+
 Planner job concurrency is separately gated by `BRP_MAX_CONCURRENT_JOBS`. On
 CN, keep staging and production pointed at the same `BRP_JOB_CONCURRENCY_DIR`
 so the limit is host-wide instead of per service. If a backend dies after
@@ -493,9 +508,14 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
 
 - Do not run local OSRM Docker for normal development.
 - Do not edit directly in the production app checkout.
-- Do not let staging and production share job directories.
+- On CN, staging and production should share runtime history/cache directories
+  through env paths; elsewhere, do not share runtime directories unless that is
+  an explicit deployment decision.
 - Keep real secrets in `ops/env/local.env` for each environment, never in git.
-- Preserve `state/jobs`, `state/side_tools`, `state/api_rate_limits`, caches, and generated outputs across pulls and directory moves.
+- Preserve `state/jobs` or `BRP_BACKEND_JOBS_DIR`, `state/side_tools` or
+  `BRP_SIDE_TOOLS_DIR`, `state/api_rate_limits` or
+  `BRP_API_RATE_LIMIT_DIR`, `BRP_CLIENT_CACHE_DIR`, `BRP_BACKEND_CACHE_DIR`,
+  legacy cache folders, and generated outputs across pulls and directory moves.
 - Keep Cloudflare Tunnel and OSRM long-running on the server that owns each
   deployment, but do not expose OSRM through public hostnames.
 - Use staging as the gate before production.

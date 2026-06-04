@@ -7,6 +7,7 @@ import importlib.util
 import io
 import itertools
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -25,7 +26,7 @@ import requests
 BASE_DIR = Path(__file__).resolve().parent
 LEGACY_PLANNER_PATH = BASE_DIR / "BusingProblem.py"
 OUTPUT_DIR = BASE_DIR / "outputs"
-CACHE_DIR = BASE_DIR / "cache"
+CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
 PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"

@@ -162,7 +162,8 @@ Last verified KR runtime state in this session:
 - public React proxy health: ok; origin returns `401` without an Access user
   header and `200` with one
 - private React preview health: ok
-- Git revision: `fa919b0`
+- App release revision: `fa919b0`; production checkouts may be fast-forwarded
+  to a later docs-only handoff commit without requiring service restarts.
 - Fleet Planner History API: ok
 - Distance & Cost Reference Distance and Route Cost history APIs: ok
 - job files: `7`
@@ -290,9 +291,10 @@ Local checkout role:
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.
-- The current `fa919b0` release is promoted to CN production and KR production.
-  It includes the Fleet Planner narrow-desktop control fix and the earlier
-  Distance & Cost history tab-switch hardening.
+- The current app release `fa919b0` is promoted to CN production and KR
+  production. It includes the Fleet Planner narrow-desktop control fix and the
+  earlier Distance & Cost history tab-switch hardening. Production checkouts may
+  also include later docs-only handoff commits.
 - CN staging is the only environment currently intended for Microsoft SSO
   preparation. Keep production deployments on their current auth provider until
   the user explicitly approves an auth migration.

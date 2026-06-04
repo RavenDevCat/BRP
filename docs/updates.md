@@ -4,6 +4,15 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-04
+
+### Fleet Planner Route Time Target
+
+- Added an explicit `Route Time Target` control to the React Fleet Planner run settings.
+- The target is passed into fleet preview assumptions, demand grouping diagnostics, grouped route preview, and global OR-Tools route planning.
+- Fleet Planner History saves and restores the route-time target for each saved run.
+- Existing Fleet Planner history remains usable; rerun saved scenarios only when users want plans rebuilt under a different time target.
+
 ## 2026-06-02
 
 ### AI Audit Report Readability

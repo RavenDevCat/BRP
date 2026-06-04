@@ -55,6 +55,10 @@ Recent UX state:
 - Fleet Planner History now collapses into a narrow left-side rail by default,
   preserving the original right-side Fleet Planner workspace layout while
   giving narrower desktop windows more room.
+- Fleet Planner now exposes a `Route Time Target` in React run settings. The
+  value is saved in Fleet Planner History, restored when a history run is
+  opened, and passed to backend fleet preview, clustering diagnostics, grouped
+  route preview, and global OR-Tools planning.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - Real server addresses, usernames, private hostnames, and environment-specific paths should
@@ -68,6 +72,9 @@ Recent UX state:
   inventory and keep Git visibility. CN staging is the active dev/test
   environment. CN production and KR production are release targets only and
   should not change during staging work.
+- Operating shorthand as of 2026-06-04: when the user says `开发` or `拉齐`
+  without naming a different target, treat the target as CN staging. Do not
+  start local services for ordinary alignment work.
 
 ## Runtime And Data Rules
 

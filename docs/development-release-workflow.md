@@ -23,6 +23,8 @@ Default posture: work directly in the CN staging checkout, validate through
 `$CN_STAGING_HOST`, commit and push the intended Git revision, then promote only
 when the user explicitly asks for a production update. Keep runtime data and
 server-local env files out of Git.
+When the operator says `开发` or `拉齐` without naming a different target, read
+that as CN staging work.
 
 ## Environment Boundary Contract
 
@@ -85,6 +87,8 @@ prod app:    /opt/brp/prod/app  # release promotion only
 ```
 
 Local service startup remains useful only as a fallback or diagnostic path.
+Do not start local services for ordinary development alignment; validate through
+the CN staging host unless the user explicitly asks for a local diagnostic run.
 When a local diagnostic run is needed, OSRM endpoints should be provided as
 local loopback ports:
 

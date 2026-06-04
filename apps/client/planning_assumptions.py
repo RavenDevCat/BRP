@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from vehicle_catalog import DEFAULT_MONITOR_SEATS
@@ -63,15 +63,17 @@ def get_planning_assumptions(
     *,
     mode: str = "balanced",
     monitor_seats: int = DEFAULT_MONITOR_SEATS,
+    max_route_duration_minutes: int | None = None,
     allow_electric: bool = True,
     allow_vans: bool = True,
 ) -> PlanningAssumptions:
     normalized_market = normalize_market(market)
     normalized_mode = normalize_planning_mode(mode)
     reserved_monitor_seats = max(0, int(monitor_seats))
+    route_time_override = int(max_route_duration_minutes or 0)
 
     if normalized_mode == "cost_saver":
-        return PlanningAssumptions(
+        assumptions = PlanningAssumptions(
             market=normalized_market,
             mode=normalized_mode,
             monitor_seats=reserved_monitor_seats,
@@ -90,9 +92,10 @@ def get_planning_assumptions(
                 category_preference=16.0,
             ),
         )
+        return replace(assumptions, max_route_duration_minutes=route_time_override) if route_time_override > 0 else assumptions
 
     if normalized_mode == "comfort_saver":
-        return PlanningAssumptions(
+        assumptions = PlanningAssumptions(
             market=normalized_market,
             mode=normalized_mode,
             monitor_seats=reserved_monitor_seats,
@@ -111,8 +114,9 @@ def get_planning_assumptions(
                 category_preference=24.0,
             ),
         )
+        return replace(assumptions, max_route_duration_minutes=route_time_override) if route_time_override > 0 else assumptions
 
-    return PlanningAssumptions(
+    assumptions = PlanningAssumptions(
         market=normalized_market,
         mode=normalized_mode,
         monitor_seats=reserved_monitor_seats,
@@ -124,6 +128,7 @@ def get_planning_assumptions(
         allow_vans=allow_vans,
         default_max_vehicles_per_type=20,
     )
+    return replace(assumptions, max_route_duration_minutes=route_time_override) if route_time_override > 0 else assumptions
 
 
 def get_default_planning_profiles(market: str = "KR") -> dict[str, dict[str, Any]]:

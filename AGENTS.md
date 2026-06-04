@@ -24,6 +24,8 @@ Codex session.
 ## Development Source
 
 - Primary development and staging validation happen on CN staging.
+- When the user says `开发` or `拉齐` without naming another target, treat the
+  target as CN staging.
 - CN production and KR production are release targets only. Do not change them
   during staging work unless the user explicitly asks for a production release.
 - Local checkouts are code-record and light-check workspaces only; they are not

@@ -60,13 +60,19 @@ def build_demand_clusters(
     market: str = "KR",
     mode: str = "balanced",
     monitor_seats: int = 1,
+    max_route_duration_minutes: int | None = None,
     sector_count: int = 8,
 ) -> dict[str, Any]:
     school = dict(geocode_result.get("school") or {})
     if school.get("status") != "ok" or school.get("lat") is None or school.get("lng") is None:
         raise ValueError("School address must geocode successfully before clustering demand.")
 
-    assumptions = get_planning_assumptions(market, mode=mode, monitor_seats=monitor_seats)
+    assumptions = get_planning_assumptions(
+        market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
+    )
     max_capacity = _max_student_capacity(assumptions.market, assumptions.monitor_seats)
     if max_capacity <= 0:
         raise ValueError("Vehicle catalog has no usable student capacity.")
@@ -164,6 +170,7 @@ def build_demand_clusters(
             "market": assumptions.market,
             "mode": assumptions.mode,
             "monitor_seats": assumptions.monitor_seats,
+            "max_route_duration_minutes": assumptions.max_route_duration_minutes,
         },
     }
 
@@ -175,6 +182,7 @@ def split_cluster_result_by_route_limit(
     market: str = "KR",
     mode: str = "balanced",
     monitor_seats: int = 1,
+    max_route_duration_minutes: int | None = None,
 ) -> dict[str, Any]:
     if not overloaded_route_ids:
         return cluster_result
@@ -219,6 +227,8 @@ def split_cluster_result_by_route_limit(
     summary = dict(cluster_result.get("summary") or {})
     summary["cluster_count"] = len(new_clusters)
     summary["split_from_overlong_routes"] = sorted(overloaded_route_ids)
+    if max_route_duration_minutes:
+        summary["max_route_duration_minutes"] = int(max_route_duration_minutes)
     return {
         **cluster_result,
         "clusters": new_clusters,

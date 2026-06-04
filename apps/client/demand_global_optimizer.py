@@ -199,6 +199,7 @@ def build_global_ortools_plan(
     market: str = "KR",
     mode: str = "balanced",
     monitor_seats: int = 1,
+    max_route_duration_minutes: int | None = None,
     service_direction: str = "to_school",
 ) -> dict[str, Any]:
     try:
@@ -210,7 +211,12 @@ def build_global_ortools_plan(
     if school.get("status") != "ok" or school.get("lat") is None or school.get("lng") is None:
         raise ValueError("School address must geocode successfully before global planning.")
 
-    assumptions = get_planning_assumptions(market, mode=mode, monitor_seats=monitor_seats)
+    assumptions = get_planning_assumptions(
+        market,
+        mode=mode,
+        monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
+    )
     raw_demand_points = [
         dict(point)
         for point in list(geocode_result.get("demand_points") or [])

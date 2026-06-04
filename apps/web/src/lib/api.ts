@@ -178,6 +178,7 @@ export type FleetPlannerPreviewResponse = {
     market: string;
     mode: string;
     monitor_seats: number;
+    max_route_duration_minutes?: number;
     group_count: number;
     total_riders: number;
     source: string;
@@ -232,6 +233,7 @@ export type FleetPlannerClusterResponse = {
     market?: string;
     mode?: string;
     monitor_seats?: number;
+    max_route_duration_minutes?: number;
   };
   school: Record<string, unknown>;
   clusters: Array<Record<string, unknown>>;
@@ -487,6 +489,7 @@ export function previewFleetPlanner(payload: {
   market: "KR" | "CN";
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
+  max_route_duration_minutes?: number;
   rider_counts?: string;
   file_name?: string;
   file_base64?: string;
@@ -513,6 +516,7 @@ export function buildFleetPlannerClusters(payload: {
   market: "KR" | "CN";
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
+  max_route_duration_minutes?: number;
   sector_count: 4 | 8 | 12;
   geocode_result: {
     school: Record<string, unknown>;
@@ -551,6 +555,7 @@ export function buildFleetPlannerGlobalPlan(payload: {
   market: "KR" | "CN";
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
+  max_route_duration_minutes?: number;
   service_direction: "to_school" | "from_school";
   geocode_result: {
     school: Record<string, unknown>;

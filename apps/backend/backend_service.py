@@ -506,6 +506,19 @@ def _demand_workbook_from_payload(payload: dict[str, Any]) -> tuple[Any | None, 
     return demand_input.read_demand_workbook(io.BytesIO(workbook_bytes)), source_label
 
 
+def _fleet_route_time_target(payload: dict[str, Any]) -> int | None:
+    raw_value = payload.get("max_route_duration_minutes")
+    if raw_value is None or raw_value == "":
+        return None
+    try:
+        minutes = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("max_route_duration_minutes must be a whole number.") from exc
+    if minutes < 5 or minutes > 240:
+        raise ValueError("max_route_duration_minutes must be between 5 and 240.")
+    return minutes
+
+
 def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
     demand_input = _client_module("demand_input")
     fleet_selector = _client_module("fleet_selector")
@@ -515,6 +528,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
     market = str(payload.get("market") or "KR").strip().upper()
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
+    max_route_duration_minutes = _fleet_route_time_target(payload)
     demand_workbook, source_label = _demand_workbook_from_payload(payload)
     workbook_payload: dict[str, Any] | None = None
     if demand_workbook is not None:
@@ -533,6 +547,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
         market,
         mode=mode,
         monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
     )
     recommendations: list[dict[str, Any]] = []
     decision_details: list[dict[str, Any]] = []
@@ -570,6 +585,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
         market=market,
         mode=mode,
         monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
     )
     catalog = []
     for vehicle in vehicle_catalog.get_vehicle_catalog(assumptions.market, monitor_seats=assumptions.monitor_seats):
@@ -590,6 +606,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
             "market": assumptions.market,
             "mode": assumptions.mode,
             "monitor_seats": assumptions.monitor_seats,
+            "max_route_duration_minutes": assumptions.max_route_duration_minutes,
             "group_count": len(rider_counts),
             "total_riders": sum(rider_counts),
             "source": "demand_workbook" if demand_workbook is not None else "manual_rider_groups",
@@ -624,6 +641,7 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
     market = str(payload.get("market") or "KR").strip().upper()
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
+    max_route_duration_minutes = _fleet_route_time_target(payload)
     sector_count = int(payload.get("sector_count") or 8)
     if sector_count not in {4, 8, 12}:
         raise ValueError("sector_count must be 4, 8, or 12.")
@@ -635,6 +653,7 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
         market=market,
         mode=mode,
         monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
         sector_count=sector_count,
     )
     return {
@@ -657,7 +676,7 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
     service_direction = str(payload.get("service_direction") or "to_school").strip()
     if service_direction not in {"to_school", "from_school"}:
         raise ValueError("service_direction must be to_school or from_school.")
-    max_route_duration_minutes = int(payload.get("max_route_duration_minutes") or 0) or None
+    max_route_duration_minutes = _fleet_route_time_target(payload)
     cluster_result = dict(payload.get("cluster_result") or {})
     if not cluster_result:
         raise ValueError("Build demand clusters before route preview.")
@@ -679,6 +698,7 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
             market=market,
             mode=mode,
             monitor_seats=monitor_seats,
+            max_route_duration_minutes=max_route_duration_minutes,
         )
         route_preview = demand_routing.build_osrm_route_preview(
             refined_cluster_result,
@@ -717,6 +737,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
     market = str(payload.get("market") or "KR").strip().upper()
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
+    max_route_duration_minutes = _fleet_route_time_target(payload)
     service_direction = str(payload.get("service_direction") or "to_school").strip()
     if service_direction not in {"to_school", "from_school"}:
         raise ValueError("service_direction must be to_school or from_school.")
@@ -728,6 +749,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         market=market,
         mode=mode,
         monitor_seats=monitor_seats,
+        max_route_duration_minutes=max_route_duration_minutes,
         service_direction=service_direction,
     )
     return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx")
@@ -756,6 +778,11 @@ def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: st
             "market": scenario.get("market") or preview_summary.get("market"),
             "mode": scenario.get("mode") or preview_summary.get("mode"),
             "monitor_seats": scenario.get("monitor_seats") or preview_summary.get("monitor_seats"),
+            "max_route_duration_minutes": (
+                scenario.get("max_route_duration_minutes")
+                or plan_summary.get("max_route_duration_minutes")
+                or preview_summary.get("max_route_duration_minutes")
+            ),
             "service_direction": scenario.get("service_direction") or plan_summary.get("service_direction"),
             "routes": plan_summary.get("route_count"),
             "students": preview_summary.get("total_riders"),

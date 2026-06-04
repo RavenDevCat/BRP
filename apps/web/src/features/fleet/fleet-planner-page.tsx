@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -30,8 +30,12 @@ import { cn } from "@/lib/cn";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
+const ROUTE_TIME_TARGET_PRESETS = [30, 45, 60, 75] as const;
 
 type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "maps" | "diagnostics";
+type FleetMarket = "KR" | "CN";
+type FleetMode = "balanced" | "cost_saver" | "comfort_saver";
+type FleetServiceDirection = "to_school" | "from_school";
 type ToolMapOutput = {
   key: string;
   name: string;
@@ -40,21 +44,22 @@ type ToolMapOutput = {
 type PreviewVariables = {
   file?: File | null;
   fileBase64?: string;
-  market?: "KR" | "CN";
+  market?: FleetMarket;
 };
 
 export function FleetPlannerPage() {
   const queryClient = useQueryClient();
-  const [market, setMarket] = useState<"KR" | "CN">("KR");
-  const [mode, setMode] = useState<"balanced" | "cost_saver" | "comfort_saver">("balanced");
+  const [market, setMarket] = useState<FleetMarket>("KR");
+  const [mode, setMode] = useState<FleetMode>("balanced");
   const [monitorSeats, setMonitorSeats] = useState(1);
+  const [routeTimeTargetMinutes, setRouteTimeTargetMinutes] = useState(60);
   const riderCounts = "8, 22, 34, 44";
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
   const [sectorCount, setSectorCount] = useState<4 | 8 | 12>(8);
-  const [routeDirection, setRouteDirection] = useState<"to_school" | "from_school">("to_school");
-  const [globalDirection, setGlobalDirection] = useState<"to_school" | "from_school">("to_school");
+  const [routeDirection, setRouteDirection] = useState<FleetServiceDirection>("to_school");
+  const [globalDirection, setGlobalDirection] = useState<FleetServiceDirection>("to_school");
   const [historyTitle, setHistoryTitle] = useState("");
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
@@ -77,6 +82,7 @@ export function FleetPlannerPage() {
         market: selectedMarket,
         mode,
         monitor_seats: monitorSeats,
+        max_route_duration_minutes: routeTimeTargetMinutes,
         rider_counts: riderCounts,
         file_name: selectedFile?.name,
         file_base64: selectedFileBase64 || undefined,
@@ -133,6 +139,7 @@ export function FleetPlannerPage() {
         market,
         mode,
         monitor_seats: monitorSeats,
+        max_route_duration_minutes: routeTimeTargetMinutes,
         sector_count: sectorCount,
         geocode_result: {
           school: geocodeResult.school,
@@ -158,7 +165,7 @@ export function FleetPlannerPage() {
         mode,
         monitor_seats: monitorSeats,
         service_direction: routeDirection,
-        max_route_duration_minutes: Number(result?.assumptions.max_route_duration_minutes || 0) || undefined,
+        max_route_duration_minutes: routeTimeTargetMinutes,
         cluster_result: {
           school: clusterResult.school,
           clusters: clusterResult.clusters,
@@ -183,6 +190,7 @@ export function FleetPlannerPage() {
         market,
         mode,
         monitor_seats: monitorSeats,
+        max_route_duration_minutes: routeTimeTargetMinutes,
         service_direction: globalDirection,
         geocode_result: {
           school: geocodeResult.school,
@@ -214,6 +222,7 @@ export function FleetPlannerPage() {
           market,
           mode,
           monitor_seats: monitorSeats,
+          max_route_duration_minutes: routeTimeTargetMinutes,
           service_direction: globalDirection,
         },
         preview_result: result,
@@ -239,6 +248,14 @@ export function FleetPlannerPage() {
       saveHistoryMutation.reset();
       setLoadedHistoryRecord(record);
       setHistoryTitle(record.title || "");
+      applyHistoryScenario(record, {
+        setMarket,
+        setMode,
+        setMonitorSeats,
+        setRouteTimeTargetMinutes,
+        setRouteDirection,
+        setGlobalDirection,
+      });
       setActiveResultView("optimized");
     },
   });
@@ -328,7 +345,7 @@ export function FleetPlannerPage() {
     [result],
   );
 
-  function handleMarketChange(nextMarket: "KR" | "CN") {
+  function handleMarketChange(nextMarket: FleetMarket) {
     if (nextMarket === market) {
       return;
     }
@@ -336,7 +353,7 @@ export function FleetPlannerPage() {
     resetScenarioResults();
   }
 
-  function handleModeChange(nextMode: "balanced" | "cost_saver" | "comfort_saver") {
+  function handleModeChange(nextMode: FleetMode) {
     if (nextMode === mode) {
       return;
     }
@@ -349,6 +366,15 @@ export function FleetPlannerPage() {
     resetScenarioResults();
   }
 
+  function handleRouteTimeTargetChange(nextMinutes: number) {
+    const normalizedTarget = normalizeRouteTimeTarget(nextMinutes);
+    if (normalizedTarget === routeTimeTargetMinutes) {
+      return;
+    }
+    setRouteTimeTargetMinutes(normalizedTarget);
+    resetScenarioResults();
+  }
+
   function handleSectorCountChange(nextSectorCount: 4 | 8 | 12) {
     if (nextSectorCount === sectorCount) {
       return;
@@ -357,7 +383,7 @@ export function FleetPlannerPage() {
     resetClusterResults();
   }
 
-  function handleRouteDirectionChange(nextDirection: "to_school" | "from_school") {
+  function handleRouteDirectionChange(nextDirection: FleetServiceDirection) {
     if (nextDirection === routeDirection) {
       return;
     }
@@ -365,7 +391,7 @@ export function FleetPlannerPage() {
     resetRoutePreviewResults();
   }
 
-  function handleGlobalDirectionChange(nextDirection: "to_school" | "from_school") {
+  function handleGlobalDirectionChange(nextDirection: FleetServiceDirection) {
     if (nextDirection === globalDirection) {
       return;
     }
@@ -475,6 +501,9 @@ export function FleetPlannerPage() {
                         <option value="comfort_saver">Comfort Saver</option>
                       </select>
                     </Field>
+                    <Field label="Route Time Target">
+                      <RouteTimeTargetControl value={routeTimeTargetMinutes} onChange={handleRouteTimeTargetChange} />
+                    </Field>
                     <Field label="Bus Monitor Seats">
                       <input
                         className={fieldClassName}
@@ -539,7 +568,7 @@ export function FleetPlannerPage() {
                   <WorkflowAction
                     step="3"
                     title="Build optimized plan"
-                    description="Create routes and auto-save the run to history."
+                    description="Create routes within the time target and auto-save the run to history."
                     disabled={!geocodeResult || !result || globalPlanMutation.isPending || saveHistoryMutation.isPending}
                     pending={globalPlanMutation.isPending || saveHistoryMutation.isPending}
                     icon={<Route className="h-4 w-4" />}
@@ -1337,7 +1366,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
             <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
               <li>Demand source: upload a demand workbook and confirm the parsed city, school, address count, and students.</li>
-              <li>Run settings: confirm the auto-selected market, then choose job name, planning mode, monitor seats, and service direction.</li>
+              <li>Run settings: confirm the auto-selected market, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
               <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
               <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
               <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
@@ -1349,6 +1378,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
               <li>Market is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
               <li>Job Name controls the title saved in Fleet Planner History.</li>
               <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
+              <li>Route Time Target caps each route's one-way completion time. Tighter targets may need more vehicles or become infeasible when individual demand points are too far from school.</li>
               <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
               <li>Service Direction controls whether routes are built toward school pickup or away from school drop-off.</li>
             </ul>
@@ -1386,6 +1416,51 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
     >
       {children}
     </button>
+  );
+}
+
+function RouteTimeTargetControl({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  const [draftValue, setDraftValue] = useState(String(value));
+
+  useEffect(() => {
+    setDraftValue(String(value));
+  }, [value]);
+
+  function commitDraft() {
+    const nextValue = Number(draftValue);
+    const normalizedValue = normalizeRouteTimeTarget(nextValue);
+    setDraftValue(String(normalizedValue));
+    onChange(normalizedValue);
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-4 gap-1.5">
+        {ROUTE_TIME_TARGET_PRESETS.map((minutes) => (
+          <ModeButton key={minutes} active={value === minutes} onClick={() => onChange(minutes)}>
+            {minutes}
+          </ModeButton>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          className={fieldClassName}
+          type="number"
+          min="5"
+          max="240"
+          step="5"
+          value={draftValue}
+          onChange={(event) => setDraftValue(event.target.value)}
+          onBlur={commitDraft}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.currentTarget.blur();
+            }
+          }}
+        />
+        <span className="shrink-0 text-xs font-medium text-muted-foreground">min</span>
+      </div>
+    </div>
   );
 }
 
@@ -1591,6 +1666,83 @@ function inferMarketFromDemandWorkbook(workbook?: FleetPlannerPreviewResponse["d
     return "KR";
   }
   return null;
+}
+
+function applyHistoryScenario(
+  record: FleetPlannerHistoryRecord,
+  setters: {
+    setMarket: (value: FleetMarket) => void;
+    setMode: (value: FleetMode) => void;
+    setMonitorSeats: (value: number) => void;
+    setRouteTimeTargetMinutes: (value: number) => void;
+    setRouteDirection: (value: FleetServiceDirection) => void;
+    setGlobalDirection: (value: FleetServiceDirection) => void;
+  },
+) {
+  const scenario = record.scenario || {};
+  const previewSummary = (record.preview_result?.summary || {}) as Record<string, unknown>;
+  const globalPlanSummary = (record.global_plan_result?.summary || {}) as Record<string, unknown>;
+
+  const market = normalizeFleetMarket(scenario.market ?? previewSummary.market);
+  if (market) {
+    setters.setMarket(market);
+  }
+
+  const mode = normalizeFleetMode(scenario.mode ?? previewSummary.mode);
+  if (mode) {
+    setters.setMode(mode);
+  }
+
+  const monitorSeats = numberFromUnknown(scenario.monitor_seats ?? previewSummary.monitor_seats);
+  if (monitorSeats !== null) {
+    setters.setMonitorSeats(Math.max(0, Math.round(monitorSeats)));
+  }
+
+  const routeTimeTarget = numberFromUnknown(
+    scenario.max_route_duration_minutes ?? globalPlanSummary.max_route_duration_minutes ?? previewSummary.max_route_duration_minutes,
+  );
+  if (routeTimeTarget !== null) {
+    setters.setRouteTimeTargetMinutes(normalizeRouteTimeTarget(routeTimeTarget));
+  }
+
+  const direction = normalizeFleetServiceDirection(scenario.service_direction ?? globalPlanSummary.service_direction);
+  if (direction) {
+    setters.setRouteDirection(direction);
+    setters.setGlobalDirection(direction);
+  }
+}
+
+function normalizeRouteTimeTarget(value: number) {
+  if (!Number.isFinite(value)) {
+    return 60;
+  }
+  return Math.min(240, Math.max(5, Math.round(value)));
+}
+
+function normalizeFleetMarket(value: unknown): FleetMarket | null {
+  const normalized = String(value || "").trim().toUpperCase();
+  return normalized === "KR" || normalized === "CN" ? normalized : null;
+}
+
+function normalizeFleetMode(value: unknown): FleetMode | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "balanced" || normalized === "cost_saver" || normalized === "comfort_saver") {
+    return normalized;
+  }
+  return null;
+}
+
+function normalizeFleetServiceDirection(value: unknown): FleetServiceDirection | null {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "to_school" || normalized === "from_school") {
+    return normalized;
+  }
+  return null;
+}
+
+function numberFromUnknown(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatDateTime(value: unknown) {

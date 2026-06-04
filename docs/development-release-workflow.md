@@ -23,8 +23,14 @@ Default posture: work directly in the CN staging checkout, validate through
 `$CN_STAGING_HOST`, commit and push the intended Git revision, then promote only
 when the user explicitly asks for a production update. Keep runtime data and
 server-local env files out of Git.
+
 When the operator says `开发` or `拉齐` without naming a different target, read
 that as CN staging work.
+
+When taking over work or catching up on progress, inspect CN staging first:
+current checkout revision, tracked/untracked status, service health, and recent
+runtime behavior. Treat local checkouts and GitHub history as supporting records
+after the staging audit, not as the primary project state.
 
 ## Environment Boundary Contract
 

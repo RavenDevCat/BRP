@@ -87,6 +87,9 @@ Recent UX state:
 - Operating shorthand as of 2026-06-04: when the user says `开发` or `拉齐`
   without naming a different target, treat the target as CN staging. Do not
   start local services for ordinary alignment work.
+- Handoff/catch-up workflow: when taking over work, inspect the CN staging
+  checkout and staging runtime first. Local checkout and GitHub history are
+  supporting records; they are no longer the project core.
 
 ## Runtime And Data Rules
 
@@ -216,7 +219,8 @@ Last verified KR runtime state in this session:
 
 For ordinary code changes:
 
-1. Confirm operator access to the target environment.
+1. Inspect the CN staging checkout and staging runtime before trusting local
+   repo state.
 2. Work in the CN staging checkout.
 3. Validate against CN staging services and `$CN_STAGING_HOST`.
 4. Commit and push the intended Git revision.

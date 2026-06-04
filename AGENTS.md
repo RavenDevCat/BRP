@@ -30,6 +30,9 @@ Codex session.
   during staging work unless the user explicitly asks for a production release.
 - Local checkouts are code-record and light-check workspaces only; they are not
   the main runtime source.
+- When the user asks to "take over", "catch up", or check current progress,
+  inspect the CN staging checkout and staging runtime first. Use local and
+  GitHub state as supporting records, not as the source of truth.
 - KR is maintained as a separate production deployment that follows the Git
   revision intentionally; do not treat KR as the main development line.
 
@@ -76,8 +79,9 @@ examples, ops scripts, Cloudflare examples, or handoff notes:
 - KR currently does not have Node/npm in PATH, so copy local `apps/web/dist` to KR after KR pulls the code when frontend assets changed.
 - Restart the KR scheduled tasks:
   - `BRP-Backend-Preview`
+  - `BRP-Nginx-Public`
   - `BRP-React-Preview`
-  - `BRP-React-Public`
+  - `BRP-React-Public` remains unused after the public Nginx cutover
 - Verify:
   - backend health
   - public React proxy health

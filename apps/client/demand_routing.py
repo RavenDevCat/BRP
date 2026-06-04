@@ -326,8 +326,8 @@ def _build_route_preview_workbook_bytes(
 def build_generated_plan_workbook_bytes(route_preview: dict[str, Any]) -> bytes:
     return _build_route_preview_workbook_bytes(
         route_preview,
-        assignments_sheet_name="generated_plan_assignments",
-        fleet_sheet_name="generated_plan_fleet",
+        assignments_sheet_name="current_plan_assignments",
+        fleet_sheet_name="current_plan_fleet",
     )
 
 

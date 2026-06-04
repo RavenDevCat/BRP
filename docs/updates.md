@@ -6,6 +6,11 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-04
 
+### Fleet Planner Generated Workbook Sheet Names
+
+- Fleet Planner generated plan downloads now use `current_plan_assignments` and `current_plan_fleet` sheet names.
+- Downloaded optimized-plan workbooks can be uploaded directly into New Audit without manually renaming sheets.
+
 ### Shared Runtime History And Cache Paths
 
 - Added configurable `BRP_CLIENT_CACHE_DIR` and `BRP_BACKEND_CACHE_DIR` runtime paths.

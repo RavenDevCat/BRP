@@ -727,6 +727,7 @@ export function FleetPlannerPage() {
               saveHistoryResult={saveHistoryMutation.data}
               saveHistoryError={saveHistoryMutation.error as Error | null}
               isSavingHistory={saveHistoryMutation.isPending}
+              historyRecord={loadedHistoryRecord}
               activeView={activeResultView}
               onActiveViewChange={setActiveResultView}
             />
@@ -875,6 +876,7 @@ function FleetPreviewResult({
   saveHistoryResult,
   saveHistoryError,
   isSavingHistory,
+  historyRecord,
   activeView,
   onActiveViewChange,
 }: {
@@ -888,6 +890,7 @@ function FleetPreviewResult({
   saveHistoryResult?: FleetPlannerHistoryCreateResponse;
   saveHistoryError?: Error | null;
   isSavingHistory: boolean;
+  historyRecord?: FleetPlannerHistoryRecord | null;
   activeView: FleetResultView;
   onActiveViewChange: (view: FleetResultView) => void;
 }) {
@@ -897,6 +900,8 @@ function FleetPreviewResult({
   const clusterSummary = clusterResult?.summary || {};
   const geocodeSummary = geocodeResult?.summary || {};
   const globalPlanSummary = globalPlanResult?.summary || {};
+  const submittedBy = historyRecord?.owner_email || saveHistoryResult?.job.owner_email || "";
+  const savedAt = historyRecord?.created_at || saveHistoryResult?.job.created_at || "";
   const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
     { key: "fleet", label: "Fleet preview", badge: `${formatNumber(previewSummary.total_riders)} riders`, available: true },
     {
@@ -938,6 +943,12 @@ function FleetPreviewResult({
           <div>
             <h2 className="text-sm font-semibold">Results workspace</h2>
             <p className="mt-1 text-xs text-muted-foreground">Each tab shows one stage of output so previews and final plans stay separate.</p>
+            {historyRecord || saveHistoryResult?.job ? (
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <span>Submitted by {submittedBy || "Unknown"}</span>
+                <span>Saved {formatDateTime(savedAt)}</span>
+              </div>
+            ) : null}
           </div>
           <Badge tone={globalPlanResult ? "success" : "info"}>{globalPlanResult ? "Plan ready" : "Preview mode"}</Badge>
         </div>
@@ -1386,6 +1397,9 @@ function FleetPlannerHistoryPanel({
                       <div className="truncate text-sm font-semibold">{job.title || "Fleet Planner Run"}</div>
                       <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                         {formatDateTime(job.created_at)}
+                      </div>
+                      <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                        Submitted by {job.owner_email || "Unknown"}
                       </div>
                     </div>
                     <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>

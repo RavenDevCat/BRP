@@ -82,9 +82,15 @@ examples, ops scripts, Cloudflare examples, or handoff notes:
   - `BRP-Nginx-Public`
   - `BRP-React-Preview`
   - `BRP-React-Public` remains unused after the public Nginx cutover
+- If `BRP-Backend-Preview` returns `Ready` immediately and backend port `8001`
+  is not listening, reset the task action to explicitly run `cmd.exe /c` on the
+  backend start wrapper, then start the task again. A backend process launched
+  directly from an SSH command may pass health while the command is open but is
+  not reliable as the persistent production process.
 - Verify:
   - backend health
-  - public React proxy health
+  - public React proxy health; the Nginx origin should return `401` without an
+    Access user header and `200` with one
   - private React preview health
   - `/new` and `/jobs`
   - job count

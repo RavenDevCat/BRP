@@ -55,13 +55,17 @@ Recent UX state:
 - Fleet Planner History now collapses into a narrow left-side rail by default,
   preserving the original right-side Fleet Planner workspace layout while
   giving narrower desktop windows more room.
+- Fleet Planner controls were tightened for 13/14-inch desktop widths in
+  `fa919b0`: mode buttons stay single-line, Run settings controls stack inside
+  their card before the whole workspace changes layout, and the original
+  right-side three-column workspace remains intact.
 - Distance & Cost now has separate React histories for Reference Distance and
   Route Cost. Successful runs auto-save to the matching history, can be
   reopened, and can be deleted from `/distance`.
 - Distance & Cost history tab switching was hardened on 2026-06-04. Opening a
   Route Cost history run and then switching to Reference Distance no longer
-  renders incompatible saved-result payloads; the fix is on GitHub `main`
-  starting with `81febde` and has been deployed to CN staging only.
+  renders incompatible saved-result payloads. The fix has been promoted with
+  the current production release.
 - Fleet Planner now exposes a `Route Time Target` in React run settings. The
   value is saved in Fleet Planner History, restored when a history run is
   opened, and passed to backend fleet preview, clustering diagnostics, grouped
@@ -143,18 +147,31 @@ External provider QPS:
   - `BRP-React-Public` is disabled after the Nginx public-origin cutover.
 - KR does not currently have Node/npm in PATH. Build React locally and copy
   `apps/web/dist` to KR when frontend assets change.
+- If the backend scheduled task returns `Ready` immediately and local backend
+  port `8001` is not listening, reset the task action so it explicitly runs the
+  backend start wrapper through `cmd.exe /c`, then start the task again. A
+  backend process launched directly from an SSH command can pass health while
+  that command is open, but should not be treated as the persistent production
+  process.
 - KR runtime migration is complete. The old checkout was removed after verifying
   jobs, cache, outputs, env backups, and old logs were migrated or archived.
 
 Last verified KR runtime state in this session:
 
 - backend health: ok
-- public React proxy health: ok
+- public React proxy health: ok; origin returns `401` without an Access user
+  header and `200` with one
 - private React preview health: ok
-- job files: `5`
+- Git revision: `fa919b0`
+- Fleet Planner History API: ok
+- Distance & Cost Reference Distance and Route Cost history APIs: ok
+- job files: `7`
+- side tool files: `4`
 - client cache files: `6`
 - backend cache files: `6`
-- Google usage at verification time: `134 / 10,000`
+- client output files: `7`
+- backend output files: `28`
+- Google usage at verification time: `0 / 10,000` for `2026-06`
 
 ### CN
 
@@ -273,9 +290,9 @@ Local checkout role:
 - OSRM stability should be handled separately from external provider QPS.
 - Continue validating the React Route Audit, Distance & Cost, and Fleet Planner
   flows against real workbooks before broader user rollout.
-- The latest Distance & Cost history split and tab-switch fix has not been
-  promoted to production in this session. Promote CN production and KR
-  production together only after explicit production approval.
+- The current `fa919b0` release is promoted to CN production and KR production.
+  It includes the Fleet Planner narrow-desktop control fix and the earlier
+  Distance & Cost history tab-switch hardening.
 - CN staging is the only environment currently intended for Microsoft SSO
   preparation. Keep production deployments on their current auth provider until
   the user explicitly approves an auth migration.

@@ -376,7 +376,14 @@ High-level KR deploy flow:
 6. Restart `BRP-Backend-Preview` and `BRP-Nginx-Public`. Restart
    `BRP-React-Preview` only when the private preview needs the new build.
    `BRP-React-Public` is intentionally disabled after the public Nginx cutover.
-7. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
+7. If `BRP-Backend-Preview` immediately returns `Ready` and backend port `8001`
+   is not listening, reset the task action to explicitly run the backend start
+   wrapper through `cmd.exe /c`, then start the task again. Do not rely on a
+   backend process launched directly from an SSH command as the persistent
+   production process.
+8. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
+   The public Nginx origin should return `401` without an Access user header
+   and `200` with one.
 
 ## Deploy To Production
 

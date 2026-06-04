@@ -70,6 +70,7 @@ def select_vehicle_for_group(
     mode: str = "balanced",
     monitor_seats: int | None = None,
     max_route_duration_minutes: int | None = None,
+    custom_catalog: list[dict[str, Any]] | None = None,
     assumptions: PlanningAssumptions | None = None,
 ) -> VehicleSelectionResult:
     if rider_count <= 0:
@@ -81,7 +82,11 @@ def select_vehicle_for_group(
         monitor_seats=1 if monitor_seats is None else monitor_seats,
         max_route_duration_minutes=max_route_duration_minutes,
     )
-    catalog = get_vehicle_catalog(active_assumptions.market, monitor_seats=active_assumptions.monitor_seats)
+    catalog = get_vehicle_catalog(
+        active_assumptions.market,
+        monitor_seats=active_assumptions.monitor_seats,
+        custom_catalog=custom_catalog,
+    )
 
     feasible_options: list[dict[str, Any]] = []
     rejected_options: list[dict[str, Any]] = []
@@ -125,6 +130,7 @@ def estimate_vehicle_mix_for_groups(
     mode: str = "balanced",
     monitor_seats: int = 1,
     max_route_duration_minutes: int | None = None,
+    custom_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     assumptions = get_planning_assumptions(
         market,
@@ -133,7 +139,7 @@ def estimate_vehicle_mix_for_groups(
         max_route_duration_minutes=max_route_duration_minutes,
     )
     selections = [
-        select_vehicle_for_group(int(rider_count), assumptions=assumptions)
+        select_vehicle_for_group(int(rider_count), assumptions=assumptions, custom_catalog=custom_catalog)
         for rider_count in rider_counts
         if int(rider_count) > 0
     ]

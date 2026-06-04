@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, RefreshCw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
+import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   deleteFleetPlannerHistory,
   geocodeFleetPlannerDemand,
   getFleetPlannerHistory,
+  getFleetPlannerVehicleCatalog,
   getDemandTemplateUrl,
   listFleetPlannerHistory,
   previewFleetPlanner,
@@ -24,6 +25,7 @@ import {
   type FleetPlannerPreviewResponse,
   type FleetPlannerRoutePreviewResponse,
   type FleetPlannerHistoryCreateResponse,
+  type FleetPlannerVehicleConfig,
 } from "@/lib/api";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -31,11 +33,17 @@ import { cn } from "@/lib/cn";
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
 const ROUTE_TIME_TARGET_PRESETS = [30, 45, 60, 75] as const;
+const VEHICLE_CATEGORIES = ["van", "mini_bus", "mid_bus", "large_bus"] as const;
+const VEHICLE_PROPULSIONS = ["diesel", "electric"] as const;
 
 type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "maps" | "diagnostics";
 type FleetMarket = "KR" | "CN";
 type FleetMode = "balanced" | "cost_saver" | "comfort_saver";
 type FleetServiceDirection = "to_school" | "from_school";
+type FleetVehicleCategory = (typeof VEHICLE_CATEGORIES)[number];
+type FleetVehiclePropulsion = (typeof VEHICLE_PROPULSIONS)[number];
+type FleetVehicleConfigDraft = FleetPlannerVehicleConfig & { id: string };
+type FleetVehicleCatalogInput = Partial<FleetPlannerVehicleConfig> & { vehicle?: unknown; [key: string]: unknown };
 type ToolMapOutput = {
   key: string;
   name: string;
@@ -61,6 +69,9 @@ export function FleetPlannerPage() {
   const [routeDirection, setRouteDirection] = useState<FleetServiceDirection>("to_school");
   const [globalDirection, setGlobalDirection] = useState<FleetServiceDirection>("to_school");
   const [historyTitle, setHistoryTitle] = useState("");
+  const [vehicleConfigs, setVehicleConfigs] = useState<FleetVehicleConfigDraft[]>([]);
+  const [vehicleCatalogEdited, setVehicleCatalogEdited] = useState(false);
+  const [vehicleConfigOpen, setVehicleConfigOpen] = useState(false);
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
@@ -71,6 +82,24 @@ export function FleetPlannerPage() {
     queryFn: listFleetPlannerHistory,
     staleTime: 15_000,
   });
+
+  const vehicleCatalogQuery = useQuery({
+    queryKey: ["fleet-planner-vehicle-catalog", market, monitorSeats],
+    queryFn: () => getFleetPlannerVehicleCatalog({ market, monitor_seats: monitorSeats }),
+    staleTime: 60_000,
+  });
+
+  const defaultVehicleConfigs = useMemo(
+    () => normalizeVehicleConfigDrafts(vehicleCatalogQuery.data?.catalog || [], market),
+    [market, vehicleCatalogQuery.data],
+  );
+  const activeVehicleConfigs = vehicleCatalogEdited ? vehicleConfigs : defaultVehicleConfigs;
+  const activeVehicleCatalogPayload = useMemo(
+    () => fleetVehiclePayloadFromDrafts(activeVehicleConfigs),
+    [activeVehicleConfigs],
+  );
+  const enabledVehicleCatalogCount = activeVehicleCatalogPayload.filter((vehicle) => vehicle.enabled && vehicle.available_count > 0).length;
+  const customVehicleCatalogPayload = vehicleCatalogEdited ? activeVehicleCatalogPayload : undefined;
 
   const previewMutation = useMutation({
     mutationFn: async (variables?: PreviewVariables) => {
@@ -83,6 +112,7 @@ export function FleetPlannerPage() {
         mode,
         monitor_seats: monitorSeats,
         max_route_duration_minutes: routeTimeTargetMinutes,
+        vehicle_catalog: customVehicleCatalogPayload,
         rider_counts: riderCounts,
         file_name: selectedFile?.name,
         file_base64: selectedFileBase64 || undefined,
@@ -94,6 +124,8 @@ export function FleetPlannerPage() {
       const selectedMarket = variables?.market ?? market;
       if (inferredMarket && inferredMarket !== selectedMarket) {
         setMarket(inferredMarket);
+        setVehicleCatalogEdited(false);
+        setVehicleConfigs([]);
         geocodeMutation.reset();
         clusterMutation.reset();
         routePreviewMutation.reset();
@@ -140,6 +172,7 @@ export function FleetPlannerPage() {
         mode,
         monitor_seats: monitorSeats,
         max_route_duration_minutes: routeTimeTargetMinutes,
+        vehicle_catalog: customVehicleCatalogPayload,
         sector_count: sectorCount,
         geocode_result: {
           school: geocodeResult.school,
@@ -166,6 +199,7 @@ export function FleetPlannerPage() {
         monitor_seats: monitorSeats,
         service_direction: routeDirection,
         max_route_duration_minutes: routeTimeTargetMinutes,
+        vehicle_catalog: customVehicleCatalogPayload,
         cluster_result: {
           school: clusterResult.school,
           clusters: clusterResult.clusters,
@@ -191,6 +225,7 @@ export function FleetPlannerPage() {
         mode,
         monitor_seats: monitorSeats,
         max_route_duration_minutes: routeTimeTargetMinutes,
+        vehicle_catalog: customVehicleCatalogPayload,
         service_direction: globalDirection,
         geocode_result: {
           school: geocodeResult.school,
@@ -223,6 +258,9 @@ export function FleetPlannerPage() {
           mode,
           monitor_seats: monitorSeats,
           max_route_duration_minutes: routeTimeTargetMinutes,
+          vehicle_catalog_source: vehicleCatalogEdited ? "custom" : "default",
+          vehicle_catalog_count: enabledVehicleCatalogCount,
+          vehicle_catalog_snapshot: activeVehicleCatalogPayload,
           service_direction: globalDirection,
         },
         preview_result: result,
@@ -253,6 +291,8 @@ export function FleetPlannerPage() {
         setMode,
         setMonitorSeats,
         setRouteTimeTargetMinutes,
+        setVehicleCatalogEdited,
+        setVehicleConfigs,
         setRouteDirection,
         setGlobalDirection,
       });
@@ -350,6 +390,8 @@ export function FleetPlannerPage() {
       return;
     }
     setMarket(nextMarket);
+    setVehicleCatalogEdited(false);
+    setVehicleConfigs([]);
     resetScenarioResults();
   }
 
@@ -372,6 +414,18 @@ export function FleetPlannerPage() {
       return;
     }
     setRouteTimeTargetMinutes(normalizedTarget);
+    resetScenarioResults();
+  }
+
+  function handleVehicleConfigsChange(nextConfigs: FleetVehicleConfigDraft[]) {
+    setVehicleConfigs(nextConfigs);
+    setVehicleCatalogEdited(true);
+    resetScenarioResults();
+  }
+
+  function handleVehicleCatalogReset() {
+    setVehicleCatalogEdited(false);
+    setVehicleConfigs([]);
     resetScenarioResults();
   }
 
@@ -485,6 +539,14 @@ export function FleetPlannerPage() {
                       </ModeButton>
                     </div>
                   </Field>
+                  <VehicleProfileSummary
+                    configs={activeVehicleConfigs}
+                    edited={vehicleCatalogEdited}
+                    isLoading={vehicleCatalogQuery.isLoading}
+                    error={vehicleCatalogQuery.error as Error | null}
+                    onManage={() => setVehicleConfigOpen(true)}
+                    onReset={handleVehicleCatalogReset}
+                  />
                   <Field label="Job Name">
                     <input
                       className={fieldClassName}
@@ -655,6 +717,16 @@ export function FleetPlannerPage() {
         </div>
       </div>
       <FleetPlannerHowToUse open={howToUseOpen} onClose={() => setHowToUseOpen(false)} />
+      <VehicleConfigModal
+        open={vehicleConfigOpen}
+        market={market}
+        defaultConfigs={defaultVehicleConfigs}
+        configs={activeVehicleConfigs}
+        edited={vehicleCatalogEdited}
+        onChange={handleVehicleConfigsChange}
+        onReset={handleVehicleCatalogReset}
+        onClose={() => setVehicleConfigOpen(false)}
+      />
     </div>
   );
 }
@@ -719,6 +791,55 @@ function WorkbookSummaryItem({ label, value }: { label: string; value: ReactNode
     <div className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 truncate font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
+
+function VehicleProfileSummary({
+  configs,
+  edited,
+  isLoading,
+  error,
+  onManage,
+  onReset,
+}: {
+  configs: FleetVehicleConfigDraft[];
+  edited: boolean;
+  isLoading: boolean;
+  error?: Error | null;
+  onManage: () => void;
+  onReset: () => void;
+}) {
+  const enabledConfigs = configs.filter((config) => config.enabled);
+  const totalAvailable = enabledConfigs.reduce((sum, config) => sum + Math.max(0, Number(config.available_count) || 0), 0);
+  const maxSeats = Math.max(0, ...enabledConfigs.map((config) => Number(config.listed_seats) || 0));
+  return (
+    <div className="space-y-2 rounded-md border border-border bg-surface p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <Bus className="h-4 w-4 text-primary" aria-hidden="true" />
+            <h3 className="text-sm font-semibold">Vehicle profile</h3>
+            <Badge tone={edited ? "warning" : "neutral"}>{edited ? "custom" : "default"}</Badge>
+          </div>
+          <p className="mt-1 text-xs leading-5 text-muted-foreground">
+            {isLoading
+              ? "Loading market defaults."
+              : `${formatNumber(enabledConfigs.length)} vehicle types, ${formatNumber(totalAvailable)} available vehicles, largest ${formatNumber(maxSeats)} seats.`}
+          </p>
+        </div>
+        <div className="flex shrink-0 gap-1">
+          {edited ? (
+            <button type="button" className={buttonClassName("ghost")} aria-label="Reset vehicle profile" onClick={onReset}>
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
+          <button type="button" className={buttonClassName("secondary")} onClick={onManage}>
+            Manage
+          </button>
+        </div>
+      </div>
+      {error ? <InlineError message={error.message} /> : null}
     </div>
   );
 }
@@ -895,7 +1016,7 @@ function FleetPreviewResult({
             ) : null}
             <div>
               <h3 className="mb-2 text-sm font-semibold">Vehicle Catalog</h3>
-              <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "notes"]} />
+              <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "available_count", "notes"]} />
             </div>
           </div>
         ) : null}
@@ -1344,6 +1465,193 @@ function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
   );
 }
 
+function VehicleConfigModal({
+  open,
+  market,
+  defaultConfigs,
+  configs,
+  edited,
+  onChange,
+  onReset,
+  onClose,
+}: {
+  open: boolean;
+  market: FleetMarket;
+  defaultConfigs: FleetVehicleConfigDraft[];
+  configs: FleetVehicleConfigDraft[];
+  edited: boolean;
+  onChange: (configs: FleetVehicleConfigDraft[]) => void;
+  onReset: () => void;
+  onClose: () => void;
+}) {
+  if (!open) {
+    return null;
+  }
+  const visibleConfigs = edited ? configs : defaultConfigs;
+
+  function updateConfig(id: string, updates: Partial<FleetVehicleConfigDraft>) {
+    onChange(
+      visibleConfigs.map((config) =>
+        config.id === id
+          ? {
+              ...config,
+              ...updates,
+            }
+          : config,
+      ),
+    );
+  }
+
+  function addConfig() {
+    onChange([...visibleConfigs, newVehicleConfigDraft(market, visibleConfigs.length + 1)]);
+  }
+
+  function deleteConfig(id: string) {
+    onChange(visibleConfigs.filter((config) => config.id !== id));
+  }
+
+  return (
+    <div className="fixed inset-0 z-40">
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close vehicle configuration" onClick={onClose} />
+      <aside className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col border-l border-border bg-surface shadow-xl">
+        <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-foreground">Vehicle profile</h2>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">
+              Configure the vehicles available for this Fleet Planner run. Changes apply to preview, optimization, and saved history.
+            </p>
+          </div>
+          <button type="button" className={buttonClassName("ghost")} aria-label="Close vehicle configuration" onClick={onClose}>
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
+          <div className="flex items-center gap-2 text-sm">
+            <Badge tone={edited ? "warning" : "neutral"}>{edited ? "custom profile" : "market defaults"}</Badge>
+            <span className="text-muted-foreground">{formatNumber(visibleConfigs.filter((config) => config.enabled).length)} enabled types</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={buttonClassName("secondary")} onClick={addConfig}>
+              <Plus className="h-4 w-4" aria-hidden="true" />
+              Add vehicle
+            </button>
+            <button type="button" className={buttonClassName("secondary")} onClick={onReset}>
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              Reset defaults
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          {visibleConfigs.length ? (
+            visibleConfigs.map((config) => (
+              <div key={config.id} className="rounded-md border border-border bg-muted/30 p-3">
+                <div className="grid gap-3 lg:grid-cols-[minmax(180px,1.4fr)_90px_130px_120px_110px_40px]">
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Vehicle Name</span>
+                    <input
+                      className={fieldClassName}
+                      value={config.display_name}
+                      onChange={(event) => updateConfig(config.id, { display_name: event.target.value })}
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Seats</span>
+                    <input
+                      className={fieldClassName}
+                      type="number"
+                      min="1"
+                      max="120"
+                      step="1"
+                      value={config.listed_seats}
+                      onChange={(event) => updateConfig(config.id, { listed_seats: normalizeVehicleInt(event.target.value, 1, 120) })}
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Category</span>
+                    <select
+                      className={fieldClassName}
+                      value={config.category}
+                      onChange={(event) => updateConfig(config.id, { category: normalizeVehicleCategory(event.target.value) })}
+                    >
+                      {VEHICLE_CATEGORIES.map((category) => (
+                        <option key={category} value={category}>
+                          {vehicleCategoryLabel(category)}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Energy</span>
+                    <select
+                      className={fieldClassName}
+                      value={config.propulsion}
+                      onChange={(event) => updateConfig(config.id, { propulsion: normalizeVehiclePropulsion(event.target.value) })}
+                    >
+                      {VEHICLE_PROPULSIONS.map((propulsion) => (
+                        <option key={propulsion} value={propulsion}>
+                          {propulsion === "electric" ? "Electric" : "Diesel"}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">Available</span>
+                    <input
+                      className={fieldClassName}
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={config.available_count}
+                      onChange={(event) => updateConfig(config.id, { available_count: normalizeVehicleInt(event.target.value, 0, 100) })}
+                    />
+                  </label>
+                  <div className="flex items-end justify-end gap-1">
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex h-9 w-9 items-center justify-center rounded-md border transition",
+                        config.enabled ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface text-muted-foreground hover:bg-muted",
+                      )}
+                      aria-label={config.enabled ? "Disable vehicle" : "Enable vehicle"}
+                      onClick={() => updateConfig(config.id, { enabled: !config.enabled })}
+                    >
+                      <Bus className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-muted-foreground transition hover:text-destructive"
+                      aria-label="Delete vehicle"
+                      onClick={() => deleteConfig(config.id)}
+                    >
+                      <Trash2 className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+                <label className="mt-3 block space-y-1.5">
+                  <span className="text-xs font-medium text-muted-foreground">Notes</span>
+                  <input
+                    className={fieldClassName}
+                    value={config.notes || ""}
+                    onChange={(event) => updateConfig(config.id, { notes: event.target.value })}
+                  />
+                </label>
+              </div>
+            ))
+          ) : (
+            <EmptyResultState title="No vehicles configured" detail="Add at least one enabled vehicle type before running the planner." />
+          )}
+        </div>
+        <div className="flex justify-end border-t border-border px-4 py-3">
+          <button type="button" className={buttonClassName("primary")} onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
+
 function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) {
     return null;
@@ -1366,7 +1674,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
             <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
             <ol className="list-decimal space-y-2 pl-5">
               <li>Demand source: upload a demand workbook and confirm the parsed city, school, address count, and students.</li>
-              <li>Run settings: confirm the auto-selected market, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
+              <li>Run settings: confirm the auto-selected market and vehicle profile, then choose job name, planning mode, route time target, monitor seats, and service direction.</li>
               <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
               <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
               <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
@@ -1376,6 +1684,7 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
             <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
             <ul className="list-disc space-y-2 pl-5">
               <li>Market is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
+              <li>Vehicle profile controls which vehicle types, seat counts, energy types, and available counts are used by this run.</li>
               <li>Job Name controls the title saved in Fleet Planner History.</li>
               <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
               <li>Route Time Target caps each route's one-way completion time. Tighter targets may need more vehicles or become infeasible when individual demand points are too far from school.</li>
@@ -1675,6 +1984,8 @@ function applyHistoryScenario(
     setMode: (value: FleetMode) => void;
     setMonitorSeats: (value: number) => void;
     setRouteTimeTargetMinutes: (value: number) => void;
+    setVehicleCatalogEdited: (value: boolean) => void;
+    setVehicleConfigs: (value: FleetVehicleConfigDraft[]) => void;
     setRouteDirection: (value: FleetServiceDirection) => void;
     setGlobalDirection: (value: FleetServiceDirection) => void;
   },
@@ -1705,6 +2016,22 @@ function applyHistoryScenario(
     setters.setRouteTimeTargetMinutes(normalizeRouteTimeTarget(routeTimeTarget));
   }
 
+  const vehicleCatalogSource = String(scenario.vehicle_catalog_source || "").trim().toLowerCase();
+  const vehicleCatalogSnapshot = Array.isArray(scenario.vehicle_catalog_snapshot)
+    ? scenario.vehicle_catalog_snapshot
+    : Array.isArray(scenario.vehicle_catalog)
+      ? scenario.vehicle_catalog
+      : [];
+  if (vehicleCatalogSnapshot.length) {
+    setters.setVehicleConfigs(
+      normalizeVehicleConfigDrafts(vehicleCatalogSnapshot.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null), market || "KR"),
+    );
+    setters.setVehicleCatalogEdited(vehicleCatalogSource === "custom");
+  } else {
+    setters.setVehicleCatalogEdited(false);
+    setters.setVehicleConfigs([]);
+  }
+
   const direction = normalizeFleetServiceDirection(scenario.service_direction ?? globalPlanSummary.service_direction);
   if (direction) {
     setters.setRouteDirection(direction);
@@ -1717,6 +2044,74 @@ function normalizeRouteTimeTarget(value: number) {
     return 60;
   }
   return Math.min(240, Math.max(5, Math.round(value)));
+}
+
+function normalizeVehicleConfigDrafts(catalog: FleetVehicleCatalogInput[], market: FleetMarket): FleetVehicleConfigDraft[] {
+  return catalog.map((vehicle, index) => ({
+    id: `${market.toLowerCase()}-${String(vehicle.vehicle_type || vehicle.display_name || vehicle.vehicle || index)}`,
+    vehicle_type: String(vehicle.vehicle_type || `vehicle_${index + 1}`),
+    display_name: String(vehicle.display_name || vehicle.vehicle || `Vehicle ${index + 1}`),
+    listed_seats: normalizeVehicleInt(vehicle.listed_seats, 1, 120),
+    category: normalizeVehicleCategory(vehicle.category),
+    propulsion: normalizeVehiclePropulsion(vehicle.propulsion),
+    available_count: normalizeVehicleInt(vehicle.available_count, 0, 100),
+    enabled: vehicle.enabled !== false,
+    notes: String(vehicle.notes || ""),
+  }));
+}
+
+function fleetVehiclePayloadFromDrafts(configs: FleetVehicleConfigDraft[]): FleetPlannerVehicleConfig[] {
+  return configs.map((config) => ({
+    vehicle_type: config.vehicle_type,
+    display_name: config.display_name.trim() || "Unnamed vehicle",
+    listed_seats: normalizeVehicleInt(config.listed_seats, 1, 120),
+    category: normalizeVehicleCategory(config.category),
+    propulsion: normalizeVehiclePropulsion(config.propulsion),
+    available_count: normalizeVehicleInt(config.available_count, 0, 100),
+    enabled: Boolean(config.enabled),
+    notes: String(config.notes || "").trim(),
+  }));
+}
+
+function newVehicleConfigDraft(market: FleetMarket, sequence: number): FleetVehicleConfigDraft {
+  return {
+    id: `custom-${Date.now()}-${sequence}`,
+    vehicle_type: `custom_${market.toLowerCase()}_${sequence}`,
+    display_name: `Custom ${market} vehicle ${sequence}`,
+    listed_seats: 45,
+    category: "large_bus",
+    propulsion: "diesel",
+    available_count: 10,
+    enabled: true,
+    notes: "",
+  };
+}
+
+function normalizeVehicleInt(value: unknown, min: number, max: number) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return min;
+  }
+  return Math.min(max, Math.max(min, Math.round(parsed)));
+}
+
+function normalizeVehicleCategory(value: unknown): FleetVehicleCategory {
+  const normalized = String(value || "").trim().toLowerCase();
+  return VEHICLE_CATEGORIES.includes(normalized as FleetVehicleCategory) ? (normalized as FleetVehicleCategory) : "large_bus";
+}
+
+function normalizeVehiclePropulsion(value: unknown): FleetVehiclePropulsion {
+  const normalized = String(value || "").trim().toLowerCase();
+  return VEHICLE_PROPULSIONS.includes(normalized as FleetVehiclePropulsion) ? (normalized as FleetVehiclePropulsion) : "diesel";
+}
+
+function vehicleCategoryLabel(value: FleetVehicleCategory) {
+  return {
+    van: "Van",
+    mini_bus: "Mini bus",
+    mid_bus: "Mid bus",
+    large_bus: "Large bus",
+  }[value];
 }
 
 function normalizeFleetMarket(value: unknown): FleetMarket | null {

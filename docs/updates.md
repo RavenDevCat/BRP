@@ -6,6 +6,13 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-04
 
+### Fleet Planner Vehicle Profile Preview
+
+- Added a staging React vehicle profile editor to Fleet Planner run settings.
+- Users can adjust vehicle names, listed seats, category, diesel/electric type, available count, and enabled state for a single Fleet Planner run.
+- Custom vehicle profiles are sent to fleet preview, demand grouping diagnostics, grouped route preview, and global OR-Tools planning.
+- Fleet Planner History saves the vehicle profile snapshot used for each run. Existing history remains usable; rerun only when users want results rebuilt under a changed vehicle profile.
+
 ### Fleet Planner Route Time Target
 
 - Added an explicit `Route Time Target` control to the React Fleet Planner run settings.

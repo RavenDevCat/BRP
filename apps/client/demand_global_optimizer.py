@@ -45,9 +45,17 @@ def _vehicle_fixed_cost(vehicle: dict[str, Any], assumptions: PlanningAssumption
     return mode_base + category_cost + electric_cost + capacity_cost
 
 
-def _candidate_vehicle_pool(total_students: int, assumptions: PlanningAssumptions) -> list[dict[str, Any]]:
+def _candidate_vehicle_pool(
+    total_students: int,
+    assumptions: PlanningAssumptions,
+    custom_catalog: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     vehicles = []
-    for vehicle in get_vehicle_catalog(assumptions.market, monitor_seats=assumptions.monitor_seats):
+    for vehicle in get_vehicle_catalog(
+        assumptions.market,
+        monitor_seats=assumptions.monitor_seats,
+        custom_catalog=custom_catalog,
+    ):
         capacity = int(vehicle.get("student_capacity", 0) or 0)
         if capacity <= 0:
             continue
@@ -55,7 +63,11 @@ def _candidate_vehicle_pool(total_students: int, assumptions: PlanningAssumption
             continue
         if str(vehicle.get("propulsion", "")).strip().lower() == "electric" and not assumptions.allow_electric:
             continue
+        available_count = int(vehicle.get("available_count", assumptions.default_max_vehicles_per_type) or 0)
+        if available_count <= 0:
+            continue
         count = min(
+            available_count,
             int(assumptions.default_max_vehicles_per_type),
             max(1, math.ceil(max(1, total_students) / capacity) + 2),
         )
@@ -200,6 +212,7 @@ def build_global_ortools_plan(
     mode: str = "balanced",
     monitor_seats: int = 1,
     max_route_duration_minutes: int | None = None,
+    custom_catalog: list[dict[str, Any]] | None = None,
     service_direction: str = "to_school",
 ) -> dict[str, Any]:
     try:
@@ -227,7 +240,11 @@ def build_global_ortools_plan(
 
     catalog_capacities = [
         int(vehicle.get("student_capacity", 0) or 0)
-        for vehicle in get_vehicle_catalog(assumptions.market, monitor_seats=assumptions.monitor_seats)
+        for vehicle in get_vehicle_catalog(
+            assumptions.market,
+            monitor_seats=assumptions.monitor_seats,
+            custom_catalog=custom_catalog,
+        )
     ]
     max_capacity = max(catalog_capacities or [0])
     if max_capacity <= 0:
@@ -235,7 +252,7 @@ def build_global_ortools_plan(
 
     demand_points = _expand_large_demands(raw_demand_points, max_capacity=max_capacity)
     total_students = sum(int(point.get("student_count", 0) or 0) for point in demand_points)
-    vehicle_pool = _candidate_vehicle_pool(total_students, assumptions)
+    vehicle_pool = _candidate_vehicle_pool(total_students, assumptions, custom_catalog=custom_catalog)
     if not vehicle_pool:
         raise ValueError("No candidate vehicles are available for global planning.")
 

@@ -182,6 +182,8 @@ export type FleetPlannerPreviewResponse = {
     group_count: number;
     total_riders: number;
     source: string;
+    vehicle_catalog_source?: string;
+    vehicle_catalog_count?: number;
   };
   assumptions: Record<string, unknown>;
   demand_workbook?: {
@@ -202,6 +204,27 @@ export type FleetPlannerPreviewResponse = {
   };
   decision_details: Array<Record<string, unknown>>;
   catalog: Array<Record<string, unknown>>;
+};
+
+export type FleetPlannerVehicleConfig = {
+  vehicle_type?: string;
+  display_name: string;
+  listed_seats: number;
+  category: string;
+  propulsion: string;
+  available_count: number;
+  enabled: boolean;
+  notes?: string;
+};
+
+export type FleetPlannerVehicleCatalogResponse = {
+  summary: {
+    market: string;
+    monitor_seats: number;
+    vehicle_count: number;
+    source: string;
+  };
+  catalog: FleetPlannerVehicleConfig[];
 };
 
 export type FleetPlannerGeocodeResponse = {
@@ -490,6 +513,7 @@ export function previewFleetPlanner(payload: {
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
   max_route_duration_minutes?: number;
+  vehicle_catalog?: FleetPlannerVehicleConfig[];
   rider_counts?: string;
   file_name?: string;
   file_base64?: string;
@@ -499,6 +523,17 @@ export function previewFleetPlanner(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+}
+
+export function getFleetPlannerVehicleCatalog(payload: {
+  market: "KR" | "CN";
+  monitor_seats: number;
+}) {
+  const params = new URLSearchParams({
+    market: payload.market,
+    monitor_seats: String(payload.monitor_seats),
+  });
+  return apiFetch<FleetPlannerVehicleCatalogResponse>(`/fleet-planner/vehicle-catalog?${params.toString()}`);
 }
 
 export function geocodeFleetPlannerDemand(payload: {
@@ -517,6 +552,7 @@ export function buildFleetPlannerClusters(payload: {
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
   max_route_duration_minutes?: number;
+  vehicle_catalog?: FleetPlannerVehicleConfig[];
   sector_count: 4 | 8 | 12;
   geocode_result: {
     school: Record<string, unknown>;
@@ -537,6 +573,7 @@ export function buildFleetPlannerRoutePreview(payload: {
   monitor_seats: number;
   service_direction: "to_school" | "from_school";
   max_route_duration_minutes?: number;
+  vehicle_catalog?: FleetPlannerVehicleConfig[];
   cluster_result: {
     school: Record<string, unknown>;
     clusters: Array<Record<string, unknown>>;
@@ -556,6 +593,7 @@ export function buildFleetPlannerGlobalPlan(payload: {
   mode: "balanced" | "cost_saver" | "comfort_saver";
   monitor_seats: number;
   max_route_duration_minutes?: number;
+  vehicle_catalog?: FleetPlannerVehicleConfig[];
   service_direction: "to_school" | "from_school";
   geocode_result: {
     school: Record<string, unknown>;

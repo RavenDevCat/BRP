@@ -59,6 +59,11 @@ Recent UX state:
   value is saved in Fleet Planner History, restored when a history run is
   opened, and passed to backend fleet preview, clustering diagnostics, grouped
   route preview, and global OR-Tools planning.
+- Fleet Planner has a staging React vehicle profile editor in Run settings.
+  It can adjust vehicle name, seats, category, energy type, available count,
+  enabled state, and notes for a single run. Custom vehicle snapshots are
+  passed to fleet preview, clustering diagnostics, grouped route preview, and
+  global OR-Tools planning, then saved with Fleet Planner History.
 - The KR-only Google usage pill is shown in the React header when
   `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`.
 - Real server addresses, usernames, private hostnames, and environment-specific paths should

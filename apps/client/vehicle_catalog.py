@@ -5,6 +5,9 @@ from typing import Any
 
 
 DEFAULT_MONITOR_SEATS = 1
+DEFAULT_AVAILABLE_VEHICLES_PER_TYPE = 20
+ALLOWED_CATEGORIES = {"van", "mini_bus", "mid_bus", "large_bus"}
+ALLOWED_PROPULSIONS = {"diesel", "electric"}
 
 
 @dataclass(frozen=True)
@@ -189,10 +192,88 @@ CHINA_VEHICLE_CATALOG: tuple[VehicleCatalogEntry, ...] = (
 )
 
 
-def get_vehicle_catalog(market: str, *, monitor_seats: int = DEFAULT_MONITOR_SEATS) -> list[dict[str, Any]]:
+def _coerce_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    return normalized not in {"0", "false", "no", "off", "disabled"}
+
+
+def _clean_custom_vehicle_catalog(
+    custom_catalog: list[dict[str, Any]],
+    *,
+    market: str,
+    monitor_seats: int,
+) -> list[dict[str, Any]]:
+    reserved = max(0, int(monitor_seats))
+    normalized_market = str(market or "").strip().upper() or "KR"
+    cleaned: list[dict[str, Any]] = []
+    for index, raw_vehicle in enumerate(custom_catalog, start=1):
+        if not isinstance(raw_vehicle, dict) or not _coerce_enabled(raw_vehicle.get("enabled", True)):
+            continue
+        display_name = str(
+            raw_vehicle.get("display_name")
+            or raw_vehicle.get("vehicle")
+            or raw_vehicle.get("name")
+            or f"Custom vehicle {index}"
+        ).strip()
+        if not display_name:
+            continue
+        try:
+            listed_seats = int(raw_vehicle.get("listed_seats") or raw_vehicle.get("seat_count") or raw_vehicle.get("seats") or 0)
+        except (TypeError, ValueError):
+            continue
+        if listed_seats <= 0 or listed_seats > 120:
+            continue
+        category = str(raw_vehicle.get("category") or "large_bus").strip().lower()
+        if category not in ALLOWED_CATEGORIES:
+            category = "large_bus"
+        propulsion = str(raw_vehicle.get("propulsion") or "diesel").strip().lower()
+        if propulsion not in ALLOWED_PROPULSIONS:
+            propulsion = "diesel"
+        try:
+            available_count = int(raw_vehicle.get("available_count") or raw_vehicle.get("max_count") or DEFAULT_AVAILABLE_VEHICLES_PER_TYPE)
+        except (TypeError, ValueError):
+            available_count = DEFAULT_AVAILABLE_VEHICLES_PER_TYPE
+        available_count = max(0, min(DEFAULT_AVAILABLE_VEHICLES_PER_TYPE * 5, available_count))
+        if available_count <= 0:
+            continue
+        vehicle_type = str(raw_vehicle.get("vehicle_type") or f"custom_{index}").strip() or f"custom_{index}"
+        cleaned.append(
+            {
+                "market": normalized_market,
+                "vehicle_type": vehicle_type,
+                "display_name": display_name,
+                "listed_seats": listed_seats,
+                "default_monitor_seats": DEFAULT_MONITOR_SEATS,
+                "propulsion": propulsion,
+                "category": category,
+                "notes": str(raw_vehicle.get("notes") or "").strip(),
+                "source_url": str(raw_vehicle.get("source_url") or "").strip(),
+                "student_capacity": max(0, listed_seats - reserved),
+                "monitor_seats": reserved,
+                "available_count": available_count,
+                "enabled": True,
+            }
+        )
+    return cleaned
+
+
+def get_vehicle_catalog(
+    market: str,
+    *,
+    monitor_seats: int = DEFAULT_MONITOR_SEATS,
+    custom_catalog: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    if custom_catalog is not None:
+        return _clean_custom_vehicle_catalog(custom_catalog, market=market, monitor_seats=monitor_seats)
     normalized_market = str(market or "").strip().upper()
     catalog = CHINA_VEHICLE_CATALOG if normalized_market in {"CN", "CHINA"} else KOREA_VEHICLE_CATALOG
-    return [entry.with_monitor_seats(monitor_seats) for entry in catalog]
+    vehicles = [entry.with_monitor_seats(monitor_seats) for entry in catalog]
+    for vehicle in vehicles:
+        vehicle["available_count"] = DEFAULT_AVAILABLE_VEHICLES_PER_TYPE
+        vehicle["enabled"] = True
+    return vehicles
 
 
 def get_vehicle_catalog_for_country(country: str, *, monitor_seats: int = DEFAULT_MONITOR_SEATS) -> list[dict[str, Any]]:

@@ -519,6 +519,50 @@ def _fleet_route_time_target(payload: dict[str, Any]) -> int | None:
     return minutes
 
 
+def _fleet_vehicle_catalog_payload(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+    raw_catalog = payload.get("vehicle_catalog")
+    if raw_catalog is None:
+        return None
+    if not isinstance(raw_catalog, list):
+        raise ValueError("vehicle_catalog must be a list.")
+    return [dict(item) for item in raw_catalog if isinstance(item, dict)]
+
+
+def _fleet_catalog_rows(catalog: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "vehicle_type": vehicle.get("vehicle_type"),
+            "vehicle": vehicle.get("display_name"),
+            "display_name": vehicle.get("display_name"),
+            "category": vehicle.get("category"),
+            "propulsion": vehicle.get("propulsion"),
+            "listed_seats": vehicle.get("listed_seats"),
+            "monitor_seats": vehicle.get("monitor_seats"),
+            "student_capacity": vehicle.get("student_capacity"),
+            "available_count": vehicle.get("available_count"),
+            "enabled": vehicle.get("enabled", True),
+            "notes": vehicle.get("notes"),
+        }
+        for vehicle in catalog
+    ]
+
+
+def _handle_fleet_planner_vehicle_catalog(payload: dict[str, Any]) -> dict[str, Any]:
+    vehicle_catalog = _client_module("vehicle_catalog")
+    market = str(payload.get("market") or "KR").strip().upper()
+    monitor_seats = int(payload.get("monitor_seats") or 0)
+    catalog = vehicle_catalog.get_vehicle_catalog(market, monitor_seats=monitor_seats)
+    return {
+        "summary": {
+            "market": market if market in {"CN", "KR"} else "KR",
+            "monitor_seats": max(0, monitor_seats),
+            "vehicle_count": len(catalog),
+            "source": "default",
+        },
+        "catalog": _fleet_catalog_rows(catalog),
+    }
+
+
 def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
     demand_input = _client_module("demand_input")
     fleet_selector = _client_module("fleet_selector")
@@ -529,6 +573,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
     max_route_duration_minutes = _fleet_route_time_target(payload)
+    custom_catalog = _fleet_vehicle_catalog_payload(payload)
     demand_workbook, source_label = _demand_workbook_from_payload(payload)
     workbook_payload: dict[str, Any] | None = None
     if demand_workbook is not None:
@@ -558,6 +603,7 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
             mode=mode,
             monitor_seats=monitor_seats,
             assumptions=assumptions,
+            custom_catalog=custom_catalog,
         )
         selected = dict(selection.selected_vehicle or {})
         recommendations.append(
@@ -586,20 +632,15 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
         mode=mode,
         monitor_seats=monitor_seats,
         max_route_duration_minutes=max_route_duration_minutes,
+        custom_catalog=custom_catalog,
     )
-    catalog = []
-    for vehicle in vehicle_catalog.get_vehicle_catalog(assumptions.market, monitor_seats=assumptions.monitor_seats):
-        catalog.append(
-            {
-                "vehicle": vehicle.get("display_name"),
-                "category": vehicle.get("category"),
-                "propulsion": vehicle.get("propulsion"),
-                "listed_seats": vehicle.get("listed_seats"),
-                "monitor_seats": vehicle.get("monitor_seats"),
-                "student_capacity": vehicle.get("student_capacity"),
-                "notes": vehicle.get("notes"),
-            }
-        )
+    catalog = vehicle_catalog.get_vehicle_catalog(
+        assumptions.market,
+        monitor_seats=assumptions.monitor_seats,
+        custom_catalog=custom_catalog,
+    )
+    if custom_catalog is not None and not catalog:
+        raise ValueError("Custom vehicle catalog has no enabled vehicles with usable seats.")
 
     return {
         "summary": {
@@ -610,13 +651,15 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
             "group_count": len(rider_counts),
             "total_riders": sum(rider_counts),
             "source": "demand_workbook" if demand_workbook is not None else "manual_rider_groups",
+            "vehicle_catalog_source": "custom" if custom_catalog is not None else "default",
+            "vehicle_catalog_count": len(catalog),
         },
         "assumptions": assumptions.to_dict(),
         "demand_workbook": workbook_payload,
         "recommendations": recommendations,
         "mix_summary": mix_summary,
         "decision_details": decision_details,
-        "catalog": catalog,
+        "catalog": _fleet_catalog_rows(catalog),
     }
 
 
@@ -642,6 +685,7 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
     max_route_duration_minutes = _fleet_route_time_target(payload)
+    custom_catalog = _fleet_vehicle_catalog_payload(payload)
     sector_count = int(payload.get("sector_count") or 8)
     if sector_count not in {4, 8, 12}:
         raise ValueError("sector_count must be 4, 8, or 12.")
@@ -654,6 +698,7 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
         mode=mode,
         monitor_seats=monitor_seats,
         max_route_duration_minutes=max_route_duration_minutes,
+        custom_catalog=custom_catalog,
         sector_count=sector_count,
     )
     return {
@@ -677,6 +722,7 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
     if service_direction not in {"to_school", "from_school"}:
         raise ValueError("service_direction must be to_school or from_school.")
     max_route_duration_minutes = _fleet_route_time_target(payload)
+    custom_catalog = _fleet_vehicle_catalog_payload(payload)
     cluster_result = dict(payload.get("cluster_result") or {})
     if not cluster_result:
         raise ValueError("Build demand clusters before route preview.")
@@ -699,6 +745,7 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
             mode=mode,
             monitor_seats=monitor_seats,
             max_route_duration_minutes=max_route_duration_minutes,
+            custom_catalog=custom_catalog,
         )
         route_preview = demand_routing.build_osrm_route_preview(
             refined_cluster_result,
@@ -738,6 +785,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
     max_route_duration_minutes = _fleet_route_time_target(payload)
+    custom_catalog = _fleet_vehicle_catalog_payload(payload)
     service_direction = str(payload.get("service_direction") or "to_school").strip()
     if service_direction not in {"to_school", "from_school"}:
         raise ValueError("service_direction must be to_school or from_school.")
@@ -750,6 +798,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         mode=mode,
         monitor_seats=monitor_seats,
         max_route_duration_minutes=max_route_duration_minutes,
+        custom_catalog=custom_catalog,
         service_direction=service_direction,
     )
     return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx")
@@ -783,6 +832,8 @@ def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: st
                 or plan_summary.get("max_route_duration_minutes")
                 or preview_summary.get("max_route_duration_minutes")
             ),
+            "vehicle_catalog_source": scenario.get("vehicle_catalog_source") or preview_summary.get("vehicle_catalog_source"),
+            "vehicle_catalog_count": scenario.get("vehicle_catalog_count") or preview_summary.get("vehicle_catalog_count"),
             "service_direction": scenario.get("service_direction") or plan_summary.get("service_direction"),
             "routes": plan_summary.get("route_count"),
             "students": preview_summary.get("total_riders"),
@@ -1967,6 +2018,10 @@ class BackendHandler(BaseHTTPRequestHandler):
                 filename="brp_demand_template.xlsx",
                 inline=False,
             )
+            return
+        if path == "/fleet-planner/vehicle-catalog":
+            query_params = dict(parse_qsl(parsed.query))
+            self._send_json(200, _handle_fleet_planner_vehicle_catalog(query_params))
             return
         if path == "/fleet-planner/history":
             self._send_json(200, {"jobs": FLEET_PLANNER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})

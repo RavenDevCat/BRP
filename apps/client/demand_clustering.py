@@ -46,10 +46,10 @@ def _sector_label(index: int, sector_count: int) -> str:
     return f"S{index + 1}"
 
 
-def _max_student_capacity(market: str, monitor_seats: int) -> int:
+def _max_student_capacity(market: str, monitor_seats: int, custom_catalog: list[dict[str, Any]] | None = None) -> int:
     capacities = [
         int(item.get("student_capacity", 0) or 0)
-        for item in get_vehicle_catalog(market, monitor_seats=monitor_seats)
+        for item in get_vehicle_catalog(market, monitor_seats=monitor_seats, custom_catalog=custom_catalog)
     ]
     return max(capacities or [0])
 
@@ -61,6 +61,7 @@ def build_demand_clusters(
     mode: str = "balanced",
     monitor_seats: int = 1,
     max_route_duration_minutes: int | None = None,
+    custom_catalog: list[dict[str, Any]] | None = None,
     sector_count: int = 8,
 ) -> dict[str, Any]:
     school = dict(geocode_result.get("school") or {})
@@ -73,7 +74,7 @@ def build_demand_clusters(
         monitor_seats=monitor_seats,
         max_route_duration_minutes=max_route_duration_minutes,
     )
-    max_capacity = _max_student_capacity(assumptions.market, assumptions.monitor_seats)
+    max_capacity = _max_student_capacity(assumptions.market, assumptions.monitor_seats, custom_catalog)
     if max_capacity <= 0:
         raise ValueError("Vehicle catalog has no usable student capacity.")
 
@@ -133,6 +134,7 @@ def build_demand_clusters(
                         assumptions.market,
                         assumptions.mode,
                         assumptions.monitor_seats,
+                        custom_catalog,
                     )
                 )
                 cluster_sequence += 1
@@ -152,6 +154,7 @@ def build_demand_clusters(
                     assumptions.market,
                     assumptions.mode,
                     assumptions.monitor_seats,
+                    custom_catalog,
                 )
             )
             cluster_sequence += 1
@@ -183,6 +186,7 @@ def split_cluster_result_by_route_limit(
     mode: str = "balanced",
     monitor_seats: int = 1,
     max_route_duration_minutes: int | None = None,
+    custom_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if not overloaded_route_ids:
         return cluster_result
@@ -220,6 +224,7 @@ def split_cluster_result_by_route_limit(
                     market,
                     mode,
                     monitor_seats,
+                    custom_catalog,
                 )
             )
             cluster_sequence += 1
@@ -244,6 +249,7 @@ def _finalize_cluster(
     market: str,
     mode: str,
     monitor_seats: int,
+    custom_catalog: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     student_count = sum(int(point.get("student_count", 0) or 0) for point in points)
     stop_count = len(points)
@@ -256,6 +262,7 @@ def _finalize_cluster(
         market=market,
         mode=mode,
         monitor_seats=monitor_seats,
+        custom_catalog=custom_catalog,
     )
     selected = selection.selected_vehicle or {}
     warnings: list[str] = []

@@ -236,6 +236,13 @@ function AiAuditPanel({
   const reportMarkdown = stringValue(report.report_markdown);
   const aiStatus = stringValue(auditMutation.data?.ai_audit_status || job.ai_audit_status).toLowerCase();
   const aiRunning = aiStatus === "running" || auditMutation.isPending;
+  const generateReportIcon =
+    auditMutation.isPending && !auditMutation.variables?.force ? (
+      <Loader2 className="h-4 w-4 animate-spin" />
+    ) : (
+      <Bot className="h-4 w-4" />
+    );
+  const generateReport = () => auditMutation.mutate({ force: false });
   const scenarioRows = scenarios.filter((scenario) => scenario.enabled);
   const routeSummaries = asRecordArray(currentPlan.route_summaries);
   const priorityActions = asRecordArray(reallocationSummary.priority_recommendations).slice(0, 5);
@@ -264,8 +271,8 @@ function AiAuditPanel({
               <Button
                 type="button"
                 disabled={aiRunning || Boolean(reportMarkdown)}
-                icon={auditMutation.isPending && !auditMutation.variables?.force ? <Loader2 className="h-4 w-4 animate-spin" /> : <Bot className="h-4 w-4" />}
-                onClick={() => auditMutation.mutate({ force: false })}
+                icon={generateReportIcon}
+                onClick={generateReport}
               >
                 Generate report
               </Button>
@@ -414,7 +421,17 @@ function AiAuditPanel({
           ) : (
             <EmptyState
               title="No AI report yet"
-              detail="Generate a bounded management-facing narrative from the deterministic audit outputs."
+              detail="History runs do not create this automatically. Click Generate report to create a bounded management-facing narrative from the deterministic audit outputs."
+              action={
+                <Button
+                  type="button"
+                  disabled={aiRunning || Boolean(reportMarkdown)}
+                  icon={generateReportIcon}
+                  onClick={generateReport}
+                >
+                  Generate report
+                </Button>
+              }
             />
           )}
         </CardContent>

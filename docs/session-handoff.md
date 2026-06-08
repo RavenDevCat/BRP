@@ -51,10 +51,11 @@ Job result tab order:
 
 ## Current Release State
 
-- GitHub `main` and CN staging source are at `43c40de`
-  (`Show git version in app sidebar`).
-- CN staging frontend `apps/web/dist` has been rebuilt from `43c40de`; the
-  sidebar shows the short Git version.
+- GitHub `main` and CN staging source include the latest docs-only handoff
+  cleanup after `43c40de`.
+- CN staging frontend `apps/web/dist` was last rebuilt from `43c40de`
+  (`Show git version in app sidebar`); the visible sidebar version remains
+  `43c40de` until the next frontend build.
 - CN production has the China geocoding hardening release `2c3f841`
   (`Harden China geocoding city constraints`) and backend health was verified
   after restart.

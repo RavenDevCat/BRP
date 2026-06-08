@@ -400,6 +400,7 @@ For React deployments, also check direct navigation to:
 - `/jobs`
 - `/distance`
 - `/fleet`
+- sidebar version marker, when frontend assets changed
 
 ## Multi-Server Note
 

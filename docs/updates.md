@@ -4,6 +4,44 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-08
+
+### China Geocoding Hardened For OSRM Cities
+
+- China geocoding now normalizes the OSRM-covered China cities before calling
+  AMap: Shanghai, Beijing, Suzhou, and Xi'an.
+- AMap city constraints use city adcodes instead of relying on English city
+  names, reducing nationwide false matches for ambiguous road names.
+- Accepted AMap results are checked against city adcode prefixes, city aliases,
+  and broad city bounding boxes before being cached or used.
+- Polluted CN shared geocode cache entries from earlier false matches were
+  removed after backup.
+- Existing completed jobs are immutable snapshots. Rerun affected jobs to
+  refresh maps and route results under the corrected geocoding rules.
+
+### Sidebar Version Marker
+
+- The React sidebar can show the current frontend build version as a short Git
+  hash.
+- This helps operators confirm which code revision a user is seeing when
+  staging, production, or KR appear out of sync.
+- The marker is build-time metadata; frontend assets must be rebuilt from the
+  intended Git revision for the displayed version to be meaningful.
+
+### Side Tool History Discoverability
+
+- Fleet Planner and Distance & Cost history rails now make the collapsed
+  history affordance clearer when users enter those pages.
+- Existing side-tool history files remain compatible.
+
+### Stale React Asset Repair
+
+- A deployment mismatch was corrected where server checkouts were current but
+  public React `dist` assets were still built from older frontend code.
+- CN staging is now the canonical React build host for release artifacts.
+- Future frontend releases should verify marker strings or the visible version
+  in the built `apps/web/dist` before copying assets to production targets.
+
 ## 2026-06-04
 
 ### Distance & Cost Histories

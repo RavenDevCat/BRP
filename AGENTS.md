@@ -3,16 +3,22 @@
 This repository is BRP / Bus Route Planner. Read this file first in every new
 Codex session.
 
+Default working model: CN staging is the development and test checkout. The
+Windows local machine is only a communication/control surface; do not use a
+separate local project checkout for BRP development.
+
 ## First Reads
 
 1. Read `docs/session-handoff.md` for the concise current project context.
 2. Read `docs/development-release-workflow.md` before running local services or deploying.
 3. Read `docs/deployment-overview.md` before fresh-server or environment setup.
 4. Read `docs/updates.md` before deciding whether a user-facing change needs a release note.
-5. If present, read ignored local file `docs/private/ops-inventory.local.md`
-   for private server addresses and environment-specific handoff facts.
-6. If that local private inventory is missing, restore it from the approved
-   private backup outside Git before changing server access or tunnel settings.
+5. If present in the active server checkout, read ignored private file
+   `docs/private/ops-inventory.local.md` for private server addresses and
+   environment-specific handoff facts.
+6. If that private inventory is missing, restore it from the approved private
+   backup outside Git before changing server access or tunnel settings. Do
+   not create a separate Windows project checkout just to host private docs.
 
 ## Server Names
 
@@ -75,8 +81,10 @@ examples, ops scripts, Cloudflare examples, or handoff notes:
 
 ## KR Deploy Pattern
 
-- If frontend assets changed, build React locally from `apps/web` with `npm run build`.
-- KR currently does not have Node/npm in PATH, so copy local `apps/web/dist` to KR after KR pulls the code when frontend assets changed.
+- If frontend assets changed, build React from the CN staging checkout and
+  verify the resulting `apps/web/dist` there.
+- KR currently does not have Node/npm in PATH, so copy the CN-staging-built
+  `apps/web/dist` to KR after KR pulls the code when frontend assets changed.
 - Restart the KR scheduled tasks:
   - `BRP-Backend-Preview`
   - `BRP-Nginx-Public`
@@ -106,12 +114,16 @@ examples, ops scripts, Cloudflare examples, or handoff notes:
 - If a server checkout cannot fast-forward after a public-history rewrite,
   confirm there are no tracked local changes, create a local backup branch, then
   realign the checkout to `origin/main`. Preserve untracked env backup files.
-- If CN does not have Node/npm available, build React from a machine that does
-  and copy `apps/web/dist` into the CN checkout. After copying, make the `dist`
-  tree readable/executable by Nginx and reload `nginx.service`.
+- CN staging is the default React build host. For frontend changes, commit the
+  intended revision first, then run `npm run lint` and `npm run build` in
+  `apps/web` on CN staging so the sidebar version marker matches the release.
+- Copy or sync that verified `apps/web/dist` artifact to production targets
+  when promoting frontend changes. After copying, ensure the `dist` tree is
+  readable/executable by Nginx and reload `nginx.service` where required.
 - Verify each touched CN environment with backend health, frontend origin
   behavior (`401` without Access header and `200` with one), same-origin
-  `/api/health`, current Git revision, and runtime data counts where relevant.
+  `/api/health`, current Git revision, visible sidebar version when frontend
+  assets changed, and runtime data counts where relevant.
 
 ## Product Naming
 

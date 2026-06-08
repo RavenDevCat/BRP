@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, UsersRound, X } from "lucide-react";
+import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -626,7 +626,7 @@ export function FleetPlannerPage() {
                       description="Check vehicle choices from the uploaded workbook."
                       disabled={!fileBase64 || previewMutation.isPending}
                       pending={previewMutation.isPending}
-                      icon={<UsersRound className="h-4 w-4" />}
+                      icon={<Bus className="h-4 w-4" />}
                       onClick={() => previewMutation.mutate(undefined)}
                     />
                     <WorkflowAction
@@ -1320,27 +1320,32 @@ function FleetPlannerHistoryPanel({
   if (collapsed) {
     return (
       <Card className={cn("overflow-hidden", className)}>
-        <div className="flex items-center justify-between gap-2 p-2 lg:min-h-[280px] lg:flex-col lg:justify-start">
+        <div className="flex min-h-[72px] items-stretch gap-2 p-2 lg:min-h-[320px] lg:flex-col">
           <button
             type="button"
-            className={buttonClassName("ghost")}
+            className="group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30 lg:flex-col lg:justify-start lg:px-2 lg:py-3"
             aria-label="Open Fleet Planner history"
             onClick={() => onCollapsedChange(false)}
           >
-            <History className="h-4 w-4 text-primary" aria-hidden="true" />
+            <span className="flex min-w-0 items-center gap-2 lg:flex-col">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface shadow-sm ring-1 ring-border transition group-hover:ring-primary/40">
+                <History className="h-4 w-4 text-primary" aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-foreground lg:[text-orientation:mixed] lg:[writing-mode:vertical-rl]">
+                  History
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">Open saved runs</span>
+              </span>
+            </span>
+            <span className="flex shrink-0 items-center gap-2 lg:mt-3 lg:flex-col">
+              <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
+              <ArrowRight className="h-4 w-4 text-primary transition group-hover:translate-x-0.5 lg:rotate-90 lg:group-hover:translate-x-0 lg:group-hover:translate-y-0.5" aria-hidden="true" />
+            </span>
           </button>
-          <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
-          <div className="flex items-center gap-1 lg:mt-auto lg:flex-col">
-            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
+          <div className="flex items-center lg:mt-auto">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" title="Refresh history" onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={buttonClassName("ghost")}
-              aria-label="Expand Fleet Planner history"
-              onClick={() => onCollapsedChange(false)}
-            >
-              <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </button>
           </div>
         </div>

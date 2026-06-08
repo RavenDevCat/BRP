@@ -189,19 +189,73 @@ def _canonical_country(country: str) -> str:
     return country.strip().upper()
 
 
+def is_china_country(country: str) -> bool:
+    return country.strip().lower() in {"china", "中国", "中华人民共和国"}
+
+
+CHINA_CITY_CONFIGS: dict[str, dict[str, Any]] = {
+    "shanghai": {
+        "canonical": "SHANGHAI",
+        "amap_city": "310000",
+        "aliases": ["shanghai", "shanghai city", "上海", "上海市"],
+        "adcode_prefixes": ["31"],
+        "bbox": (31.90, 122.25, 30.65, 120.85),
+    },
+    "beijing": {
+        "canonical": "BEIJING",
+        "amap_city": "110000",
+        "aliases": ["beijing", "beijing city", "北京", "北京市"],
+        "adcode_prefixes": ["11"],
+        "bbox": (41.10, 117.60, 39.40, 115.40),
+    },
+    "suzhou": {
+        "canonical": "SUZHOU",
+        "amap_city": "320500",
+        "aliases": ["suzhou", "suzhou city", "苏州", "苏州市"],
+        "adcode_prefixes": ["3205"],
+        "bbox": (32.15, 121.35, 30.75, 119.85),
+    },
+    "xian": {
+        "canonical": "XIAN",
+        "amap_city": "610100",
+        "aliases": ["xian", "xi'an", "xi an", "西安", "西安市"],
+        "adcode_prefixes": ["6101"],
+        "bbox": (34.85, 109.85, 33.40, 107.50),
+    },
+}
+
+
+CHINA_CITY_ALIAS_TO_KEY = {
+    alias.lower(): city_key
+    for city_key, config in CHINA_CITY_CONFIGS.items()
+    for alias in config["aliases"]
+}
+
+
+def _normalize_china_city_key(city: str) -> str:
+    normalized = " ".join(city.strip().lower().replace("’", "'").split())
+    return CHINA_CITY_ALIAS_TO_KEY.get(normalized, normalized)
+
+
+def _china_city_config(city: str) -> dict[str, Any] | None:
+    return CHINA_CITY_CONFIGS.get(_normalize_china_city_key(city))
+
+
+def _amap_city_param(country: str, city: str) -> str:
+    if not is_china_country(country):
+        return city.strip()
+    config = _china_city_config(city)
+    if config:
+        return str(config["amap_city"])
+    return city.strip()
+
+
 def _canonical_city(city: str) -> str:
     normalized = city.strip().lower()
+    china_config = _china_city_config(city)
+    if china_config:
+        return str(china_config["canonical"])
     aliases = {
-        "shanghai": "SHANGHAI",
-        "上海": "SHANGHAI",
-        "beijing": "BEIJING",
-        "北京": "BEIJING",
-        "suzhou": "SUZHOU",
-        "苏州": "SUZHOU",
-        "xian": "XIAN",
-        "xi'an": "XIAN",
-        "xi an": "XIAN",
-        "西安": "XIAN",
         "seoul": "SEOUL",
         "서울": "SEOUL",
         "seongnam": "SEOUL",
@@ -216,10 +270,10 @@ def _canonical_city(city: str) -> str:
 def _infer_location_from_address(address: str) -> tuple[str, str] | None:
     normalized = address.strip().lower()
     patterns = [
-        (("上海", "shanghai"), ("CHINA", "SHANGHAI")),
-        (("北京", "beijing"), ("CHINA", "BEIJING")),
-        (("苏州", "suzhou"), ("CHINA", "SUZHOU")),
-        (("西安", "xian", "xi'an", "xi an"), ("CHINA", "XIAN")),
+        (tuple(CHINA_CITY_CONFIGS["shanghai"]["aliases"]), ("CHINA", "SHANGHAI")),
+        (tuple(CHINA_CITY_CONFIGS["beijing"]["aliases"]), ("CHINA", "BEIJING")),
+        (tuple(CHINA_CITY_CONFIGS["suzhou"]["aliases"]), ("CHINA", "SUZHOU")),
+        (tuple(CHINA_CITY_CONFIGS["xian"]["aliases"]), ("CHINA", "XIAN")),
         (("서울", "seoul"), ("SOUTH KOREA", "SEOUL")),
         (("성남", "seongnam"), ("SOUTH KOREA", "SEOUL")),
     ]
@@ -398,7 +452,54 @@ def geocode_cache_key(country: str, city: str, address: str) -> str:
     return f"{country.strip()}|{city.strip()}|{address.strip()}"
 
 
+def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
+    config = _china_city_config(city)
+    if config is None:
+        return True
+    north, east, south, west = config["bbox"]
+    return south <= lat <= north and west <= lng <= east
+
+
+def is_plausible_china_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+    adcode: str = "",
+) -> bool:
+    if not is_china_country(country):
+        return True
+    config = _china_city_config(city)
+    if config is None:
+        return True
+
+    adcode_text = str(adcode).strip()
+    if adcode_text and any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"]):
+        return True
+
+    address_text = formatted_address.strip().lower()
+    if any(alias.lower() in address_text for alias in config["aliases"]):
+        return True
+
+    return _is_within_china_city_bbox(city, lat, lng)
+
+
+def is_plausible_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+    adcode: str = "",
+) -> bool:
+    if is_china_country(country):
+        return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
+    return True
+
+
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
+    amap_city = _amap_city_param(country, city)
     queries = [address.strip()]
     if city.strip():
         queries.append(f"{city.strip()} {address.strip()}")
@@ -411,8 +512,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
     for query in queries:
         try:
             params = {"address": query}
-            if city.strip():
-                params["city"] = city.strip()
+            if amap_city:
+                params["city"] = amap_city
             payload = amap_request_json("/v3/geocode/geo", params, AMAP_GEOCODE_LIMITER)
             geocodes = payload.get("geocodes") or []
             if geocodes:
@@ -420,6 +521,13 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 lng_str, lat_str = str(first["location"]).split(",")
                 lat = float(lat_str)
                 lng = float(lng_str)
+                formatted_address = str(first.get("formatted_address") or address.strip()).strip()
+                adcode = str(first.get("adcode", "") or "").strip()
+                if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+                    last_error = RuntimeError(
+                        f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
+                    )
+                    continue
                 plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
                 return {
                     "provider": "amap",
@@ -430,7 +538,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                     "lng": lng,
                     "plot_lat": plot_lat,
                     "plot_lng": plot_lng,
-                    "formatted_address": first.get("formatted_address") or address.strip(),
+                    "formatted_address": formatted_address,
+                    "adcode": adcode,
                 }
         except Exception as exc:
             last_error = exc
@@ -440,8 +549,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             "/v3/place/text",
             {
                 "keywords": address.strip(),
-                "city": city.strip(),
-                "citylimit": "true" if city.strip() else "false",
+                "city": amap_city,
+                "citylimit": "true" if amap_city else "false",
                 "offset": 10,
                 "page": 1,
             },
@@ -453,6 +562,10 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             lng_str, lat_str = str(first["location"]).split(",")
             lat = float(lat_str)
             lng = float(lng_str)
+            formatted_address = str(first.get("address") or address.strip()).strip()
+            adcode = str(first.get("adcode", "") or "").strip()
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+                raise RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
             plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
             return {
                 "provider": "amap",
@@ -463,7 +576,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 "lng": lng,
                 "plot_lat": plot_lat,
                 "plot_lng": plot_lng,
-                "formatted_address": first.get("address") or address.strip(),
+                "formatted_address": formatted_address,
+                "adcode": adcode,
             }
     except Exception as exc:
         last_error = exc
@@ -484,9 +598,25 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         passenger_count = int(item.get("passenger_count", 0 if index == 0 else 1))
         cache_key = geocode_cache_key(country, city, address)
         cached = GEOCODE_CACHE.get(cache_key)
+        point = None
         if cached:
-            point = dict(cached)
-        else:
+            try:
+                cached_lat = float(cached.get("lat", 0.0) or 0.0)
+                cached_lng = float(cached.get("lng", 0.0) or 0.0)
+                cached_formatted_address = str(cached.get("formatted_address", "") or address).strip()
+                cached_adcode = str(cached.get("adcode", "") or "").strip()
+                if is_plausible_geocode_result(
+                    country,
+                    city,
+                    cached_lat,
+                    cached_lng,
+                    cached_formatted_address,
+                    cached_adcode,
+                ):
+                    point = dict(cached)
+            except Exception:
+                point = None
+        if point is None:
             try:
                 point = amap_geocode_query(country, city, address)
                 GEOCODE_CACHE[cache_key] = point

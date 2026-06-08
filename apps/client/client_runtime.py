@@ -213,6 +213,67 @@ def is_korea_country(country: str) -> bool:
     }
 
 
+def is_china_country(country: str) -> bool:
+    return country.strip().lower() in {"china", "中国", "中华人民共和国"}
+
+
+CHINA_CITY_CONFIGS: dict[str, dict[str, Any]] = {
+    "shanghai": {
+        "canonical": "Shanghai",
+        "amap_city": "310000",
+        "aliases": ["shanghai", "shanghai city", "上海", "上海市"],
+        "adcode_prefixes": ["31"],
+        "bbox": (31.90, 122.25, 30.65, 120.85),
+    },
+    "beijing": {
+        "canonical": "Beijing",
+        "amap_city": "110000",
+        "aliases": ["beijing", "beijing city", "北京", "北京市"],
+        "adcode_prefixes": ["11"],
+        "bbox": (41.10, 117.60, 39.40, 115.40),
+    },
+    "suzhou": {
+        "canonical": "Suzhou",
+        "amap_city": "320500",
+        "aliases": ["suzhou", "suzhou city", "苏州", "苏州市"],
+        "adcode_prefixes": ["3205"],
+        "bbox": (32.15, 121.35, 30.75, 119.85),
+    },
+    "xian": {
+        "canonical": "Xian",
+        "amap_city": "610100",
+        "aliases": ["xian", "xi'an", "xi an", "西安", "西安市"],
+        "adcode_prefixes": ["6101"],
+        "bbox": (34.85, 109.85, 33.40, 107.50),
+    },
+}
+
+
+CHINA_CITY_ALIAS_TO_KEY = {
+    alias.lower(): city_key
+    for city_key, config in CHINA_CITY_CONFIGS.items()
+    for alias in config["aliases"]
+}
+
+
+def _normalize_china_city_key(city: str) -> str:
+    normalized = " ".join(city.strip().lower().replace("’", "'").split())
+    return CHINA_CITY_ALIAS_TO_KEY.get(normalized, normalized)
+
+
+def _china_city_config(city: str) -> dict[str, Any] | None:
+    return CHINA_CITY_CONFIGS.get(_normalize_china_city_key(city))
+
+
+def _amap_city_param(country: str, city: str) -> str:
+    if not is_china_country(country):
+        return city.strip()
+    config = _china_city_config(city)
+    if config:
+        return str(config["amap_city"])
+    return city.strip()
+
+
 def _metro_query_cities(country: str, city: str) -> list[str]:
     raw_city = city.strip()
     if not raw_city:
@@ -326,6 +387,54 @@ def is_plausible_korea_geocode_result(
     if any(alias in address_text for alias in city_aliases):
         return True
     return _is_within_korea_city_bbox(normalized_city, lat, lng)
+
+
+def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
+    config = _china_city_config(city)
+    if config is None:
+        return True
+    north, east, south, west = config["bbox"]
+    return south <= lat <= north and west <= lng <= east
+
+
+def is_plausible_china_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+    adcode: str = "",
+) -> bool:
+    if not is_china_country(country):
+        return True
+    config = _china_city_config(city)
+    if config is None:
+        return True
+
+    adcode_text = str(adcode).strip()
+    if adcode_text and any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"]):
+        return True
+
+    address_text = formatted_address.strip().lower()
+    if any(alias.lower() in address_text for alias in config["aliases"]):
+        return True
+
+    return _is_within_china_city_bbox(city, lat, lng)
+
+
+def is_plausible_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+    adcode: str = "",
+) -> bool:
+    if is_korea_country(country):
+        return is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address)
+    if is_china_country(country):
+        return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
+    return True
 
 
 def haversine_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -469,19 +578,11 @@ def canonical_cache_city(country: str, city: str) -> str:
             return "Seongnam"
         if city_key == "daejeon":
             return "Daejeon"
-    china_aliases = {
-        "shanghai": "Shanghai",
-        "上海": "Shanghai",
-        "beijing": "Beijing",
-        "北京": "Beijing",
-        "suzhou": "Suzhou",
-        "苏州": "Suzhou",
-        "xian": "Xian",
-        "xi'an": "Xian",
-        "xi an": "Xian",
-        "西安": "Xian",
-    }
-    return china_aliases.get(normalized.strip().lower(), normalized)
+    if is_china_country(country):
+        config = _china_city_config(normalized)
+        if config:
+            return str(config["canonical"])
+    return normalized
 
 
 def canonical_cache_address(address: str) -> str:
@@ -577,7 +678,8 @@ def resolve_geocoded_point(
             cached_lat = float(cached.get("lat", 0.0) or 0.0)
             cached_lng = float(cached.get("lng", 0.0) or 0.0)
             cached_formatted_address = str(cached.get("formatted_address", "") or address).strip()
-            if is_plausible_korea_geocode_result(country, city, cached_lat, cached_lng, cached_formatted_address):
+            cached_adcode = str(cached.get("adcode", "") or "").strip()
+            if is_plausible_geocode_result(country, city, cached_lat, cached_lng, cached_formatted_address, cached_adcode):
                 if matched_cache_key and matched_cache_key != cache_key:
                     GEOCODE_CACHE[cache_key] = dict(cached)
                     return dict(cached), None, True
@@ -605,6 +707,7 @@ def resolve_geocoded_point(
 
 
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
+    amap_city = _amap_city_param(country, city)
     queries = [address.strip()]
     if city.strip():
         queries.append(f"{city.strip()} {address.strip()}")
@@ -617,8 +720,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
     for query in queries:
         try:
             params = {"address": query}
-            if city.strip():
-                params["city"] = city.strip()
+            if amap_city:
+                params["city"] = amap_city
             payload = amap_request_json("/v3/geocode/geo", params, AMAP_GEOCODE_LIMITER)
             geocodes = payload.get("geocodes") or []
             if geocodes:
@@ -626,6 +729,13 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 lng_str, lat_str = str(first["location"]).split(",")
                 lat = float(lat_str)
                 lng = float(lng_str)
+                formatted_address = str(first.get("formatted_address") or address.strip()).strip()
+                adcode = str(first.get("adcode", "") or "").strip()
+                if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+                    last_error = RuntimeError(
+                        f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
+                    )
+                    continue
                 plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
                 return {
                     "provider": "amap",
@@ -636,7 +746,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                     "lng": lng,
                     "plot_lat": plot_lat,
                     "plot_lng": plot_lng,
-                    "formatted_address": first.get("formatted_address") or address.strip(),
+                    "formatted_address": formatted_address,
+                    "adcode": adcode,
                 }
         except Exception as exc:
             last_error = exc
@@ -646,8 +757,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             "/v3/place/text",
             {
                 "keywords": address.strip(),
-                "city": city.strip(),
-                "citylimit": "true" if city.strip() else "false",
+                "city": amap_city,
+                "citylimit": "true" if amap_city else "false",
                 "offset": 10,
                 "page": 1,
             },
@@ -659,6 +770,10 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             lng_str, lat_str = str(first["location"]).split(",")
             lat = float(lat_str)
             lng = float(lng_str)
+            formatted_address = str(first.get("address") or address.strip()).strip()
+            adcode = str(first.get("adcode", "") or "").strip()
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+                raise RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
             plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
             return {
                 "provider": "amap",
@@ -669,7 +784,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 "lng": lng,
                 "plot_lat": plot_lat,
                 "plot_lng": plot_lng,
-                "formatted_address": first.get("address") or address.strip(),
+                "formatted_address": formatted_address,
+                "adcode": adcode,
             }
     except Exception as exc:
         last_error = exc
@@ -702,7 +818,7 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
                 or first.get("address_name")
                 or address.strip()
             )
-            if not is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
             return {
                 "provider": "kakao",
@@ -737,7 +853,7 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
                 or first.get("place_name")
                 or address.strip()
             )
-            if not is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
             return {
                 "provider": "kakao",
@@ -780,7 +896,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
             lat = float(location["lat"])
             lng = float(location["lng"])
             formatted_address = str(first.get("formatted_address") or address.strip()).strip()
-            if not is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
             return {
                 "provider": "google",

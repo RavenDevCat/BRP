@@ -112,6 +112,30 @@ BRP jobs may run in parallel. Submitting multiple jobs starts separate backend
 worker processes, so external API protection must be process-wide rather than
 only in-memory.
 
+### Geocoding
+
+China Route Audit geocoding uses AMap for current supported China deployments.
+For the China cities covered by the managed OSRM stack, the application keeps a
+shared city configuration with:
+
+- canonical cache city name
+- AMap city adcode
+- accepted city aliases
+- accepted adcode prefixes
+- broad plausibility bounding box
+
+Current China city coverage:
+
+- Shanghai: AMap city `310000`
+- Beijing: AMap city `110000`
+- Suzhou: AMap city `320500`
+- Xi'an: AMap city `610100`
+
+AMap results for those cities should not be accepted only because they are the
+first provider result. They must pass adcode, city-alias, or bounding-box
+plausibility before being cached or used in route planning. This is especially
+important for ambiguous road names that exist in multiple China cities.
+
 ### Provider QPS
 
 Kakao, Google, AMap, and DeepSeek outbound calls use a cross-process provider

@@ -1,16 +1,16 @@
 # Development And Release Workflow
 
-This is the day-to-day workflow for developing BRP across local checkouts, the
-domestic CN server, and the South Korea/KR production server. Local checkouts
-are code-record and test workspaces only. CN owns the development, staging,
-domestic production, OSRM, and Cloudflare Tunnel chain. KR is a separate final
-production landing target.
+This is the day-to-day workflow for developing BRP from the Windows control
+machine against the domestic CN server and the South Korea/KR production
+server. The Windows local machine is only a communication/control surface.
+CN staging owns active development and testing. CN production and KR are
+release targets only.
 
 ## Current Roles
 
-- Local checkouts: code-record and test workspaces. Use them to validate the
-  staging host recorded in the private inventory in a browser and keep Git
-  visibility.
+- Windows local machine: Codex communication, private notes, browser checks,
+  and operator control commands only. Do not keep or recreate a BRP project
+  checkout there for normal development.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
   Cloudflare Tunnel. Development and test changes happen only in CN staging.
   CN production is a separate checkout and service pair; it should change only
@@ -29,8 +29,8 @@ that as CN staging work.
 
 When taking over work or catching up on progress, inspect CN staging first:
 current checkout revision, tracked/untracked status, service health, and recent
-runtime behavior. Treat local checkouts and GitHub history as supporting records
-after the staging audit, not as the primary project state.
+runtime behavior. Treat GitHub history and any local notes as supporting
+records after the staging audit, not as the primary project state.
 
 ## Environment Boundary Contract
 
@@ -66,11 +66,14 @@ auth links, not the job ownership model. Admin rights remain controlled by the
 server-local `BRP_ADMIN_EMAILS` value unless a future release deliberately moves
 admin authorization to group claims.
 
-Local checkouts should not run OSRM Docker containers. Lightweight local checks
-can reach OSRM through the diagnostic loopback mapping recorded in private
-inventory.
-The React Google geocode usage counter is shown only when `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea deployment only.
-That counter is persistent runtime state. Preserve the current `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset it to an old verified value.
+The Windows local control machine should not run OSRM Docker containers or BRP
+app services for ordinary development. Rare diagnostics can reach OSRM through
+the loopback mapping recorded in private inventory.
+The React Google geocode usage counter is shown only when
+`BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea
+deployment only. That counter is persistent runtime state. Preserve the current
+`apps/client/cache/google_geocode_usage.json` file during deploys; do not reset
+it to an old verified value.
 External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, and DeepSeek calls use cross-process limiter files under
 `state/api_rate_limits` by default, or `BRP_API_RATE_LIMIT_DIR` when set.
@@ -98,20 +101,19 @@ after `BRP_JOB_SLOT_ATTACH_STALE_SECONDS`.
 
 ## Connection Workspaces
 
-Local checkouts should not be treated as the main runtime source. Use them to
-keep a code record, inspect Git, and test the staging site in a browser. For
-normal BRP feature work, work in the CN staging checkout:
+Do not treat the Windows local machine as a project runtime source. For normal
+BRP feature work, edit and test in the CN staging checkout:
 
 ```text
 staging app: /opt/brp/staging/app
 prod app:    /opt/brp/prod/app  # release promotion only
 ```
 
-Local service startup remains useful only as a fallback or diagnostic path.
-Do not start local services for ordinary development alignment; validate through
-the CN staging host unless the user explicitly asks for a local diagnostic run.
-When a local diagnostic run is needed, OSRM endpoints should be provided as
-local loopback ports:
+Local service startup remains only as a fallback diagnostic path and should not
+be used for ordinary development alignment. Validate through the CN staging
+host unless the user explicitly asks for a local diagnostic run. When a local
+diagnostic run is needed, OSRM endpoints should be provided as local loopback
+ports:
 
 ```text
 127.0.0.1:5002 -> Shanghai OSRM
@@ -121,7 +123,7 @@ local loopback ports:
 127.0.0.1:5006 -> South Korea OSRM
 ```
 
-Start local services:
+For rare diagnostic local runs only, start local services:
 
 ```bash
 ./ops/scripts/run_backend.sh
@@ -138,26 +140,23 @@ private inventory first, then use the checked-in service helpers:
 .\ops\scripts\run_web.ps1
 ```
 
-The PowerShell helpers load `ops/env/local.env` if it exists. For local checks,
-keep `BACKEND_PYTHON` and `CLIENT_PYTHON` pointed at the local Python
-environment, and keep `BRP_DEV_USER_EMAIL` set to a development email that
-should own or administer local jobs.
+The PowerShell helpers load `ops/env/local.env` if it exists. They are for
+rare diagnostic local checks only, not the default development path.
 
 Windows shell habit:
 
-- Use Git Bash at `C:\Program Files\Git\bin\bash.exe` for complex local `ssh`,
-  `scp`, and Git command composition, especially when sending shell snippets to
-  Linux hosts.
-- Use PowerShell for Windows-specific local helper commands, such as npm/Python
-  invocations that rely on Windows paths.
+- Use Git Bash at `C:\Program Files\Git\bin\bash.exe` first for external
+  `ssh`, `scp`, and Git command composition, especially when sending shell
+  snippets to Linux hosts.
+- Use PowerShell only for Windows-specific local helper commands.
 - For remote Windows service work, avoid deeply nested one-line quoting. Prefer
   encoded PowerShell or an uploaded script, then run that script remotely.
 
-If historical jobs were generated in another environment, do not rely on their persisted absolute
-map-output paths. The client rerenders historical maps into the current checkout under
-`apps/client/outputs/<job_id>/`.
+If historical jobs were generated in another environment, do not rely on their
+persisted absolute map-output paths. The client rerenders historical maps into
+the current checkout under `apps/client/outputs/<job_id>/`.
 
-Local checks:
+Rare diagnostic local checks:
 
 ```bash
 curl -s http://127.0.0.1:8001/health
@@ -217,7 +216,7 @@ sudo SITE_NAME=brp-staging \
   ops/scripts/install_nginx_react_site.sh
 ```
 
-Before publishing:
+Before publishing source changes:
 
 ```bash
 git status
@@ -225,6 +224,19 @@ git add ...
 git commit -m "..."
 git push origin main
 ```
+
+For frontend changes, build React from the CN staging checkout after the commit
+that should be displayed to users:
+
+```bash
+cd "$BRP_STAGING_APP_ROOT/apps/web"
+npm run lint
+npm run build
+```
+
+The React build injects the short Git hash into the sidebar version marker.
+Verify the marker or the built bundle before copying `apps/web/dist` to any
+production target.
 
 ## Deploy To Staging
 
@@ -292,6 +304,7 @@ Run a staging smoke test before production:
 - job history reloads
 - map output opens
 - AI report works when explicitly triggered
+- sidebar version marker matches the intended Git revision when frontend assets changed
 
 ## React Static Host And Cutover
 
@@ -310,7 +323,7 @@ ssh "$CN_SSH_USER@$CN_SSH_HOST"
 cd "$BRP_STAGING_APP_ROOT"
 git pull --ff-only
 cd apps/web
-npm install
+npm run lint
 npm run build
 ```
 
@@ -346,6 +359,7 @@ Browser QA before production promotion:
 - Route Audit dashboard, new audit submit, Job History, job detail, maps, and AI Audit
 - Distance & Cost workbook preview, reference distance, and route cost
 - Fleet Planner demand geocode, clustering, route preview, global plan, workbook download, and submit generated plan as job
+- visible sidebar version marker after frontend release builds
 
 If preview passes, schedule a separate production promotion. Do not switch or
 repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move only
@@ -353,8 +367,8 @@ during an explicit release window.
 
 KR is already in the post-cutover shape. Its public React service uses local
 Nginx on the KR server's `8501` origin, and its preview uses local `4173`.
-Because KR does not currently have Node/npm in PATH, build React locally and
-copy `apps/web/dist` to KR when frontend assets change.
+Because KR does not currently have Node/npm in PATH, reuse the CN-staging-built
+`apps/web/dist` artifact when frontend assets change.
 
 ## Deploy To KR
 
@@ -368,11 +382,12 @@ High-level KR deploy flow:
 
 1. Validate the intended revision on CN staging.
 2. Commit and push the intended revision.
-3. Build React from a local/connection workspace with `npm run build` in
-   `apps/web` when frontend assets changed and KR cannot build it itself.
+3. Build React from CN staging with `npm run build` in `apps/web` when
+   frontend assets changed.
 4. Pull the intended revision in the KR active checkout recorded in the private
    inventory.
-5. Copy the new `apps/web/dist` to KR when frontend assets changed.
+5. Copy the same CN-staging-built `apps/web/dist` artifact to KR when frontend
+   assets changed.
 6. Restart `BRP-Backend-Preview` and `BRP-Nginx-Public`. Restart
    `BRP-React-Preview` only when the private preview needs the new build.
    `BRP-React-Public` is intentionally disabled after the public Nginx cutover.
@@ -381,7 +396,7 @@ High-level KR deploy flow:
    wrapper through `cmd.exe /c`, then start the task again. Do not rely on a
    backend process launched directly from an SSH command as the persistent
    production process.
-8. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, job count, cache counts, and Google usage continuity.
+8. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, visible sidebar version when frontend assets changed, job count, cache counts, and Google usage continuity.
    The public Nginx origin should return `401` without an Access user header
    and `200` with one.
 

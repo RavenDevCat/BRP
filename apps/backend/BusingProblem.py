@@ -475,10 +475,17 @@ def is_plausible_china_geocode_result(
         return True
 
     adcode_text = str(adcode).strip()
-    if adcode_text and any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"]):
-        return True
+    if adcode_text:
+        return any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"])
 
     address_text = formatted_address.strip().lower()
+    target_city_key = _normalize_china_city_key(city)
+    for city_key, candidate_config in CHINA_CITY_CONFIGS.items():
+        if city_key == target_city_key:
+            continue
+        if any(alias.lower() in address_text for alias in candidate_config["aliases"]):
+            return False
+
     if any(alias.lower() in address_text for alias in config["aliases"]):
         return True
 
@@ -516,13 +523,12 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 params["city"] = amap_city
             payload = amap_request_json("/v3/geocode/geo", params, AMAP_GEOCODE_LIMITER)
             geocodes = payload.get("geocodes") or []
-            if geocodes:
-                first = geocodes[0]
-                lng_str, lat_str = str(first["location"]).split(",")
+            for candidate in geocodes:
+                lng_str, lat_str = str(candidate["location"]).split(",")
                 lat = float(lat_str)
                 lng = float(lng_str)
-                formatted_address = str(first.get("formatted_address") or address.strip()).strip()
-                adcode = str(first.get("adcode", "") or "").strip()
+                formatted_address = str(candidate.get("formatted_address") or address.strip()).strip()
+                adcode = str(candidate.get("adcode", "") or "").strip()
                 if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
                     last_error = RuntimeError(
                         f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
@@ -557,15 +563,21 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             AMAP_PLACES_LIMITER,
         )
         pois = payload.get("pois") or []
-        if pois:
-            first = pois[0]
-            lng_str, lat_str = str(first["location"]).split(",")
+        for candidate in pois:
+            lng_str, lat_str = str(candidate["location"]).split(",")
             lat = float(lat_str)
             lng = float(lng_str)
-            formatted_address = str(first.get("address") or address.strip()).strip()
-            adcode = str(first.get("adcode", "") or "").strip()
+            formatted_parts = [
+                str(candidate.get("pname", "") or "").strip(),
+                str(candidate.get("cityname", "") or "").strip(),
+                str(candidate.get("adname", "") or "").strip(),
+                str(candidate.get("address", "") or candidate.get("name", "") or address.strip()).strip(),
+            ]
+            formatted_address = "".join(part for index, part in enumerate(formatted_parts) if part and part not in formatted_parts[:index])
+            adcode = str(candidate.get("adcode", "") or "").strip()
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
-                raise RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
+                last_error = RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
+                continue
             plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
             return {
                 "provider": "amap",

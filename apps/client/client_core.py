@@ -719,6 +719,8 @@ def build_excluded_stops_from_warnings(warnings: list[dict[str, str]]) -> list[d
     excluded: list[dict[str, str]] = []
     seen: set[str] = set()
     for item in warnings:
+        if str(item.get("accepted", "")).strip().lower() == "true":
+            continue
         address = str(item.get("address", "")).strip()
         if not address or address in seen:
             continue

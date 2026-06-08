@@ -475,6 +475,10 @@ def geocode_demand_workbook(demand_workbook: DemandWorkbook) -> dict[str, Any]:
         demand_rows.append(row)
         cache_changed = cache_changed or changed
 
+    distance_review_warnings: list[dict[str, str]] = []
+    if school_row.get("status") == "ok":
+        distance_review_warnings = runtime.apply_school_distance_review(school_row, demand_rows)
+
     if cache_changed:
         runtime.save_json_cache(runtime.GEOCODE_CACHE_PATH, runtime.GEOCODE_CACHE)
 
@@ -489,6 +493,7 @@ def geocode_demand_workbook(demand_workbook: DemandWorkbook) -> dict[str, Any]:
         "failed_students": sum(int(row.get("student_count", 0) or 0) for row in failed_rows),
         "cache_hits": sum(1 for row in [school_row, *demand_rows] if bool(row.get("cache_hit"))),
         "cache_changed": cache_changed,
+        "distance_review_rows": len(distance_review_warnings),
     }
     return {
         "school": school_row,

@@ -43,6 +43,7 @@ SUBWAY_SEARCH_RADIUS_M = 1500
 MAX_SUBWAY_WALK_DISTANCE_M = 800
 ANNOTATION_ROUTE_DURATION_SECONDS = 60 * 60
 NEARBY_CLUSTER_RADIUS_M = 500
+GEOCODE_SCHOOL_DISTANCE_REVIEW_KM = float(os.environ.get("BRP_GEOCODE_SCHOOL_DISTANCE_REVIEW_KM", "55") or 0)
 
 
 class RateLimiter:
@@ -412,10 +413,17 @@ def is_plausible_china_geocode_result(
         return True
 
     adcode_text = str(adcode).strip()
-    if adcode_text and any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"]):
-        return True
+    if adcode_text:
+        return any(adcode_text.startswith(prefix) for prefix in config["adcode_prefixes"])
 
     address_text = formatted_address.strip().lower()
+    target_city_key = _normalize_china_city_key(city)
+    for city_key, candidate_config in CHINA_CITY_CONFIGS.items():
+        if city_key == target_city_key:
+            continue
+        if any(alias.lower() in address_text for alias in candidate_config["aliases"]):
+            return False
+
     if any(alias.lower() in address_text for alias in config["aliases"]):
         return True
 
@@ -437,6 +445,25 @@ def is_plausible_geocode_result(
     return True
 
 
+def annotate_geocode_point(
+    point: dict[str, Any],
+    *,
+    country: str,
+    city: str,
+    address: str,
+    requested_city_param: str = "",
+    validation_status: str = "ok",
+) -> dict[str, Any]:
+    enriched = dict(point)
+    enriched["requested_country"] = country.strip()
+    enriched["requested_city"] = city.strip()
+    enriched["requested_address"] = address.strip()
+    if requested_city_param:
+        enriched["requested_city_param"] = requested_city_param
+    enriched["validation_status"] = validation_status
+    return enriched
+
+
 def haversine_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     radius_km = 6371.0088
     dlat = math.radians(lat2 - lat1)
@@ -446,6 +473,81 @@ def haversine_distance_km(lat1: float, lng1: float, lat2: float, lng2: float) ->
         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlng / 2) ** 2
     )
     return 2 * radius_km * math.asin(math.sqrt(a))
+
+
+def _point_lat_lng(point: dict[str, Any]) -> tuple[float, float] | None:
+    try:
+        lat = float(point.get("lat", 0.0) or 0.0)
+        lng = float(point.get("lng", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not lat or not lng:
+        return None
+    return lat, lng
+
+
+def geocode_school_distance_km(school_point: dict[str, Any], point: dict[str, Any]) -> float | None:
+    school_coords = _point_lat_lng(school_point)
+    point_coords = _point_lat_lng(point)
+    if school_coords is None or point_coords is None:
+        return None
+    return haversine_distance_km(school_coords[0], school_coords[1], point_coords[0], point_coords[1])
+
+
+def build_school_distance_review_warning(
+    school_point: dict[str, Any],
+    point: dict[str, Any],
+    *,
+    threshold_km: float | None = None,
+) -> dict[str, str] | None:
+    threshold = GEOCODE_SCHOOL_DISTANCE_REVIEW_KM if threshold_km is None else threshold_km
+    if threshold <= 0:
+        return None
+    distance_km = geocode_school_distance_km(school_point, point)
+    if distance_km is None or distance_km <= threshold:
+        return None
+    distance_label = f"{distance_km:.1f}"
+    threshold_label = f"{threshold:.0f}"
+    return {
+        "country": str(point.get("country", point.get("requested_country", ""))).strip(),
+        "city": str(point.get("city", point.get("requested_city", ""))).strip(),
+        "address": str(point.get("display_address") or point.get("address") or point.get("requested_address", "")).strip(),
+        "source_excel_rows": str(point.get("source_excel_rows", "")).strip(),
+        "status": "needs_review",
+        "accepted": "true",
+        "distance_to_school_km": distance_label,
+        "warning": (
+            f"Resolved coordinate is {distance_label} km from the school, above the {threshold_label} km review "
+            "threshold. Check that the workbook city/province/country and the resolved address match the intended stop."
+        ),
+        "suggestion": (
+            "If the resolved city or province is wrong, correct the workbook city/address and rerun geocoding. "
+            "If the distance is expected, keep the result."
+        ),
+        "formatted_address": str(point.get("formatted_address", "")).strip(),
+        "provider": str(point.get("provider", "")).strip(),
+    }
+
+
+def apply_school_distance_review(
+    school_point: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    threshold_km: float | None = None,
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    for row in rows:
+        if str(row.get("status", "ok")).strip().lower() not in {"", "ok"}:
+            continue
+        warning = build_school_distance_review_warning(school_point, row, threshold_km=threshold_km)
+        if warning is None:
+            continue
+        row["geocode_status"] = "needs_review"
+        row["distance_to_school_km"] = warning["distance_to_school_km"]
+        existing_warning = str(row.get("warning", "")).strip()
+        row["warning"] = f"{existing_warning} {warning['warning']}".strip()
+        warnings.append(warning)
+    return warnings
 
 
 def out_of_china(lat: float, lng: float) -> bool:
@@ -666,6 +768,7 @@ def resolve_geocoded_point(
             matched_cache_key = lookup_key
             break
     provider_name = expected_geocode_provider(country, address)
+    cache_changed = False
     if cached:
         if is_failed_geocode_cache_entry(cached):
             attempted_provider = str(cached.get("attempted_provider", "")).strip().lower()
@@ -680,10 +783,26 @@ def resolve_geocoded_point(
             cached_formatted_address = str(cached.get("formatted_address", "") or address).strip()
             cached_adcode = str(cached.get("adcode", "") or "").strip()
             if is_plausible_geocode_result(country, city, cached_lat, cached_lng, cached_formatted_address, cached_adcode):
+                enriched_cached = annotate_geocode_point(
+                    dict(cached),
+                    country=country,
+                    city=city,
+                    address=address,
+                    validation_status=str(cached.get("validation_status", "") or "ok"),
+                )
                 if matched_cache_key and matched_cache_key != cache_key:
-                    GEOCODE_CACHE[cache_key] = dict(cached)
-                    return dict(cached), None, True
-                return dict(cached), None, False
+                    GEOCODE_CACHE[cache_key] = enriched_cached
+                    return dict(enriched_cached), None, True
+                if enriched_cached != cached:
+                    GEOCODE_CACHE[cache_key] = enriched_cached
+                    return dict(enriched_cached), None, True
+                return dict(enriched_cached), None, False
+            if matched_cache_key:
+                GEOCODE_CACHE.pop(matched_cache_key, None)
+                cache_changed = True
+            if matched_cache_key != cache_key:
+                GEOCODE_CACHE.pop(cache_key, None)
+                cache_changed = True
 
     try:
         if provider_name == "google":
@@ -724,31 +843,36 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 params["city"] = amap_city
             payload = amap_request_json("/v3/geocode/geo", params, AMAP_GEOCODE_LIMITER)
             geocodes = payload.get("geocodes") or []
-            if geocodes:
-                first = geocodes[0]
-                lng_str, lat_str = str(first["location"]).split(",")
+            for candidate in geocodes:
+                lng_str, lat_str = str(candidate["location"]).split(",")
                 lat = float(lat_str)
                 lng = float(lng_str)
-                formatted_address = str(first.get("formatted_address") or address.strip()).strip()
-                adcode = str(first.get("adcode", "") or "").strip()
+                formatted_address = str(candidate.get("formatted_address") or address.strip()).strip()
+                adcode = str(candidate.get("adcode", "") or "").strip()
                 if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
                     last_error = RuntimeError(
                         f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
                     )
                     continue
                 plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-                return {
-                    "provider": "amap",
-                    "address": address.strip(),
-                    "city": city.strip(),
-                    "country": country.strip(),
-                    "lat": lat,
-                    "lng": lng,
-                    "plot_lat": plot_lat,
-                    "plot_lng": plot_lng,
-                    "formatted_address": formatted_address,
-                    "adcode": adcode,
-                }
+                return annotate_geocode_point(
+                    {
+                        "provider": "amap",
+                        "address": address.strip(),
+                        "city": city.strip(),
+                        "country": country.strip(),
+                        "lat": lat,
+                        "lng": lng,
+                        "plot_lat": plot_lat,
+                        "plot_lng": plot_lng,
+                        "formatted_address": formatted_address,
+                        "adcode": adcode,
+                    },
+                    country=country,
+                    city=city,
+                    address=address,
+                    requested_city_param=amap_city,
+                )
         except Exception as exc:
             last_error = exc
 
@@ -765,28 +889,40 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             AMAP_PLACES_LIMITER,
         )
         pois = payload.get("pois") or []
-        if pois:
-            first = pois[0]
-            lng_str, lat_str = str(first["location"]).split(",")
+        for candidate in pois:
+            lng_str, lat_str = str(candidate["location"]).split(",")
             lat = float(lat_str)
             lng = float(lng_str)
-            formatted_address = str(first.get("address") or address.strip()).strip()
-            adcode = str(first.get("adcode", "") or "").strip()
+            formatted_parts = [
+                str(candidate.get("pname", "") or "").strip(),
+                str(candidate.get("cityname", "") or "").strip(),
+                str(candidate.get("adname", "") or "").strip(),
+                str(candidate.get("address", "") or candidate.get("name", "") or address.strip()).strip(),
+            ]
+            formatted_address = "".join(part for index, part in enumerate(formatted_parts) if part and part not in formatted_parts[:index])
+            adcode = str(candidate.get("adcode", "") or "").strip()
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
-                raise RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
+                last_error = RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
+                continue
             plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-            return {
-                "provider": "amap",
-                "address": address.strip(),
-                "city": city.strip(),
-                "country": country.strip(),
-                "lat": lat,
-                "lng": lng,
-                "plot_lat": plot_lat,
-                "plot_lng": plot_lng,
-                "formatted_address": formatted_address,
-                "adcode": adcode,
-            }
+            return annotate_geocode_point(
+                {
+                    "provider": "amap",
+                    "address": address.strip(),
+                    "city": city.strip(),
+                    "country": country.strip(),
+                    "lat": lat,
+                    "lng": lng,
+                    "plot_lat": plot_lat,
+                    "plot_lng": plot_lng,
+                    "formatted_address": formatted_address,
+                    "adcode": adcode,
+                },
+                country=country,
+                city=city,
+                address=address,
+                requested_city_param=amap_city,
+            )
     except Exception as exc:
         last_error = exc
 
@@ -820,17 +956,22 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
             )
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
-            return {
-                "provider": "kakao",
-                "address": address.strip(),
-                "city": city.strip(),
-                "country": country.strip(),
-                "lat": lat,
-                "lng": lng,
-                "plot_lat": lat,
-                "plot_lng": lng,
-                "formatted_address": formatted_address,
-            }
+            return annotate_geocode_point(
+                {
+                    "provider": "kakao",
+                    "address": address.strip(),
+                    "city": city.strip(),
+                    "country": country.strip(),
+                    "lat": lat,
+                    "lng": lng,
+                    "plot_lat": lat,
+                    "plot_lng": lng,
+                    "formatted_address": formatted_address,
+                },
+                country=country,
+                city=city,
+                address=address,
+            )
         except Exception as exc:
             last_error = exc
 
@@ -855,17 +996,22 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
             )
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
-            return {
-                "provider": "kakao",
-                "address": address.strip(),
-                "city": city.strip(),
-                "country": country.strip(),
-                "lat": lat,
-                "lng": lng,
-                "plot_lat": lat,
-                "plot_lng": lng,
-                "formatted_address": formatted_address,
-            }
+            return annotate_geocode_point(
+                {
+                    "provider": "kakao",
+                    "address": address.strip(),
+                    "city": city.strip(),
+                    "country": country.strip(),
+                    "lat": lat,
+                    "lng": lng,
+                    "plot_lat": lat,
+                    "plot_lng": lng,
+                    "formatted_address": formatted_address,
+                },
+                country=country,
+                city=city,
+                address=address,
+            )
         except Exception as exc:
             last_error = exc
 
@@ -898,17 +1044,22 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
             formatted_address = str(first.get("formatted_address") or address.strip()).strip()
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
                 continue
-            return {
-                "provider": "google",
-                "address": address.strip(),
-                "city": city.strip(),
-                "country": country.strip(),
-                "lat": lat,
-                "lng": lng,
-                "plot_lat": lat,
-                "plot_lng": lng,
-                "formatted_address": formatted_address,
-            }
+            return annotate_geocode_point(
+                {
+                    "provider": "google",
+                    "address": address.strip(),
+                    "city": city.strip(),
+                    "country": country.strip(),
+                    "lat": lat,
+                    "lng": lng,
+                    "plot_lat": lat,
+                    "plot_lng": lng,
+                    "formatted_address": formatted_address,
+                },
+                country=country,
+                city=city,
+                address=address,
+            )
         except Exception as exc:
             last_error = exc
 
@@ -974,8 +1125,12 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         point["passenger_count"] = passenger_count
         point["original_members"] = [address]
         point["display_address"] = address
+        if item.get("source_excel_row") not in (None, "", 0):
+            point["source_excel_rows"] = str(int(item.get("source_excel_row") or 0))
         point["is_depot"] = len(points) == 0
         points.append(point)
+    if points:
+        warnings.extend(apply_school_distance_review(points[0], points[1:]))
     if changed:
         save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
     if not points:

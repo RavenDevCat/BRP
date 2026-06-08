@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Gauge, History, LayoutDashboard, LogOut, RefreshCw, Ruler, ShieldCheck, UploadCloud, UsersRound } from "lucide-react";
+import { Bus, Gauge, History, LayoutDashboard, LogOut, RefreshCw, Ruler, ShieldCheck, UploadCloud } from "lucide-react";
 import { getAuthConfig, getCurrentUser, getGoogleGeocodeUsage, getHealth, type GoogleGeocodeUsage } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,7 +15,7 @@ const primaryNavItems = [
 ];
 
 const sideToolNavItems = [
-  { to: "/fleet", label: "Fleet Planner", icon: UsersRound },
+  { to: "/fleet", label: "Fleet Planner", icon: Bus },
   { to: "/distance", label: "Distance & Cost", icon: Ruler },
 ];
 
@@ -27,6 +27,7 @@ const mobileNavItems = [
 ];
 
 const productName = "BRP: Bus Route Planner";
+const appVersion = String(import.meta.env.VITE_APP_VERSION || "dev").trim();
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -65,6 +66,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
 
         <div className="space-y-3 border-t border-border p-4">
+          <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span className="font-medium">Version</span>
+            <span className="font-mono text-[11px] text-foreground/70">{appVersion}</span>
+          </div>
           <div className="flex items-center justify-between gap-3">
             <span className="text-xs font-medium text-muted-foreground">Backend</span>
             <Badge tone={healthQuery.data?.status === "ok" ? "success" : "warning"}>

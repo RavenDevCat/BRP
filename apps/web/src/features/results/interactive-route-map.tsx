@@ -234,6 +234,15 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
     }),
     [selectedRouteId, stopFeatures],
   );
+  const contextStopFeatures = useMemo<FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: selectedRouteId
+        ? stopFeatures.features.filter((feature) => feature.properties.route_id !== selectedRouteId)
+        : stopFeatures.features,
+    }),
+    [selectedRouteId, stopFeatures],
+  );
   const interactiveStopFeatures = selectedRouteId ? selectedStopFeatures : stopFeatures;
 
   const privateLinkFeatures = useMemo<FeatureCollection>(
@@ -560,11 +569,11 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               }}
             />
           </Source>
-          <Source id="stops" type="geojson" data={stopFeatures}>
+          <Source id="stops" type="geojson" data={contextStopFeatures}>
             <Layer
               id="stops-halo"
               type="circle"
-              beforeId="route-casing"
+              beforeId="selected-route-casing"
               paint={{
                 "circle-color": "#94a3b8",
                 "circle-radius": selectedRouteId
@@ -576,7 +585,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
             <Layer
               id="stops-circle"
               type="circle"
-              beforeId="route-casing"
+              beforeId="selected-route-casing"
               paint={{
                 "circle-color": "#64748b",
                 "circle-radius": selectedRouteId
@@ -590,7 +599,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               id="stops-label"
               type="symbol"
               minzoom={12.25}
-              beforeId="route-casing"
+              beforeId="selected-route-casing"
               layout={{
                 "text-field": ["get", "label"],
                 "text-size": ["interpolate", ["linear"], ["zoom"], 12, 9, 14, 11, 16, 13],

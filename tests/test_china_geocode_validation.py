@@ -70,56 +70,6 @@ class ChinaGeocodeValidationTests(unittest.TestCase):
         self.assertEqual(point["adcode"], "310107")
         self.assertEqual(point["requested_city_param"], "310000")
 
-    def test_amap_geocode_uses_reference_area_context_for_ambiguous_china_stop(self) -> None:
-        original_request_json = runtime.amap_request_json
-        calls: list[str] = []
-
-        def fake_request_json(endpoint: str, params: dict[str, object], limiter: object) -> dict[str, object]:
-            self.assertEqual(endpoint, "/v3/geocode/geo")
-            self.assertEqual(params.get("city"), "310000")
-            query = str(params.get("address") or "")
-            calls.append(query)
-            if query.startswith("闵行区 "):
-                return {
-                    "geocodes": [
-                        {
-                            "formatted_address": "上海市闵行区繁安路",
-                            "location": "121.391883,31.067734",
-                            "adcode": "310112",
-                        }
-                    ]
-                }
-            return {
-                "geocodes": [
-                    {
-                        "formatted_address": "上海市浦东新区瑞建路",
-                        "location": "121.599076,31.098642",
-                        "adcode": "310115",
-                    }
-                ]
-            }
-
-        try:
-            runtime.amap_request_json = fake_request_json  # type: ignore[assignment]
-            point = runtime.amap_geocode_query(
-                "China",
-                "Shanghai",
-                "繁安路瑞建路路口",
-                {
-                    "area_terms": ["闵行区"],
-                    "reference_lat": 31.049744,
-                    "reference_lng": 121.336559,
-                },
-            )
-        finally:
-            runtime.amap_request_json = original_request_json  # type: ignore[assignment]
-
-        self.assertEqual(calls[0], "闵行区 繁安路瑞建路路口")
-        self.assertEqual(point["formatted_address"], "上海市闵行区繁安路")
-        self.assertEqual(point["adcode"], "310112")
-        self.assertEqual(point["geocode_context_applied"], True)
-        self.assertEqual(point["geocode_context_terms"], "闵行区")
-
     def test_far_from_school_warning_is_review_not_reject(self) -> None:
         school = {"lat": 31.2300, "lng": 121.4300, "address": "School"}
         point = {

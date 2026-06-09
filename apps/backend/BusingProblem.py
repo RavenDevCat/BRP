@@ -5,7 +5,6 @@ import html
 import json
 import math
 import os
-import re
 import threading
 import time
 from collections import Counter
@@ -33,7 +32,6 @@ AMAP_PLACES_MAX_QPS = 2.8
 AMAP_ROUTING_MAX_QPS = 2.8
 AMAP_MATRIX_MAX_QPS = 2.8
 REQUEST_TIMEOUT = 20
-CHINA_GEOCODE_CONTEXT_RETRY_KM = float(os.environ.get("BRP_CHINA_GEOCODE_CONTEXT_RETRY_KM", "18") or 0)
 OSRM_USE_BUILTIN_DEFAULTS = os.environ.get("OSRM_USE_BUILTIN_DEFAULTS", "true").strip().lower() not in {
     "0",
     "false",
@@ -232,8 +230,6 @@ CHINA_CITY_ALIAS_TO_KEY = {
     for city_key, config in CHINA_CITY_CONFIGS.items()
     for alias in config["aliases"]
 }
-
-CHINA_ADMIN_TERM_RE = re.compile(r"[\u4e00-\u9fff]{1,10}?(?:新区|自治县|自治州|区|县|镇|乡|街道)")
 
 
 def _normalize_china_city_key(city: str) -> str:
@@ -464,125 +460,6 @@ def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
     return south <= lat <= north and west <= lng <= east
 
 
-def _strip_china_city_aliases(text: str, city: str) -> str:
-    cleaned = text.strip()
-    config = _china_city_config(city)
-    if config:
-        for alias in sorted(config["aliases"], key=len, reverse=True):
-            cleaned = cleaned.replace(str(alias), "")
-    for token in ("中国", "中华人民共和国", "China", "china"):
-        cleaned = cleaned.replace(token, "")
-    return cleaned
-
-
-def _china_admin_terms(country: str, city: str, *texts: str) -> list[str]:
-    if not is_china_country(country):
-        return []
-    terms: list[str] = []
-    for text in texts:
-        cleaned = _strip_china_city_aliases(str(text or ""), city)
-        for match in CHINA_ADMIN_TERM_RE.findall(cleaned):
-            if match and match not in terms:
-                terms.append(match)
-    return terms
-
-
-def _china_address_has_admin_term(country: str, city: str, address: str) -> bool:
-    return bool(_china_admin_terms(country, city, address))
-
-
-def build_china_geocode_context(country: str, city: str, point: dict[str, Any] | None) -> dict[str, Any]:
-    if not point or not is_china_country(country):
-        return {}
-    context: dict[str, Any] = {}
-    terms = _china_admin_terms(
-        country,
-        city,
-        str(point.get("formatted_address", "") or ""),
-        str(point.get("address", "") or ""),
-        str(point.get("requested_address", "") or ""),
-    )
-    if terms:
-        context["area_terms"] = terms
-    adcode = str(point.get("adcode", "") or "").strip()
-    if adcode:
-        context["preferred_adcode"] = adcode
-    try:
-        lat = float(point.get("lat", 0.0) or 0.0)
-        lng = float(point.get("lng", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        lat = 0.0
-        lng = 0.0
-    if lat and lng:
-        context["reference_lat"] = lat
-        context["reference_lng"] = lng
-    return context
-
-
-def _dedupe_strings(items: list[str]) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        normalized = " ".join(str(item or "").strip().split())
-        if normalized and normalized not in seen:
-            deduped.append(normalized)
-            seen.add(normalized)
-    return deduped
-
-
-def _amap_geocode_queries(country: str, city: str, address: str, context: dict[str, Any] | None = None) -> list[str]:
-    base_address = address.strip()
-    queries: list[str] = []
-    if (
-        context
-        and is_china_country(country)
-        and base_address
-        and not _china_address_has_admin_term(country, city, base_address)
-    ):
-        for term in list(context.get("area_terms") or [])[:2]:
-            term_text = str(term).strip()
-            if term_text:
-                queries.append(f"{term_text} {base_address}")
-                if city.strip():
-                    queries.append(f"{city.strip()} {term_text} {base_address}")
-    queries.append(base_address)
-    if city.strip():
-        queries.append(f"{city.strip()} {base_address}")
-    if country.strip() and city.strip():
-        queries.append(f"{country.strip()} {city.strip()} {base_address}")
-    if country.strip():
-        queries.append(f"{country.strip()} {base_address}")
-    return _dedupe_strings(queries)
-
-
-def _is_china_context_suspect(
-    country: str,
-    city: str,
-    address: str,
-    point: dict[str, Any],
-    context: dict[str, Any] | None = None,
-) -> bool:
-    if not context or not is_china_country(country) or _china_address_has_admin_term(country, city, address):
-        return False
-    threshold_km = CHINA_GEOCODE_CONTEXT_RETRY_KM
-    if threshold_km <= 0:
-        return False
-    formatted_address = str(point.get("formatted_address", "") or "")
-    area_terms = [str(term).strip() for term in list(context.get("area_terms") or []) if str(term).strip()]
-    if area_terms and any(term in formatted_address for term in area_terms):
-        return False
-    try:
-        reference_lat = float(context.get("reference_lat", 0.0) or 0.0)
-        reference_lng = float(context.get("reference_lng", 0.0) or 0.0)
-        lat = float(point.get("lat", 0.0) or 0.0)
-        lng = float(point.get("lng", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        return False
-    if not reference_lat or not reference_lng or not lat or not lng:
-        return False
-    return haversine_distance_km(reference_lat, reference_lng, lat, lng) > threshold_km
-
-
 def is_plausible_china_geocode_result(
     country: str,
     city: str,
@@ -628,15 +505,15 @@ def is_plausible_geocode_result(
     return True
 
 
-def amap_geocode_query(
-    country: str,
-    city: str,
-    address: str,
-    context: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
     amap_city = _amap_city_param(country, city)
-    queries = _amap_geocode_queries(country, city, address, context)
-    base_queries = set(_amap_geocode_queries(country, city, address))
+    queries = [address.strip()]
+    if city.strip():
+        queries.append(f"{city.strip()} {address.strip()}")
+    if country.strip() and city.strip():
+        queries.append(f"{country.strip()} {city.strip()} {address.strip()}")
+    if country.strip():
+        queries.append(f"{country.strip()} {address.strip()}")
 
     last_error = None
     for query in queries:
@@ -657,49 +534,27 @@ def amap_geocode_query(
                         f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
                     )
                     continue
-                point = {
+                plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
+                return {
                     "provider": "amap",
                     "address": address.strip(),
                     "city": city.strip(),
                     "country": country.strip(),
                     "lat": lat,
                     "lng": lng,
-                    "plot_lat": 0.0,
-                    "plot_lng": 0.0,
+                    "plot_lat": plot_lat,
+                    "plot_lng": plot_lng,
                     "formatted_address": formatted_address,
                     "adcode": adcode,
                 }
-                if _is_china_context_suspect(country, city, address, point, context):
-                    last_error = RuntimeError(
-                        f"AMap geocode returned ambiguous result outside reference area: {formatted_address}"
-                    )
-                    continue
-                plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-                point["plot_lat"] = plot_lat
-                point["plot_lng"] = plot_lng
-                if query not in base_queries:
-                    point["geocode_context_applied"] = True
-                    point["geocode_context_query"] = query
-                    point["geocode_context_terms"] = ", ".join(
-                        str(term).strip() for term in list((context or {}).get("area_terms") or []) if str(term).strip()
-                    )
-                return point
         except Exception as exc:
             last_error = exc
 
     try:
-        place_keywords = address.strip()
-        if (
-            context
-            and is_china_country(country)
-            and not _china_address_has_admin_term(country, city, address)
-            and list(context.get("area_terms") or [])
-        ):
-            place_keywords = f"{str(list(context.get('area_terms') or [])[0]).strip()} {address.strip()}".strip()
         payload = amap_request_json(
             "/v3/place/text",
             {
-                "keywords": place_keywords,
+                "keywords": address.strip(),
                 "city": amap_city,
                 "citylimit": "true" if amap_city else "false",
                 "offset": 10,
@@ -723,33 +578,19 @@ def amap_geocode_query(
             if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
                 last_error = RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
                 continue
-            point = {
+            plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
+            return {
                 "provider": "amap",
                 "address": address.strip(),
                 "city": city.strip(),
                 "country": country.strip(),
                 "lat": lat,
                 "lng": lng,
-                "plot_lat": 0.0,
-                "plot_lng": 0.0,
+                "plot_lat": plot_lat,
+                "plot_lng": plot_lng,
                 "formatted_address": formatted_address,
                 "adcode": adcode,
             }
-            if _is_china_context_suspect(country, city, address, point, context):
-                last_error = RuntimeError(
-                    f"AMap place search returned ambiguous result outside reference area: {formatted_address}"
-                )
-                continue
-            plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-            point["plot_lat"] = plot_lat
-            point["plot_lng"] = plot_lng
-            if place_keywords != address.strip():
-                point["geocode_context_applied"] = True
-                point["geocode_context_query"] = place_keywords
-                point["geocode_context_terms"] = ", ".join(
-                    str(term).strip() for term in list((context or {}).get("area_terms") or []) if str(term).strip()
-                )
-            return point
     except Exception as exc:
         last_error = exc
 
@@ -762,7 +603,6 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
     points: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
     changed = False
-    china_geocode_context: dict[str, Any] = {}
     for index, item in enumerate(input_records):
         country = str(item.get("country", "")).strip()
         city = str(item.get("city", "")).strip()
@@ -770,7 +610,6 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         passenger_count = int(item.get("passenger_count", 0 if index == 0 else 1))
         cache_key = geocode_cache_key(country, city, address)
         cached = GEOCODE_CACHE.get(cache_key)
-        geocode_context = china_geocode_context if points and is_china_country(country) else None
         point = None
         if cached:
             try:
@@ -785,16 +624,13 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
                     cached_lng,
                     cached_formatted_address,
                     cached_adcode,
-                ) and not _is_china_context_suspect(country, city, address, dict(cached), geocode_context):
+                ):
                     point = dict(cached)
-                elif _is_china_context_suspect(country, city, address, dict(cached), geocode_context):
-                    GEOCODE_CACHE.pop(cache_key, None)
-                    changed = True
             except Exception:
                 point = None
         if point is None:
             try:
-                point = amap_geocode_query(country, city, address, geocode_context)
+                point = amap_geocode_query(country, city, address)
                 GEOCODE_CACHE[cache_key] = point
                 changed = True
             except Exception as exc:
@@ -817,8 +653,6 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         point["display_address"] = address
         point["is_depot"] = len(points) == 0
         points.append(point)
-        if len(points) == 1:
-            china_geocode_context = build_china_geocode_context(country, city, point)
     if changed:
         save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
     if not points:

@@ -33,8 +33,9 @@ separate local project checkout for BRP development.
   stops.
 - Next product polish candidates are route display naming, selected route card
   placement/collapse behavior, demand batch labels in stop sequence, map base
-  style/contrast, wider route hit areas, scenario delta metrics, and narrow
-  viewport layout.
+  style/contrast, wider route hit areas, scenario delta metrics, upper-right
+  map popup/control content, interactive map download/export behavior, and
+  narrow viewport layout.
 - Treat those candidates as backlog, not emergency fixes. Keep implementing on
   CN staging first.
 

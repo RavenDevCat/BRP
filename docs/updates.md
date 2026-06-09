@@ -34,6 +34,9 @@ It is not a code changelog. Record changes here when users or operators should k
   demand was split into solver batches.
 - Tune map base style/contrast, route hit areas, scenario delta metrics, route
   context default behavior, and narrow viewport layout.
+- Review the upper-right map popup/control content after the polish pass.
+- Define a download/export path for the polished interactive map style, separate
+  from or replacing the legacy HTML map artifact download.
 
 ### Interactive Route Map MVP Started
 

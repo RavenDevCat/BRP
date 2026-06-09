@@ -110,6 +110,8 @@ Recommended next Route Audit map polish:
 - Add scenario delta metrics such as route count saved, distance delta, and
   longest-route delta against current plan.
 - Revisit route context toggle default behavior and narrow viewport layout.
+- Decide what the upper-right map popup/control should show after the map polish pass; current behavior needs product review.
+- Decide how users should download/export the polished interactive map style, since the legacy HTML download does not capture the new React map presentation.
 
 Other known product/routing follow-ups:
 

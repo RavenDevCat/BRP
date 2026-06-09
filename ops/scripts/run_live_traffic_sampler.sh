@@ -26,6 +26,9 @@ case "$period" in
     market="${BRP_LIVE_TRAFFIC_TO_SCHOOL_MARKET:-CN}"
     city="${BRP_LIVE_TRAFFIC_TO_SCHOOL_CITY:-Shanghai}"
     timing_args=(--target-arrival-local-time "${BRP_LIVE_TRAFFIC_AM_TARGET_ARRIVAL_LOCAL_TIME:-08:00}")
+    if [ -n "${BRP_LIVE_TRAFFIC_AM_ROUTE_START_TIMES_PATH:-}" ]; then
+      timing_args+=(--route-start-times-path "$BRP_LIVE_TRAFFIC_AM_ROUTE_START_TIMES_PATH")
+    fi
     ;;
   pm_peak)
     job_id="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_JOB_ID:-}"

@@ -118,6 +118,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const [hoverInfo, setHoverInfo] = useState<HoverInfo>(null);
   const [routeSearch, setRouteSearch] = useState("");
   const [routeFilter, setRouteFilter] = useState<RouteFilter>("all");
+  const [showRouteContext, setShowRouteContext] = useState(true);
 
   const routesById = useMemo(() => new Map(data.routes.map((route) => [route.id, route])), [data.routes]);
   const stopsById = useMemo(() => new Map(data.stops.map((stop) => [stop.id, stop])), [data.stops]);
@@ -192,6 +193,13 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
       features: routeFeatures.features.filter((feature) => feature.properties.route_id === selectedRouteId),
     }),
     [routeFeatures, selectedRouteId],
+  );
+  const contextRouteFeatures = useMemo<FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: selectedRouteId && !showRouteContext ? [] : routeFeatures.features,
+    }),
+    [routeFeatures, selectedRouteId, showRouteContext],
   );
 
   const stopFeatures = useMemo<FeatureCollection>(
@@ -285,6 +293,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const clearFocus = () => {
     setSelectedRouteId("");
     setSelectedStop(null);
+    setShowRouteContext(true);
     window.setTimeout(() => mapRef.current?.resize(), 120);
     fitAll(mapRef.current, data);
   };
@@ -393,6 +402,32 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
             <div className="text-[11px] text-muted-foreground">
               Showing {formatNumber(visibleRoutes.length)} of {formatNumber(data.routes.length)} routes
             </div>
+            {selectedRoute ? (
+              <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+                <div>
+                  <div className="text-xs font-medium text-foreground">Route context</div>
+                  <div className="text-[11px] text-muted-foreground">
+                    {showRouteContext ? "Other routes visible" : "Only selected route"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={cn(
+                    "relative h-6 w-10 rounded-full border transition",
+                    showRouteContext ? "border-primary bg-primary" : "border-border bg-muted",
+                  )}
+                  aria-pressed={showRouteContext}
+                  onClick={() => setShowRouteContext((value) => !value)}
+                >
+                  <span
+                    className={cn(
+                      "absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition",
+                      showRouteContext ? "left-[17px]" : "left-0.5",
+                    )}
+                  />
+                </button>
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
@@ -485,7 +520,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               }}
             />
           </Source>
-          <Source id="routes" type="geojson" data={routeFeatures}>
+          <Source id="routes" type="geojson" data={contextRouteFeatures}>
             <Layer
               id="route-casing"
               type="line"

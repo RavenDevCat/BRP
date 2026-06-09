@@ -125,7 +125,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
-      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
+      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} mapOutputs={mapOutputs} result={result} /> : null}
       {activeTab === "actions" ? (
         <ActionPanel
           priorityActions={priorityActions}
@@ -685,10 +685,11 @@ function DiagnosticsPanel({
   );
 }
 
-function MapsPanel({ jobId, mapOutputs }: { jobId: string; mapOutputs: MapOutput[] }) {
+function MapsPanel({ jobId, mapOutputs, result }: { jobId: string; mapOutputs: MapOutput[]; result: Record<string, unknown> }) {
   const [selectedKey, setSelectedKey] = useState("");
   const [mapMode, setMapMode] = useState<"interactive" | "legacy">("interactive");
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
+  const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
   const interactiveQuery = useQuery({
     queryKey: ["job-map-data", jobId, selected?.key],
     queryFn: () => getJobMapData(jobId, selected.key),
@@ -760,6 +761,32 @@ function MapsPanel({ jobId, mapOutputs }: { jobId: string; mapOutputs: MapOutput
               }}
             >
               {item.name}
+            </button>
+          ))}
+        </div>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+          {scenarioSummaries.map((summary) => (
+            <button
+              key={summary.key}
+              type="button"
+              className={cn(
+                "rounded-md border p-3 text-left transition",
+                selected.key === summary.key
+                  ? "border-primary bg-primary/10"
+                  : "border-border bg-surface hover:bg-muted",
+              )}
+              onClick={() => setSelectedKey(summary.key)}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="truncate text-sm font-semibold">{summary.name}</div>
+                <Badge tone={selected.key === summary.key ? "info" : "neutral"}>{formatNumber(summary.routeCount)} routes</Badge>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                <div>Stops: {formatNumber(summary.stopCount)}</div>
+                <div>Riders: {formatNumber(summary.passengerCount)}</div>
+                <div>Total: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
+                <div>Longest: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
+              </div>
             </button>
           ))}
         </div>
@@ -1110,6 +1137,16 @@ type MapOutput = {
   downloadUrl: string;
 };
 
+type MapScenarioSummary = {
+  key: string;
+  name: string;
+  routeCount: number;
+  stopCount: number;
+  passengerCount: number;
+  totalDistanceM: number;
+  longestDurationS: number;
+};
+
 function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
   const structured = asRecord(result.structured_results);
   const keys = [
@@ -1140,6 +1177,27 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
       };
     })
     .filter((item) => item.hasRenderableMap);
+}
+
+function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: MapOutput[]): MapScenarioSummary[] {
+  const structured = asRecord(result.structured_results);
+  return mapOutputs.map((output) => {
+    const scenario = asRecord(structured[output.key]);
+    const routes = asRecordArray(scenario.routes);
+    return {
+      key: output.key,
+      name: output.name,
+      routeCount: Number(scenario.route_count || scenario.bus_count || routes.length || 0),
+      stopCount: Number(scenarioServiceStopCount(scenario) || 0),
+      passengerCount: routes.reduce((total, route) => total + Number(routePassengerCount(route) || 0), 0),
+      totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
+      longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
+    };
+  });
+}
+
+function mapRouteDurationSeconds(route: Record<string, unknown>) {
+  return Number(route.traffic_api_duration_s || route.traffic_adjusted_drive_time_s || route.time_s || 0);
 }
 
 function buildAiReportHtml({

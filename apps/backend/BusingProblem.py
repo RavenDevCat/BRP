@@ -133,6 +133,11 @@ def stop_rider_label(point: dict[str, Any]) -> str:
         return "School"
     passenger_count = int(point.get("passenger_count", 0) or 0)
     rider_action = "Boarding" if is_to_school_direction() else "Drop-off"
+    if int(point.get("demand_batch_count", 0) or 0) > 1:
+        batch_index = int(point.get("demand_batch_index", 0) or 0)
+        batch_count = int(point.get("demand_batch_count", 0) or 0)
+        total = int(point.get("original_passenger_count", passenger_count) or passenger_count)
+        return f"{rider_action}: {passenger_count} of {total}, batch {batch_index}/{batch_count}"
     return f"{rider_action}: {passenger_count}"
 
 
@@ -906,6 +911,42 @@ def route_stop_limit() -> int:
     return max(1, int(MAX_STOPS_PER_ROUTE))
 
 
+def split_oversized_demand_points(points: list[dict[str, Any]], max_batch_size: int) -> list[dict[str, Any]]:
+    if max_batch_size <= 0 or len(points) <= 1:
+        return points
+
+    expanded: list[dict[str, Any]] = []
+    for point in points:
+        if bool(point.get("is_depot")):
+            cloned_depot = dict(point)
+            cloned_depot["node_id"] = len(expanded)
+            expanded.append(cloned_depot)
+            continue
+
+        passenger_count = int(point.get("passenger_count", 0) or 0)
+        if passenger_count <= max_batch_size:
+            cloned = dict(point)
+            cloned["node_id"] = len(expanded)
+            expanded.append(cloned)
+            continue
+
+        split_batch_size = max(1, max_batch_size - 1)
+        batch_count = int(math.ceil(passenger_count / split_batch_size))
+        remaining = passenger_count
+        for batch_index in range(1, batch_count + 1):
+            batch_size = min(split_batch_size, remaining)
+            remaining -= batch_size
+            cloned = dict(point)
+            cloned["node_id"] = len(expanded)
+            cloned["passenger_count"] = batch_size
+            cloned["original_passenger_count"] = passenger_count
+            cloned["demand_batch_index"] = batch_index
+            cloned["demand_batch_count"] = batch_count
+            cloned["demand_batch_key"] = str(point.get("address", "")).strip() or f"node-{point.get('node_id', len(expanded))}"
+            expanded.append(cloned)
+    return expanded
+
+
 def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, Any]], extra_buffer: int = 2) -> list[dict[str, Any]]:
     if not points or not fleet:
         return []
@@ -916,11 +957,13 @@ def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, An
         return fleet[:1]
 
     sorted_fleet = sort_regular_preference(fleet)
+    stop_based_count = math.ceil(max(0, len(points) - 1) / route_stop_limit())
     min_vehicle_count = max(
         _minimum_vehicle_count_for_demand(total_demand, sorted_fleet),
-        math.ceil(max(0, len(points) - 1) / route_stop_limit()),
+        stop_based_count,
     )
-    target_vehicle_count = min(len(sorted_fleet), max(1, min_vehicle_count + extra_buffer))
+    operational_buffer = max(extra_buffer, int(math.ceil(stop_based_count * 0.75)))
+    target_vehicle_count = min(len(sorted_fleet), max(1, min_vehicle_count + operational_buffer))
 
     trimmed = sorted_fleet[:target_vehicle_count]
     if largest_stop_demand > 0 and all(solver_capacity_for_vehicle(item) < largest_stop_demand for item in trimmed):
@@ -1086,19 +1129,19 @@ def solve_routes_for_fleet(
     )
     load_dimension = routing.GetDimensionOrDie("Load")
 
-    def stop_count_callback(index: int) -> int:
-        node = manager.IndexToNode(index)
-        return 0 if node == 0 else 1
+    def stop_count_callback(from_index: int, to_index: int) -> int:
+        del from_index
+        to_node = manager.IndexToNode(to_index)
+        return 0 if to_node == 0 else 1
 
-    stop_count_index = routing.RegisterUnaryTransitCallback(stop_count_callback)
-    routing.AddDimensionWithVehicleCapacity(
+    stop_count_index = routing.RegisterTransitCallback(stop_count_callback)
+    routing.AddDimension(
         stop_count_index,
         0,
-        [route_stop_limit()] * vehicle_count,
+        route_stop_limit(),
         True,
         "Stops",
     )
-    stop_dimension = routing.GetDimensionOrDie("Stops")
 
     for vehicle_id, vehicle in enumerate(fleet):
         routing.SetFixedCostOfVehicle(VEHICLE_FIXED_COST.get(vehicle["name"], 0), vehicle_id)
@@ -1112,11 +1155,8 @@ def solve_routes_for_fleet(
             ROUTE_DURATION_SOFT_PENALTY_PER_SECOND,
         )
 
-    for node in range(1, len(points)):
-        routing.AddDisjunction([manager.NodeToIndex(node)], 10_000_000)
-
     search = pywrapcp.DefaultRoutingSearchParameters()
-    search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
     search.time_limit.seconds = 30
     solution = routing.SolveWithParameters(search)
@@ -1147,8 +1187,8 @@ def solve_routes_for_fleet(
             route_time_s += int(working_time_matrix[from_node][to_node])
             route_distance_m += int(working_distance_matrix[from_node][to_node])
             index = next_index
-        route_load = int(solution.Value(load_dimension.CumulVar(routing.End(vehicle_id))))
-        route_stop_count = int(solution.Value(stop_dimension.CumulVar(routing.End(vehicle_id))))
+        route_load = sum(int(points[node].get("passenger_count", 0) or 0) for node in nodes if node != 0)
+        route_stop_count = len([node for node in nodes if node != 0])
         routes.append(
             reverse_route_for_to_school(
                 {
@@ -1164,6 +1204,15 @@ def solve_routes_for_fleet(
                 "stop_count": route_stop_count,
                 }
             )
+        )
+    served_nodes = {node for route in routes for node in route.get("nodes", []) if node != 0}
+    expected_nodes = set(range(1, len(points)))
+    missing_nodes = sorted(expected_nodes - served_nodes)
+    if missing_nodes:
+        missing_addresses = [str(points[node].get("address", f"node {node}")) for node in missing_nodes[:10]]
+        raise RuntimeError(
+            "Routing solution did not serve every stop. "
+            f"Missing stops: {', '.join(missing_addresses)}"
         )
     routes.sort(key=lambda item: item["vehicle_id"])
     return routes
@@ -1889,6 +1938,11 @@ def render_map(
 
 def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, Any]], output_html: str) -> dict[str, Any]:
     service_points = [point for point in points if not bool(point.get("is_depot"))]
+    physical_service_points = [
+        point
+        for point in service_points
+        if int(point.get("demand_batch_index", 1) or 1) <= 1
+    ]
     total_distance_m = sum(float(route.get("distance_m", 0.0)) for route in routes)
     total_duration_s = sum(float(route.get("time_s", 0.0)) for route in routes)
     avg_route_distance_m = (total_distance_m / len(routes)) if routes else 0.0
@@ -1919,8 +1973,9 @@ def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, A
         "routes": routes,
         "output_html": output_html,
         "bus_count": len(routes),
-        "stop_count": len(service_points),
-        "service_stop_count": len(service_points),
+        "stop_count": len(physical_service_points),
+        "service_stop_count": len(physical_service_points),
+        "solver_stop_count": len(service_points),
         "map_point_count": len(points),
         "bus_mix": route_bus_mix(routes),
         "total_distance_m": total_distance_m,
@@ -1943,6 +1998,10 @@ def build_scenario(points: list[dict[str, Any]], output_html: str, scenario_labe
         routes: list[dict[str, Any]] = []
         render_map(points, routes, output_html)
         return build_scenario_result(points, routes, output_html)
+    full_fleet = build_vehicle_fleet()
+    if full_fleet:
+        max_comfort_capacity = max(solver_capacity_for_vehicle(item) for item in full_fleet)
+        points = split_oversized_demand_points(points, max_comfort_capacity)
     log(f"[INFO] Building {scenario_label} scenario with {len(points)} total points.")
     global OSRM_BASE_URL
     scenario_osrm_base_url = resolve_osrm_base_url(points)

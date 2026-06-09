@@ -4255,12 +4255,22 @@ def _compute_scenario_without_render(
         return result
 
     planner.log(f"[BACKEND] Building {scenario_label} scenario with {len(points)} total points.")
-    scenario_osrm_base_url = planner.resolve_osrm_base_url(points)
-    previous_osrm_base_url = planner.OSRM_BASE_URL
     previous_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
-    planner.OSRM_BASE_URL = scenario_osrm_base_url
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
+    full_fleet = planner.build_vehicle_fleet()
+    if full_fleet:
+        max_comfort_capacity = max(planner.solver_capacity_for_vehicle(item) for item in full_fleet)
+        expanded_points = planner.split_oversized_demand_points(points, max_comfort_capacity)
+        if len(expanded_points) != len(points):
+            planner.log(
+                f"[BACKEND] Split oversized demand stops for {scenario_label}: "
+                f"{len(points)} points -> {len(expanded_points)} solver points."
+            )
+        points = expanded_points
+    scenario_osrm_base_url = planner.resolve_osrm_base_url(points)
+    previous_osrm_base_url = planner.OSRM_BASE_URL
+    planner.OSRM_BASE_URL = scenario_osrm_base_url
     planner.log(f"[BACKEND] Using OSRM backend {scenario_osrm_base_url} for {scenario_label} scenario.")
     try:
         try:

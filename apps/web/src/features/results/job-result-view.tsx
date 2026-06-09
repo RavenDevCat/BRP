@@ -745,25 +745,6 @@ function MapsPanel({ jobId, mapOutputs, result }: { jobId: string; mapOutputs: M
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="flex flex-wrap gap-2">
-          {mapOutputs.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={cn(
-                "h-9 rounded-md border px-3 text-sm font-medium transition",
-                selected.key === item.key
-                  ? "border-primary bg-primary text-primary-foreground"
-                  : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
-              )}
-              onClick={() => {
-                setSelectedKey(item.key);
-              }}
-            >
-              {item.name}
-            </button>
-          ))}
-        </div>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {scenarioSummaries.map((summary) => (
             <button

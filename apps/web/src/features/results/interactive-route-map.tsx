@@ -79,6 +79,7 @@ type HoverInfo = {
 } | null;
 
 export function InteractiveRouteMap({ data }: { data: JobMapData }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapRef | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string>("");
   const [selectedStop, setSelectedStop] = useState<JobMapStop | null>(null);
@@ -183,12 +184,15 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const focusRoute = (route: JobMapRoute) => {
     setSelectedRouteId(route.id);
     setSelectedStop(null);
+    containerRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    window.setTimeout(() => mapRef.current?.resize(), 120);
     fitRoute(mapRef.current, route);
   };
 
   const clearFocus = () => {
     setSelectedRouteId("");
     setSelectedStop(null);
+    window.setTimeout(() => mapRef.current?.resize(), 120);
     fitAll(mapRef.current, data);
   };
 
@@ -227,7 +231,11 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   };
 
   return (
-    <div className="grid min-h-[720px] overflow-hidden rounded-md border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]">
+    <div
+      ref={containerRef}
+      className="grid min-h-[560px] overflow-hidden rounded-md border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]"
+      style={{ height: "clamp(560px, calc(100vh - 220px), 760px)" }}
+    >
       <aside className="flex min-h-0 flex-col border-b border-border bg-surface lg:border-b-0 lg:border-r">
         <div className="border-b border-border p-3">
           <div className="flex items-center justify-between gap-3">
@@ -278,7 +286,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
         </div>
       </aside>
 
-      <div className="relative min-h-[620px]">
+      <div className="relative min-h-0">
         <MapView
           ref={mapRef}
           initialViewState={initialViewState}

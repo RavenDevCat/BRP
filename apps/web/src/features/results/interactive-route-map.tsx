@@ -98,7 +98,10 @@ const routeFilterOptions: Array<{ key: RouteFilter; label: string }> = [
   { key: "many_stops", label: "Many stops" },
 ];
 
+const STOP_LAYER_IDS = ["stops-hit-area", "selected-stops-circle", "selected-stops-label", "stops-circle", "stops-label"];
+const ROUTE_LAYER_IDS = ["selected-route-line", "route-lines"];
 const INTERACTIVE_LAYER_IDS = [
+  "stops-hit-area",
   "selected-stops-circle",
   "selected-stops-label",
   "stops-circle",
@@ -286,7 +289,9 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   };
 
   const handleMapClick = (event: MapLayerMouseEvent) => {
-    const feature = event.features?.[0];
+    const feature =
+      event.features?.find((item) => STOP_LAYER_IDS.includes(item.layer.id)) ||
+      event.features?.find((item) => ROUTE_LAYER_IDS.includes(item.layer.id));
     const stopId = String(feature?.properties?.stop_id || "");
     const routeId = String(feature?.properties?.route_id || "");
     if (stopId) {
@@ -305,9 +310,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   };
 
   const handleMouseMove = (event: MapLayerMouseEvent) => {
-    const stopFeature = event.features?.find((item) =>
-      ["selected-stops-circle", "selected-stops-label", "stops-circle", "stops-label"].includes(item.layer.id),
-    );
+    const stopFeature = event.features?.find((item) => STOP_LAYER_IDS.includes(item.layer.id));
     const stopId = String(stopFeature?.properties?.stop_id || "");
     if (stopId) {
       const stop = stopsById.get(stopId);
@@ -327,7 +330,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
       }
     }
 
-    const feature = event.features?.find((item) => ["selected-route-line", "route-lines"].includes(item.layer.id));
+    const feature = event.features?.find((item) => ROUTE_LAYER_IDS.includes(item.layer.id));
     const routeId = String(feature?.properties?.route_id || "");
     if (!routeId) {
       setHoverInfo(null);
@@ -591,6 +594,17 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "text-halo-color": "#111827",
                 "text-halo-width": 1.4,
                 "text-opacity": selectedRouteId ? 1 : 0,
+              }}
+            />
+          </Source>
+          <Source id="stop-hit-areas" type="geojson" data={stopFeatures}>
+            <Layer
+              id="stops-hit-area"
+              type="circle"
+              paint={{
+                "circle-color": "#ffffff",
+                "circle-radius": ["case", ["get", "is_depot"], 16, ["interpolate", ["linear"], ["zoom"], 10, 10, 14, 13, 16, 16]],
+                "circle-opacity": 0.001,
               }}
             />
           </Source>

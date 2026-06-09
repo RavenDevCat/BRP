@@ -10,8 +10,8 @@ if [ -f "$LOCAL_ENV_FILE" ]; then
   set +a
 fi
 
-AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 08:00:00}"
-PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:30:00}"
+AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:30:00}"
+PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:40:00}"
 SYSTEMD_DIR="${BRP_LIVE_TRAFFIC_SYSTEMD_DIR:-/etc/systemd/system}"
 
 write_service() {
@@ -56,5 +56,7 @@ sudo systemctl daemon-reload
 echo "Installed timers, not enabled:"
 echo "  brp-live-traffic-am.timer -> $AM_ON_CALENDAR"
 echo "  brp-live-traffic-pm.timer -> $PM_ON_CALENDAR"
+echo "For AM arrival-based sampling, run the AM sampler repeatedly across the morning departure window"
+echo "and pass --sample-due-routes-only once the operating schedule is confirmed."
 echo "Enable after confirming times:"
 echo "  sudo systemctl enable --now brp-live-traffic-am.timer brp-live-traffic-pm.timer"

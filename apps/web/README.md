@@ -65,3 +65,17 @@ The React app uses backend routes for:
 - Distance & Cost workbook preview, reference distance, and route cost
 - Fleet Planner preview, geocoding, clustering, route preview, global plan,
   generated workbook download, and generated-plan submission
+
+## Route Audit Maps
+
+The Route Audit job detail Maps tab uses a React MapLibre interactive map for
+compatible completed jobs. It reads structured map data from the backend,
+keeps legacy HTML map artifacts as fallback, and supports scenario tiles, route
+search/filtering, route focus, selected-route direction arrows, stop hover/click
+inspection, natural route label ordering, route status badges, and a route
+context toggle.
+
+Map UI changes should be developed and built on CN staging first. For frontend
+release promotion, reuse the CN-staging-built `apps/web/dist` artifact for
+production targets unless the target server is explicitly configured to build
+React locally.

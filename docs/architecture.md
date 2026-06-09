@@ -87,6 +87,22 @@ Current status:
 - CN staging uses Nginx for active React testing
 - CN production and KR production are separate public production endpoints
 
+### Route Audit Maps
+
+Route Audit map presentation is now split into two layers:
+
+- backend-generated legacy HTML map artifacts remain available for fallback,
+  download, and compatibility with existing completed jobs
+- the React frontend consumes structured scenario map data from `/api/jobs/:jobId/map-data/:scenarioKey`
+  and renders an interactive MapLibre map in the Maps tab
+
+The interactive map is a presentation layer over completed job `structured_results`.
+It should not mutate job results or require rerunning compatible jobs. Current UI
+capabilities include scenario summary tiles, route search and filters, natural
+route label ordering, selected-route focus, selected-route direction arrows,
+stop hover/click inspection, stop sequence drill-in, route status badges, and a
+route context toggle.
+
 ## Backend
 
 Location: `apps/backend`

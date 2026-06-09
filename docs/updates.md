@@ -6,6 +6,35 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-09
 
+### Interactive Route Map Polished
+
+- The Route Audit Maps tab now uses the React MapLibre interactive map as the
+  primary route inspection surface for compatible completed jobs, while keeping
+  legacy HTML maps available through the existing fallback mode.
+- Scenario summary tiles replace the old repeated scenario button row and show
+  route count, stop count, riders, total distance, and longest route at a glance.
+- Route inspection now includes route search and filters, natural numeric route
+  label ordering, selected-route focus, route context toggle, selected-route
+  direction arrows, route hover summaries, bottom route summary cards, status
+  badges for long/high-load/capacity routes, and softer context stops.
+- Stop inspection now prioritizes stop hover/click over route lines, keeps
+  selected-route stops visually prominent, and shows stop address, riders, and
+  cumulative timing/distance details.
+- No rerun is required for compatible completed jobs because the interactive map
+  reads existing structured job results. Rerun only when users want results
+  rebuilt under newer planner or geocoding behavior.
+
+### Interactive Route Map Follow-Up Backlog
+
+- Improve route display naming so user-facing labels read like `Route 1` while
+  preserving raw IDs in secondary text.
+- Revisit selected route card placement or collapse behavior so it does not hide
+  important map areas.
+- Surface demand batch metadata in stop sequence when oversized same-address
+  demand was split into solver batches.
+- Tune map base style/contrast, route hit areas, scenario delta metrics, route
+  context default behavior, and narrow viewport layout.
+
 ### Interactive Route Map MVP Started
 
 - Route Audit map work is moving from backend-rendered Folium iframe artifacts

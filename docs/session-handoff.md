@@ -36,7 +36,7 @@ Job result tab order:
 ## Current Operating Model
 
 - The Windows local machine is only a Codex/control console.
-- Do not use or recreate a separate Windows project checkout for BRP
+- Do not use or recreate a separate Windows or OneDrive BRP project checkout for
   development.
 - CN staging is the active development and test checkout.
 - CN production and KR production are release targets only.
@@ -44,68 +44,79 @@ Job result tab order:
   status, relevant service health, and recent runtime behavior.
 - Work directly in CN staging, validate there, commit and push the intended Git
   revision, then promote only when the user explicitly asks.
-- For external `ssh`, `scp`, and Git command composition from Windows, prefer
-  Git Bash over PowerShell.
 - Real server addresses, usernames, private hostnames, and concrete access
   paths belong only in the ignored private inventory or approved private backup.
 
 ## Current Release State
 
-- GitHub `main` and CN staging source include the latest docs-only handoff
-  cleanup after `43c40de`.
-- CN staging frontend `apps/web/dist` was last rebuilt from `43c40de`
-  (`Show git version in app sidebar`); the visible sidebar version remains
-  `43c40de` until the next frontend build.
-- CN production has the China geocoding hardening release `2c3f841`
-  (`Harden China geocoding city constraints`) and backend health was verified
-  after restart.
-- CN production has not yet received the sidebar version display release
-  `43c40de`.
-- KR production was not synced to the China geocoding hardening or sidebar
-  version display at end of day. Sync KR only after an explicit release decision.
+- Interactive Route Audit map polish is included through `bd6379e` (`Surface route status in map list`); later docs-only commits may advance `main` beyond that product revision.
+- CN staging frontend `apps/web/dist` was rebuilt from `bd6379e` and staging
+  responded `200 OK` at the protected React origin during verification.
+- Tonight's work has not been promoted to CN production or KR production unless
+  the user explicitly asked elsewhere after this handoff.
+- Commit authorship on the CN/KR-maintained history was corrected on 2026-06-09:
+  the prior Ubuntu-authored commits from `8eb1b52` onward were rewritten to
+  `Raven <catsradios@gmail.com>`, with backup tag
+  `backup/main-before-author-rewrite-20260609`.
+- CN staging and KR repo configs now set future commits to
+  `Raven <catsradios@gmail.com>`.
 
-## Completed Today
+## Completed 2026-06-09 Evening
 
-- Repaired stale React frontend assets that made CN staging, CN production, and
-  KR production appear rolled back even though source checkouts were newer.
-- Established CN staging as the canonical React build host; CN has Node/npm
-  available for release builds.
-- Improved Side Tools history discoverability and deployed it through the
-  accepted release path.
-- Hardened China geocoding for the OSRM-covered China cities:
-  Shanghai, Beijing, Suzhou, and Xi'an.
-- AMap geocode requests now use city adcodes for those cities, and results are
-  checked by adcode, city alias, and bounding box before they can be accepted or
-  reused from cache.
-- Cleaned polluted CN shared client geocode cache entries. Affected old job
-  result files do not change automatically; users should rerun affected jobs for
-  corrected coordinates.
-- Added a small sidebar version marker in CN staging, sourced from the build
-  checkout's short Git hash.
+Route Audit Maps tab polish:
 
-## Open Product Risks / Next Work
+- Added React MapLibre interactive route map MVP while retaining legacy HTML
+  map fallback.
+- Added structured map-data endpoint usage in React Maps tab.
+- Added scenario summary tiles and removed the old duplicated scenario button row.
+- Fixed map artifact refresh issue caused by an undefined private-access mode
+  variable in legacy map summary rerendering.
+- Improved selected-route viewport focus so selecting a route scrolls/fits the
+  map into the current browser viewport.
+- Added route list search, quick filters, and filter hit counts.
+- Added natural numeric route label ordering so route labels sort `1,2,3...10`
+  instead of `1,10,11...2`.
+- Added stop hover/click priority, stop details, selected stop popups, and stop
+  sequence drill-in.
+- Made selected-route stops larger and visually distinct; softened non-selected
+  context stops into grey points.
+- Added route context toggle to switch between contextual routes and selected
+  route isolation.
+- Added selected-route direction arrows.
+- Added route hover summaries, bottom selected-route summary card, route status
+  badges, and route list accent markers for long/high-load/capacity routes.
 
-- Route Audit `subway baseline` and `nearby baseline` can currently merge
-  multiple riders at the same station/cluster into one capacity demand. If that
-  merged demand exceeds a vehicle capacity, or exceeds a vehicle's remaining
-  capacity when the route reaches that node, the solver can become infeasible.
-  Proposed fix: keep the station/cluster aggregated for display, but split the
-  solver input into same-coordinate virtual pickup batches no larger than the
-  smallest enabled vehicle capacity. Preserve `cluster_id`, `batch_index`, and
-  `batch_count`, then merge consecutive same-station batches again for route
-  presentation.
-- A `To School` job was observed with a `长寿路` stop recognized as Suzhou.
-  Do not rush a blind fix. Next session should identify the exact job, source
-  row, city/country fields, and whether the result came from old polluted cache
-  or a fresh provider call. If it still reproduces after the China geocoding
-  hardening, add a Shanghai-specific candidate selection or district/context
-  enrichment rule for ambiguous road names.
-- The old generated job outputs remain immutable snapshots. When geocoding or
-  baseline modeling changes, affected jobs need to be rerun to get corrected
-  maps and route results.
-- Before deploying the sidebar version display to production, promote
-  `43c40de`, rebuild/copy frontend assets through the current release flow, and
-  verify the visible version in each touched environment.
+Operational/documentation work:
+
+- Rewrote Ubuntu-authored commits to Raven authorship and aligned CN staging and
+  KR source checkouts to the new `main` history.
+- Set CN and KR local Git author configs to Raven.
+- Recorded the remaining map-product backlog in public updates and private
+  handoff material.
+
+## Open Product Backlog
+
+Recommended next Route Audit map polish:
+
+- Improve route display naming so user-facing labels read like `Route 1`, with
+  raw route IDs preserved in secondary text.
+- Revisit selected route card placement or collapse behavior so it does not hide
+  map content or stops.
+- Show demand batch metadata in stop sequence when oversized same-address demand
+  was split into solver batches.
+- Tune map base style/contrast so dense city labels compete less with routes.
+- Add wider transparent route hit areas so hover/click does not require precise
+  line targeting.
+- Add scenario delta metrics such as route count saved, distance delta, and
+  longest-route delta against current plan.
+- Revisit route context toggle default behavior and narrow viewport layout.
+
+Other known product/routing follow-ups:
+
+- Existing completed jobs are immutable snapshots. When geocoding or baseline
+  modeling changes, affected jobs need to be rerun for corrected maps/results.
+- Domain replacement and SSO remain blocked pending company cyber/security code
+  review; continue product polish until that is cleared.
 
 ## Runtime Data Rules
 
@@ -154,7 +165,11 @@ Docs-only changes do not need service restart.
 After meaningful implementation:
 
 - update this handoff only for current recovery facts
+- update `AGENTS.md` for new-session startup warnings and current focus
+- update `README.md` for product-level surface changes
 - update `docs/architecture.md` for stable design or module boundary changes
 - update `docs/development-release-workflow.md` for run/deploy/check changes
 - update `docs/deployment-overview.md` for fresh-environment requirements
 - update `docs/updates.md` for user/operator-facing behavior or rerun guidance
+- update ignored private inventory and the OneDrive private backup when server
+  access, service maintenance, or production restart facts change

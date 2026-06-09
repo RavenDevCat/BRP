@@ -32,6 +32,15 @@ current checkout revision, tracked/untracked status, service health, and recent
 runtime behavior. Treat GitHub history and any local notes as supporting
 records after the staging audit, not as the primary project state.
 
+## Current Development Focus
+
+As of 2026-06-09, active product polish is the Route Audit Maps tab. The React
+MapLibre interactive map is the primary inspection surface, with legacy HTML map
+artifacts retained as fallback. Continue map UI work on CN staging first. The
+next backlog is route naming, selected route card placement, demand batch labels,
+map base contrast, wider route hit areas, scenario delta metrics, route context
+default behavior, and narrow viewport layout.
+
 ## Environment Boundary Contract
 
 Current hostnames and ports:
@@ -384,21 +393,22 @@ High-level KR deploy flow:
 2. Commit and push the intended revision.
 3. Build React from CN staging with `npm run build` in `apps/web` when
    frontend assets changed.
-4. Pull the intended revision in the KR active checkout recorded in the private
-   inventory.
-5. Copy the same CN-staging-built `apps/web/dist` artifact to KR when frontend
-   assets changed.
-6. Restart `BRP-Backend-Preview` and `BRP-Nginx-Public`. Restart
-   `BRP-React-Preview` only when the private preview needs the new build.
-   `BRP-React-Public` is intentionally disabled after the public Nginx cutover.
-7. If `BRP-Backend-Preview` immediately returns `Ready` and backend port `8001`
-   is not listening, reset the task action to explicitly run the backend start
-   wrapper through `cmd.exe /c`, then start the task again. Do not rely on a
-   backend process launched directly from an SSH command as the persistent
-   production process.
-8. Verify backend health, public React proxy health, private React preview health, `/new`, `/jobs`, visible sidebar version when frontend assets changed, job count, cache counts, and Google usage continuity.
-   The public Nginx origin should return `401` without an Access user header
-   and `200` with one.
+4. Connect to KR directly using the private inventory. Do not route KR work
+   through CN and do not rediscover the KR service model each session.
+5. Pull or realign the intended revision in the KR active checkout recorded in
+   the private inventory. After public-history rewrites, use a protected reset
+   only after confirming there are no tracked local changes to preserve.
+6. Copy the same CN-staging-built `apps/web/dist` artifact to KR when frontend
+   assets changed. KR should not be used as the React build host unless it has
+   explicitly been provisioned with Node/npm.
+7. Restart KR through its existing scheduled tasks/process supervisor recorded
+   in the private inventory. In particular, use the backend task that calls the
+   repository backend start wrapper; do not launch a one-off backend process
+   from an SSH command and treat it as production.
+8. Verify backend health, public React proxy health, private React preview
+   health, `/new`, `/jobs`, visible sidebar version when frontend assets changed,
+   job count, cache counts, and Google usage continuity. The public Nginx origin
+   should return `401` without an Access user header and `200` with one.
 
 ## Deploy To Production
 

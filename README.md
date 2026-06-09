@@ -14,7 +14,8 @@ flows.
 
 - Route Audit: upload a current bus plan workbook, validate it, run planning
   baselines, and review AI Audit, Audit Detail, Actions, Baselines, Maps, and
-  Diagnostics.
+  Diagnostics. The Maps tab includes a React MapLibre interactive route map
+  with legacy HTML map artifacts retained as fallback.
 - Distance & Cost: check reference-stop distance and estimate route-level cost
   from uploaded workbook data.
 - Fleet Planner: preview demand, geocode/cluster stops, generate route plans,
@@ -178,12 +179,14 @@ patterns.
 - `docs/deployment-overview.md`: fresh environment checklist
 - `docs/updates.md`: major user/operator-facing updates
 - `docs/session-handoff.md`: concise current project handoff for future Codex
-  sessions
+  sessions, including the current staging revision, active product focus, and
+  next backlog
 - `docs/private-ops-template.md`: template for private server inventory
 
 Committed docs use aliases, example domains, and generic paths. Keep real server
-addresses, usernames, hostnames, environment-specific paths, and deployment inventory in
-ignored local files such as `docs/private/ops-inventory.local.md`.
+addresses, usernames, hostnames, environment-specific paths, and deployment
+inventory in ignored private files inside active server checkouts, or in the
+approved private backup outside Git.
 
 ## Development Notes
 
@@ -196,3 +199,12 @@ ignored local files such as `docs/private/ops-inventory.local.md`.
   `apps/client/client_runtime.py`.
 - Keep server-specific behavior in env files and runtime data directories, not
   hard-coded in application code.
+
+## Current Product Notes
+
+As of 2026-06-09, active product polish is centered on the Route Audit Maps tab.
+The React interactive map can switch scenarios through summary tiles, inspect
+routes and stops, focus selected routes, show route direction arrows, filter and
+search route lists, and keep legacy backend-rendered HTML maps available as a
+fallback. Continue UI/product work in CN staging first; promote production only
+when explicitly approved.

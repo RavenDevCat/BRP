@@ -20,6 +20,24 @@ separate local project checkout for BRP development.
    backup outside Git before changing server access or tunnel settings. Do
    not create a separate Windows project checkout just to host private docs.
 
+## Current Focus Snapshot - 2026-06-09
+
+- Interactive Route Audit map polish is included through `bd6379e`; later
+  docs-only commits may advance `main` beyond that product revision.
+- The Maps tab now has a React MapLibre interactive map with legacy HTML maps
+  retained as fallback.
+- Current interactive map capabilities include scenario summary tiles, route
+  search/filtering, natural route label ordering, selected-route focus,
+  route-context toggle, selected stop sequence, stop hover/click details,
+  selected-route direction arrows, route status badges, and softened context
+  stops.
+- Next product polish candidates are route display naming, selected route card
+  placement/collapse behavior, demand batch labels in stop sequence, map base
+  style/contrast, wider route hit areas, scenario delta metrics, and narrow
+  viewport layout.
+- Treat those candidates as backlog, not emergency fixes. Keep implementing on
+  CN staging first.
+
 ## Server Names
 
 - KR server: South Korea deployment. Real address/user/path belong in the

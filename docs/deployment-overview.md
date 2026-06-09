@@ -369,6 +369,19 @@ This fallback is required for direct navigation to React routes such as `/jobs`,
 
 For production-like environments, avoid exposing the backend publicly without an access control layer.
 
+## Production Maintenance Notes
+
+- CN staging is the default development, validation, and React build host.
+- CN production and KR production are release targets only; change them only
+  after explicit approval.
+- KR should follow the intended Git revision and reuse CN-staging-built frontend
+  assets when frontend files changed. Keep KR service restart details in the
+  ignored private inventory so future operators do not rediscover the Windows
+  scheduled-task setup each session.
+- If a checkout cannot fast-forward after an approved public-history rewrite,
+  preserve untracked runtime backups, confirm there are no tracked local changes
+  to keep, and realign the checkout to the intended `origin/main` revision.
+
 ## Fresh Environment Validation
 
 After deployment, verify:

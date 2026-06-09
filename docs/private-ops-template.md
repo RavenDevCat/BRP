@@ -1,7 +1,9 @@
 # Private Operations Inventory Template
 
-Copy this file to `docs/private/ops-inventory.local.md` and fill it locally.
-The `docs/private/` directory is ignored by Git.
+Copy this file to `docs/private/ops-inventory.local.md` only inside an active
+server checkout that needs private handoff facts. The `docs/private/`
+directory is ignored by Git. Do not create a separate Windows project checkout
+just to host this file.
 
 Use this for server addresses, usernames, private hostnames, environment-specific
 paths, and other handoff details that should not be shared with the repository.
@@ -41,6 +43,34 @@ paths, and other handoff details that should not be shared with the repository.
 - local env:
 - Google usage:
 - provider rate-limit state:
+
+## Production Service Maintenance
+
+### CN
+
+- staging app root:
+- production app root:
+- staging backend service:
+- production backend service:
+- Nginx service:
+- Cloudflare service:
+- React build host:
+- frontend dist promotion path:
+- required smoke checks:
+
+### KR
+
+- active checkout:
+- backend scheduled task/service:
+- backend start wrapper:
+- public Nginx task/service:
+- private preview task/service:
+- frontend dist source:
+- required smoke checks:
+- known anti-patterns:
+  - do not use CN as a KR jump host unless explicitly approved
+  - do not build React on KR unless Node/npm was deliberately provisioned
+  - do not launch a one-off backend over SSH and call it persistent production
 
 ## Access Notes
 

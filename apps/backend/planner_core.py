@@ -71,7 +71,7 @@ TRAFFIC_PROFILE_LOCATION_MULTIPLIERS: dict[tuple[str, str], dict[str, float]] = 
         "PM Peak": 1.68,
     },
     ("CHINA", "SHANGHAI"): {
-        "Off-Peak": 1.4,
+        "Off-Peak": 1.84,
         "AM Peak": 1.6,
         "PM Peak": 1.75,
     },

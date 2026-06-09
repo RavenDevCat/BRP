@@ -65,6 +65,8 @@ MAX_ROUTE_DURATION_SECONDS = 90 * 60
 ANNOTATION_ROUTE_DURATION_SECONDS = 90 * 60
 ROUTE_DURATION_GRACE_SECONDS = 10 * 60
 STOP_SERVICE_SECONDS = 60
+MAX_STOPS_PER_ROUTE = int(os.environ.get("BRP_MAX_STOPS_PER_ROUTE", "10") or 10)
+COMFORT_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_LOAD_FACTOR", "0.85") or 0.85)
 SUBWAY_SEARCH_RADIUS_M = 1500
 MAX_SUBWAY_WALK_DISTANCE_M = 800
 NEARBY_CLUSTER_RADIUS_M = 500
@@ -862,20 +864,46 @@ def build_vehicle_fleet() -> list[dict[str, Any]]:
     fleet: list[dict[str, Any]] = []
     for bus_type in BUS_TYPE_CONFIGS:
         for _ in range(int(bus_type.get("max_count", 0))):
-            fleet.append({"name": str(bus_type["name"]), "capacity": int(bus_type["capacity"])})
+            capacity = int(bus_type["capacity"])
+            fleet.append(
+                {
+                    "name": str(bus_type["name"]),
+                    "capacity": capacity,
+                    "comfort_capacity": comfort_capacity_for_vehicle(capacity),
+                }
+            )
     return fleet
 
 
 def _minimum_vehicle_count_for_demand(total_demand: int, fleet: list[dict[str, Any]]) -> int:
     if total_demand <= 0 or not fleet:
         return 0
-    sorted_capacities = sorted((int(item["capacity"]) for item in fleet), reverse=True)
+    sorted_capacities = sorted((solver_capacity_for_vehicle(item) for item in fleet), reverse=True)
     running = 0
     for count, capacity in enumerate(sorted_capacities, start=1):
         running += capacity
         if running >= total_demand:
             return count
     return len(sorted_capacities)
+
+
+def comfort_capacity_for_vehicle(capacity: int) -> int:
+    if capacity <= 0:
+        return 0
+    bounded_factor = min(1.0, max(0.1, float(COMFORT_LOAD_FACTOR)))
+    return max(1, min(capacity, int(math.floor(capacity * bounded_factor))))
+
+
+def solver_capacity_for_vehicle(vehicle: dict[str, Any]) -> int:
+    capacity = int(vehicle.get("capacity", 0) or 0)
+    comfort_capacity = int(vehicle.get("comfort_capacity", 0) or 0)
+    if comfort_capacity <= 0:
+        comfort_capacity = comfort_capacity_for_vehicle(capacity)
+    return min(capacity, comfort_capacity)
+
+
+def route_stop_limit() -> int:
+    return max(1, int(MAX_STOPS_PER_ROUTE))
 
 
 def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, Any]], extra_buffer: int = 2) -> list[dict[str, Any]]:
@@ -888,14 +916,17 @@ def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, An
         return fleet[:1]
 
     sorted_fleet = sort_regular_preference(fleet)
-    min_vehicle_count = _minimum_vehicle_count_for_demand(total_demand, sorted_fleet)
+    min_vehicle_count = max(
+        _minimum_vehicle_count_for_demand(total_demand, sorted_fleet),
+        math.ceil(max(0, len(points) - 1) / route_stop_limit()),
+    )
     target_vehicle_count = min(len(sorted_fleet), max(1, min_vehicle_count + extra_buffer))
 
     trimmed = sorted_fleet[:target_vehicle_count]
-    if largest_stop_demand > 0 and all(int(item["capacity"]) < largest_stop_demand for item in trimmed):
+    if largest_stop_demand > 0 and all(solver_capacity_for_vehicle(item) < largest_stop_demand for item in trimmed):
         for candidate in sorted_fleet[target_vehicle_count:]:
             trimmed.append(candidate)
-            if int(candidate["capacity"]) >= largest_stop_demand:
+            if solver_capacity_for_vehicle(candidate) >= largest_stop_demand:
                 break
     return trimmed
 
@@ -910,7 +941,7 @@ def build_trivial_routes(
         return []
 
     demand = int(points[1].get("passenger_count", 0))
-    chosen_vehicle = next((item for item in sort_regular_preference(fleet) if int(item["capacity"]) >= demand), None)
+    chosen_vehicle = next((item for item in sort_regular_preference(fleet) if solver_capacity_for_vehicle(item) >= demand), None)
     if chosen_vehicle is None:
         raise RuntimeError("No feasible vehicle is large enough for the requested stop demand.")
 
@@ -918,6 +949,8 @@ def build_trivial_routes(
             "vehicle_id": 1,
             "bus_type_name": chosen_vehicle["name"],
             "bus_capacity": chosen_vehicle["capacity"],
+            "comfort_capacity": solver_capacity_for_vehicle(chosen_vehicle),
+            "max_stops": route_stop_limit(),
             "nodes": [0, 1],
             "time_s": int(time_matrix[0][1]),
             "distance_m": int(distance_matrix[0][1]),
@@ -999,16 +1032,16 @@ def solve_routes_for_fleet(
     working_time_matrix = transpose_matrix(time_matrix) if is_to_school_direction() else time_matrix
     working_distance_matrix = transpose_matrix(distance_matrix) if is_to_school_direction() else distance_matrix
 
-    largest_capacity = max(item["capacity"] for item in fleet)
+    largest_capacity = max(solver_capacity_for_vehicle(item) for item in fleet)
     oversized = [point["address"] for point in points[1:] if int(point.get("passenger_count", 1)) > largest_capacity]
     if oversized:
         raise RuntimeError(
-            "One or more stops exceed the largest bus capacity. "
-            f"Oversized stops above the largest bus capacity: {', '.join(oversized[:10])}"
+            "One or more stops exceed the largest comfort capacity. "
+            f"Current comfort load factor is {COMFORT_LOAD_FACTOR:.0%}; oversized stops above the largest comfort capacity: {', '.join(oversized[:10])}"
         )
 
     total_demand = sum(int(point.get("passenger_count", 0)) for point in points[1:])
-    if total_demand > sum(item["capacity"] for item in fleet):
+    if total_demand > sum(solver_capacity_for_vehicle(item) for item in fleet):
         raise RuntimeError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
     vehicle_count = len(fleet)
@@ -1047,11 +1080,25 @@ def solve_routes_for_fleet(
     routing.AddDimensionWithVehicleCapacity(
         demand_index,
         0,
-        [int(item["capacity"]) for item in fleet],
+        [solver_capacity_for_vehicle(item) for item in fleet],
         True,
         "Load",
     )
     load_dimension = routing.GetDimensionOrDie("Load")
+
+    def stop_count_callback(index: int) -> int:
+        node = manager.IndexToNode(index)
+        return 0 if node == 0 else 1
+
+    stop_count_index = routing.RegisterUnaryTransitCallback(stop_count_callback)
+    routing.AddDimensionWithVehicleCapacity(
+        stop_count_index,
+        0,
+        [route_stop_limit()] * vehicle_count,
+        True,
+        "Stops",
+    )
+    stop_dimension = routing.GetDimensionOrDie("Stops")
 
     for vehicle_id, vehicle in enumerate(fleet):
         routing.SetFixedCostOfVehicle(VEHICLE_FIXED_COST.get(vehicle["name"], 0), vehicle_id)
@@ -1101,16 +1148,20 @@ def solve_routes_for_fleet(
             route_distance_m += int(working_distance_matrix[from_node][to_node])
             index = next_index
         route_load = int(solution.Value(load_dimension.CumulVar(routing.End(vehicle_id))))
+        route_stop_count = int(solution.Value(stop_dimension.CumulVar(routing.End(vehicle_id))))
         routes.append(
             reverse_route_for_to_school(
                 {
                 "vehicle_id": vehicle_id + 1,
                 "bus_type_name": vehicle["name"],
                 "bus_capacity": vehicle["capacity"],
+                "comfort_capacity": solver_capacity_for_vehicle(vehicle),
+                "max_stops": route_stop_limit(),
                 "nodes": nodes,
                 "time_s": route_time_s,
                 "distance_m": route_distance_m,
                 "load": route_load,
+                "stop_count": route_stop_count,
                 }
             )
         )
@@ -1512,11 +1563,21 @@ def build_map_summary_html(
             route_buffer_factor_float = float(route_buffer_factor)
         except (TypeError, ValueError):
             route_buffer_factor_float = None
+        comfort_capacity = int(route.get("comfort_capacity", route.get("bus_capacity", 0)) or 0)
+        bus_capacity = int(route.get("bus_capacity", 0) or 0)
+        stop_count = int(route.get("stop_count", max(0, len(route.get("nodes", [])) - 1)) or 0)
+        max_stops = int(route.get("max_stops", route_stop_limit()) or route_stop_limit())
+        passenger_line = (
+            f"<div>Passengers: {route['load']} / {comfort_capacity} comfort seats ({bus_capacity} physical)</div>"
+            if comfort_capacity and comfort_capacity != bus_capacity
+            else f"<div>Passengers: {route['load']} / {bus_capacity} seats</div>"
+        )
         lines.extend(
             [
                 f"<h4 style='margin:12px 0 4px 0;'>Bus {route['vehicle_id']}</h4>",
                 f"<div>Vehicle type: {route['bus_type_name']}</div>",
-                f"<div>Passengers: {route['load']} / {route['bus_capacity']} seats</div>",
+                passenger_line,
+                f"<div>Stops: {stop_count} / {max_stops}</div>",
                 f"<div>Estimated time: {seconds_to_human(display_time_s)}</div>",
                 f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
             ]
@@ -1665,7 +1726,12 @@ def render_map(
                 color=color,
                 weight=6,
                 opacity=0.9,
-                tooltip=f"Bus {route['vehicle_id']} | {route['bus_type_name']} | {route['load']}/{route['bus_capacity']}",
+                tooltip=(
+                    f"Bus {route['vehicle_id']} | {route['bus_type_name']} | "
+                    f"{route['load']}/{route.get('comfort_capacity', route['bus_capacity'])} comfort | "
+                    f"{route.get('stop_count', max(0, len(route.get('nodes', [])) - 1))}/"
+                    f"{route.get('max_stops', route_stop_limit())} stops"
+                ),
             ).add_to(fmap)
         for order, node in enumerate(route["nodes"]):
             point = points[node]
@@ -1834,6 +1900,20 @@ def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, A
         ) / len(routes)
         if routes else 0.0
     )
+    avg_route_comfort_load_factor = (
+        sum(
+            (
+                float(route.get("load", 0.0))
+                / float(route.get("comfort_capacity", route.get("bus_capacity", 1)) or 1)
+            )
+            for route in routes
+        ) / len(routes)
+        if routes else 0.0
+    )
+    max_route_stop_count = max(
+        (int(route.get("stop_count", max(0, len(route.get("nodes", [])) - 1)) or 0) for route in routes),
+        default=0,
+    )
     return {
         "points": points,
         "routes": routes,
@@ -1848,6 +1928,10 @@ def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, A
         "avg_route_distance_m": avg_route_distance_m,
         "avg_route_duration_s": avg_route_duration_s,
         "avg_route_load_factor": avg_route_load_factor,
+        "avg_route_comfort_load_factor": avg_route_comfort_load_factor,
+        "max_route_stop_count": max_route_stop_count,
+        "max_stops_per_route": route_stop_limit(),
+        "comfort_load_factor_limit": min(1.0, max(0.1, float(COMFORT_LOAD_FACTOR))),
         "total_operating_cost": 0.0,
         "total_chargeable_revenue": 0.0,
         "total_profit_loss": 0.0,

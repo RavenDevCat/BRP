@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
+import tempfile
 import unittest
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +127,52 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(route_stats["sampled_leg_count"], 1)
         self.assertEqual(route_stats["total_leg_count"], 1)
         self.assertTrue(route_stats["coverage_complete"])
+
+    def test_live_traffic_sample_summarizes_recent_city_period(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "pm_live.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-09T15:40:00+08:00",
+                        "local_date": "2026-06-09",
+                        "period": "pm_peak",
+                        "city": "Shanghai",
+                        "dry_run": False,
+                        "route_count": 21,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_amap_duration_s": 1900.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (sample_dir / "pm_dry_run.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-09T15:35:00+08:00",
+                        "local_date": "2026-06-09",
+                        "period": "pm_peak",
+                        "city": "Shanghai",
+                        "dry_run": True,
+                        "route_count": 21,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_amap_duration_s": 9999.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = planner_core.summarize_live_traffic_samples(
+                service_direction="From School",
+                input_records=[{"country": "China", "city": "Shanghai", "address": "School"}],
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 9, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["period"], "pm_peak")
+        self.assertEqual(result["traffic_profile_name"], "PM Peak (Live)")
+        self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.9)
+        self.assertEqual(result["route_sample_count"], 21)
 
 
 if __name__ == "__main__":

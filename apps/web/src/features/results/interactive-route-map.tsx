@@ -418,7 +418,9 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
-                "circle-radius": selectedRouteId ? 4 : ["case", ["get", "is_depot"], 9, 6],
+                "circle-radius": selectedRouteId
+                  ? ["interpolate", ["linear"], ["zoom"], 10, 3, 14, 4.5, 16, 6]
+                  : ["case", ["get", "is_depot"], 9, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 6, 16, 8]],
                 "circle-opacity": selectedRouteId ? 0.24 : 0.9,
                 "circle-stroke-color": "#ffffff",
                 "circle-stroke-width": 2,
@@ -427,16 +429,20 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
             <Layer
               id="stops-label"
               type="symbol"
+              minzoom={12.25}
               layout={{
                 "text-field": ["get", "label"],
-                "text-size": 11,
+                "text-size": ["interpolate", ["linear"], ["zoom"], 12, 9, 14, 11, 16, 13],
                 "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-                "text-allow-overlap": true,
-                "text-ignore-placement": true,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+                "text-optional": true,
               }}
               paint={{
                 "text-color": "#ffffff",
-                "text-opacity": selectedRouteId ? 0.18 : 0.95,
+                "text-halo-color": "#111827",
+                "text-halo-width": 1.1,
+                "text-opacity": selectedRouteId ? 0.12 : ["interpolate", ["linear"], ["zoom"], 12.25, 0, 13, 0.82, 15, 0.96],
               }}
             />
           </Source>
@@ -446,7 +452,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": "#ffffff",
-                "circle-radius": ["case", ["get", "is_depot"], 13, 10],
+                "circle-radius": ["case", ["get", "is_depot"], 13, ["interpolate", ["linear"], ["zoom"], 10, 8, 14, 10, 16, 12]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
               }}
             />
@@ -455,7 +461,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
-                "circle-radius": ["case", ["get", "is_depot"], 10, 8],
+                "circle-radius": ["case", ["get", "is_depot"], 10, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 16, 10]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
                 "circle-stroke-color": "#111827",
                 "circle-stroke-width": 1.5,
@@ -466,13 +472,15 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="symbol"
               layout={{
                 "text-field": ["get", "label"],
-                "text-size": 12,
+                "text-size": ["interpolate", ["linear"], ["zoom"], 10, 11, 14, 13, 16, 15],
                 "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
                 "text-allow-overlap": true,
                 "text-ignore-placement": true,
               }}
               paint={{
                 "text-color": "#ffffff",
+                "text-halo-color": "#111827",
+                "text-halo-width": 1.4,
                 "text-opacity": selectedRouteId ? 1 : 0,
               }}
             />

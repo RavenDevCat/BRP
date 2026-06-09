@@ -116,6 +116,13 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertTrue(result["succeeded"])
         self.assertEqual(result["selected_period"], "pm_peak")
         self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.5)
+        route_stats = result["route_periods"]["pm_peak"]["R1"]
+        self.assertAlmostEqual(float(route_stats["osrm_duration_s"]), 100.0)
+        self.assertAlmostEqual(float(route_stats["amap_duration_s"]), 150.0)
+        self.assertAlmostEqual(float(route_stats["factor"]), 1.5)
+        self.assertEqual(route_stats["sampled_leg_count"], 1)
+        self.assertEqual(route_stats["total_leg_count"], 1)
+        self.assertTrue(route_stats["coverage_complete"])
 
 
 if __name__ == "__main__":

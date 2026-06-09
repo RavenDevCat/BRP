@@ -526,6 +526,17 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
           </Source>
           <Source id="stops" type="geojson" data={stopFeatures}>
             <Layer
+              id="stops-halo"
+              type="circle"
+              paint={{
+                "circle-color": "#ffffff",
+                "circle-radius": selectedRouteId
+                  ? ["interpolate", ["linear"], ["zoom"], 10, 5, 14, 7, 16, 9]
+                  : ["case", ["get", "is_depot"], 11, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 16, 10]],
+                "circle-opacity": selectedRouteId ? 0.18 : 0.92,
+              }}
+            />
+            <Layer
               id="stops-circle"
               type="circle"
               paint={{
@@ -534,8 +545,8 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                   ? ["interpolate", ["linear"], ["zoom"], 10, 3, 14, 4.5, 16, 6]
                   : ["case", ["get", "is_depot"], 9, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 6, 16, 8]],
                 "circle-opacity": selectedRouteId ? 0.24 : 0.9,
-                "circle-stroke-color": "#ffffff",
-                "circle-stroke-width": 2,
+                "circle-stroke-color": selectedRouteId ? "#111827" : "#ffffff",
+                "circle-stroke-width": selectedRouteId ? 1.5 : 2,
               }}
             />
             <Layer
@@ -564,7 +575,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": "#ffffff",
-                "circle-radius": ["case", ["get", "is_depot"], 13, ["interpolate", ["linear"], ["zoom"], 10, 8, 14, 10, 16, 12]],
+                "circle-radius": ["case", ["get", "is_depot"], 16, ["interpolate", ["linear"], ["zoom"], 10, 10, 14, 13, 16, 15]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
               }}
             />
@@ -573,10 +584,10 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
-                "circle-radius": ["case", ["get", "is_depot"], 10, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 16, 10]],
+                "circle-radius": ["case", ["get", "is_depot"], 12, ["interpolate", ["linear"], ["zoom"], 10, 7, 14, 10, 16, 12]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
                 "circle-stroke-color": "#111827",
-                "circle-stroke-width": 1.5,
+                "circle-stroke-width": 2.5,
               }}
             />
             <Layer

@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+LOCAL_ENV_FILE="$ROOT_DIR/ops/env/local.env"
+if [ -f "$LOCAL_ENV_FILE" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  source "$LOCAL_ENV_FILE"
+  set +a
+fi
+
+DEFAULT_BRP_PYTHON="/opt/brp/staging/venv/bin/python"
+if [ -z "${BACKEND_PYTHON:-}" ] && [ -x "$DEFAULT_BRP_PYTHON" ]; then
+  BACKEND_PYTHON="$DEFAULT_BRP_PYTHON"
+else
+  BACKEND_PYTHON="${BACKEND_PYTHON:-python3}"
+fi
+
+period="${1:-}"
+run_id="${BRP_LIVE_TRAFFIC_SUZHOU_RUN_ID:-0048b194830c}"
+market="${BRP_LIVE_TRAFFIC_SUZHOU_MARKET:-CN}"
+city="${BRP_LIVE_TRAFFIC_SUZHOU_CITY:-Suzhou}"
+
+case "$period" in
+  am_peak)
+    timing_args=(--target-arrival-local-time "${BRP_LIVE_TRAFFIC_SUZHOU_AM_TARGET_ARRIVAL_LOCAL_TIME:-08:00}")
+    ;;
+  pm_peak)
+    timing_args=(--departure-local-time "${BRP_LIVE_TRAFFIC_SUZHOU_PM_DEPARTURE_LOCAL_TIME:-15:40}")
+    ;;
+  off_peak)
+    timing_args=()
+    ;;
+  *)
+    echo "Usage: $0 {am_peak|pm_peak|off_peak} [extra sampler args...]" >&2
+    exit 2
+    ;;
+esac
+
+shift || true
+cd "$ROOT_DIR/apps/backend"
+exec "$BACKEND_PYTHON" live_traffic_sampler.py \
+  --source fleet_planner \
+  --run-id "$run_id" \
+  --period "$period" \
+  --market "$market" \
+  --city "$city" \
+  "${timing_args[@]}" \
+  "$@"

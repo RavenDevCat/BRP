@@ -6,6 +6,18 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-09
 
+### Interactive Route Map MVP Started
+
+- Route Audit map work is moving from backend-rendered Folium iframe artifacts
+  toward a React-native interactive map.
+- The first pass keeps the legacy HTML maps as a fallback while adding a
+  structured map-data API and an Interactive / Legacy toggle in the Maps tab.
+- MVP scope: Route Audit job results only, scenario switching for existing map
+  outputs, route list, route focus, stop markers, stop detail popups, and
+  fit-to-route controls.
+- Backend source of truth remains existing completed job `structured_results`;
+  no rerun is required to view an interactive map for compatible completed jobs.
+
 ### Oversized Pickup Batching Balanced
 
 - Route Audit now splits oversized pickup demand using the smallest capacity-feasible

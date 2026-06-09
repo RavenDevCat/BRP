@@ -56,6 +56,79 @@ export type AiAuditResponse = {
   message?: string;
 };
 
+export type JobMapBounds = {
+  min_lng: number;
+  min_lat: number;
+  max_lng: number;
+  max_lat: number;
+};
+
+export type JobMapRoute = {
+  id: string;
+  route_index: number;
+  vehicle_id?: string | number | null;
+  bus_type_name: string;
+  load: number;
+  bus_capacity?: number | null;
+  comfort_capacity?: number | null;
+  stop_count: number;
+  max_stops?: number | null;
+  distance_m: number;
+  duration_s: number;
+  raw_duration_s: number;
+  traffic_time_source?: string;
+  geometry: number[][];
+  stop_ids: string[];
+};
+
+export type JobMapStop = {
+  id: string;
+  route_id: string;
+  route_index: number;
+  order: number;
+  node_index: number;
+  address: string;
+  requested_address?: string;
+  passenger_count: number;
+  is_depot: boolean;
+  lat: number;
+  lng: number;
+  cumulative_duration_s: number;
+  cumulative_distance_m: number;
+  demand_batch_index?: number | null;
+  demand_batch_count?: number | null;
+};
+
+export type JobMapPrivateLink = {
+  id: string;
+  access_type: string;
+  address: string;
+  pickup_address: string;
+  pickup_route_id: string;
+  drive_time_s: number;
+  drive_distance_m: number;
+  geometry: number[][];
+};
+
+export type JobMapData = {
+  job_id: string;
+  scenario_key: string;
+  scenario_name: string;
+  service_direction?: string;
+  traffic_profile_name?: string;
+  bounds?: JobMapBounds | null;
+  routes: JobMapRoute[];
+  stops: JobMapStop[];
+  private_links: JobMapPrivateLink[];
+  summary: {
+    route_count: number;
+    stop_count: number;
+    passenger_count: number;
+    distance_m: number;
+    duration_s: number;
+  };
+};
+
 export type PlannerConfigPayload = {
   large_bus_name: string;
   mid_bus_name: string;
@@ -420,6 +493,10 @@ export function getJobArtifactUrl(jobId: string, artifactKey: string, options?: 
   }
   const query = params.toString();
   return query ? `${url}?${query}` : url;
+}
+
+export function getJobMapData(jobId: string, scenarioKey: string) {
+  return apiFetch<JobMapData>(`/jobs/${encodeURIComponent(jobId)}/map-data/${encodeURIComponent(scenarioKey)}`);
 }
 
 export function getJobExportUrl(jobId: string, exportKey: string) {

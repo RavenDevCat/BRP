@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
   ArrowRight,
@@ -20,7 +20,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { buttonClassName } from "@/components/ui/button-styles";
-import { generateAiAudit, getJobArtifactUrl, getJobExportUrl, type JobRecord } from "@/lib/api";
+import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { generateAiAudit, getJobArtifactUrl, getJobExportUrl, getJobMapData, type JobRecord } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import {
   formatDistanceKmFromMeters,
@@ -124,7 +125,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
-      {activeTab === "maps" ? <MapsPanel mapOutputs={mapOutputs} /> : null}
+      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
       {activeTab === "actions" ? (
         <ActionPanel
           priorityActions={priorityActions}
@@ -684,9 +685,15 @@ function DiagnosticsPanel({
   );
 }
 
-function MapsPanel({ mapOutputs }: { mapOutputs: MapOutput[] }) {
+function MapsPanel({ jobId, mapOutputs }: { jobId: string; mapOutputs: MapOutput[] }) {
   const [selectedKey, setSelectedKey] = useState("");
+  const [mapMode, setMapMode] = useState<"interactive" | "legacy">("interactive");
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
+  const interactiveQuery = useQuery({
+    queryKey: ["job-map-data", jobId, selected?.key],
+    queryFn: () => getJobMapData(jobId, selected.key),
+    enabled: Boolean(selected && mapMode === "interactive"),
+  });
 
   if (!mapOutputs.length || !selected) {
     return <EmptyState title="No maps available" detail="This job did not include rendered route map artifacts." />;
@@ -701,6 +708,30 @@ function MapsPanel({ mapOutputs }: { mapOutputs: MapOutput[] }) {
             <h2 className="text-sm font-semibold">Route maps</h2>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={cn(
+                "h-9 rounded-md border px-3 text-sm font-medium transition",
+                mapMode === "interactive"
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => setMapMode("interactive")}
+            >
+              Interactive
+            </button>
+            <button
+              type="button"
+              className={cn(
+                "h-9 rounded-md border px-3 text-sm font-medium transition",
+                mapMode === "legacy"
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+              onClick={() => setMapMode("legacy")}
+            >
+              Legacy HTML
+            </button>
             <a href={selected.url} target="_blank" rel="noreferrer" className={buttonClassName("secondary")}>
               <ExternalLink className="h-4 w-4" aria-hidden="true" />
               Open
@@ -724,15 +755,32 @@ function MapsPanel({ mapOutputs }: { mapOutputs: MapOutput[] }) {
                   ? "border-primary bg-primary text-primary-foreground"
                   : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
               )}
-              onClick={() => setSelectedKey(item.key)}
+              onClick={() => {
+                setSelectedKey(item.key);
+              }}
             >
               {item.name}
             </button>
           ))}
         </div>
-        <div className="overflow-hidden rounded-md border border-border bg-muted">
-          <iframe key={selected.key} title={selected.name} src={selected.url} className="h-[720px] min-h-[560px] max-h-[75vh] w-full border-0" />
-        </div>
+        {mapMode === "interactive" ? (
+          interactiveQuery.isLoading ? (
+            <div className="flex h-[560px] items-center justify-center rounded-md border border-border bg-muted text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+              Loading interactive map
+            </div>
+          ) : interactiveQuery.isError ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              Interactive map data is not available for this scenario yet. Use Legacy HTML while this view is being prepared.
+            </div>
+          ) : interactiveQuery.data ? (
+            <InteractiveRouteMap data={interactiveQuery.data} />
+          ) : null
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border bg-muted">
+            <iframe key={selected.key} title={selected.name} src={selected.url} className="h-[720px] min-h-[560px] max-h-[75vh] w-full border-0" />
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -10,22 +10,23 @@ if [ -f "$LOCAL_ENV_FILE" ]; then
   set +a
 fi
 
-AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:30:00}"
-PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:40:00}"
+AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:10:00 Asia/Shanghai}"
+PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:40:00 Asia/Shanghai}"
 SYSTEMD_DIR="${BRP_LIVE_TRAFFIC_SYSTEMD_DIR:-/etc/systemd/system}"
 
 write_service() {
   local name="$1"
-  local period="$2"
+  local description="$2"
+  local command="$3"
   local path="$SYSTEMD_DIR/$name.service"
   sudo tee "$path" >/dev/null <<EOF
 [Unit]
-Description=BRP live traffic sampler ($period)
+Description=BRP live traffic sampler ($description)
 
 [Service]
 Type=oneshot
 WorkingDirectory=$ROOT_DIR
-ExecStart=$ROOT_DIR/ops/scripts/run_live_traffic_sampler.sh $period
+ExecStart=$command
 EOF
 }
 
@@ -47,16 +48,15 @@ WantedBy=timers.target
 EOF
 }
 
-write_service "brp-live-traffic-am" "am_peak"
+write_service "brp-live-traffic-am" "am_peak arrival window" "$ROOT_DIR/ops/scripts/run_live_traffic_am_window.sh"
 write_timer "brp-live-traffic-am" "$AM_ON_CALENDAR"
-write_service "brp-live-traffic-pm" "pm_peak"
+write_service "brp-live-traffic-pm" "pm_peak departure" "$ROOT_DIR/ops/scripts/run_live_traffic_sampler.sh pm_peak"
 write_timer "brp-live-traffic-pm" "$PM_ON_CALENDAR"
 
 sudo systemctl daemon-reload
 echo "Installed timers, not enabled:"
 echo "  brp-live-traffic-am.timer -> $AM_ON_CALENDAR"
 echo "  brp-live-traffic-pm.timer -> $PM_ON_CALENDAR"
-echo "For AM arrival-based sampling, run the AM sampler repeatedly across the morning departure window"
-echo "and pass --sample-due-routes-only once the operating schedule is confirmed."
+echo "AM uses run_live_traffic_am_window.sh and samples only routes due near their planned departure."
 echo "Enable after confirming times:"
 echo "  sudo systemctl enable --now brp-live-traffic-am.timer brp-live-traffic-pm.timer"

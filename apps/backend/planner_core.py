@@ -34,6 +34,21 @@ PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"
 TRAFFIC_CALIBRATION_CACHE_PATH = CACHE_DIR / "traffic_calibration_cache.json"
+LIVE_TRAFFIC_SAMPLE_DIR = Path(
+    os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "/opt/brp/shared/runtime/traffic_samples")
+).expanduser()
+LIVE_TRAFFIC_ROLLING_WORKDAYS = max(
+    1,
+    int(os.environ.get("BRP_LIVE_TRAFFIC_ROLLING_WORKDAYS", "5") or 5),
+)
+LIVE_TRAFFIC_MAX_AGE_DAYS = max(
+    1,
+    int(os.environ.get("BRP_LIVE_TRAFFIC_MAX_AGE_DAYS", "14") or 14),
+)
+LIVE_TRAFFIC_MIN_ROUTE_SAMPLES = max(
+    1,
+    int(os.environ.get("BRP_LIVE_TRAFFIC_MIN_ROUTE_SAMPLES", "1") or 1),
+)
 AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
     "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
     "false",
@@ -321,6 +336,145 @@ def resolve_traffic_profile(
     if country_profiles is not None:
         return normalized, float(country_profiles[normalized]), f"{country.title()} default"
     return normalized, float(TRAFFIC_PROFILE_MULTIPLIERS[normalized]), "Global default"
+
+
+def live_traffic_period_for_service_direction(service_direction: str | None) -> str | None:
+    normalized = normalize_service_direction(service_direction)
+    if normalized == "To School":
+        return "am_peak"
+    if normalized == "From School":
+        return "pm_peak"
+    return None
+
+
+def _parse_live_sample_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=AMAP_TRAFFIC_CALIBRATION_TZ)
+    return parsed.astimezone(AMAP_TRAFFIC_CALIBRATION_TZ)
+
+
+def _load_live_traffic_sample(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _matching_live_traffic_samples(
+    *,
+    country: str,
+    city: str,
+    period: str,
+    sample_dir: Path | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    if country != "CHINA" or not city:
+        return []
+    directory = sample_dir or LIVE_TRAFFIC_SAMPLE_DIR
+    if not directory.exists():
+        return []
+    now = now or datetime.now(AMAP_TRAFFIC_CALIBRATION_TZ)
+    cutoff = now - timedelta(days=LIVE_TRAFFIC_MAX_AGE_DAYS)
+    matches: list[dict[str, Any]] = []
+    for path in sorted(directory.glob("*.json")):
+        payload = _load_live_traffic_sample(path)
+        if not payload:
+            continue
+        if bool(payload.get("dry_run")):
+            continue
+        if str(payload.get("period", "")).strip() != period:
+            continue
+        if str(payload.get("city", "")).strip().upper() != city:
+            continue
+        measured_at = _parse_live_sample_datetime(payload.get("measured_at"))
+        if measured_at is None or measured_at < cutoff:
+            continue
+        route_count = int(payload.get("route_count", 0) or 0)
+        total_osrm = float(payload.get("total_osrm_duration_s", 0.0) or 0.0)
+        total_amap = float(payload.get("total_amap_duration_s", 0.0) or 0.0)
+        if route_count <= 0 or total_osrm <= 0 or total_amap <= 0:
+            continue
+        item = dict(payload)
+        item["_path"] = str(path)
+        item["_measured_at"] = measured_at
+        item["_local_date"] = str(payload.get("local_date") or measured_at.date().isoformat())
+        matches.append(item)
+    matches.sort(key=lambda item: item["_measured_at"], reverse=True)
+    return matches
+
+
+def summarize_live_traffic_samples(
+    *,
+    service_direction: str | None,
+    input_records: list[dict[str, Any]] | None,
+    sample_dir: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    country, city = infer_traffic_location(input_records)
+    period = live_traffic_period_for_service_direction(service_direction)
+    if period is None:
+        return None
+    matches = _matching_live_traffic_samples(
+        country=country,
+        city=city,
+        period=period,
+        sample_dir=sample_dir,
+        now=now,
+    )
+    if not matches:
+        return None
+
+    selected_dates: list[str] = []
+    selected: list[dict[str, Any]] = []
+    for item in matches:
+        local_date = str(item["_local_date"])
+        if local_date not in selected_dates:
+            if len(selected_dates) >= LIVE_TRAFFIC_ROLLING_WORKDAYS:
+                continue
+            selected_dates.append(local_date)
+        if local_date in selected_dates:
+            selected.append(item)
+
+    total_osrm = sum(float(item.get("total_osrm_duration_s", 0.0) or 0.0) for item in selected)
+    total_amap = sum(float(item.get("total_amap_duration_s", 0.0) or 0.0) for item in selected)
+    route_count = sum(int(item.get("route_count", 0) or 0) for item in selected)
+    if total_osrm <= 0 or total_amap <= 0 or route_count < LIVE_TRAFFIC_MIN_ROUTE_SAMPLES:
+        return None
+    factor = total_amap / total_osrm
+    latest = selected[0]
+    label = "AM Peak" if period == "am_peak" else "PM Peak"
+    return {
+        "enabled": True,
+        "succeeded": True,
+        "source": "live_traffic_samples",
+        "country": country,
+        "city": city,
+        "period": period,
+        "period_label": label,
+        "traffic_profile_name": f"{label} (Live)",
+        "traffic_time_multiplier": float(factor),
+        "traffic_profile_context": (
+            f"{city.title()} {label} live traffic sample; "
+            f"{route_count} route sample(s), {len(selected_dates)} workday(s), "
+            f"latest {latest['_measured_at'].strftime('%Y-%m-%d %H:%M')}"
+        ),
+        "route_sample_count": route_count,
+        "sample_file_count": len(selected),
+        "workday_count": len(selected_dates),
+        "local_dates": selected_dates,
+        "latest_measured_at": latest["_measured_at"].isoformat(timespec="seconds"),
+        "total_osrm_duration_s": total_osrm,
+        "total_amap_duration_s": total_amap,
+        "sample_paths": [str(item.get("_path", "")) for item in selected],
+    }
 
 
 def _load_json_object(path: Path) -> dict[str, Any]:
@@ -4177,6 +4331,14 @@ def run_backend_planner_with_prepared_data(
         config.traffic_profile_name,
         input_records,
     )
+    live_traffic_sample = summarize_live_traffic_samples(
+        service_direction=config.service_direction,
+        input_records=input_records,
+    )
+    if live_traffic_sample:
+        traffic_profile_name = str(live_traffic_sample["traffic_profile_name"])
+        traffic_time_multiplier = float(live_traffic_sample["traffic_time_multiplier"])
+        traffic_profile_context = str(live_traffic_sample["traffic_profile_context"])
 
     original_points = deepcopy(prepared_payload.get("original_points") or [])
     subway_points = deepcopy(prepared_payload.get("subway_points") or [])
@@ -4221,6 +4383,12 @@ def run_backend_planner_with_prepared_data(
             else:
                 reason = str(traffic_calibration.get("reason", "not_applicable"))
                 planner.log(f"[BACKEND] AMap peak calibration skipped: {reason}.")
+            if live_traffic_sample and not traffic_calibration.get("succeeded"):
+                planner.log(
+                    f"[BACKEND] Live traffic sample selected {traffic_time_multiplier:.2f}x "
+                    f"for {live_traffic_sample.get('city')} {live_traffic_sample.get('period')} "
+                    f"({live_traffic_sample.get('route_sample_count')} route sample(s))."
+                )
         except Exception as exc:
             traffic_calibration = {
                 "enabled": True,
@@ -4387,6 +4555,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
         "traffic_calibration": traffic_calibration,
+        "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
     }
     structured_results = attach_output_paths_to_structured_results(structured_results, config)
@@ -4414,6 +4583,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
         "traffic_calibration": traffic_calibration,
+        "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
     }
 

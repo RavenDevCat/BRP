@@ -60,3 +60,17 @@ def test_solver_uses_comfort_capacity_not_physical_capacity(monkeypatch):
     assert len(routes) >= 3
     assert all(route["comfort_capacity"] == 35 for route in routes)
     assert all(route["load"] <= route["comfort_capacity"] for route in routes)
+
+
+def test_oversized_stop_is_split_into_multiple_vehicle_batches(monkeypatch):
+    planner = _configure_solver(monkeypatch)
+    points = [_point(0), _point(1, 38)]
+
+    expanded = planner.split_oversized_demand_points(points, 35)
+    matrix = _simple_matrix(len(expanded))
+    routes = planner.solve_routes(expanded, matrix, matrix)
+
+    assert [point["passenger_count"] for point in expanded[1:]] == [34, 4]
+    assert len(routes) == 2
+    assert all(route["load"] <= route["comfort_capacity"] for route in routes)
+    assert {expanded[node]["demand_batch_count"] for route in routes for node in route["nodes"] if node} == {2}

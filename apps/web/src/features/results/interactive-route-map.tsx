@@ -226,6 +226,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
     }),
     [selectedRouteId, stopFeatures],
   );
+  const interactiveStopFeatures = selectedRouteId ? selectedStopFeatures : stopFeatures;
 
   const privateLinkFeatures = useMemo<FeatureCollection>(
     () => ({
@@ -533,7 +534,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "circle-radius": selectedRouteId
                   ? ["interpolate", ["linear"], ["zoom"], 10, 5, 14, 7, 16, 9]
                   : ["case", ["get", "is_depot"], 11, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 16, 10]],
-                "circle-opacity": selectedRouteId ? 0.18 : 0.92,
+                "circle-opacity": selectedRouteId ? 0 : 0.92,
               }}
             />
             <Layer
@@ -544,7 +545,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "circle-radius": selectedRouteId
                   ? ["interpolate", ["linear"], ["zoom"], 10, 3, 14, 4.5, 16, 6]
                   : ["case", ["get", "is_depot"], 9, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 6, 16, 8]],
-                "circle-opacity": selectedRouteId ? 0.24 : 0.9,
+                "circle-opacity": selectedRouteId ? 0 : 0.9,
                 "circle-stroke-color": selectedRouteId ? "#111827" : "#ffffff",
                 "circle-stroke-width": selectedRouteId ? 1.5 : 2,
               }}
@@ -565,7 +566,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "text-color": "#ffffff",
                 "text-halo-color": "#111827",
                 "text-halo-width": 1.1,
-                "text-opacity": selectedRouteId ? 0.12 : ["interpolate", ["linear"], ["zoom"], 12.25, 0, 13, 0.82, 15, 0.96],
+                "text-opacity": selectedRouteId ? 0 : ["interpolate", ["linear"], ["zoom"], 12.25, 0, 13, 0.82, 15, 0.96],
               }}
             />
           </Source>
@@ -575,7 +576,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": "#ffffff",
-                "circle-radius": ["case", ["get", "is_depot"], 16, ["interpolate", ["linear"], ["zoom"], 10, 10, 14, 13, 16, 15]],
+                "circle-radius": ["case", ["get", "is_depot"], 20, ["interpolate", ["linear"], ["zoom"], 10, 13, 14, 16, 16, 18]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
               }}
             />
@@ -584,10 +585,10 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
-                "circle-radius": ["case", ["get", "is_depot"], 12, ["interpolate", ["linear"], ["zoom"], 10, 7, 14, 10, 16, 12]],
+                "circle-radius": ["case", ["get", "is_depot"], 15, ["interpolate", ["linear"], ["zoom"], 10, 9, 14, 12, 16, 14]],
                 "circle-opacity": selectedRouteId ? 0.98 : 0,
                 "circle-stroke-color": "#111827",
-                "circle-stroke-width": 2.5,
+                "circle-stroke-width": 3,
               }}
             />
             <Layer
@@ -595,7 +596,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="symbol"
               layout={{
                 "text-field": ["get", "label"],
-                "text-size": ["interpolate", ["linear"], ["zoom"], 10, 11, 14, 13, 16, 15],
+                "text-size": ["interpolate", ["linear"], ["zoom"], 10, 12, 14, 15, 16, 17],
                 "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
                 "text-allow-overlap": true,
                 "text-ignore-placement": true,
@@ -608,7 +609,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               }}
             />
           </Source>
-          <Source id="stop-hit-areas" type="geojson" data={stopFeatures}>
+          <Source id="stop-hit-areas" type="geojson" data={interactiveStopFeatures}>
             <Layer
               id="stops-hit-area"
               type="circle"

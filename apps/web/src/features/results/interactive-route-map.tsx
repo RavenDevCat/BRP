@@ -98,6 +98,7 @@ const routeFilterOptions: Array<{ key: RouteFilter; label: string }> = [
   { key: "many_stops", label: "Many stops" },
 ];
 
+const ROUTE_LABEL_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
 const STOP_LAYER_IDS = ["stops-hit-area", "selected-stops-circle", "selected-stops-label", "stops-circle", "stops-label"];
 const ROUTE_LAYER_IDS = ["selected-route-line", "route-lines"];
 const INTERACTIVE_LAYER_IDS = [
@@ -139,8 +140,9 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const sortedRoutes = useMemo(
     () =>
       [...data.routes].sort((a, b) => {
+        const labelOrder = ROUTE_LABEL_COLLATOR.compare(routeSortLabel(a), routeSortLabel(b));
         const workbookOrder = routeWorkbookOrder(a, stopsByRouteId) - routeWorkbookOrder(b, stopsByRouteId);
-        return workbookOrder || a.route_index - b.route_index || a.id.localeCompare(b.id);
+        return labelOrder || workbookOrder || a.route_index - b.route_index;
       }),
     [data.routes, stopsByRouteId],
   );
@@ -782,6 +784,10 @@ function routeColor(index: number) {
 
 function routeLabel(route: JobMapRoute) {
   return route.id || `Bus ${route.vehicle_id || route.route_index + 1}`;
+}
+
+function routeSortLabel(route: JobMapRoute) {
+  return route.id || String(route.vehicle_id || route.route_index + 1);
 }
 
 function routeLoadRatio(route: JobMapRoute) {

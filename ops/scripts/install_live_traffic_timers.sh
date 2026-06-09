@@ -10,7 +10,7 @@ if [ -f "$LOCAL_ENV_FILE" ]; then
   set +a
 fi
 
-AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:10:00 Asia/Shanghai}"
+AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:20:00 Asia/Shanghai}"
 PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:40:00 Asia/Shanghai}"
 SYSTEMD_DIR="${BRP_LIVE_TRAFFIC_SYSTEMD_DIR:-/etc/systemd/system}"
 

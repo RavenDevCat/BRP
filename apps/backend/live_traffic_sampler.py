@@ -26,6 +26,8 @@ DEFAULT_SIDE_TOOLS_DIR = Path(os.environ.get("BRP_SIDE_TOOLS_DIR", "/opt/brp/sha
 DEFAULT_TZ = ZoneInfo(os.environ.get("BRP_LIVE_TRAFFIC_TIMEZONE", "Asia/Shanghai") or "Asia/Shanghai")
 DEFAULT_DEPARTURE_MULTIPLIER = float(os.environ.get("BRP_LIVE_TRAFFIC_DEPARTURE_MULTIPLIER", "1.84") or 1.84)
 DEFAULT_DUE_WINDOW_MINUTES = int(os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_DUE_WINDOW_MINUTES", "5") or 5)
+DEFAULT_ROUTE_START_TIMES_PATH = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_PATH", "").strip()
+DEFAULT_ROUTE_START_TIMES_JSON = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_JSON", "").strip()
 
 
 def _coord(point: dict[str, Any]) -> str:
@@ -53,6 +55,44 @@ def _parse_clock(value: str | None) -> dt_time | None:
 
 def _combine_today(clock: dt_time, *, now: datetime) -> datetime:
     return datetime.combine(now.date(), clock, tzinfo=now.tzinfo)
+
+
+def _normalize_route_schedule_key(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    prefix = raw.split("-", 1)[0].strip()
+    digits = "".join(ch for ch in prefix if ch.isdigit())
+    if digits:
+        return f"Line {int(digits):02d}"
+    return raw.lower()
+
+
+def _load_route_start_times(args: argparse.Namespace) -> dict[str, str]:
+    payload: Any = None
+    if args.route_start_times_json:
+        payload = json.loads(args.route_start_times_json)
+    elif args.route_start_times_path:
+        path = Path(args.route_start_times_path)
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("Route start times must be a JSON object")
+    return {
+        _normalize_route_schedule_key(key): str(value).strip()
+        for key, value in payload.items()
+        if str(value).strip()
+    }
+
+
+def _route_schedule_key(route: dict[str, Any]) -> str:
+    route_id = route.get("route_id")
+    key = _normalize_route_schedule_key(route_id)
+    if key:
+        return key
+    return _normalize_route_schedule_key(route.get("vehicle_id"))
 
 
 def _load_job(job_id: str, jobs_dir: Path) -> dict[str, Any]:
@@ -180,22 +220,40 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _route_sampling_schedule(args: argparse.Namespace, osrm_s: float, now: datetime) -> dict[str, Any]:
+def _route_sampling_schedule(
+    args: argparse.Namespace,
+    route: dict[str, Any],
+    osrm_s: float,
+    now: datetime,
+    route_start_times: dict[str, str],
+) -> dict[str, Any]:
     target_arrival_clock = _parse_clock(args.target_arrival_local_time)
     departure_clock = _parse_clock(args.departure_local_time)
+    schedule_key = _route_schedule_key(route)
+    scheduled_start_time = route_start_times.get(schedule_key)
+    route_start_clock = _parse_clock(scheduled_start_time)
     planned_departure = None
     target_arrival = None
     due_for_sample = True
-    if target_arrival_clock is not None:
+    schedule_source = "none"
+    if route_start_clock is not None:
+        planned_departure = _combine_today(route_start_clock, now=now)
+        schedule_source = "route_start_times"
+    elif target_arrival_clock is not None:
         target_arrival = _combine_today(target_arrival_clock, now=now)
         planned_departure = target_arrival - timedelta(seconds=osrm_s * args.departure_multiplier)
+        schedule_source = "target_arrival_fallback"
     elif departure_clock is not None:
         planned_departure = _combine_today(departure_clock, now=now)
+        schedule_source = "period_departure"
     if args.sample_due_routes_only and planned_departure is not None:
         due_start = now - timedelta(minutes=args.route_due_window_minutes)
         due_end = now + timedelta(minutes=args.route_due_window_minutes)
         due_for_sample = due_start <= planned_departure <= due_end
     return {
+        "route_schedule_key": schedule_key,
+        "schedule_source": schedule_source,
+        "scheduled_start_time": scheduled_start_time,
         "target_arrival_local_time": target_arrival.isoformat(timespec="seconds") if target_arrival else None,
         "planned_departure_local_time": planned_departure.isoformat(timespec="seconds") if planned_departure else None,
         "due_for_sample": due_for_sample,
@@ -210,6 +268,7 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
     route_rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     now = datetime.now(DEFAULT_TZ)
+    route_start_times = _load_route_start_times(args)
     if args.now_local_time:
         now = _combine_today(_parse_clock(args.now_local_time), now=now)
     for route in routes:
@@ -218,7 +277,7 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         osrm_s = _raw_osrm_seconds(route)
         if stop_count < 2 or osrm_s <= 0:
             continue
-        schedule = _route_sampling_schedule(args, osrm_s, now)
+        schedule = _route_sampling_schedule(args, route, osrm_s, now, route_start_times)
         if not schedule["due_for_sample"]:
             continue
         route_points = _route_points(points, route)
@@ -275,6 +334,8 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         "target_arrival_local_time": args.target_arrival_local_time,
         "departure_local_time": args.departure_local_time,
         "departure_multiplier": args.departure_multiplier,
+        "route_start_times_path": args.route_start_times_path,
+        "route_start_time_count": len(route_start_times),
         "sample_due_routes_only": bool(args.sample_due_routes_only),
         "route_due_window_minutes": args.route_due_window_minutes,
         "api": AMAP_DIRECTION_URL,
@@ -302,6 +363,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--target-arrival-local-time", default=os.environ.get("BRP_LIVE_TRAFFIC_TARGET_ARRIVAL_LOCAL_TIME", ""))
     parser.add_argument("--departure-local-time", default=os.environ.get("BRP_LIVE_TRAFFIC_DEPARTURE_LOCAL_TIME", ""))
     parser.add_argument("--departure-multiplier", type=float, default=DEFAULT_DEPARTURE_MULTIPLIER)
+    parser.add_argument("--route-start-times-path", default=DEFAULT_ROUTE_START_TIMES_PATH)
+    parser.add_argument("--route-start-times-json", default=DEFAULT_ROUTE_START_TIMES_JSON)
     parser.add_argument("--sample-due-routes-only", action="store_true")
     parser.add_argument("--route-due-window-minutes", type=int, default=DEFAULT_DUE_WINDOW_MINUTES)
     parser.add_argument("--now-local-time", default="")

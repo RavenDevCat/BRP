@@ -146,6 +146,15 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
       }),
     [data.routes, stopsByRouteId],
   );
+  const routeFilterCounts = useMemo(
+    () => ({
+      all: sortedRoutes.length,
+      long: sortedRoutes.filter((route) => route.duration_s >= longRouteThreshold).length,
+      high_load: sortedRoutes.filter((route) => routeLoadRatio(route) >= 0.85).length,
+      many_stops: sortedRoutes.filter((route) => route.stop_count >= 8).length,
+    }),
+    [longRouteThreshold, sortedRoutes],
+  );
   const visibleRoutes = useMemo(() => {
     const normalizedSearch = routeSearch.trim().toLowerCase();
     return sortedRoutes.filter((route) => {
@@ -417,6 +426,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                   onClick={() => setRouteFilter(option.key)}
                 >
                   {option.label}
+                  {option.key === "all" ? null : <span className="ml-1 opacity-75">{formatNumber(routeFilterCounts[option.key])}</span>}
                 </button>
               ))}
             </div>
@@ -463,8 +473,9 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 <button
                   type="button"
                   className={cn(
-                    "flex w-full items-start gap-3 px-3 py-3 text-left transition",
+                    "flex w-full items-start gap-3 border-l-2 px-3 py-3 text-left transition",
                     active ? "bg-primary/10" : "hover:bg-muted",
+                    routeListAccentClass(route),
                   )}
                   onClick={() => focusRoute(route)}
                 >
@@ -474,7 +485,10 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                     aria-hidden="true"
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-semibold text-foreground">{routeLabel(route)}</span>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate text-sm font-semibold text-foreground">{routeLabel(route)}</span>
+                      <RouteStatusBadge route={route} />
+                    </span>
                     <span className="mt-1 block text-xs text-muted-foreground">
                       {formatNumber(route.load)} riders · {formatNumber(route.stop_count)} stops ·{" "}
                       {formatDurationMinFromSeconds(route.duration_s)}
@@ -829,6 +843,20 @@ function routeStatusLabel(route: JobMapRoute) {
     return "Long";
   }
   return "";
+}
+
+function routeListAccentClass(route: JobMapRoute) {
+  const status = routeStatusLabel(route);
+  if (status === "Capacity") {
+    return "border-l-rose-300";
+  }
+  if (status === "High load") {
+    return "border-l-amber-300";
+  }
+  if (status === "Long") {
+    return "border-l-sky-300";
+  }
+  return "border-l-transparent";
 }
 
 function RouteStatusBadge({ route }: { route: JobMapRoute }) {

@@ -78,16 +78,51 @@ type HoverInfo = {
   latitude: number;
 } | null;
 
+type RouteFilter = "all" | "long" | "high_load" | "many_stops";
+
+const routeFilterOptions: Array<{ key: RouteFilter; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "long", label: "Long" },
+  { key: "high_load", label: "High load" },
+  { key: "many_stops", label: "Many stops" },
+];
+
 export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapRef | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string>("");
   const [selectedStop, setSelectedStop] = useState<JobMapStop | null>(null);
   const [hoverInfo, setHoverInfo] = useState<HoverInfo>(null);
+  const [routeSearch, setRouteSearch] = useState("");
+  const [routeFilter, setRouteFilter] = useState<RouteFilter>("all");
 
   const routesById = useMemo(() => new Map(data.routes.map((route) => [route.id, route])), [data.routes]);
   const stopsById = useMemo(() => new Map(data.stops.map((stop) => [stop.id, stop])), [data.stops]);
   const selectedRoute = selectedRouteId ? routesById.get(selectedRouteId) || null : null;
+  const longRouteThreshold = useMemo(() => percentile(data.routes.map((route) => route.duration_s), 0.75), [data.routes]);
+  const visibleRoutes = useMemo(() => {
+    const normalizedSearch = routeSearch.trim().toLowerCase();
+    return data.routes.filter((route) => {
+      if (normalizedSearch) {
+        const haystack = [route.id, route.bus_type_name, String(route.vehicle_id ?? ""), String(route.route_index + 1)]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(normalizedSearch)) {
+          return false;
+        }
+      }
+      if (routeFilter === "long") {
+        return route.duration_s >= longRouteThreshold;
+      }
+      if (routeFilter === "high_load") {
+        return routeLoadRatio(route) >= 0.85;
+      }
+      if (routeFilter === "many_stops") {
+        return route.stop_count >= 8;
+      }
+      return true;
+    });
+  }, [data.routes, longRouteThreshold, routeFilter, routeSearch]);
   const stopsByRouteId = useMemo(() => {
     const grouped = new Map<string, JobMapStop[]>();
     for (const stop of data.stops) {
@@ -284,9 +319,40 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               Fit all
             </Button>
           </div>
+          <div className="mt-3 space-y-2">
+            <input
+              className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary"
+              value={routeSearch}
+              onChange={(event) => setRouteSearch(event.target.value)}
+              placeholder="Search route, bus, vehicle"
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {routeFilterOptions.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={cn(
+                    "h-7 rounded-md border px-2 text-xs font-medium transition",
+                    routeFilter === option.key
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                  onClick={() => setRouteFilter(option.key)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              Showing {formatNumber(visibleRoutes.length)} of {formatNumber(data.routes.length)} routes
+            </div>
+          </div>
         </div>
         <div className="min-h-0 flex-1 overflow-auto">
-          {data.routes.map((route) => {
+          {visibleRoutes.length ? null : (
+            <div className="p-4 text-sm text-muted-foreground">No routes match the current filter.</div>
+          )}
+          {visibleRoutes.map((route) => {
             const active = selectedRouteId === route.id;
             const routeStops = stopsByRouteId.get(route.id) || [];
             return (
@@ -536,6 +602,20 @@ function routeColor(index: number) {
 
 function routeLabel(route: JobMapRoute) {
   return route.id || `Bus ${route.vehicle_id || route.route_index + 1}`;
+}
+
+function routeLoadRatio(route: JobMapRoute) {
+  const capacity = route.comfort_capacity || route.bus_capacity || 0;
+  return capacity > 0 ? route.load / capacity : 0;
+}
+
+function percentile(values: number[], ratio: number) {
+  const sorted = values.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (!sorted.length) {
+    return 0;
+  }
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * ratio)));
+  return sorted[index];
 }
 
 function fitAll(map: MapRef | null, data: JobMapData) {

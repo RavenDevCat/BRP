@@ -4,6 +4,21 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-09
+
+### Oversized Pickup Batching Balanced
+
+- Route Audit now splits oversized pickup demand using the smallest capacity-feasible
+  batch count plus a target-load check instead of filling one nearly full batch
+  and leaving a tiny remainder.
+- The default target is 70% of the largest comfort capacity, with a small cap on
+  extra batches to avoid over-fragmenting a single pickup point.
+- This applies to original stops and aggregated subway/nearby pickup points
+  before solver execution. Display still preserves the original pickup identity
+  through demand batch metadata.
+- Existing completed jobs are immutable snapshots. Rerun affected jobs when users
+  want route results rebuilt under the balanced batching rule.
+
 ## 2026-06-08
 
 ### China Geocoding Hardened For OSRM Cities

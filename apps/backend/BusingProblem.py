@@ -122,6 +122,24 @@ def apply_traffic_time_multiplier(duration_s: int | float) -> int:
     return max(1, adjusted)
 
 
+def traffic_buffer_factor() -> float:
+    return max(0.1, float(TRAFFIC_TIME_MULTIPLIER))
+
+
+def stop_rider_label(point: dict[str, Any]) -> str:
+    if bool(point.get("is_depot")):
+        return "School"
+    passenger_count = int(point.get("passenger_count", 0) or 0)
+    rider_action = "Boarding" if is_to_school_direction() else "Drop-off"
+    return f"{rider_action}: {passenger_count}"
+
+
+def stop_display_text(point: dict[str, Any]) -> str:
+    address = str(point.get("address", "")).strip()
+    rider_label = stop_rider_label(point)
+    return f"{address} ({rider_label})" if address else rider_label
+
+
 def load_json_cache(path: Path) -> dict[str, Any]:
     ensure_cache_dir()
     if not path.exists():
@@ -1324,6 +1342,8 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
         leg_details: list[dict[str, Any]] = []
         actual_time_s = 0
         actual_distance_m = 0
+        raw_osrm_time_s = 0
+        stop_service_time_s = 0
         for from_node, to_node in zip(route["nodes"][:-1], route["nodes"][1:]):
             try:
                 distance_m, duration_s, geometry_wgs = osrm_driving_direction(points[from_node], points[to_node])
@@ -1344,20 +1364,35 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
                     (points[to_node]["plot_lat"], points[to_node]["plot_lng"]),
                 ]
             adjusted_duration_s = apply_traffic_time_multiplier(duration_s)
+            stop_service_s = STOP_SERVICE_SECONDS if to_node != 0 else 0
             actual_distance_m += distance_m
-            actual_time_s += adjusted_duration_s + (STOP_SERVICE_SECONDS if to_node != 0 else 0)
+            raw_osrm_time_s += int(duration_s)
+            stop_service_time_s += stop_service_s
+            actual_time_s += adjusted_duration_s + stop_service_s
             leg_details.append(
                 {
                     "from_node": from_node,
                     "to_node": to_node,
                     "distance_m": distance_m,
-                    "duration_s": adjusted_duration_s + (STOP_SERVICE_SECONDS if to_node != 0 else 0),
+                    "duration_s": adjusted_duration_s + stop_service_s,
+                    "raw_osrm_duration_s": int(duration_s),
+                    "traffic_adjusted_duration_s": adjusted_duration_s,
+                    "stop_service_s": stop_service_s,
                     "geometry": geometry_wgs,
                 }
             )
         route["leg_details"] = leg_details
         route["time_s"] = actual_time_s
         route["distance_m"] = actual_distance_m
+        route["raw_osrm_time_s"] = raw_osrm_time_s
+        try:
+            route_factor = float(route.get("traffic_buffer_factor"))
+        except (TypeError, ValueError):
+            route_factor = traffic_buffer_factor()
+        route_factor = max(0.1, route_factor)
+        route["traffic_buffer_factor"] = route_factor
+        route["traffic_adjusted_drive_time_s"] = int(round(raw_osrm_time_s * route_factor)) if raw_osrm_time_s else 0
+        route["stop_service_time_s"] = stop_service_time_s
 
 
 def annotate_and_price_routes(
@@ -1460,15 +1495,43 @@ def build_map_summary_html(
                 private_access_by_pickup.setdefault(pickup_address, []).append(item)
     for route in routes:
         route_id = f"Bus {route['vehicle_id']}"
+        display_time_s = (
+            route.get("traffic_api_duration_s")
+            if bool(route.get("traffic_coverage_complete", True))
+            else None
+        )
+        display_time_source = str(route.get("traffic_time_source", "")).strip()
+        if display_time_s is None:
+            display_time_s = route.get("traffic_adjusted_drive_time_s")
+            display_time_source = "OSRM drive time * traffic buffer"
+        if display_time_s is None:
+            display_time_s = route.get("time_s")
+        raw_osrm_time_s = route.get("raw_osrm_time_s") or route.get("traffic_osrm_duration_s")
+        route_buffer_factor = route.get("traffic_buffer_factor")
+        try:
+            route_buffer_factor_float = float(route_buffer_factor)
+        except (TypeError, ValueError):
+            route_buffer_factor_float = None
         lines.extend(
             [
                 f"<h4 style='margin:12px 0 4px 0;'>Bus {route['vehicle_id']}</h4>",
                 f"<div>Vehicle type: {route['bus_type_name']}</div>",
                 f"<div>Passengers: {route['load']} / {route['bus_capacity']} seats</div>",
-                f"<div>Estimated time: {seconds_to_human(route['time_s'])}</div>",
+                f"<div>Estimated time: {seconds_to_human(display_time_s)}</div>",
                 f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
             ]
         )
+        if display_time_source:
+            lines.append(f"<div>Time source: {html.escape(display_time_source)}</div>")
+        if raw_osrm_time_s:
+            lines.append(f"<div>OSRM drive time: {seconds_to_human(raw_osrm_time_s)}</div>")
+        if route_buffer_factor_float is not None:
+            lines.append(f"<div>Traffic buffer: {route_buffer_factor_float:.2f}x</div>")
+        if route.get("traffic_sampled_leg_count") is not None and route.get("traffic_total_leg_count") is not None:
+            lines.append(
+                f"<div>AMap sampled legs: {int(route.get('traffic_sampled_leg_count') or 0)} / "
+                f"{int(route.get('traffic_total_leg_count') or 0)}</div>"
+            )
         if route.get("limit_stop_order") is not None:
             lines.append(
                 f"<div><b>{ANNOTATION_ROUTE_DURATION_SECONDS // 60}-minute mark:</b> Stop {route['limit_stop_order']} "
@@ -1483,7 +1546,7 @@ def build_map_summary_html(
                 prefix = "School"
             else:
                 prefix = f"Stop {order}"
-            lines.append(f"<li>{prefix}: {points[node]['address']}</li>")
+            lines.append(f"<li>{prefix}: {html.escape(stop_display_text(points[node]))}</li>")
         lines.append("</ol>")
         route_private_drive_stops = list(private_access_by_route.get(route_id) or [])
         if route_private_drive_stops:
@@ -1559,7 +1622,7 @@ def render_map(
 
     def build_cluster_popup(point: dict[str, Any]) -> str:
         address = str(point.get("address", "")).strip()
-        base_popup = f"{html.escape(address)}"
+        base_popup = f"{html.escape(stop_display_text(point))}"
         members = list(private_access_by_pickup.get(address) or [])
         if not members:
             return base_popup

@@ -548,6 +548,45 @@ def _weighted_average_factor(samples: list[dict[str, float]]) -> float | None:
     return weighted / total_weight
 
 
+def _summarize_route_period_stats(
+    route_samples: dict[str, dict[str, dict[str, float]]],
+    route_edge_counts: dict[str, int],
+) -> dict[str, dict[str, dict[str, Any]]]:
+    route_periods: dict[str, dict[str, dict[str, Any]]] = {}
+    for period_key, routes in route_samples.items():
+        route_periods[period_key] = {}
+        for route_id, stats in routes.items():
+            osrm_duration_s = float(stats.get("osrm_duration_s", 0.0) or 0.0)
+            amap_duration_s = float(stats.get("amap_duration_s", 0.0) or 0.0)
+            sampled_leg_count = int(stats.get("sampled_leg_count", 0.0) or 0)
+            total_leg_count = int(route_edge_counts.get(route_id, sampled_leg_count))
+            factor = (amap_duration_s / osrm_duration_s) if osrm_duration_s > 0 else None
+            route_periods[period_key][route_id] = {
+                "osrm_duration_s": osrm_duration_s,
+                "amap_duration_s": amap_duration_s,
+                "factor": float(factor) if factor is not None else None,
+                "sample_count": int(stats.get("sample_count", 0.0) or 0),
+                "sampled_leg_count": sampled_leg_count,
+                "total_leg_count": total_leg_count,
+                "coverage_complete": sampled_leg_count >= total_leg_count and total_leg_count > 0,
+            }
+    return route_periods
+
+
+def _selected_route_traffic_stats(
+    traffic_calibration: dict[str, Any] | None,
+    route_id: str,
+) -> dict[str, Any] | None:
+    calibration = dict(traffic_calibration or {})
+    if not calibration.get("succeeded"):
+        return None
+    selected_period = str(calibration.get("selected_period", "")).strip()
+    route_periods = dict(calibration.get("route_periods") or {})
+    selected_routes = dict(route_periods.get(selected_period) or {})
+    stats = selected_routes.get(str(route_id).strip())
+    return dict(stats) if isinstance(stats, dict) else None
+
+
 def calibrate_peak_traffic_multiplier(
     planner: Any,
     current_plan: dict[str, Any] | None,
@@ -575,10 +614,17 @@ def calibrate_peak_traffic_multiplier(
     edges = _sample_current_plan_edges(route_points_by_id, max_edges)
     if not edges:
         return {"enabled": False, "reason": "no_matched_current_plan_edges"}
+    route_edge_counts = {
+        str(route_id): max(0, len(points) - 1)
+        for route_id, points in route_points_by_id.items()
+    }
 
     cache = _load_json_object(TRAFFIC_CALIBRATION_CACHE_PATH)
     cache_changed = False
     period_samples: dict[str, list[dict[str, float]]] = {str(period["key"]): [] for period in periods}
+    route_period_samples: dict[str, dict[str, dict[str, float]]] = {
+        str(period["key"]): {} for period in periods
+    }
     api_calls = 0
     cache_hits = 0
     errors: list[str] = []
@@ -604,6 +650,23 @@ def calibrate_peak_traffic_multiplier(
                     else:
                         api_calls += 1
                         cache_changed = True
+                    period_key = str(period["key"])
+                    route_stats = route_period_samples.setdefault(period_key, {}).setdefault(
+                        str(route_id),
+                        {
+                            "osrm_duration_s": 0.0,
+                            "amap_duration_s": 0.0,
+                            "sample_count": 0.0,
+                            "sampled_leg_count": 0.0,
+                        },
+                    )
+                    average_amap_duration_s = (
+                        sum(float(item) for item in durations_s) / float(len(durations_s))
+                    ) if durations_s else 0.0
+                    route_stats["osrm_duration_s"] += float(osrm_duration_s)
+                    route_stats["amap_duration_s"] += float(average_amap_duration_s)
+                    route_stats["sample_count"] += float(len(durations_s))
+                    route_stats["sampled_leg_count"] += 1.0
                     for duration_s in durations_s:
                         raw_factor = float(duration_s) / float(osrm_duration_s)
                         factor = min(
@@ -628,6 +691,7 @@ def calibrate_peak_traffic_multiplier(
         _save_json_object(TRAFFIC_CALIBRATION_CACHE_PATH, cache)
 
     period_summaries: dict[str, dict[str, Any]] = {}
+    route_periods = _summarize_route_period_stats(route_period_samples, route_edge_counts)
     for period in periods:
         key = str(period["key"])
         samples = period_samples.get(key) or []
@@ -684,6 +748,7 @@ def calibrate_peak_traffic_multiplier(
         "fallback_context": fallback_context,
         "combined_factor": float(combined_factor) if combined_factor is not None else None,
         "periods": period_summaries,
+        "route_periods": route_periods,
         "sampled_edge_count": len(edges),
         "api_calls": api_calls,
         "cache_hits": cache_hits,
@@ -1606,6 +1671,7 @@ def assess_current_plan(
     solve_time: list[list[float]] | None = None,
     solve_distance: list[list[float]] | None = None,
     optimize_stop_order: bool = False,
+    traffic_calibration: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     normalized = _normalize_current_plan(current_plan)
     if not normalized:
@@ -1703,8 +1769,7 @@ def assess_current_plan(
             recommendation_set.append(
                 f"Route {route_id} has {len(service_stops)} service stops. Review whether some nearby stops can be consolidated."
             )
-        route_summaries.append(
-            {
+        route_summary = {
                 "route_id": route_id,
                 "bus_type": bus_type,
                 "capacity": capacity,
@@ -1732,7 +1797,27 @@ def assess_current_plan(
                 "matched_node_ids": [int(point.get("node_id", 0)) for point in matched_points],
                 "matched_addresses": [str(point.get("address", "")).strip() for point in matched_points],
             }
-        )
+        selected_traffic_stats = _selected_route_traffic_stats(traffic_calibration, route_id)
+        if selected_traffic_stats:
+            traffic_factor = selected_traffic_stats.get("factor")
+            traffic_api_duration_s = selected_traffic_stats.get("amap_duration_s")
+            traffic_osrm_duration_s = selected_traffic_stats.get("osrm_duration_s")
+            route_summary.update(
+                {
+                    "traffic_api_duration_s": float(traffic_api_duration_s)
+                    if traffic_api_duration_s is not None else None,
+                    "traffic_osrm_duration_s": float(traffic_osrm_duration_s)
+                    if traffic_osrm_duration_s is not None else None,
+                    "traffic_buffer_factor": float(traffic_factor)
+                    if traffic_factor is not None else None,
+                    "traffic_sample_count": int(selected_traffic_stats.get("sample_count", 0) or 0),
+                    "traffic_sampled_leg_count": int(selected_traffic_stats.get("sampled_leg_count", 0) or 0),
+                    "traffic_total_leg_count": int(selected_traffic_stats.get("total_leg_count", 0) or 0),
+                    "traffic_coverage_complete": bool(selected_traffic_stats.get("coverage_complete")),
+                    "traffic_time_source": "AMap peak API current-plan route time",
+                }
+            )
+        route_summaries.append(route_summary)
 
     route_count = len(route_summaries)
     average_load_factor = (total_load_factor / route_count) if route_count else 0.0
@@ -1805,6 +1890,13 @@ def build_current_plan_map_scenario(
                 "distance_m": int(float(route_summary.get("distance_m", 0.0) or 0.0)),
                 "load": int(route_summary.get("passenger_count", 0) or 0),
                 "leg_details": [],
+                "traffic_api_duration_s": route_summary.get("traffic_api_duration_s"),
+                "traffic_osrm_duration_s": route_summary.get("traffic_osrm_duration_s"),
+                "traffic_buffer_factor": route_summary.get("traffic_buffer_factor"),
+                "traffic_sampled_leg_count": route_summary.get("traffic_sampled_leg_count"),
+                "traffic_total_leg_count": route_summary.get("traffic_total_leg_count"),
+                "traffic_coverage_complete": bool(route_summary.get("traffic_coverage_complete", False)),
+                "traffic_time_source": route_summary.get("traffic_time_source"),
             }
         )
 
@@ -4182,6 +4274,7 @@ def run_backend_planner_with_prepared_data(
             config,
             solve_time=assessment_time,
             solve_distance=assessment_distance,
+            traffic_calibration=traffic_calibration,
         )
         current_plan_scenario = build_current_plan_map_scenario(
             planner,

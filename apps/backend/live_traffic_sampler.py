@@ -309,6 +309,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--skip-empty", action="store_true")
     args = parser.parse_args()
     if args.source == "route_audit_job" and not args.job_id:
         parser.error("--job-id is required for route_audit_job source")
@@ -320,6 +321,9 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     summary = run_sample(args)
+    if args.skip_empty and not summary.get("route_count"):
+        print("No routes were due for sampling; no sample file written.")
+        return
     args.output_dir.mkdir(parents=True, exist_ok=True)
     source_id = summary.get("source_id") or args.job_id or args.run_id
     filename = (

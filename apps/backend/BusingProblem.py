@@ -1605,9 +1605,14 @@ def build_map_summary_html(
         f"Routes are estimated under the {traffic_note}, one-way only, and the map marks the farthest stop "
         f"reachable within {ANNOTATION_ROUTE_DURATION_SECONDS // 60} minutes.</p>",
     ]
+    outlying_private_access_rows = list(outlying_private_access_rows or [])
+    private_access_mode = (
+        str(outlying_private_access_rows[0].get("private_access_type", "clustered_rider")).strip()
+        if outlying_private_access_rows else "clustered_rider"
+    ) or "clustered_rider"
     private_access_by_route: dict[str, list[dict[str, Any]]] = {}
     private_access_by_pickup: dict[str, list[dict[str, Any]]] = {}
-    for item in list(outlying_private_access_rows or []):
+    for item in outlying_private_access_rows:
         access_type = str(item.get("private_access_type", "clustered_rider")).strip() or "clustered_rider"
         if access_type == "private_drive_stop":
             route_id = str(item.get("pickup_route_id", "")).strip()

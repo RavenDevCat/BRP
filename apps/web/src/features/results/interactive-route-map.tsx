@@ -72,8 +72,19 @@ type FeatureCollection = {
 };
 
 type HoverInfo = {
+  type: "route";
   routeId: string;
   label: string;
+  longitude: number;
+  latitude: number;
+} | {
+  type: "stop";
+  stopId: string;
+  routeId: string;
+  label: string;
+  address: string;
+  passengerCount: number;
+  cumulativeDurationSeconds: number;
   longitude: number;
   latitude: number;
 } | null;
@@ -85,6 +96,15 @@ const routeFilterOptions: Array<{ key: RouteFilter; label: string }> = [
   { key: "long", label: "Long" },
   { key: "high_load", label: "High load" },
   { key: "many_stops", label: "Many stops" },
+];
+
+const INTERACTIVE_LAYER_IDS = [
+  "selected-stops-circle",
+  "selected-stops-label",
+  "stops-circle",
+  "stops-label",
+  "selected-route-line",
+  "route-lines",
 ];
 
 export function InteractiveRouteMap({ data }: { data: JobMapData }) {
@@ -285,13 +305,36 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   };
 
   const handleMouseMove = (event: MapLayerMouseEvent) => {
-    const feature = event.features?.find((item) => item.layer.id === "route-lines");
+    const stopFeature = event.features?.find((item) =>
+      ["selected-stops-circle", "selected-stops-label", "stops-circle", "stops-label"].includes(item.layer.id),
+    );
+    const stopId = String(stopFeature?.properties?.stop_id || "");
+    if (stopId) {
+      const stop = stopsById.get(stopId);
+      if (stop) {
+        setHoverInfo({
+          type: "stop",
+          stopId,
+          routeId: stop.route_id,
+          label: stop.is_depot ? "School / Start" : `Stop ${stop.order}`,
+          address: stop.address || stop.requested_address || "Unknown address",
+          passengerCount: stop.passenger_count,
+          cumulativeDurationSeconds: stop.cumulative_duration_s,
+          longitude: event.lngLat.lng,
+          latitude: event.lngLat.lat,
+        });
+        return;
+      }
+    }
+
+    const feature = event.features?.find((item) => ["selected-route-line", "route-lines"].includes(item.layer.id));
     const routeId = String(feature?.properties?.route_id || "");
     if (!routeId) {
       setHoverInfo(null);
       return;
     }
     setHoverInfo({
+      type: "route",
       routeId,
       label: String(feature?.properties?.label || routeId),
       longitude: event.lngLat.lng,
@@ -419,7 +462,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
           ref={mapRef}
           initialViewState={initialViewState}
           mapStyle={MAP_STYLE}
-          interactiveLayerIds={["stops-circle", "stops-label", "route-lines"]}
+          interactiveLayerIds={INTERACTIVE_LAYER_IDS}
           onClick={handleMapClick}
           onMouseMove={handleMouseMove}
           onMouseLeave={() => setHoverInfo(null)}
@@ -551,9 +594,20 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               }}
             />
           </Source>
-          {hoverInfo ? (
+          {hoverInfo && !selectedStop ? (
             <Popup longitude={hoverInfo.longitude} latitude={hoverInfo.latitude} closeButton={false} closeOnClick={false}>
-              <div className="text-xs font-semibold">{hoverInfo.label}</div>
+              {hoverInfo.type === "route" ? (
+                <div className="text-xs font-semibold">{hoverInfo.label}</div>
+              ) : (
+                <div className="max-w-[240px] space-y-1 text-xs">
+                  <div className="font-semibold">{hoverInfo.label}</div>
+                  <div className="line-clamp-2">{hoverInfo.address}</div>
+                  <div className="text-muted-foreground">
+                    {hoverInfo.routeId} · {formatNumber(hoverInfo.passengerCount)} riders
+                  </div>
+                  <div className="text-muted-foreground">{formatDurationMinFromSeconds(hoverInfo.cumulativeDurationSeconds)}</div>
+                </div>
+              )}
             </Popup>
           ) : null}
           {selectedStop ? (

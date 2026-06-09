@@ -570,6 +570,28 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "line-opacity": selectedRouteId ? 0.98 : 0,
               }}
             />
+            <Layer
+              id="selected-route-arrows"
+              type="symbol"
+              minzoom={11}
+              layout={{
+                "symbol-placement": "line",
+                "symbol-spacing": 90,
+                "text-field": ">",
+                "text-size": ["interpolate", ["linear"], ["zoom"], 11, 13, 14, 17, 16, 20],
+                "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+                "text-rotation-alignment": "map",
+                "text-keep-upright": false,
+                "text-allow-overlap": false,
+                "text-ignore-placement": false,
+              }}
+              paint={{
+                "text-color": "#ffffff",
+                "text-halo-color": ["get", "color"],
+                "text-halo-width": 2.5,
+                "text-opacity": selectedRouteId ? 0.92 : 0,
+              }}
+            />
           </Source>
           <Source id="stops" type="geojson" data={contextStopFeatures}>
             <Layer

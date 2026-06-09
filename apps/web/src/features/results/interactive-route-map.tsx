@@ -364,6 +364,8 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
     });
   };
 
+  const hoveredRoute = hoverInfo?.type === "route" ? routesById.get(hoverInfo.routeId) || null : null;
+
   return (
     <div
       ref={containerRef}
@@ -669,7 +671,23 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
           {hoverInfo && !selectedStop ? (
             <Popup longitude={hoverInfo.longitude} latitude={hoverInfo.latitude} closeButton={false} closeOnClick={false}>
               {hoverInfo.type === "route" ? (
-                <div className="text-xs font-semibold">{hoverInfo.label}</div>
+                <div className="max-w-[260px] space-y-1.5 text-xs">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold">{hoveredRoute ? routeLabel(hoveredRoute) : hoverInfo.label}</span>
+                    {hoveredRoute ? <RouteStatusBadge route={hoveredRoute} /> : null}
+                  </div>
+                  {hoveredRoute ? (
+                    <>
+                      <div className="text-muted-foreground">
+                        {routeLoadLabel(hoveredRoute)} riders · {formatNumber(hoveredRoute.stop_count)} stops
+                      </div>
+                      <div className="text-muted-foreground">
+                        {formatDurationMinFromSeconds(hoveredRoute.duration_s)} · {formatDistanceKmFromMeters(hoveredRoute.distance_m)}
+                      </div>
+                      <div className="text-muted-foreground">{routeVehicleLabel(hoveredRoute)}</div>
+                    </>
+                  ) : null}
+                </div>
               ) : (
                 <div className="max-w-[240px] space-y-1 text-xs">
                   <div className="font-semibold">{hoverInfo.label}</div>
@@ -699,16 +717,22 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
           ) : null}
         </MapView>
         {selectedRoute ? (
-          <div className="absolute bottom-3 left-3 right-3 rounded-md border border-border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto md:w-[360px]">
+          <div className="absolute bottom-3 left-3 right-3 rounded-md border border-border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto md:w-[420px]">
             <div className="flex items-start justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">{routeLabel(selectedRoute)}</div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  {formatNumber(selectedRoute.load)} riders · {formatNumber(selectedRoute.stop_count)} stops ·{" "}
-                  {formatDurationMinFromSeconds(selectedRoute.duration_s)} · {formatDistanceKmFromMeters(selectedRoute.distance_m)}
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <div className="truncate text-sm font-semibold">{routeLabel(selectedRoute)}</div>
+                  <RouteStatusBadge route={selectedRoute} />
                 </div>
-                <div className="mt-1 text-xs text-muted-foreground">
-                  Select a stop in the left sequence to inspect its address and timing.
+                <div className="mt-1 text-xs text-muted-foreground">{routeVehicleLabel(selectedRoute)}</div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-xs md:grid-cols-4">
+                  <RouteMetric label="Load" value={routeLoadLabel(selectedRoute)} />
+                  <RouteMetric label="Stops" value={formatNumber(selectedRoute.stop_count)} />
+                  <RouteMetric label="Duration" value={formatDurationMinFromSeconds(selectedRoute.duration_s)} />
+                  <RouteMetric label="Distance" value={formatDistanceKmFromMeters(selectedRoute.distance_m)} />
+                </div>
+                <div className="mt-2 text-xs text-muted-foreground">
+                  {selectedRoute.traffic_time_source ? `${selectedRoute.traffic_time_source} timing` : "Planned route timing"}
                 </div>
               </div>
               <Button className="h-8 px-3 text-xs" variant="secondary" onClick={clearFocus}>
@@ -733,6 +757,64 @@ function routeLabel(route: JobMapRoute) {
 function routeLoadRatio(route: JobMapRoute) {
   const capacity = route.comfort_capacity || route.bus_capacity || 0;
   return capacity > 0 ? route.load / capacity : 0;
+}
+
+function routeCapacity(route: JobMapRoute) {
+  return route.comfort_capacity || route.bus_capacity || 0;
+}
+
+function routeLoadLabel(route: JobMapRoute) {
+  const capacity = routeCapacity(route);
+  return capacity > 0 ? `${formatNumber(route.load)} / ${formatNumber(capacity)}` : formatNumber(route.load);
+}
+
+function routeVehicleLabel(route: JobMapRoute) {
+  const vehicle = route.vehicle_id ? `Vehicle ${route.vehicle_id}` : `Route ${route.route_index + 1}`;
+  return route.bus_type_name ? `${vehicle} · ${route.bus_type_name}` : vehicle;
+}
+
+function routeStatusLabel(route: JobMapRoute) {
+  const loadRatio = routeLoadRatio(route);
+  if (loadRatio >= 1) {
+    return "Capacity";
+  }
+  if (loadRatio >= 0.85) {
+    return "High load";
+  }
+  if (route.duration_s >= 3600) {
+    return "Long";
+  }
+  return "";
+}
+
+function RouteStatusBadge({ route }: { route: JobMapRoute }) {
+  const label = routeStatusLabel(route);
+  if (!label) {
+    return null;
+  }
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+        label === "Capacity"
+          ? "border-rose-200 bg-rose-50 text-rose-700"
+          : label === "High load"
+            ? "border-amber-200 bg-amber-50 text-amber-700"
+            : "border-sky-200 bg-sky-50 text-sky-700",
+      )}
+    >
+      {label}
+    </span>
+  );
+}
+
+function RouteMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/40 px-2 py-1.5">
+      <div className="text-[10px] font-semibold uppercase text-muted-foreground">{label}</div>
+      <div className="mt-0.5 truncate font-semibold text-foreground">{value}</div>
+    </div>
+  );
 }
 
 function percentile(values: number[], ratio: number) {

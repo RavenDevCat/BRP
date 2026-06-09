@@ -67,6 +67,9 @@ ROUTE_DURATION_GRACE_SECONDS = 10 * 60
 STOP_SERVICE_SECONDS = 60
 MAX_STOPS_PER_ROUTE = int(os.environ.get("BRP_MAX_STOPS_PER_ROUTE", "10") or 10)
 COMFORT_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_LOAD_FACTOR", "0.85") or 0.85)
+DEMAND_SPLIT_TARGET_LOAD_RATIO = float(os.environ.get("BRP_DEMAND_SPLIT_TARGET_LOAD_RATIO", "0.70") or 0.70)
+DEMAND_SPLIT_MIN_BATCH_SIZE = int(os.environ.get("BRP_DEMAND_SPLIT_MIN_BATCH_SIZE", "8") or 8)
+DEMAND_SPLIT_MAX_EXTRA_BATCHES = int(os.environ.get("BRP_DEMAND_SPLIT_MAX_EXTRA_BATCHES", "2") or 2)
 SUBWAY_SEARCH_RADIUS_M = 1500
 MAX_SUBWAY_WALK_DISTANCE_M = 800
 NEARBY_CLUSTER_RADIUS_M = 500
@@ -911,6 +914,30 @@ def route_stop_limit() -> int:
     return max(1, int(MAX_STOPS_PER_ROUTE))
 
 
+def balanced_demand_batch_sizes(passenger_count: int, max_batch_size: int) -> list[int]:
+    passenger_count = max(0, int(passenger_count or 0))
+    max_batch_size = max(1, int(max_batch_size or 1))
+    if passenger_count <= max_batch_size:
+        return [passenger_count] if passenger_count else []
+
+    minimum_batch_count = int(math.ceil(passenger_count / max_batch_size))
+    target_load_ratio = min(1.0, max(0.1, float(DEMAND_SPLIT_TARGET_LOAD_RATIO)))
+    configured_min_size = max(1, int(DEMAND_SPLIT_MIN_BATCH_SIZE or 1))
+    target_batch_size = min(
+        max_batch_size,
+        max(configured_min_size, int(math.ceil(max_batch_size * target_load_ratio))),
+    )
+    target_batch_count = int(math.ceil(passenger_count / target_batch_size))
+    max_extra_batches = max(0, int(DEMAND_SPLIT_MAX_EXTRA_BATCHES or 0))
+    max_batch_count = minimum_batch_count + max_extra_batches
+    batch_count = max(minimum_batch_count, min(target_batch_count, max_batch_count))
+    batch_count = min(batch_count, passenger_count)
+
+    base_size = passenger_count // batch_count
+    remainder = passenger_count % batch_count
+    return [base_size + (1 if index < remainder else 0) for index in range(batch_count)]
+
+
 def split_oversized_demand_points(points: list[dict[str, Any]], max_batch_size: int) -> list[dict[str, Any]]:
     if max_batch_size <= 0 or len(points) <= 1:
         return points
@@ -924,18 +951,15 @@ def split_oversized_demand_points(points: list[dict[str, Any]], max_batch_size: 
             continue
 
         passenger_count = int(point.get("passenger_count", 0) or 0)
-        if passenger_count <= max_batch_size:
+        batch_sizes = balanced_demand_batch_sizes(passenger_count, max_batch_size)
+        if len(batch_sizes) <= 1:
             cloned = dict(point)
             cloned["node_id"] = len(expanded)
             expanded.append(cloned)
             continue
 
-        split_batch_size = max(1, max_batch_size - 1)
-        batch_count = int(math.ceil(passenger_count / split_batch_size))
-        remaining = passenger_count
-        for batch_index in range(1, batch_count + 1):
-            batch_size = min(split_batch_size, remaining)
-            remaining -= batch_size
+        batch_count = len(batch_sizes)
+        for batch_index, batch_size in enumerate(batch_sizes, start=1):
             cloned = dict(point)
             cloned["node_id"] = len(expanded)
             cloned["passenger_count"] = batch_size
@@ -943,9 +967,9 @@ def split_oversized_demand_points(points: list[dict[str, Any]], max_batch_size: 
             cloned["demand_batch_index"] = batch_index
             cloned["demand_batch_count"] = batch_count
             cloned["demand_batch_key"] = str(point.get("address", "")).strip() or f"node-{point.get('node_id', len(expanded))}"
+            cloned["demand_batch_strategy"] = "balanced_target_load"
             expanded.append(cloned)
     return expanded
-
 
 def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, Any]], extra_buffer: int = 2) -> list[dict[str, Any]]:
     if not points or not fleet:

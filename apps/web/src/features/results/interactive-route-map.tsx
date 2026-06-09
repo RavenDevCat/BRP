@@ -124,9 +124,29 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const stopsById = useMemo(() => new Map(data.stops.map((stop) => [stop.id, stop])), [data.stops]);
   const selectedRoute = selectedRouteId ? routesById.get(selectedRouteId) || null : null;
   const longRouteThreshold = useMemo(() => percentile(data.routes.map((route) => route.duration_s), 0.75), [data.routes]);
+  const stopsByRouteId = useMemo(() => {
+    const grouped = new Map<string, JobMapStop[]>();
+    for (const stop of data.stops) {
+      const stops = grouped.get(stop.route_id) || [];
+      stops.push(stop);
+      grouped.set(stop.route_id, stops);
+    }
+    for (const stops of grouped.values()) {
+      stops.sort((a, b) => a.order - b.order);
+    }
+    return grouped;
+  }, [data.stops]);
+  const sortedRoutes = useMemo(
+    () =>
+      [...data.routes].sort((a, b) => {
+        const workbookOrder = routeWorkbookOrder(a, stopsByRouteId) - routeWorkbookOrder(b, stopsByRouteId);
+        return workbookOrder || a.route_index - b.route_index || a.id.localeCompare(b.id);
+      }),
+    [data.routes, stopsByRouteId],
+  );
   const visibleRoutes = useMemo(() => {
     const normalizedSearch = routeSearch.trim().toLowerCase();
-    return data.routes.filter((route) => {
+    return sortedRoutes.filter((route) => {
       if (normalizedSearch) {
         const haystack = [route.id, route.bus_type_name, String(route.vehicle_id ?? ""), String(route.route_index + 1)]
           .join(" ")
@@ -146,24 +166,12 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
       }
       return true;
     });
-  }, [data.routes, longRouteThreshold, routeFilter, routeSearch]);
-  const stopsByRouteId = useMemo(() => {
-    const grouped = new Map<string, JobMapStop[]>();
-    for (const stop of data.stops) {
-      const stops = grouped.get(stop.route_id) || [];
-      stops.push(stop);
-      grouped.set(stop.route_id, stops);
-    }
-    for (const stops of grouped.values()) {
-      stops.sort((a, b) => a.order - b.order);
-    }
-    return grouped;
-  }, [data.stops]);
+  }, [longRouteThreshold, routeFilter, routeSearch, sortedRoutes]);
 
   const routeFeatures = useMemo<FeatureCollection>(
     () => ({
       type: "FeatureCollection",
-      features: data.routes
+      features: sortedRoutes
         .filter((route) => route.geometry.length >= 2)
         .map((route) => ({
           type: "Feature",
@@ -184,7 +192,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
           },
         })),
     }),
-    [data.routes],
+    [sortedRoutes],
   );
 
   const selectedRouteFeatures = useMemo<FeatureCollection>(
@@ -779,6 +787,14 @@ function routeLabel(route: JobMapRoute) {
 function routeLoadRatio(route: JobMapRoute) {
   const capacity = route.comfort_capacity || route.bus_capacity || 0;
   return capacity > 0 ? route.load / capacity : 0;
+}
+
+function routeWorkbookOrder(route: JobMapRoute, stopsByRouteId: Map<string, JobMapStop[]>) {
+  const stops = stopsByRouteId.get(route.id) || [];
+  const firstWorkbookStop = stops
+    .filter((stop) => !stop.is_depot && Number.isFinite(stop.node_index))
+    .reduce<number | null>((best, stop) => (best === null || stop.node_index < best ? stop.node_index : best), null);
+  return firstWorkbookStop ?? Number.MAX_SAFE_INTEGER;
 }
 
 function routeCapacity(route: JobMapRoute) {

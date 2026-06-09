@@ -3,6 +3,8 @@ from __future__ import annotations
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta
+import hashlib
 import importlib.util
 import io
 import itertools
@@ -14,6 +16,7 @@ import time
 from typing import Any
 from urllib.parse import urljoin
 import uuid
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 try:
@@ -30,6 +33,32 @@ CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache")
 PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"
+TRAFFIC_CALIBRATION_CACHE_PATH = CACHE_DIR / "traffic_calibration_cache.json"
+AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
+    "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
+    "false",
+).strip().lower() not in {"0", "false", "no", "off"}
+AMAP_TRAFFIC_CALIBRATION_MAX_CALLS = max(
+    0,
+    int(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_MAX_CALLS", "40") or 0),
+)
+AMAP_TRAFFIC_CALIBRATION_INTERVAL_SECONDS = max(
+    60,
+    int(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_INTERVAL_SECONDS", "900") or 900),
+)
+AMAP_TRAFFIC_CALIBRATION_SAMPLE_COUNT = max(
+    1,
+    min(48, int(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_SAMPLE_COUNT", "5") or 5)),
+)
+AMAP_TRAFFIC_CALIBRATION_MIN_FACTOR = max(
+    0.1,
+    float(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_MIN_FACTOR", "0.8") or 0.8),
+)
+AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR = max(
+    AMAP_TRAFFIC_CALIBRATION_MIN_FACTOR,
+    float(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR", "2.8") or 2.8),
+)
+AMAP_TRAFFIC_CALIBRATION_TZ = ZoneInfo("Asia/Shanghai")
 TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
     "Off-Peak": 1.0,
     "AM Peak": 1.2,
@@ -292,6 +321,374 @@ def resolve_traffic_profile(
     if country_profiles is not None:
         return normalized, float(country_profiles[normalized]), f"{country.title()} default"
     return normalized, float(TRAFFIC_PROFILE_MULTIPLIERS[normalized]), "Global default"
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        return {}
+    return {}
+
+
+def _save_json_object(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _next_local_timestamp(hour: int, minute: int = 0) -> int:
+    now = datetime.now(AMAP_TRAFFIC_CALIBRATION_TZ)
+    candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if candidate <= now + timedelta(minutes=5):
+        candidate += timedelta(days=1)
+    return int(candidate.timestamp())
+
+
+def peak_traffic_periods() -> list[dict[str, Any]]:
+    return [
+        {
+            "key": "am_peak",
+            "label": "AM Peak",
+            "firsttime": _next_local_timestamp(8, 0),
+            "interval": AMAP_TRAFFIC_CALIBRATION_INTERVAL_SECONDS,
+            "count": AMAP_TRAFFIC_CALIBRATION_SAMPLE_COUNT,
+        },
+        {
+            "key": "pm_peak",
+            "label": "PM Peak",
+            "firsttime": _next_local_timestamp(15, 30),
+            "interval": AMAP_TRAFFIC_CALIBRATION_INTERVAL_SECONDS,
+            "count": AMAP_TRAFFIC_CALIBRATION_SAMPLE_COUNT,
+        },
+    ]
+
+
+def _point_lng_lat(point: dict[str, Any]) -> tuple[float, float]:
+    return float(point.get("lng", 0.0) or 0.0), float(point.get("lat", 0.0) or 0.0)
+
+
+def _traffic_cache_key(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    period: dict[str, Any],
+) -> str:
+    origin_lng, origin_lat = _point_lng_lat(origin)
+    destination_lng, destination_lat = _point_lng_lat(destination)
+    payload = {
+        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
+        "destination": f"{destination_lng:.6f},{destination_lat:.6f}",
+        "firsttime": int(period["firsttime"]),
+        "interval": int(period["interval"]),
+        "count": int(period["count"]),
+        "strategy": 1,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+
+
+def _parse_amap_future_duration_seconds(payload: dict[str, Any]) -> list[float]:
+    durations: list[float] = []
+    for path in list(((payload.get("data") or {}).get("paths")) or []):
+        for time_info in list(path.get("time_infos") or []):
+            elements = list(time_info.get("elements") or [])
+            if not elements and time_info.get("duration") not in (None, ""):
+                elements = [time_info]
+            for element in elements:
+                raw_duration = element.get("duration")
+                if raw_duration in (None, ""):
+                    continue
+                try:
+                    # AMap advanced path returns duration in minutes.
+                    duration_seconds = float(raw_duration) * 60.0
+                except (TypeError, ValueError):
+                    continue
+                if duration_seconds > 0:
+                    durations.append(duration_seconds)
+    return durations
+
+
+def amap_future_driving_duration_seconds(
+    planner: Any,
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    period: dict[str, Any],
+    cache: dict[str, Any],
+) -> tuple[list[float], bool]:
+    cache_key = _traffic_cache_key(origin, destination, period)
+    cached = cache.get(cache_key)
+    if isinstance(cached, dict):
+        durations = []
+        for item in list(cached.get("durations_s") or []):
+            try:
+                duration = float(item)
+            except (TypeError, ValueError):
+                continue
+            if duration > 0:
+                durations.append(duration)
+        if durations:
+            return durations, True
+
+    origin_lng, origin_lat = _point_lng_lat(origin)
+    destination_lng, destination_lat = _point_lng_lat(destination)
+    limiter = getattr(planner, "AMAP_ROUTING_LIMITER", None)
+    if limiter is not None:
+        limiter.wait()
+    response = requests.get(
+        "https://restapi.amap.com/v4/etd/driving",
+        params={
+            "key": getattr(planner, "AMAP_KEY", ""),
+            "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
+            "destination": f"{destination_lng:.6f},{destination_lat:.6f}",
+            "strategy": "1",
+            "firsttime": str(int(period["firsttime"])),
+            "interval": str(int(period["interval"])),
+            "count": str(int(period["count"])),
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if int(payload.get("errcode", -1) or -1) != 0:
+        raise RuntimeError(str(payload.get("errmsg") or payload.get("errdetail") or "AMap future driving failed"))
+    durations = _parse_amap_future_duration_seconds(payload)
+    if not durations:
+        raise RuntimeError("AMap future driving returned no usable durations.")
+    cache[cache_key] = {
+        "durations_s": durations,
+        "period": str(period["key"]),
+        "firsttime": int(period["firsttime"]),
+        "interval": int(period["interval"]),
+        "count": int(period["count"]),
+        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
+        "destination": f"{destination_lng:.6f},{destination_lat:.6f}",
+    }
+    return durations, False
+
+
+def _current_plan_matched_route_points(
+    current_plan: dict[str, Any] | None,
+    prepared_original_points: list[dict[str, Any]],
+    service_direction: str,
+) -> dict[str, list[dict[str, Any]]]:
+    normalized = _normalize_current_plan(current_plan)
+    if not normalized:
+        return {}
+    point_lookup = _make_point_lookup(prepared_original_points)
+    stop_lookup = {
+        str(item.get("stop_id", "")).strip(): dict(item)
+        for item in list(normalized.get("stops") or [])
+    }
+    route_groups: dict[str, list[dict[str, Any]]] = {}
+    for assignment in list(normalized.get("assignments") or []):
+        route_id = str(assignment.get("route_id", "")).strip()
+        stop_id = str(assignment.get("stop_id", "")).strip()
+        if not route_id or not stop_id or stop_id not in stop_lookup:
+            continue
+        row = {
+            "stop_sequence": int(assignment.get("stop_sequence", 0) or 0),
+            **dict(stop_lookup[stop_id]),
+        }
+        route_groups.setdefault(route_id, []).append(row)
+
+    matched: dict[str, list[dict[str, Any]]] = {}
+    for route_id, rows in sorted(route_groups.items()):
+        ordered_rows = sorted(rows, key=lambda item: int(item.get("stop_sequence", 0) or 0))
+        points: list[dict[str, Any]] = []
+        for row in ordered_rows:
+            key = (
+                str(row.get("country", "")).strip().lower(),
+                str(row.get("city", "")).strip().lower(),
+                str(row.get("address", "")).strip().lower(),
+            )
+            point = point_lookup.get(key)
+            if point is not None:
+                points.append(point)
+        ordered_points = order_points_for_service_direction(points, service_direction, optimized=False)
+        if len(ordered_points) >= 2:
+            matched[route_id] = ordered_points
+    return matched
+
+
+def _sample_current_plan_edges(
+    route_points_by_id: dict[str, list[dict[str, Any]]],
+    max_edges: int,
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    if max_edges <= 0:
+        return []
+    all_edges: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    seen: set[tuple[int, int]] = set()
+    for route_id, points in sorted(route_points_by_id.items()):
+        for origin, destination in zip(points[:-1], points[1:]):
+            key = (int(origin.get("node_id", -1)), int(destination.get("node_id", -1)))
+            if key in seen or key[0] < 0 or key[1] < 0 or key[0] == key[1]:
+                continue
+            seen.add(key)
+            all_edges.append((route_id, origin, destination))
+    if len(all_edges) <= max_edges:
+        return all_edges
+    step = len(all_edges) / float(max_edges)
+    sampled = [all_edges[int(index * step)] for index in range(max_edges)]
+    deduped: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+    sampled_keys: set[tuple[int, int]] = set()
+    for item in sampled:
+        key = (int(item[1].get("node_id", -1)), int(item[2].get("node_id", -1)))
+        if key not in sampled_keys:
+            deduped.append(item)
+            sampled_keys.add(key)
+    return deduped
+
+
+def _weighted_average_factor(samples: list[dict[str, float]]) -> float | None:
+    total_weight = sum(float(item.get("weight_s", 0.0) or 0.0) for item in samples)
+    if total_weight <= 0:
+        return None
+    weighted = sum(float(item["factor"]) * float(item["weight_s"]) for item in samples)
+    return weighted / total_weight
+
+
+def calibrate_peak_traffic_multiplier(
+    planner: Any,
+    current_plan: dict[str, Any] | None,
+    prepared_original_points: list[dict[str, Any]],
+    input_records: list[dict[str, Any]],
+    config: PlannerConfig,
+    fallback_profile_name: str,
+    fallback_multiplier: float,
+    fallback_context: str,
+) -> dict[str, Any]:
+    country, _city = infer_traffic_location(input_records)
+    service_direction = normalize_service_direction(config.service_direction)
+    if not AMAP_TRAFFIC_CALIBRATION_ENABLED:
+        return {"enabled": False, "reason": "disabled_by_env"}
+    if country != "CHINA":
+        return {"enabled": False, "reason": "non_china_location"}
+    if not current_plan:
+        return {"enabled": False, "reason": "missing_current_plan"}
+    if AMAP_TRAFFIC_CALIBRATION_MAX_CALLS <= 0:
+        return {"enabled": False, "reason": "max_calls_zero"}
+
+    periods = peak_traffic_periods()
+    max_edges = max(1, AMAP_TRAFFIC_CALIBRATION_MAX_CALLS // max(1, len(periods)))
+    route_points_by_id = _current_plan_matched_route_points(current_plan, prepared_original_points, service_direction)
+    edges = _sample_current_plan_edges(route_points_by_id, max_edges)
+    if not edges:
+        return {"enabled": False, "reason": "no_matched_current_plan_edges"}
+
+    cache = _load_json_object(TRAFFIC_CALIBRATION_CACHE_PATH)
+    cache_changed = False
+    period_samples: dict[str, list[dict[str, float]]] = {str(period["key"]): [] for period in periods}
+    api_calls = 0
+    cache_hits = 0
+    errors: list[str] = []
+
+    previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
+    planner.OSRM_BASE_URL = planner.resolve_osrm_base_url(prepared_original_points)
+    try:
+        for period in periods:
+            for route_id, origin, destination in edges:
+                try:
+                    distance_m, osrm_duration_s, _geometry = planner.osrm_driving_direction(origin, destination)
+                    if osrm_duration_s <= 0:
+                        continue
+                    durations_s, from_cache = amap_future_driving_duration_seconds(
+                        planner,
+                        origin,
+                        destination,
+                        period,
+                        cache,
+                    )
+                    if from_cache:
+                        cache_hits += 1
+                    else:
+                        api_calls += 1
+                        cache_changed = True
+                    for duration_s in durations_s:
+                        raw_factor = float(duration_s) / float(osrm_duration_s)
+                        factor = min(
+                            AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR,
+                            max(AMAP_TRAFFIC_CALIBRATION_MIN_FACTOR, raw_factor),
+                        )
+                        period_samples[str(period["key"])].append(
+                            {
+                                "factor": factor,
+                                "weight_s": float(osrm_duration_s),
+                                "route_id": str(route_id),
+                                "distance_m": float(distance_m),
+                            }
+                        )
+                except Exception as exc:
+                    if len(errors) < 8:
+                        errors.append(str(exc))
+    finally:
+        planner.OSRM_BASE_URL = previous_osrm_base_url
+
+    if cache_changed:
+        _save_json_object(TRAFFIC_CALIBRATION_CACHE_PATH, cache)
+
+    period_summaries: dict[str, dict[str, Any]] = {}
+    for period in periods:
+        key = str(period["key"])
+        samples = period_samples.get(key) or []
+        factor = _weighted_average_factor(samples)
+        if factor is not None:
+            period_summaries[key] = {
+                "label": str(period["label"]),
+                "factor": float(factor),
+                "sample_count": len(samples),
+                "firsttime": int(period["firsttime"]),
+                "interval_seconds": int(period["interval"]),
+                "time_point_count": int(period["count"]),
+            }
+
+    selected_key = "am_peak" if service_direction == "To School" else "pm_peak"
+    selected = period_summaries.get(selected_key)
+    combined_samples = [
+        item
+        for samples in period_samples.values()
+        for item in samples
+    ]
+    combined_factor = _weighted_average_factor(combined_samples)
+    selected_factor = float(selected["factor"]) if selected else combined_factor
+    if selected_factor is None:
+        return {
+            "enabled": True,
+            "succeeded": False,
+            "reason": "no_usable_amap_samples",
+            "fallback_profile_name": fallback_profile_name,
+            "fallback_multiplier": float(fallback_multiplier),
+            "fallback_context": fallback_context,
+            "api_calls": api_calls,
+            "cache_hits": cache_hits,
+            "errors": errors,
+        }
+
+    selected_factor = min(
+        AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR,
+        max(AMAP_TRAFFIC_CALIBRATION_MIN_FACTOR, float(selected_factor)),
+    )
+    return {
+        "enabled": True,
+        "succeeded": True,
+        "selected_period": selected_key,
+        "service_direction": service_direction,
+        "traffic_profile_name": f"{fallback_profile_name} (AMap calibrated)",
+        "traffic_time_multiplier": selected_factor,
+        "traffic_profile_context": (
+            f"AMap future driving calibration from current-plan legs; "
+            f"{len(edges)} sampled edge(s), {api_calls} API call(s), {cache_hits} cache hit(s)"
+        ),
+        "fallback_profile_name": fallback_profile_name,
+        "fallback_multiplier": float(fallback_multiplier),
+        "fallback_context": fallback_context,
+        "combined_factor": float(combined_factor) if combined_factor is not None else None,
+        "periods": period_summaries,
+        "sampled_edge_count": len(edges),
+        "api_calls": api_calls,
+        "cache_hits": cache_hits,
+        "errors": errors,
+    }
 
 
 def load_legacy_planner():
@@ -3696,10 +4093,53 @@ def run_backend_planner_with_prepared_data(
 
     log_stream = _StreamingLogCapture(callback=progress_callback)
     started_at = time.perf_counter()
+    traffic_calibration: dict[str, Any] = {}
     with redirect_stdout(log_stream), redirect_stderr(log_stream):
         planner.log(
             f"[BACKEND] Starting route optimization for service direction `{normalize_service_direction(config.service_direction)}`."
         )
+        try:
+            traffic_calibration = calibrate_peak_traffic_multiplier(
+                planner,
+                current_plan,
+                original_points,
+                input_records,
+                config,
+                traffic_profile_name,
+                traffic_time_multiplier,
+                traffic_profile_context,
+            )
+            if traffic_calibration.get("succeeded"):
+                traffic_profile_name = str(traffic_calibration["traffic_profile_name"])
+                traffic_time_multiplier = float(traffic_calibration["traffic_time_multiplier"])
+                traffic_profile_context = str(traffic_calibration["traffic_profile_context"])
+                planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
+                planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
+                planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
+                planner.log(
+                    f"[BACKEND] AMap peak calibration selected {traffic_time_multiplier:.2f}x "
+                    f"for {traffic_calibration.get('selected_period')} "
+                    f"({traffic_calibration.get('sampled_edge_count')} edge(s))."
+                )
+            elif traffic_calibration.get("enabled"):
+                planner.log(
+                    "[WARN] AMap peak calibration did not produce a usable factor; "
+                    f"falling back to {traffic_time_multiplier:.2f}x."
+                )
+            else:
+                reason = str(traffic_calibration.get("reason", "not_applicable"))
+                planner.log(f"[BACKEND] AMap peak calibration skipped: {reason}.")
+        except Exception as exc:
+            traffic_calibration = {
+                "enabled": True,
+                "succeeded": False,
+                "reason": "calibration_exception",
+                "error": str(exc),
+                "fallback_profile_name": traffic_profile_name,
+                "fallback_multiplier": float(traffic_time_multiplier),
+                "fallback_context": traffic_profile_context,
+            }
+            planner.log(f"[WARN] AMap peak calibration failed; falling back to fixed traffic profile: {exc}")
         planner.log(
             f"[BACKEND] Using traffic profile `{traffic_profile_name}` "
             f"with travel-time multiplier {traffic_time_multiplier:.2f}x "
@@ -3853,6 +4293,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
+        "traffic_calibration": traffic_calibration,
         "service_direction": normalize_service_direction(config.service_direction),
     }
     structured_results = attach_output_paths_to_structured_results(structured_results, config)
@@ -3879,6 +4320,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
+        "traffic_calibration": traffic_calibration,
         "service_direction": normalize_service_direction(config.service_direction),
     }
 

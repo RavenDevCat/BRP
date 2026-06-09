@@ -97,6 +97,14 @@ MAP_ARTIFACT_KEYS = {
     "further_most": "further_most",
     "further_most_nearby": "further_most_nearby",
 }
+MAP_SCENARIO_LABELS = {
+    "current_plan": "Current Plan",
+    "original": "Free Optimization Baseline",
+    "subway": "Subway Aggregated",
+    "nearby": "Nearby Aggregated",
+    "further_most": "Further Most",
+    "further_most_nearby": "Further Most + Nearby Aggregate",
+}
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
     "original": "original_html",
@@ -1963,6 +1971,206 @@ def _resolve_job_map_artifact(job_record: dict[str, Any], artifact_key: str) -> 
     return None, f"Map artifact is not available: {artifact_key}"
 
 
+def _float_or_none(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isfinite(number):
+        return number
+    return None
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _map_point_coordinates(point: dict[str, Any]) -> tuple[float, float] | None:
+    lat = _float_or_none(point.get("plot_lat") if point.get("plot_lat") is not None else point.get("lat"))
+    lng = _float_or_none(point.get("plot_lng") if point.get("plot_lng") is not None else point.get("lng"))
+    if lat is None or lng is None:
+        return None
+    return lat, lng
+
+
+def _map_bounds_from_coordinates(coordinates: list[tuple[float, float]]) -> dict[str, float] | None:
+    if not coordinates:
+        return None
+    lats = [lat for lat, _lng in coordinates]
+    lngs = [lng for _lat, lng in coordinates]
+    return {
+        "min_lng": min(lngs),
+        "min_lat": min(lats),
+        "max_lng": max(lngs),
+        "max_lat": max(lats),
+    }
+
+
+def _route_geometry_coordinates(route: dict[str, Any]) -> list[list[float]]:
+    coordinates: list[list[float]] = []
+    for leg_detail in list(route.get("leg_details") or []):
+        geometry = list(leg_detail.get("geometry") or [])
+        for index, raw_pair in enumerate(geometry):
+            if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) < 2:
+                continue
+            lat = _float_or_none(raw_pair[0])
+            lng = _float_or_none(raw_pair[1])
+            if lat is None or lng is None:
+                continue
+            if coordinates and index == 0 and coordinates[-1] == [lng, lat]:
+                continue
+            coordinates.append([lng, lat])
+    return coordinates
+
+
+def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[dict[str, Any] | None, str | None]:
+    scenario_key = MAP_ARTIFACT_KEYS.get(artifact_key.strip().lower())
+    if not scenario_key:
+        return None, f"Unknown map scenario: {artifact_key}"
+
+    result = dict(job_record.get("result") or {})
+    structured = dict(result.get("structured_results") or {})
+    scenario = dict(structured.get(scenario_key) or {})
+    points = list(scenario.get("points") or [])
+    routes = list(scenario.get("routes") or [])
+    if not points or not routes:
+        return None, f"Map data is not available: {artifact_key}"
+
+    route_payloads: list[dict[str, Any]] = []
+    stop_payloads: list[dict[str, Any]] = []
+    all_coordinates: list[tuple[float, float]] = []
+
+    for route_index, route in enumerate(routes):
+        route_id = str(route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}")
+        geometry = _route_geometry_coordinates(dict(route))
+        for lng, lat in geometry:
+            all_coordinates.append((lat, lng))
+        nodes = list(route.get("nodes") or [])
+        leg_details = list(route.get("leg_details") or [])
+        cumulative_duration_s = 0.0
+        cumulative_distance_m = 0.0
+        route_stop_ids: list[str] = []
+        for order, node in enumerate(nodes):
+            node_index = _int_or_none(node)
+            if node_index is None or node_index < 0 or node_index >= len(points):
+                continue
+            point = dict(points[node_index] or {})
+            coords = _map_point_coordinates(point)
+            if not coords:
+                continue
+            lat, lng = coords
+            if order > 0 and order - 1 < len(leg_details):
+                leg = dict(leg_details[order - 1] or {})
+                cumulative_duration_s += float(leg.get("duration_s", 0.0) or 0.0)
+                cumulative_distance_m += float(leg.get("distance_m", 0.0) or 0.0)
+            stop_id = f"{route_id}:{order}:{node_index}"
+            route_stop_ids.append(stop_id)
+            all_coordinates.append((lat, lng))
+            stop_payloads.append(
+                {
+                    "id": stop_id,
+                    "route_id": route_id,
+                    "route_index": route_index,
+                    "order": order,
+                    "node_index": node_index,
+                    "address": str(point.get("display_address") or point.get("address") or "").strip(),
+                    "requested_address": str(point.get("requested_address") or "").strip(),
+                    "passenger_count": int(point.get("passenger_count", 0) or 0),
+                    "is_depot": bool(point.get("is_depot")),
+                    "lat": lat,
+                    "lng": lng,
+                    "cumulative_duration_s": cumulative_duration_s,
+                    "cumulative_distance_m": cumulative_distance_m,
+                    "demand_batch_index": _int_or_none(point.get("demand_batch_index")),
+                    "demand_batch_count": _int_or_none(point.get("demand_batch_count")),
+                }
+            )
+        route_payloads.append(
+            {
+                "id": route_id,
+                "route_index": route_index,
+                "vehicle_id": route.get("vehicle_id"),
+                "bus_type_name": str(route.get("bus_type_name") or "").strip(),
+                "load": int(route.get("load", 0) or 0),
+                "bus_capacity": _int_or_none(route.get("bus_capacity")),
+                "comfort_capacity": _int_or_none(route.get("comfort_capacity")),
+                "stop_count": _int_or_none(route.get("stop_count")) or max(0, len(nodes) - 1),
+                "max_stops": _int_or_none(route.get("max_stops")),
+                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "duration_s": float(route.get("traffic_api_duration_s") or route.get("traffic_adjusted_drive_time_s") or route.get("time_s") or 0.0),
+                "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
+                "traffic_time_source": str(route.get("traffic_time_source") or "").strip(),
+                "geometry": geometry,
+                "stop_ids": route_stop_ids,
+            }
+        )
+
+    point_by_address = {
+        str(point.get("address") or point.get("display_address") or "").strip(): dict(point)
+        for point in points
+        if str(point.get("address") or point.get("display_address") or "").strip()
+    }
+    private_links: list[dict[str, Any]] = []
+    for index, item in enumerate(list(scenario.get("outlying_private_access_rows") or [])):
+        row = dict(item or {})
+        geometry: list[list[float]] = []
+        for raw_pair in list(row.get("private_drive_geometry") or []):
+            if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) < 2:
+                continue
+            lat = _float_or_none(raw_pair[0])
+            lng = _float_or_none(raw_pair[1])
+            if lat is None or lng is None:
+                continue
+            geometry.append([lng, lat])
+            all_coordinates.append((lat, lng))
+        if len(geometry) < 2:
+            stop_point = point_by_address.get(str(row.get("address") or "").strip())
+            pickup_point = point_by_address.get(str(row.get("pickup_address") or "").strip())
+            stop_coords = _map_point_coordinates(stop_point or row)
+            pickup_coords = _map_point_coordinates(pickup_point or {
+                "plot_lat": row.get("pickup_plot_lat"),
+                "plot_lng": row.get("pickup_plot_lng"),
+            })
+            if stop_coords and pickup_coords:
+                geometry = [[stop_coords[1], stop_coords[0]], [pickup_coords[1], pickup_coords[0]]]
+                all_coordinates.extend([stop_coords, pickup_coords])
+        if geometry:
+            private_links.append(
+                {
+                    "id": f"private-link-{index}",
+                    "access_type": str(row.get("private_access_type") or "clustered_rider").strip() or "clustered_rider",
+                    "address": str(row.get("address") or "").strip(),
+                    "pickup_address": str(row.get("pickup_address") or "").strip(),
+                    "pickup_route_id": str(row.get("pickup_route_id") or "").strip(),
+                    "drive_time_s": float(row.get("private_drive_time_s", 0.0) or 0.0),
+                    "drive_distance_m": float(row.get("private_drive_distance_m", 0.0) or 0.0),
+                    "geometry": geometry,
+                }
+            )
+
+    return {
+        "job_id": str(job_record.get("job_id") or ""),
+        "scenario_key": scenario_key,
+        "scenario_name": MAP_SCENARIO_LABELS.get(scenario_key, scenario_key),
+        "service_direction": str(result.get("service_direction") or structured.get("service_direction") or "").strip(),
+        "traffic_profile_name": str(result.get("traffic_profile_name") or structured.get("traffic_profile_name") or "").strip(),
+        "bounds": _map_bounds_from_coordinates(all_coordinates),
+        "routes": route_payloads,
+        "stops": stop_payloads,
+        "private_links": private_links,
+        "summary": {
+            "route_count": len(route_payloads),
+            "stop_count": len([item for item in stop_payloads if not item.get("is_depot")]),
+            "passenger_count": sum(int(route.get("load", 0) or 0) for route in routes),
+            "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in routes),
+            "duration_s": max([float(route.get("time_s", 0.0) or 0.0) for route in routes] or [0.0]),
+        },
+    }, None
+
+
 def _infer_output_directory_name(result: dict[str, Any]) -> str:
     structured = dict(result.get("structured_results") or {})
     outputs_root = (BASE_DIR / "outputs").resolve()
@@ -2309,6 +2517,22 @@ class BackendHandler(BaseHTTPRequestHandler):
                     filename=artifact_path.name,
                     inline=inline,
                 )
+                return
+            if len(parts) == 4 and parts[2] == "map-data":
+                job_id = parts[1].strip()
+                scenario_key = unquote(parts[3]).strip()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    return
+                map_data, map_data_error = _build_job_map_data(job_record, scenario_key)
+                if map_data_error or not map_data:
+                    self._send_json(404, {"error": map_data_error or f"Map data not found: {scenario_key}"})
+                    return
+                self._send_json(200, map_data)
                 return
             if len(parts) != 2:
                 self._send_json(404, {"error": f"Unknown path: {path}"})

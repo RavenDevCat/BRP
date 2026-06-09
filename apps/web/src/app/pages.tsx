@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCircle2, ChevronDown, ChevronUp, Clock3, ListChecks, Loader2, Trash2, XCircle } from "lucide-react";
+import { ArrowRight, Ban, CheckCircle2, ChevronDown, ChevronUp, Clock3, History, ListChecks, Loader2, RefreshCw, Trash2, XCircle } from "lucide-react";
 import { AppShell } from "@/features/shell/app-shell";
 import { JobMetrics } from "@/features/jobs/job-metrics";
 import { JobTable } from "@/features/jobs/job-table";
@@ -99,7 +99,8 @@ export function JobDetailPage() {
 }
 
 function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
-  const [historyOpen, setHistoryOpen] = useState(!selectedJobId);
+  const [mobileHistoryOpen, setMobileHistoryOpen] = useState(!selectedJobId);
+  const [desktopHistoryCollapsed, setDesktopHistoryCollapsed] = useState(Boolean(selectedJobId));
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 15_000 });
   const jobs = jobsQuery.data || [];
   const resolvedJobId = selectedJobId || jobs[0]?.job_id || "";
@@ -107,7 +108,8 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
 
   useEffect(() => {
     if (selectedJobId) {
-      setHistoryOpen(false);
+      setMobileHistoryOpen(false);
+      setDesktopHistoryCollapsed(true);
     }
   }, [selectedJobId]);
 
@@ -135,56 +137,30 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
         </div>
       </section>
 
-      <div className="grid gap-4 xl:grid-cols-[340px_minmax(0,1fr)]">
-        <Card className="min-w-0 xl:sticky xl:top-20 xl:self-start">
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold">History</h2>
-                  <Badge tone="info">{formatNumber(jobs.length)}</Badge>
-                </div>
-                {selectedJob ? (
-                  <div className="mt-1 truncate text-xs text-muted-foreground xl:hidden">
-                    {getJobName(selectedJob)}
-                  </div>
-                ) : null}
-              </div>
-              <Button
-                type="button"
-                variant="ghost"
-                className="xl:hidden"
-                icon={
-                  historyOpen ? (
-                    <ChevronUp className="h-4 w-4" aria-hidden="true" />
-                  ) : (
-                    <ChevronDown className="h-4 w-4" aria-hidden="true" />
-                  )
-                }
-                onClick={() => setHistoryOpen((open) => !open)}
-              >
-                {historyOpen ? "Hide" : "Show"}
-              </Button>
-            </div>
-          </CardHeader>
-          <CardContent className={historyOpen ? "block" : "hidden xl:block"}>
-            {jobsQuery.error ? (
-              <InlineError message={(jobsQuery.error as Error).message} />
-            ) : jobsQuery.isLoading ? (
-              <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-                <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-                Loading jobs
-              </div>
-            ) : jobs.length ? (
-              <JobHistorySubList jobs={jobs} selectedJobId={resolvedJobId} />
-            ) : (
-              <EmptyState
-                title="No audits yet"
-                detail="Submitted audit runs will appear here after workbook validation and queue submission."
-              />
-            )}
-          </CardContent>
-        </Card>
+      <div className={["grid gap-4", desktopHistoryCollapsed ? "xl:grid-cols-[88px_minmax(0,1fr)]" : "xl:grid-cols-[340px_minmax(0,1fr)]"].join(" ")}>
+        <JobHistoryMobilePanel
+          jobs={jobs}
+          selectedJob={selectedJob}
+          selectedJobId={resolvedJobId}
+          isOpen={mobileHistoryOpen}
+          isLoading={jobsQuery.isLoading}
+          isFetching={jobsQuery.isFetching}
+          error={jobsQuery.error as Error | null}
+          onOpenChange={setMobileHistoryOpen}
+          onRefresh={() => void jobsQuery.refetch()}
+        />
+
+        <JobHistoryDesktopPanel
+          className="hidden xl:block xl:sticky xl:top-20 xl:self-start"
+          jobs={jobs}
+          selectedJobId={resolvedJobId}
+          collapsed={desktopHistoryCollapsed}
+          isLoading={jobsQuery.isLoading}
+          isFetching={jobsQuery.isFetching}
+          error={jobsQuery.error as Error | null}
+          onCollapsedChange={setDesktopHistoryCollapsed}
+          onRefresh={() => void jobsQuery.refetch()}
+        />
 
         {resolvedJobId ? (
           <JobDetailPanel jobId={resolvedJobId} />
@@ -202,6 +178,184 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
       </div>
     </div>
   );
+}
+
+function JobHistoryMobilePanel({
+  jobs,
+  selectedJob,
+  selectedJobId,
+  isOpen,
+  isLoading,
+  isFetching,
+  error,
+  onOpenChange,
+  onRefresh,
+}: {
+  jobs: Awaited<ReturnType<typeof listJobs>>;
+  selectedJob?: Awaited<ReturnType<typeof listJobs>>[number];
+  selectedJobId: string;
+  isOpen: boolean;
+  isLoading: boolean;
+  isFetching: boolean;
+  error?: Error | null;
+  onOpenChange: (open: boolean) => void;
+  onRefresh: () => void;
+}) {
+  return (
+    <Card className="min-w-0 xl:hidden">
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-semibold">History</h2>
+              <Badge tone="info">{formatNumber(jobs.length)}</Badge>
+            </div>
+            {selectedJob ? (
+              <div className="mt-1 truncate text-xs text-muted-foreground">
+                {getJobName(selectedJob)}
+              </div>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-1">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Route Audit history" onClick={onRefresh}>
+              <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />
+            </button>
+            <Button
+              type="button"
+              variant="ghost"
+              icon={
+                isOpen ? (
+                  <ChevronUp className="h-4 w-4" aria-hidden="true" />
+                ) : (
+                  <ChevronDown className="h-4 w-4" aria-hidden="true" />
+                )
+              }
+              onClick={() => onOpenChange(!isOpen)}
+            >
+              {isOpen ? "Hide" : "Show"}
+            </Button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className={isOpen ? "block" : "hidden"}>
+        <JobHistoryContent jobs={jobs} selectedJobId={selectedJobId} isLoading={isLoading} error={error} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function JobHistoryDesktopPanel({
+  className,
+  jobs,
+  selectedJobId,
+  collapsed,
+  isLoading,
+  isFetching,
+  error,
+  onCollapsedChange,
+  onRefresh,
+}: {
+  className?: string;
+  jobs: Awaited<ReturnType<typeof listJobs>>;
+  selectedJobId: string;
+  collapsed: boolean;
+  isLoading: boolean;
+  isFetching: boolean;
+  error?: Error | null;
+  onCollapsedChange: (collapsed: boolean) => void;
+  onRefresh: () => void;
+}) {
+  if (collapsed) {
+    return (
+      <Card className={["overflow-hidden", className || ""].join(" ")}>
+        <div className="flex min-h-[320px] items-stretch gap-2 p-2 lg:flex-col">
+          <button
+            type="button"
+            className="group flex min-w-0 flex-1 flex-col items-center justify-start gap-3 rounded-md border border-primary/30 bg-primary/5 px-2 py-3 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30"
+            aria-label="Open Route Audit history"
+            onClick={() => onCollapsedChange(false)}
+          >
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface shadow-sm ring-1 ring-border transition group-hover:ring-primary/40">
+              <History className="h-4 w-4 text-primary" aria-hidden="true" />
+            </span>
+            <span className="block truncate text-sm font-semibold text-foreground [text-orientation:mixed] [writing-mode:vertical-rl]">
+              History
+            </span>
+            <span className="mt-auto flex shrink-0 flex-col items-center gap-2">
+              <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
+              <ArrowRight className="h-4 w-4 rotate-90 text-primary transition group-hover:translate-y-0.5" aria-hidden="true" />
+            </span>
+          </button>
+          <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Route Audit history" title="Refresh history" onClick={onRefresh}>
+            <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />
+          </button>
+        </div>
+      </Card>
+    );
+  }
+
+  return (
+    <Card className={["min-w-0", className || ""].join(" ")}>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <History className="h-4 w-4 flex-none text-primary" aria-hidden="true" />
+            <h2 className="truncate text-sm font-semibold">Route Audit History</h2>
+            <Badge tone="info">{formatNumber(jobs.length)}</Badge>
+          </div>
+          <div className="flex items-center gap-1">
+            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Route Audit history" onClick={onRefresh}>
+              <RefreshCw className={isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              aria-label="Collapse Route Audit history"
+              onClick={() => onCollapsedChange(true)}
+            >
+              <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent>
+        <JobHistoryContent jobs={jobs} selectedJobId={selectedJobId} isLoading={isLoading} error={error} />
+      </CardContent>
+    </Card>
+  );
+}
+
+function JobHistoryContent({
+  jobs,
+  selectedJobId,
+  isLoading,
+  error,
+}: {
+  jobs: Awaited<ReturnType<typeof listJobs>>;
+  selectedJobId: string;
+  isLoading: boolean;
+  error?: Error | null;
+}) {
+  if (error) {
+    return <InlineError message={error.message} />;
+  }
+  if (isLoading) {
+    return (
+      <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+        Loading jobs
+      </div>
+    );
+  }
+  if (!jobs.length) {
+    return (
+      <EmptyState
+        title="No audits yet"
+        detail="Submitted audit runs will appear here after workbook validation and queue submission."
+      />
+    );
+  }
+  return <JobHistorySubList jobs={jobs} selectedJobId={selectedJobId} />;
 }
 
 function JobHistorySubList({

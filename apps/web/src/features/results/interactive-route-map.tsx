@@ -88,6 +88,18 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   const routesById = useMemo(() => new Map(data.routes.map((route) => [route.id, route])), [data.routes]);
   const stopsById = useMemo(() => new Map(data.stops.map((stop) => [stop.id, stop])), [data.stops]);
   const selectedRoute = selectedRouteId ? routesById.get(selectedRouteId) || null : null;
+  const stopsByRouteId = useMemo(() => {
+    const grouped = new Map<string, JobMapStop[]>();
+    for (const stop of data.stops) {
+      const stops = grouped.get(stop.route_id) || [];
+      stops.push(stop);
+      grouped.set(stop.route_id, stops);
+    }
+    for (const stops of grouped.values()) {
+      stops.sort((a, b) => a.order - b.order);
+    }
+    return grouped;
+  }, [data.stops]);
 
   const routeFeatures = useMemo<FeatureCollection>(
     () => ({
@@ -116,6 +128,14 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
     [data.routes],
   );
 
+  const selectedRouteFeatures = useMemo<FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: routeFeatures.features.filter((feature) => feature.properties.route_id === selectedRouteId),
+    }),
+    [routeFeatures, selectedRouteId],
+  );
+
   const stopFeatures = useMemo<FeatureCollection>(
     () => ({
       type: "FeatureCollection",
@@ -139,6 +159,14 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
       })),
     }),
     [data.stops],
+  );
+
+  const selectedStopFeatures = useMemo<FeatureCollection>(
+    () => ({
+      type: "FeatureCollection",
+      features: stopFeatures.features.filter((feature) => feature.properties.route_id === selectedRouteId),
+    }),
+    [selectedRouteId, stopFeatures],
   );
 
   const privateLinkFeatures = useMemo<FeatureCollection>(
@@ -187,6 +215,12 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
     containerRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
     window.setTimeout(() => mapRef.current?.resize(), 120);
     fitRoute(mapRef.current, route);
+  };
+
+  const focusStop = (stop: JobMapStop) => {
+    setSelectedRouteId(stop.route_id);
+    setSelectedStop(stop);
+    mapRef.current?.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(mapRef.current.getZoom(), 14), duration: 450 });
   };
 
   const clearFocus = () => {
@@ -254,33 +288,61 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
         <div className="min-h-0 flex-1 overflow-auto">
           {data.routes.map((route) => {
             const active = selectedRouteId === route.id;
+            const routeStops = stopsByRouteId.get(route.id) || [];
             return (
-              <button
-                key={route.id}
-                type="button"
-                className={cn(
-                  "flex w-full items-start gap-3 border-b border-border px-3 py-3 text-left transition",
-                  active ? "bg-primary/10" : "hover:bg-muted",
-                )}
-                onClick={() => focusRoute(route)}
-              >
-                <span
-                  className="mt-1 h-3 w-3 shrink-0 rounded-full ring-2 ring-white"
-                  style={{ backgroundColor: routeColor(route.route_index) }}
-                  aria-hidden="true"
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate text-sm font-semibold text-foreground">{routeLabel(route)}</span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {formatNumber(route.load)} riders · {formatNumber(route.stop_count)} stops ·{" "}
-                    {formatDurationMinFromSeconds(route.duration_s)}
+              <div key={route.id} className="border-b border-border">
+                <button
+                  type="button"
+                  className={cn(
+                    "flex w-full items-start gap-3 px-3 py-3 text-left transition",
+                    active ? "bg-primary/10" : "hover:bg-muted",
+                  )}
+                  onClick={() => focusRoute(route)}
+                >
+                  <span
+                    className="mt-1 h-3 w-3 shrink-0 rounded-full ring-2 ring-white"
+                    style={{ backgroundColor: routeColor(route.route_index) }}
+                    aria-hidden="true"
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-foreground">{routeLabel(route)}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {formatNumber(route.load)} riders · {formatNumber(route.stop_count)} stops ·{" "}
+                      {formatDurationMinFromSeconds(route.duration_s)}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {formatDistanceKmFromMeters(route.distance_m)}
+                      {route.bus_type_name ? ` · ${route.bus_type_name}` : ""}
+                    </span>
                   </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {formatDistanceKmFromMeters(route.distance_m)}
-                    {route.bus_type_name ? ` · ${route.bus_type_name}` : ""}
-                  </span>
-                </span>
-              </button>
+                </button>
+                {active ? (
+                  <div className="max-h-[320px] overflow-auto bg-muted/45 px-3 pb-3">
+                    <div className="mb-2 pt-2 text-[11px] font-semibold uppercase text-muted-foreground">Stop sequence</div>
+                    <div className="space-y-1">
+                      {routeStops.map((stop) => (
+                        <button
+                          key={stop.id}
+                          type="button"
+                          className={cn(
+                            "grid w-full grid-cols-[28px_minmax(0,1fr)] gap-2 rounded-md px-2 py-2 text-left text-xs transition",
+                            selectedStop?.id === stop.id ? "bg-primary text-primary-foreground" : "hover:bg-surface",
+                          )}
+                          onClick={() => focusStop(stop)}
+                        >
+                          <span className="font-semibold">{stop.is_depot ? "S" : stop.order}</span>
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">{stop.address || stop.requested_address || "Unknown address"}</span>
+                            <span className={cn("mt-0.5 block", selectedStop?.id === stop.id ? "text-primary-foreground/80" : "text-muted-foreground")}>
+                              {formatNumber(stop.passenger_count)} riders · {formatDurationMinFromSeconds(stop.cumulative_duration_s)}
+                            </span>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
             );
           })}
         </div>
@@ -316,8 +378,8 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="line"
               paint={{
                 "line-color": "#ffffff",
-                "line-width": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 11, 5] : 7,
-                "line-opacity": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 0.95, 0.16] : 0.75,
+                "line-width": selectedRouteId ? 5 : 7,
+                "line-opacity": selectedRouteId ? 0.18 : 0.75,
               }}
             />
             <Layer
@@ -325,8 +387,28 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="line"
               paint={{
                 "line-color": ["get", "color"],
-                "line-width": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 7, 3] : 4,
-                "line-opacity": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 0.95, 0.22] : 0.76,
+                "line-width": selectedRouteId ? 3 : 4,
+                "line-opacity": selectedRouteId ? 0.18 : 0.76,
+              }}
+            />
+          </Source>
+          <Source id="selected-route" type="geojson" data={selectedRouteFeatures}>
+            <Layer
+              id="selected-route-casing"
+              type="line"
+              paint={{
+                "line-color": "#ffffff",
+                "line-width": 13,
+                "line-opacity": selectedRouteId ? 0.98 : 0,
+              }}
+            />
+            <Layer
+              id="selected-route-line"
+              type="line"
+              paint={{
+                "line-color": ["get", "color"],
+                "line-width": 8,
+                "line-opacity": selectedRouteId ? 0.98 : 0,
               }}
             />
           </Source>
@@ -336,10 +418,8 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               type="circle"
               paint={{
                 "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
-                "circle-radius": selectedRouteId
-                  ? ["case", ["==", ["get", "route_id"], selectedRouteId], ["case", ["get", "is_depot"], 9, 7], 4]
-                  : ["case", ["get", "is_depot"], 9, 6],
-                "circle-opacity": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 0.96, 0.28] : 0.9,
+                "circle-radius": selectedRouteId ? 4 : ["case", ["get", "is_depot"], 9, 6],
+                "circle-opacity": selectedRouteId ? 0.24 : 0.9,
                 "circle-stroke-color": "#ffffff",
                 "circle-stroke-width": 2,
               }}
@@ -356,7 +436,44 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
               }}
               paint={{
                 "text-color": "#ffffff",
-                "text-opacity": selectedRouteId ? ["case", ["==", ["get", "route_id"], selectedRouteId], 1, 0.2] : 0.95,
+                "text-opacity": selectedRouteId ? 0.18 : 0.95,
+              }}
+            />
+          </Source>
+          <Source id="selected-stops" type="geojson" data={selectedStopFeatures}>
+            <Layer
+              id="selected-stops-halo"
+              type="circle"
+              paint={{
+                "circle-color": "#ffffff",
+                "circle-radius": ["case", ["get", "is_depot"], 13, 10],
+                "circle-opacity": selectedRouteId ? 0.98 : 0,
+              }}
+            />
+            <Layer
+              id="selected-stops-circle"
+              type="circle"
+              paint={{
+                "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
+                "circle-radius": ["case", ["get", "is_depot"], 10, 8],
+                "circle-opacity": selectedRouteId ? 0.98 : 0,
+                "circle-stroke-color": "#111827",
+                "circle-stroke-width": 1.5,
+              }}
+            />
+            <Layer
+              id="selected-stops-label"
+              type="symbol"
+              layout={{
+                "text-field": ["get", "label"],
+                "text-size": 12,
+                "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+                "text-allow-overlap": true,
+                "text-ignore-placement": true,
+              }}
+              paint={{
+                "text-color": "#ffffff",
+                "text-opacity": selectedRouteId ? 1 : 0,
               }}
             />
           </Source>
@@ -389,6 +506,9 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 <div className="mt-1 text-xs text-muted-foreground">
                   {formatNumber(selectedRoute.load)} riders · {formatNumber(selectedRoute.stop_count)} stops ·{" "}
                   {formatDurationMinFromSeconds(selectedRoute.duration_s)} · {formatDistanceKmFromMeters(selectedRoute.distance_m)}
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Select a stop in the left sequence to inspect its address and timing.
                 </div>
               </div>
               <Button className="h-8 px-3 text-xs" variant="secondary" onClick={clearFocus}>

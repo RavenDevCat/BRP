@@ -564,31 +564,33 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
             <Layer
               id="stops-halo"
               type="circle"
+              beforeId="route-casing"
               paint={{
-                "circle-color": "#ffffff",
+                "circle-color": "#94a3b8",
                 "circle-radius": selectedRouteId
-                  ? ["interpolate", ["linear"], ["zoom"], 10, 5, 14, 7, 16, 9]
-                  : ["case", ["get", "is_depot"], 11, ["interpolate", ["linear"], ["zoom"], 10, 6, 14, 8, 16, 10]],
-                "circle-opacity": selectedRouteId ? 0 : 0.92,
+                  ? ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 5.5, 16, 7]
+                  : ["case", ["get", "is_depot"], 8, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 5.5, 16, 7]],
+                "circle-opacity": selectedRouteId ? (showRouteContext ? 0.18 : 0) : 0.24,
               }}
             />
             <Layer
               id="stops-circle"
               type="circle"
+              beforeId="route-casing"
               paint={{
-                "circle-color": ["case", ["get", "is_depot"], "#111827", ["get", "color"]],
+                "circle-color": "#64748b",
                 "circle-radius": selectedRouteId
-                  ? ["interpolate", ["linear"], ["zoom"], 10, 3, 14, 4.5, 16, 6]
-                  : ["case", ["get", "is_depot"], 9, ["interpolate", ["linear"], ["zoom"], 10, 4, 14, 6, 16, 8]],
-                "circle-opacity": selectedRouteId ? 0 : 0.9,
-                "circle-stroke-color": selectedRouteId ? "#111827" : "#ffffff",
-                "circle-stroke-width": selectedRouteId ? 1.5 : 2,
+                  ? ["interpolate", ["linear"], ["zoom"], 10, 2.5, 14, 3.5, 16, 4.5]
+                  : ["case", ["get", "is_depot"], 5, ["interpolate", ["linear"], ["zoom"], 10, 3, 14, 4, 16, 5]],
+                "circle-opacity": selectedRouteId ? (showRouteContext ? 0.34 : 0) : 0.46,
+                "circle-stroke-width": 0,
               }}
             />
             <Layer
               id="stops-label"
               type="symbol"
               minzoom={12.25}
+              beforeId="route-casing"
               layout={{
                 "text-field": ["get", "label"],
                 "text-size": ["interpolate", ["linear"], ["zoom"], 12, 9, 14, 11, 16, 13],
@@ -601,7 +603,7 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
                 "text-color": "#ffffff",
                 "text-halo-color": "#111827",
                 "text-halo-width": 1.1,
-                "text-opacity": selectedRouteId ? 0 : ["interpolate", ["linear"], ["zoom"], 12.25, 0, 13, 0.82, 15, 0.96],
+                "text-opacity": 0,
               }}
             />
           </Source>

@@ -6,7 +6,6 @@ import {
   BarChart3,
   Bot,
   Download,
-  ExternalLink,
   FileWarning,
   GitCompareArrows,
   ListChecks,
@@ -745,10 +744,10 @@ function MapsPanel({
             >
               Legacy HTML
             </button>
-            <a href={selected.url} target="_blank" rel="noreferrer" className={buttonClassName("secondary")}>
-              <ExternalLink className="h-4 w-4" aria-hidden="true" />
-              Open
-            </a>
+            <button type="button" className={buttonClassName("secondary")} onClick={() => setMapMode("legacy")}>
+              <Map className="h-4 w-4" aria-hidden="true" />
+              Preview HTML
+            </button>
             <a href={selected.downloadUrl} className={buttonClassName("secondary")}>
               <Download className="h-4 w-4" aria-hidden="true" />
               Download

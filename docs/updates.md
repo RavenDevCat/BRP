@@ -24,20 +24,6 @@ It is not a code changelog. Record changes here when users or operators should k
   reads existing structured job results. Rerun only when users want results
   rebuilt under newer planner or geocoding behavior.
 
-### Interactive Route Map Follow-Up Backlog
-
-- Improve route display naming so user-facing labels read like `Route 1` while
-  preserving raw IDs in secondary text.
-- Revisit selected route card placement or collapse behavior so it does not hide
-  important map areas.
-- Surface demand batch metadata in stop sequence when oversized same-address
-  demand was split into solver batches.
-- Tune map base style/contrast, route hit areas, scenario delta metrics, route
-  context default behavior, and narrow viewport layout.
-- Review the upper-right map popup/control content after the polish pass.
-- Define a download/export path for the polished interactive map style, separate
-  from or replacing the legacy HTML map artifact download.
-
 ### Interactive Route Map MVP Started
 
 - Route Audit map work is moving from backend-rendered Folium iframe artifacts

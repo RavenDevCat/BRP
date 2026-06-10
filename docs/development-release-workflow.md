@@ -34,12 +34,9 @@ records after the staging audit, not as the primary project state.
 
 ## Current Development Focus
 
-As of 2026-06-09, active product polish is the Route Audit Maps tab. The React
-MapLibre interactive map is the primary inspection surface, with legacy HTML map
-artifacts retained as fallback. Continue map UI work on CN staging first. The
-next backlog is route naming, selected route card placement, demand batch labels,
-map base contrast, wider route hit areas, scenario delta metrics, route context
-default behavior, and narrow viewport layout.
+Current progress, next tasks, release ledger entries, environment status, and
+operator handoff notes are intentionally kept out of this public workflow file.
+Read the private handoff/inventory before deciding what to work on next.
 
 ## Environment Boundary Contract
 

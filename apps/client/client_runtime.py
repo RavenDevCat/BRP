@@ -375,31 +375,11 @@ def _normalize_korea_city_key(city: str) -> str:
     return normalized
 
 
-def _korea_city_aliases(city: str) -> list[str]:
-    city_key = _normalize_korea_city_key(city)
-    aliases = {
-        "seoul": ["seoul", "서울", "seoul-si", "seoul special city"],
-        "seongnam": ["seongnam", "seongnam-si", "성남", "성남시"],
-        "gimpo": ["gimpo", "gimpo-si", "김포", "김포시"],
-        "daejeon": ["daejeon", "대전", "대전광역시", "daejeon-si", "daejeon metropolitan city"],
-    }
-    values = aliases.get(city_key, [city.strip()])
-    return [item.strip().lower() for item in values if item.strip()]
-
-
-def _is_within_korea_city_bbox(city: str, lat: float, lng: float) -> bool:
-    city_key = _normalize_korea_city_key(city)
-    bboxes = {
-        # Broad Seoul metro-safe bounds, intentionally including Seongnam fringe.
-        "seoul": (37.72, 127.30, 37.35, 126.75),
-        "seongnam": (37.50, 127.20, 37.32, 126.95),
-        "gimpo": (37.78, 126.85, 37.50, 126.55),
-        "daejeon": (36.45, 127.55, 36.20, 127.25),
-    }
-    bbox = bboxes.get(city_key)
-    if bbox is None:
-        return True
-    north, east, south, west = bbox
+def _is_within_south_korea_bbox(lat: float, lng: float) -> bool:
+    # Korea workbooks often use Seoul as the operating city while valid stops
+    # can sit in nearby Gyeonggi/Incheon metro areas. Keep this as a country
+    # sanity check instead of a city-level rejection gate.
+    north, east, south, west = (38.70, 132.10, 33.00, 124.50)
     return south <= lat <= north and west <= lng <= east
 
 
@@ -413,20 +393,7 @@ def is_plausible_korea_geocode_result(
 ) -> bool:
     if not is_korea_country(country):
         return True
-    normalized_city = str(city).strip()
-    if not normalized_city:
-        return True
-
-    address_text = formatted_address.strip().lower()
-    requested_text = requested_address.strip().lower()
-    for city_key in ("seoul", "seongnam", "gimpo", "daejeon"):
-        aliases = _korea_city_aliases(city_key)
-        if any(alias in requested_text for alias in aliases) and any(alias in address_text for alias in aliases):
-            return True
-    city_aliases = _korea_city_aliases(normalized_city)
-    if any(alias in address_text for alias in city_aliases):
-        return True
-    return _is_within_korea_city_bbox(normalized_city, lat, lng)
+    return _is_within_south_korea_bbox(lat, lng)
 
 
 def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
@@ -789,7 +756,7 @@ def geocode_cache_lookup_keys(country: str, city: str, address: str) -> list[str
         candidates.append(f"{raw_country}|{normalized_city}|{normalized_address}")
 
     if is_korea_country(raw_country):
-        korea_city_variants = [raw_city, normalized_city, "Seoul", "Seongnam", ""]
+        korea_city_variants = [raw_city, normalized_city, ""]
         for city_variant in korea_city_variants:
             candidates.append(f"{normalized_country}|{city_variant.strip()}|{normalized_address}")
             candidates.append(f"{raw_country}|{city_variant.strip()}|{raw_address}")
@@ -851,12 +818,20 @@ def resolve_geocoded_point(
     cache_changed = False
     if cached:
         if is_failed_geocode_cache_entry(cached):
-            attempted_providers = failed_geocode_cache_providers(cached)
-            if attempted_providers.issuperset(set(provider_names)):
-                if matched_cache_key and matched_cache_key != cache_key:
-                    GEOCODE_CACHE[cache_key] = dict(cached)
-                    return None, build_geocode_warning(country, city, address, source_excel_rows), True
-                return None, build_geocode_warning(country, city, address, source_excel_rows), False
+            if is_korea_country(country):
+                if matched_cache_key:
+                    GEOCODE_CACHE.pop(matched_cache_key, None)
+                    cache_changed = True
+                if matched_cache_key != cache_key:
+                    GEOCODE_CACHE.pop(cache_key, None)
+                    cache_changed = True
+            else:
+                attempted_providers = failed_geocode_cache_providers(cached)
+                if attempted_providers.issuperset(set(provider_names)):
+                    if matched_cache_key and matched_cache_key != cache_key:
+                        GEOCODE_CACHE[cache_key] = dict(cached)
+                        return None, build_geocode_warning(country, city, address, source_excel_rows), True
+                    return None, build_geocode_warning(country, city, address, source_excel_rows), False
         elif str(cached.get("provider", "")).strip().lower() in set(provider_names):
             cached_lat = float(cached.get("lat", 0.0) or 0.0)
             cached_lng = float(cached.get("lng", 0.0) or 0.0)

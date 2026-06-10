@@ -11,13 +11,28 @@ def _simple_matrix(size: int) -> list[list[int]]:
     return matrix
 
 
+def _distance_matrix_with_remote_stop(size: int, remote_index: int = 1) -> list[list[int]]:
+    matrix = _simple_matrix(size)
+    for i in range(size):
+        if i == remote_index:
+            continue
+        matrix[remote_index][i] = 9000
+        matrix[i][remote_index] = 9000
+    return matrix
+
+
 def _point(index: int, passengers: int = 1) -> dict:
+    lat = 31.2 + index * 0.001
+    lng = 121.4 + index * 0.001
+    if index == 1:
+        lat = 31.5
+        lng = 121.7
     return {
         "address": "School" if index == 0 else f"Stop {index}",
-        "lat": 31.2 + index * 0.001,
-        "lng": 121.4 + index * 0.001,
-        "plot_lat": 31.2 + index * 0.001,
-        "plot_lng": 121.4 + index * 0.001,
+        "lat": lat,
+        "lng": lng,
+        "plot_lat": lat,
+        "plot_lng": lng,
         "passenger_count": passengers,
         "is_depot": index == 0,
     }
@@ -97,6 +112,25 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self._setattr("DEMAND_SPLIT_MAX_EXTRA_BATCHES", 1)
 
         self.assertEqual(self.planner.balanced_demand_batch_sizes(140, 35), [28, 28, 28, 28, 28])
+
+    def test_express_reservation_does_not_starve_regular_fleet_capacity(self) -> None:
+        self._setattr("BUS_TYPE_CONFIGS", [{"name": "Compact", "capacity": 10, "max_count": 4}])
+        self._setattr("VEHICLE_FIXED_COST", {"Compact": 0})
+        self._setattr("MIN_LOAD_TARGET", {"Compact": 0})
+        self._setattr("MIN_LOAD_PENALTY", {"Compact": 0})
+        self._setattr("COMFORT_LOAD_FACTOR", 1.0)
+        self._setattr("RESERVED_EXPRESS_BUSES", 1)
+        self._setattr("EXPRESS_THRESHOLD_KM", 15.0)
+        self._setattr("EXPRESS_SKIP_INNER_KM", 8.0)
+        points = [_point(0)] + [_point(index) for index in range(1, 33)]
+        time_matrix = _simple_matrix(len(points))
+        distance_matrix = _distance_matrix_with_remote_stop(len(points))
+
+        routes = self.planner.solve_routes(points, time_matrix, distance_matrix)
+
+        served_nodes = {node for route in routes for node in route["nodes"] if node}
+        self.assertEqual(served_nodes, set(range(1, len(points))))
+        self.assertLessEqual(max(route["load"] for route in routes), 10)
 
 
 if __name__ == "__main__":

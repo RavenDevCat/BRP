@@ -1101,6 +1101,14 @@ def remap_subset_routes(subset_routes: list[dict[str, Any]], subset_nodes: list[
     return remapped
 
 
+def points_total_demand(points: list[dict[str, Any]]) -> int:
+    return sum(int(point.get("passenger_count", 0) or 0) for point in points[1:])
+
+
+def fleet_total_capacity(fleet: list[dict[str, Any]]) -> int:
+    return sum(solver_capacity_for_vehicle(item) for item in fleet)
+
+
 def solve_routes_for_fleet(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
@@ -1123,8 +1131,8 @@ def solve_routes_for_fleet(
             f"Current comfort load factor is {COMFORT_LOAD_FACTOR:.0%}; oversized stops above the largest comfort capacity: {', '.join(oversized[:10])}"
         )
 
-    total_demand = sum(int(point.get("passenger_count", 0)) for point in points[1:])
-    if total_demand > sum(solver_capacity_for_vehicle(item) for item in fleet):
+    total_demand = points_total_demand(points)
+    if total_demand > fleet_total_capacity(fleet):
         raise RuntimeError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
     vehicle_count = len(fleet)
@@ -1283,10 +1291,22 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     regular_fleet = trim_fleet_for_demand(points, full_fleet)
     if remote_nodes and RESERVED_EXPRESS_BUSES > 0:
         sorted_for_express = sort_express_preference(full_fleet)
-        express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
-        express_ids = {id(item) for item in express_fleet}
-        regular_fleet = [item for item in full_fleet if id(item) not in express_ids]
-        regular_fleet = trim_fleet_for_demand(points, regular_fleet)
+        candidate_express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
+        express_ids = {id(item) for item in candidate_express_fleet}
+        candidate_regular_fleet = [item for item in full_fleet if id(item) not in express_ids]
+        eligible_remote_nodes = [
+            idx
+            for idx in remote_nodes
+            if depot_distances.get(idx, 0.0) >= EXPRESS_SKIP_INNER_KM
+        ]
+        eligible_remote_demand = sum(int(points[idx].get("passenger_count", 0) or 0) for idx in eligible_remote_nodes)
+        if (
+            fleet_total_capacity(candidate_regular_fleet)
+            + min(eligible_remote_demand, fleet_total_capacity(candidate_express_fleet))
+            >= points_total_demand(points)
+        ):
+            express_fleet = candidate_express_fleet
+            regular_fleet = trim_fleet_for_demand(points, candidate_regular_fleet)
 
     combined_routes: list[dict[str, Any]] = []
 

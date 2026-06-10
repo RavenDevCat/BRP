@@ -9,6 +9,7 @@ import MapView, {
 } from "react-map-gl/maplibre";
 import type { StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { JobMapData, JobMapRoute, JobMapStop } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -395,18 +396,22 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
     <div
       ref={containerRef}
       className={cn(
-        "grid overflow-hidden border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]",
-        fullscreen ? "h-full min-h-0 rounded-none border-0 lg:grid-cols-[360px_minmax(0,1fr)]" : "min-h-[560px] rounded-md",
+        fullscreen
+          ? "relative overflow-hidden border-0 bg-transparent"
+          : "grid overflow-hidden border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]",
+        fullscreen ? "h-full min-h-0 rounded-none" : "min-h-[560px] rounded-md",
       )}
       style={{ height: fullscreen ? "100%" : "clamp(560px, calc(100vh - 220px), 760px)" }}
     >
       <aside
         className={cn(
-          "flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r",
-          fullscreen ? "border-white/35 bg-surface/68 shadow-xl backdrop-blur-xl lg:border-r-white/35" : "border-border bg-surface",
+          "flex min-h-0 flex-col",
+          fullscreen
+            ? "absolute inset-y-3 left-3 right-3 z-10 overflow-hidden rounded-lg border border-white/45 bg-white/30 shadow-2xl ring-1 ring-slate-950/10 backdrop-blur-2xl sm:right-auto sm:w-[360px]"
+            : "border-b border-border bg-surface lg:border-b-0 lg:border-r",
         )}
       >
-        <div className={cn("border-b p-3", fullscreen ? "border-white/35 bg-white/20 backdrop-blur-xl" : "border-border")}>
+        <div className={cn("border-b p-3", fullscreen ? "border-white/35 bg-white/18 backdrop-blur-2xl" : "border-border")}>
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">{data.scenario_name}</h3>
@@ -423,7 +428,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
             <input
               className={cn(
                 "h-9 w-full rounded-md border px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary",
-                fullscreen ? "border-white/45 bg-white/50 shadow-sm backdrop-blur placeholder:text-slate-500" : "border-border bg-surface",
+                fullscreen ? "border-white/45 bg-white/38 shadow-sm backdrop-blur placeholder:text-slate-500" : "border-border bg-surface",
               )}
               value={routeSearch}
               onChange={(event) => setRouteSearch(event.target.value)}
@@ -480,7 +485,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
             ) : null}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className={cn("min-h-0 flex-1 overflow-auto", fullscreen ? "space-y-2 bg-transparent p-2" : "")}>
           {visibleRoutes.length ? null : (
             <div className="p-4 text-sm text-muted-foreground">No routes match the current filter.</div>
           )}
@@ -488,12 +493,13 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
             const active = selectedRouteId === route.id;
             const routeStops = stopsByRouteId.get(route.id) || [];
             return (
-              <div key={route.id} className={cn("border-b", fullscreen ? "border-white/30" : "border-border")}>
+              <div key={route.id} className={cn(fullscreen ? "overflow-hidden rounded-lg border border-white/38 bg-white/28 shadow-sm backdrop-blur-xl" : "border-b border-border")}>
                 <button
                   type="button"
                   className={cn(
                     "flex w-full items-start gap-3 border-l-2 px-3 py-3 text-left transition",
-                    active ? (fullscreen ? "bg-white/45 backdrop-blur" : "bg-primary/10") : fullscreen ? "hover:bg-white/32" : "hover:bg-muted",
+                    fullscreen ? "rounded-lg" : "",
+                    active ? (fullscreen ? "bg-white/56 backdrop-blur" : "bg-primary/10") : fullscreen ? "hover:bg-white/42" : "hover:bg-muted",
                     routeListAccentClass(route),
                   )}
                   onClick={() => focusRoute(route)}
@@ -517,9 +523,12 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                       {route.bus_type_name ? ` · ${route.bus_type_name}` : ""}
                     </span>
                   </span>
+                  <span className={cn("mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition", fullscreen ? "bg-white/45 text-slate-700" : "text-muted-foreground")}>
+                    {active ? <ChevronUp className="h-4 w-4" aria-hidden="true" /> : <ChevronDown className="h-4 w-4" aria-hidden="true" />}
+                  </span>
                 </button>
                 {active ? (
-                  <div className={cn("max-h-[320px] overflow-auto px-3 pb-3", fullscreen ? "bg-white/24 backdrop-blur" : "bg-muted/45")}>
+                  <div className={cn("max-h-[320px] overflow-auto px-3 pb-3", fullscreen ? "border-t border-white/30 bg-white/18 backdrop-blur-xl" : "bg-muted/45")}>
                     <div className="mb-2 pt-2 text-[11px] font-semibold uppercase text-muted-foreground">Stop sequence</div>
                     <div className="space-y-1">
                       {routeStops.map((stop) => (
@@ -550,7 +559,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
         </div>
       </aside>
 
-      <div className="relative min-h-0">
+      <div className={cn("relative min-h-0", fullscreen ? "h-full" : "")}>
         <MapView
           ref={mapRef}
           initialViewState={initialViewState}

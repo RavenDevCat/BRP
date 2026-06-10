@@ -1299,6 +1299,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     const colors = ${JSON.stringify(routeColors)};
     let selectedRouteId = "";
     let selectedStopId = "";
+    let hoverPopup = null;
     let filter = "all";
     let search = "";
     const routesById = new Map(data.routes.map(route => [route.id, route]));
@@ -1323,11 +1324,20 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       map.on("click", "route-lines", event => { const id = event.features && event.features[0] && event.features[0].properties.route_id; if (id) selectRoute(String(id)); });
       map.on("click", "selected-route-line", event => { const id = event.features && event.features[0] && event.features[0].properties.route_id; if (id) selectRoute(String(id)); });
       map.on("click", "stops-circle", event => { const id = event.features && event.features[0] && event.features[0].properties.stop_id; if (id) selectStop(String(id)); });
+      map.on("mousemove", "route-lines", showRouteHover);
+      map.on("mousemove", "selected-route-line", showRouteHover);
+      map.on("mousemove", "stops-circle", showStopHover);
       map.on("mouseenter", "route-lines", () => map.getCanvas().style.cursor = "pointer");
-      map.on("mouseleave", "route-lines", () => map.getCanvas().style.cursor = "grab");
+      map.on("mouseenter", "selected-route-line", () => map.getCanvas().style.cursor = "pointer");
       map.on("mouseenter", "stops-circle", () => map.getCanvas().style.cursor = "pointer");
-      map.on("mouseleave", "stops-circle", () => map.getCanvas().style.cursor = "grab");
+      map.on("mouseleave", "route-lines", clearHover);
+      map.on("mouseleave", "selected-route-line", clearHover);
+      map.on("mouseleave", "stops-circle", clearHover);
     }
+    function showRouteHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const route = routesById.get(String(feature.properties.route_id)); if (!route) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</strong><div>' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops</div><div>' + duration(route.duration_s) + ' · ' + distance(route.distance_m) + '</div>' + (route.bus_type_name ? '<div>' + esc(route.bus_type_name) + '</div>' : '') + '</div>'); }
+    function showStopHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const stop = data.stops.find(item => item.id === String(feature.properties.stop_id)); if (!stop) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + duration(stop.cumulative_duration_s) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>'); }
+    function showHover(lngLat, html) { if (!hoverPopup) hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12 }); hoverPopup.setLngLat(lngLat).setHTML(html).addTo(map); }
+    function clearHover() { map.getCanvas().style.cursor = "grab"; if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; } }
     function routeGeojson(dimmed) { return { type: "FeatureCollection", features: data.routes.filter(route => route.geometry && route.geometry.length >= 2 && (!dimmed || route.id !== selectedRouteId)).map(route => ({ type: "Feature", properties: { route_id: route.id, color: color(route.route_index) }, geometry: { type: "LineString", coordinates: route.geometry } })) }; }
     function selectedRouteGeojson() { const route = routesById.get(selectedRouteId); return { type: "FeatureCollection", features: route && route.geometry && route.geometry.length >= 2 ? [{ type: "Feature", properties: { route_id: route.id, color: color(route.route_index) }, geometry: { type: "LineString", coordinates: route.geometry } }] : [] }; }
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }

@@ -368,6 +368,8 @@ def _normalize_korea_city_key(city: str) -> str:
         return "seoul"
     if normalized in {"seongnam", "seongnam-si", "seongnam si", "성남", "성남시"}:
         return "seongnam"
+    if normalized in {"gimpo", "gimpo-si", "gimpo si", "김포", "김포시"}:
+        return "gimpo"
     if normalized in {"daejeon", "대전", "대전광역시"}:
         return "daejeon"
     return normalized
@@ -378,6 +380,7 @@ def _korea_city_aliases(city: str) -> list[str]:
     aliases = {
         "seoul": ["seoul", "서울", "seoul-si", "seoul special city"],
         "seongnam": ["seongnam", "seongnam-si", "성남", "성남시"],
+        "gimpo": ["gimpo", "gimpo-si", "김포", "김포시"],
         "daejeon": ["daejeon", "대전", "대전광역시", "daejeon-si", "daejeon metropolitan city"],
     }
     values = aliases.get(city_key, [city.strip()])
@@ -390,6 +393,7 @@ def _is_within_korea_city_bbox(city: str, lat: float, lng: float) -> bool:
         # Broad Seoul metro-safe bounds, intentionally including Seongnam fringe.
         "seoul": (37.72, 127.30, 37.35, 126.75),
         "seongnam": (37.50, 127.20, 37.32, 126.95),
+        "gimpo": (37.78, 126.85, 37.50, 126.55),
         "daejeon": (36.45, 127.55, 36.20, 127.25),
     }
     bbox = bboxes.get(city_key)
@@ -405,6 +409,7 @@ def is_plausible_korea_geocode_result(
     lat: float,
     lng: float,
     formatted_address: str,
+    requested_address: str = "",
 ) -> bool:
     if not is_korea_country(country):
         return True
@@ -413,6 +418,11 @@ def is_plausible_korea_geocode_result(
         return True
 
     address_text = formatted_address.strip().lower()
+    requested_text = requested_address.strip().lower()
+    for city_key in ("seoul", "seongnam", "gimpo", "daejeon"):
+        aliases = _korea_city_aliases(city_key)
+        if any(alias in requested_text for alias in aliases) and any(alias in address_text for alias in aliases):
+            return True
     city_aliases = _korea_city_aliases(normalized_city)
     if any(alias in address_text for alias in city_aliases):
         return True
@@ -466,9 +476,10 @@ def is_plausible_geocode_result(
     lng: float,
     formatted_address: str,
     adcode: str = "",
+    requested_address: str = "",
 ) -> bool:
     if is_korea_country(country):
-        return is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address)
+        return is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address, requested_address)
     if is_china_country(country):
         return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
     return True
@@ -851,7 +862,15 @@ def resolve_geocoded_point(
             cached_lng = float(cached.get("lng", 0.0) or 0.0)
             cached_formatted_address = str(cached.get("formatted_address", "") or address).strip()
             cached_adcode = str(cached.get("adcode", "") or "").strip()
-            if is_plausible_geocode_result(country, city, cached_lat, cached_lng, cached_formatted_address, cached_adcode):
+            if is_plausible_geocode_result(
+                country,
+                city,
+                cached_lat,
+                cached_lng,
+                cached_formatted_address,
+                cached_adcode,
+                requested_address=address,
+            ):
                 enriched_cached = annotate_geocode_point(
                     dict(cached),
                     country=country,
@@ -927,7 +946,7 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                 lng = float(lng_str)
                 formatted_address = str(candidate.get("formatted_address") or address.strip()).strip()
                 adcode = str(candidate.get("adcode", "") or "").strip()
-                if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+                if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode, requested_address=address):
                     last_error = RuntimeError(
                         f"AMap geocode returned result outside {city.strip()}: {formatted_address}"
                     )
@@ -979,7 +998,7 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             ]
             formatted_address = "".join(part for index, part in enumerate(formatted_parts) if part and part not in formatted_parts[:index])
             adcode = str(candidate.get("adcode", "") or "").strip()
-            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, adcode, requested_address=address):
                 last_error = RuntimeError(f"AMap place search returned result outside {city.strip()}: {formatted_address}")
                 continue
             plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
@@ -1032,7 +1051,7 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
                 or first.get("address_name")
                 or address.strip()
             )
-            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, requested_address=address):
                 continue
             return annotate_geocode_point(
                 {
@@ -1072,7 +1091,7 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
                 or first.get("place_name")
                 or address.strip()
             )
-            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, requested_address=address):
                 continue
             return annotate_geocode_point(
                 {
@@ -1113,7 +1132,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
             lat = float(location["lat"])
             lng = float(location["lng"])
             formatted_address = str(first.get("formatted_address") or address.strip()).strip()
-            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
+            if not is_plausible_geocode_result(country, city, lat, lng, formatted_address, requested_address=address):
                 continue
             return annotate_geocode_point(
                 {

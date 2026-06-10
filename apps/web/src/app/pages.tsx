@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Ban, CheckCircle2, ChevronDown, ChevronUp, Clock3, History, ListChecks, Loader2, RefreshCw, Trash2, XCircle } from "lucide-react";
@@ -100,7 +100,8 @@ export function JobDetailPage() {
 
 function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
   const [mobileHistoryOpen, setMobileHistoryOpen] = useState(!selectedJobId);
-  const [desktopHistoryCollapsed, setDesktopHistoryCollapsed] = useState(Boolean(selectedJobId));
+  const [desktopHistoryCollapsed, setDesktopHistoryCollapsed] = useState(true);
+  const desktopHistoryRef = useRef<HTMLDivElement | null>(null);
   const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: listJobs, refetchInterval: 15_000 });
   const jobs = jobsQuery.data || [];
   const resolvedJobId = selectedJobId || jobs[0]?.job_id || "";
@@ -112,6 +113,26 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
       setDesktopHistoryCollapsed(true);
     }
   }, [selectedJobId]);
+
+  useEffect(() => {
+    if (desktopHistoryCollapsed) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (window.innerWidth < 1280) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Node && desktopHistoryRef.current?.contains(target)) {
+        return;
+      }
+      setDesktopHistoryCollapsed(true);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [desktopHistoryCollapsed]);
 
   return (
     <div className="space-y-4 pb-16 lg:pb-0">
@@ -150,17 +171,18 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
           onRefresh={() => void jobsQuery.refetch()}
         />
 
-        <JobHistoryDesktopPanel
-          className="hidden xl:block xl:sticky xl:top-20 xl:self-start"
-          jobs={jobs}
-          selectedJobId={resolvedJobId}
-          collapsed={desktopHistoryCollapsed}
-          isLoading={jobsQuery.isLoading}
-          isFetching={jobsQuery.isFetching}
-          error={jobsQuery.error as Error | null}
-          onCollapsedChange={setDesktopHistoryCollapsed}
-          onRefresh={() => void jobsQuery.refetch()}
-        />
+        <div ref={desktopHistoryRef} className="hidden xl:block xl:sticky xl:top-20 xl:self-start">
+          <JobHistoryDesktopPanel
+            jobs={jobs}
+            selectedJobId={resolvedJobId}
+            collapsed={desktopHistoryCollapsed}
+            isLoading={jobsQuery.isLoading}
+            isFetching={jobsQuery.isFetching}
+            error={jobsQuery.error as Error | null}
+            onCollapsedChange={setDesktopHistoryCollapsed}
+            onRefresh={() => void jobsQuery.refetch()}
+          />
+        </div>
 
         {resolvedJobId ? (
           <JobDetailPanel jobId={resolvedJobId} />

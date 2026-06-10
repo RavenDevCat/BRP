@@ -21,29 +21,8 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 
 type PlannerConfigKey = keyof PlannerConfigPayload;
 
-const FLEET_ASSUMPTION_KEYS: PlannerConfigKey[] = [
-  "large_bus_name",
-  "large_bus_capacity",
-  "large_bus_max_count",
-  "mid_bus_name",
-  "mid_bus_capacity",
-  "mid_bus_max_count",
-  "small_bus_name",
-  "small_bus_capacity",
-  "small_bus_max_count",
-];
-
-const FREE_BASELINE_MIX_KEYS: PlannerConfigKey[] = [
-  "free_baseline_large_bus_ratio",
-  "free_baseline_mid_bus_ratio",
-  "free_baseline_small_bus_ratio",
-];
-
-const ROUTE_POLICY_KEYS: PlannerConfigKey[] = [
+const ROUTE_TIMING_KEYS: PlannerConfigKey[] = [
   "stop_service_minutes",
-  "express_threshold_km",
-  "reserved_express_buses",
-  "express_skip_inner_km",
 ];
 
 const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
@@ -427,86 +406,12 @@ export function NewJobPage() {
               </div>
 
               <SettingsSection
-                title="Fleet assumptions"
-                description="Optional baseline fleet inputs; workbook fleet is still used for current-plan audit when present."
-                customized={hasUserConfigOverrides(FLEET_ASSUMPTION_KEYS)}
-                onReset={() => clearUserConfigOverrides(FLEET_ASSUMPTION_KEYS)}
+                title="Route timing"
+                description="Optional stop dwell time used by route calculations."
+                customized={hasUserConfigOverrides(ROUTE_TIMING_KEYS)}
+                onReset={() => clearUserConfigOverrides(ROUTE_TIMING_KEYS)}
               >
-                <div className="space-y-3">
-                  <FleetSettingsRow
-                    slotLabel="Large Slot"
-                    name={config.large_bus_name}
-                    capacity={config.large_bus_capacity}
-                    count={config.large_bus_max_count}
-                    onNameChange={(value) => updateUserConfig({ large_bus_name: value })}
-                    onCapacityChange={(value) => updateUserConfig({ large_bus_capacity: value })}
-                    onCountChange={(value) => updateUserConfig({ large_bus_max_count: value })}
-                  />
-                  <FleetSettingsRow
-                    slotLabel="Mid Slot"
-                    name={config.mid_bus_name}
-                    capacity={config.mid_bus_capacity}
-                    count={config.mid_bus_max_count}
-                    onNameChange={(value) => updateUserConfig({ mid_bus_name: value })}
-                    onCapacityChange={(value) => updateUserConfig({ mid_bus_capacity: value })}
-                    onCountChange={(value) => updateUserConfig({ mid_bus_max_count: value })}
-                  />
-                  <FleetSettingsRow
-                    slotLabel="Small Slot"
-                    name={config.small_bus_name}
-                    capacity={config.small_bus_capacity}
-                    count={config.small_bus_max_count}
-                    onNameChange={(value) => updateUserConfig({ small_bus_name: value })}
-                    onCapacityChange={(value) => updateUserConfig({ small_bus_capacity: value })}
-                    onCountChange={(value) => updateUserConfig({ small_bus_max_count: value })}
-                  />
-                </div>
-              </SettingsSection>
-
-              <SettingsSection
-                title="Free baseline vehicle mix"
-                description="Optional mix weights for the free optimization baseline vehicle pool."
-                customized={hasUserConfigOverrides(FREE_BASELINE_MIX_KEYS)}
-                onReset={() => clearUserConfigOverrides(FREE_BASELINE_MIX_KEYS)}
-              >
-                <div className="grid gap-3 md:grid-cols-3">
-                  <NumberField
-                    label={`${config.large_bus_name || "Large Slot"} Mix Weight`}
-                    value={config.free_baseline_large_bus_ratio}
-                    min={0}
-                    max={500}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ free_baseline_large_bus_ratio: value })}
-                  />
-                  <NumberField
-                    label={`${config.mid_bus_name || "Mid Slot"} Mix Weight`}
-                    value={config.free_baseline_mid_bus_ratio}
-                    min={0}
-                    max={500}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ free_baseline_mid_bus_ratio: value })}
-                  />
-                  <NumberField
-                    label={`${config.small_bus_name || "Small Slot"} Mix Weight`}
-                    value={config.free_baseline_small_bus_ratio}
-                    min={0}
-                    max={500}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ free_baseline_small_bus_ratio: value })}
-                  />
-                </div>
-                <div className="rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
-                  Current mix: {formatVehicleRatio(config)}
-                </div>
-              </SettingsSection>
-
-              <SettingsSection
-                title="Route policy assumptions"
-                description="Optional dwell-time and express-route assumptions used by route calculations."
-                customized={hasUserConfigOverrides(ROUTE_POLICY_KEYS)}
-                onReset={() => clearUserConfigOverrides(ROUTE_POLICY_KEYS)}
-              >
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                   <NumberField
                     label="Stop Dwell Minutes"
                     value={config.stop_service_minutes}
@@ -514,30 +419,6 @@ export function NewJobPage() {
                     max={20}
                     step={1}
                     onChange={(value) => updateUserConfig({ stop_service_minutes: value })}
-                  />
-                  <NumberField
-                    label="Remote Stop Threshold (km)"
-                    value={config.express_threshold_km}
-                    min={1}
-                    max={100}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ express_threshold_km: value })}
-                  />
-                  <NumberField
-                    label="Reserved Express Buses"
-                    value={config.reserved_express_buses}
-                    min={0}
-                    max={100}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ reserved_express_buses: value })}
-                  />
-                  <NumberField
-                    label="Express Skip Inner Radius (km)"
-                    value={config.express_skip_inner_km}
-                    min={0}
-                    max={100}
-                    step={1}
-                    onChange={(value) => updateUserConfig({ express_skip_inner_km: value })}
                   />
                 </div>
               </SettingsSection>
@@ -753,34 +634,6 @@ function NumberField({
   );
 }
 
-function FleetSettingsRow({
-  slotLabel,
-  name,
-  capacity,
-  count,
-  onNameChange,
-  onCapacityChange,
-  onCountChange,
-}: {
-  slotLabel: string;
-  name: string;
-  capacity: number;
-  count: number;
-  onNameChange: (value: string) => void;
-  onCapacityChange: (value: number) => void;
-  onCountChange: (value: number) => void;
-}) {
-  return (
-    <div className="grid gap-3 md:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)_minmax(0,1fr)]">
-      <Field label={`${slotLabel} Label`}>
-        <input className={fieldClassName} value={name} onChange={(event) => onNameChange(event.target.value)} />
-      </Field>
-      <NumberField label="Seats" value={capacity} min={0} max={200} step={1} onChange={onCapacityChange} />
-      <NumberField label="Max Count" value={count} min={0} max={200} step={1} onChange={onCountChange} />
-    </div>
-  );
-}
-
 function DemoMeta({ demo }: { demo?: { name: string; size_bytes: number; modified_at?: string } }) {
   if (!demo) {
     return null;
@@ -846,22 +699,6 @@ function FleetSlot({ label, seats, count }: { label: string; seats: number; coun
 
 function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{message}</div>;
-}
-
-function formatVehicleRatio(config: PlannerConfigPayload) {
-  const entries = [
-    [config.large_bus_name || "Large Bus", config.free_baseline_large_bus_ratio],
-    [config.mid_bus_name || "Mid Bus", config.free_baseline_mid_bus_ratio],
-    [config.small_bus_name || "Small Bus", config.free_baseline_small_bus_ratio],
-  ] as const;
-  const total = entries.reduce((sum, [, value]) => sum + Number(value || 0), 0);
-  if (total <= 0) {
-    return "No baseline vehicles";
-  }
-  return entries
-    .filter(([, value]) => Number(value || 0) > 0)
-    .map(([name, value]) => `${name}: ${Math.round((Number(value) / total) * 100)}%`)
-    .join(" | ");
 }
 
 function formatWorkbookSize(value: number) {

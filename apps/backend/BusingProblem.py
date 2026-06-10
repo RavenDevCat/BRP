@@ -70,8 +70,6 @@ ROUTE_DURATION_GRACE_SECONDS = 10 * 60
 STOP_SERVICE_SECONDS = 60
 MAX_STOPS_PER_ROUTE = int(os.environ.get("BRP_MAX_STOPS_PER_ROUTE", "10") or 10)
 COMFORT_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_LOAD_FACTOR", "0.85") or 0.85)
-COMFORT_TARGET_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_TARGET_LOAD_FACTOR", "0.90") or 0.90)
-COMFORT_OVER_TARGET_PENALTY = int(os.environ.get("BRP_COMFORT_OVER_TARGET_PENALTY", "5000") or 5000)
 DEMAND_SPLIT_TARGET_LOAD_RATIO = float(os.environ.get("BRP_DEMAND_SPLIT_TARGET_LOAD_RATIO", "0.70") or 0.70)
 DEMAND_SPLIT_MIN_BATCH_SIZE = int(os.environ.get("BRP_DEMAND_SPLIT_MIN_BATCH_SIZE", "8") or 8)
 DEMAND_SPLIT_MAX_EXTRA_BATCHES = int(os.environ.get("BRP_DEMAND_SPLIT_MAX_EXTRA_BATCHES", "2") or 2)
@@ -928,14 +926,6 @@ def solver_capacity_for_vehicle(vehicle: dict[str, Any]) -> int:
     return min(capacity, comfort_capacity)
 
 
-def target_comfort_load_for_vehicle(vehicle: dict[str, Any]) -> int:
-    comfort_capacity = solver_capacity_for_vehicle(vehicle)
-    if comfort_capacity <= 1:
-        return comfort_capacity
-    bounded_factor = min(1.0, max(0.1, float(COMFORT_TARGET_LOAD_FACTOR)))
-    return max(1, min(comfort_capacity, int(math.ceil(comfort_capacity * bounded_factor))))
-
-
 def route_stop_limit() -> int:
     return max(1, int(MAX_STOPS_PER_ROUTE))
 
@@ -1207,14 +1197,6 @@ def solve_routes_for_fleet(
         penalty = MIN_LOAD_PENALTY.get(vehicle["name"], 0)
         if target > 0 and penalty > 0:
             load_dimension.SetCumulVarSoftLowerBound(routing.End(vehicle_id), target, penalty)
-        target_comfort_load = target_comfort_load_for_vehicle(vehicle)
-        solver_capacity = solver_capacity_for_vehicle(vehicle)
-        if 0 < target_comfort_load < solver_capacity and COMFORT_OVER_TARGET_PENALTY > 0:
-            load_dimension.SetCumulVarSoftUpperBound(
-                routing.End(vehicle_id),
-                target_comfort_load,
-                COMFORT_OVER_TARGET_PENALTY,
-            )
         time_dimension.SetCumulVarSoftUpperBound(
             routing.End(vehicle_id),
             soft_route_duration_seconds,

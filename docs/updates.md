@@ -323,6 +323,13 @@ It is not a code changelog. Record changes here when users or operators should k
 - Jobs still run in parallel; only the external provider request gate is globally paced.
 - Existing jobs do not need to be rerun.
 
+### OSRM Elevated-Road Snap Fallback Added
+
+- Route Audit now detects obviously inflated short legs where the normal plot/WGS coordinate snaps to a high-speed or elevated road layer and creates a large detour.
+- For those legs only, the backend retries OSRM routing with the original geocode coordinate and keeps the shorter route when it materially improves distance or duration.
+- The chosen leg records `coordinate_source=raw_geocode_fallback` plus the original plot-route distance/duration for auditability.
+- CN staging job `ed918d069752` was patched so `21-fromschool` leg 4 to 5 (`长宁路999号` to `长宁路63号`) no longer loops through 北横通道; future jobs pick up the fix automatically after backend restart.
+
 ## Update Log Guidance
 
 Add a new dated entry when a change affects user workflow, operational behavior, or interpretation of results, such as:

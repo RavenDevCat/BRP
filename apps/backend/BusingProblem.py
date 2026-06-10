@@ -50,6 +50,9 @@ OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("SOUTH KOREA", "SEOUL"): "http://127.0.0.1:5006",
     ("SOUTH KOREA", ""): "http://127.0.0.1:5006",
 }
+OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM", "3.0") or 3.0)
+OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO", "6.0") or 6.0)
+OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO", "0.35") or 0.35)
 
 INPUT_STOPS: list[dict[str, Any]] = []
 ADDRESSES: list[str] = []
@@ -439,12 +442,25 @@ def decode_polyline(polyline: str) -> list[tuple[float, float]]:
     return points
 
 
-def point_osrm_lat_lng(point: dict[str, Any]) -> tuple[float, float]:
-    lat = point.get("plot_lat", point.get("lat"))
-    lng = point.get("plot_lng", point.get("lng"))
+def point_osrm_lat_lng(point: dict[str, Any], *, prefer_plot: bool = True) -> tuple[float, float]:
+    if prefer_plot:
+        lat = point.get("plot_lat", point.get("lat"))
+        lng = point.get("plot_lng", point.get("lng"))
+    else:
+        lat = point.get("lat", point.get("plot_lat"))
+        lng = point.get("lng", point.get("plot_lng"))
     if lat is None or lng is None:
         raise RuntimeError(f"Point has no usable OSRM coordinates: {point.get('address', 'UNKNOWN')}")
     return float(lat), float(lng)
+
+
+def point_has_distinct_raw_coordinate(point: dict[str, Any]) -> bool:
+    try:
+        plot_lat, plot_lng = point_osrm_lat_lng(point, prefer_plot=True)
+        raw_lat, raw_lng = point_osrm_lat_lng(point, prefer_plot=False)
+    except Exception:
+        return False
+    return haversine_distance_km(plot_lat, plot_lng, raw_lat, raw_lng) >= 0.05
 
 
 def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimiter) -> dict[str, Any]:
@@ -1387,9 +1403,14 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
     return time_matrix, distance_matrix
 
 
-def osrm_driving_direction(origin: dict[str, Any], destination: dict[str, Any]) -> tuple[int, int, list[tuple[float, float]]]:
-    origin_lat, origin_lng = point_osrm_lat_lng(origin)
-    destination_lat, destination_lng = point_osrm_lat_lng(destination)
+def _osrm_driving_direction_for_coordinates(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    *,
+    prefer_plot: bool,
+) -> tuple[int, int, list[tuple[float, float]]]:
+    origin_lat, origin_lng = point_osrm_lat_lng(origin, prefer_plot=prefer_plot)
+    destination_lat, destination_lng = point_osrm_lat_lng(destination, prefer_plot=prefer_plot)
     payload = osrm_request_json(
         "route",
         f"{origin_lng},{origin_lat};{destination_lng},{destination_lat}",
@@ -1408,6 +1429,62 @@ def osrm_driving_direction(origin: dict[str, Any], destination: dict[str, Any]) 
     if not geometry:
         geometry = [(origin_lat, origin_lng), (destination_lat, destination_lng)]
     return int(round(float(best.get("distance", 0) or 0))), int(round(float(best.get("duration", 0) or 0))), geometry
+
+
+def _should_try_raw_coordinate_route(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    distance_m: int,
+) -> bool:
+    try:
+        origin_lat, origin_lng = point_osrm_lat_lng(origin, prefer_plot=True)
+        destination_lat, destination_lng = point_osrm_lat_lng(destination, prefer_plot=True)
+    except Exception:
+        return False
+    direct_km = haversine_distance_km(origin_lat, origin_lng, destination_lat, destination_lng)
+    if direct_km <= 0 or direct_km > OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM:
+        return False
+    if distance_m < direct_km * 1000.0 * OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO:
+        return False
+    return point_has_distinct_raw_coordinate(origin) or point_has_distinct_raw_coordinate(destination)
+
+
+def osrm_driving_direction_with_metadata(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+) -> tuple[int, int, list[tuple[float, float]], dict[str, Any]]:
+    distance_m, duration_s, geometry = _osrm_driving_direction_for_coordinates(origin, destination, prefer_plot=True)
+    metadata: dict[str, Any] = {"coordinate_source": "plot"}
+    if not _should_try_raw_coordinate_route(origin, destination, distance_m):
+        return distance_m, duration_s, geometry, metadata
+
+    try:
+        raw_distance_m, raw_duration_s, raw_geometry = _osrm_driving_direction_for_coordinates(
+            origin,
+            destination,
+            prefer_plot=False,
+        )
+    except Exception as exc:
+        metadata["raw_coordinate_fallback_error"] = str(exc)
+        return distance_m, duration_s, geometry, metadata
+
+    min_distance = distance_m * (1.0 - OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO)
+    min_duration = duration_s * (1.0 - OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO)
+    if raw_distance_m < min_distance or raw_duration_s < min_duration:
+        return raw_distance_m, raw_duration_s, raw_geometry, {
+            "coordinate_source": "raw_geocode_fallback",
+            "plot_distance_m": distance_m,
+            "plot_duration_s": duration_s,
+        }
+
+    metadata["raw_coordinate_distance_m"] = raw_distance_m
+    metadata["raw_coordinate_duration_s"] = raw_duration_s
+    return distance_m, duration_s, geometry, metadata
+
+
+def osrm_driving_direction(origin: dict[str, Any], destination: dict[str, Any]) -> tuple[int, int, list[tuple[float, float]]]:
+    distance_m, duration_s, geometry, _metadata = osrm_driving_direction_with_metadata(origin, destination)
+    return distance_m, duration_s, geometry
 
 
 def seed_candidate_edges(points: list[dict[str, Any]], seed_routes: list[dict[str, Any]]) -> dict[int, set[int]]:
@@ -1469,8 +1546,12 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
         raw_osrm_time_s = 0
         stop_service_time_s = 0
         for from_node, to_node in zip(route["nodes"][:-1], route["nodes"][1:]):
+            leg_metadata: dict[str, Any] = {}
             try:
-                distance_m, duration_s, geometry_wgs = osrm_driving_direction(points[from_node], points[to_node])
+                distance_m, duration_s, geometry_wgs, leg_metadata = osrm_driving_direction_with_metadata(
+                    points[from_node],
+                    points[to_node],
+                )
                 if geometry_wgs:
                     geometry_wgs[0] = (points[from_node]["plot_lat"], points[from_node]["plot_lng"])
                     geometry_wgs[-1] = (points[to_node]["plot_lat"], points[to_node]["plot_lng"])
@@ -1503,6 +1584,7 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
                     "traffic_adjusted_duration_s": adjusted_duration_s,
                     "stop_service_s": stop_service_s,
                     "geometry": geometry_wgs,
+                    **leg_metadata,
                 }
             )
         route["leg_details"] = leg_details

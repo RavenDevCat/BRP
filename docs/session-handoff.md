@@ -60,6 +60,14 @@ Job result tab order:
   `backup/main-before-author-rewrite-20260609`.
 - CN staging and KR repo configs now set future commits to
   `Raven <catsradios@gmail.com>`.
+- CN staging now includes the OSRM elevated-road snap fallback in
+  `apps/backend/BusingProblem.py`. The backend retries very short but obviously
+  overlong OSRM legs with original geocode coordinates and records
+  `coordinate_source=raw_geocode_fallback` when that route is selected.
+- Staging job `ed918d069752` was patched in place for review: `21-fromschool`
+  leg 4 to 5 (`长宁路999号` to `长宁路63号`) changed from the 北横通道 detour
+  to a local-road route. A backup was kept next to the job JSON in shared
+  runtime storage.
 
 ## Completed 2026-06-09 Evening
 
@@ -117,6 +125,9 @@ Other known product/routing follow-ups:
 
 - Existing completed jobs are immutable snapshots. When geocoding or baseline
   modeling changes, affected jobs need to be rerun for corrected maps/results.
+- The OSRM snap fallback currently affects final route geometry/time enrichment.
+  If solver ordering still appears distorted by elevated-road snaps, apply the
+  same fallback policy to matrix-building or candidate-edge costing.
 - Domain replacement and SSO remain blocked pending company cyber/security code
   review; continue product polish until that is cleared.
 

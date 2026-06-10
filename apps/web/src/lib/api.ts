@@ -150,6 +150,7 @@ export type PlannerConfigPayload = {
   subway_search_radius_m: number;
   max_subway_walk_distance_m: number;
   nearby_cluster_radius_m: number;
+  comfort_load_factor: number;
   traffic_profile_name: string;
   service_direction: string;
   include_subway_aggregation_scenario: boolean;

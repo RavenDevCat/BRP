@@ -52,6 +52,9 @@ const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
   "nearby_cluster_radius_m",
 ];
 
+const COMFORT_LOAD_FACTOR = 0.85;
+const FULL_CAPACITY_LOAD_FACTOR = 1.0;
+
 export function NewJobPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -392,6 +395,18 @@ export function NewJobPage() {
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
+                <label className={toggleClassName}>
+                  <input
+                    type="checkbox"
+                    checked={Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) < FULL_CAPACITY_LOAD_FACTOR}
+                    onChange={(event) =>
+                      updateUserConfig({
+                        comfort_load_factor: event.target.checked ? COMFORT_LOAD_FACTOR : FULL_CAPACITY_LOAD_FACTOR,
+                      })
+                    }
+                  />
+                  <span>Improve comfort</span>
+                </label>
                 <label className={toggleClassName}>
                   <input
                     type="checkbox"

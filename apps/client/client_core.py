@@ -78,6 +78,7 @@ class PlannerConfig:
     subway_search_radius_m: int = 1500
     max_subway_walk_distance_m: int = 800
     nearby_cluster_radius_m: int = 500
+    comfort_load_factor: float = 0.85
     traffic_profile_name: str = "Off-Peak"
     service_direction: str = "From School"
     matrix_nearest_neighbors: int = 10

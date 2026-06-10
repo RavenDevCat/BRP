@@ -136,6 +136,7 @@ class PlannerConfig:
     subway_search_radius_m: int = 1500
     max_subway_walk_distance_m: int = 800
     nearby_cluster_radius_m: int = 500
+    comfort_load_factor: float = 0.85
     traffic_profile_name: str = "Off-Peak"
     service_direction: str = "From School"
     matrix_nearest_neighbors: int = 10
@@ -1271,6 +1272,7 @@ def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[
     planner.SUBWAY_SEARCH_RADIUS_M = config.subway_search_radius_m
     planner.MAX_SUBWAY_WALK_DISTANCE_M = config.max_subway_walk_distance_m
     planner.NEARBY_CLUSTER_RADIUS_M = config.nearby_cluster_radius_m
+    planner.COMFORT_LOAD_FACTOR = min(1.0, max(0.1, float(config.comfort_load_factor)))
     planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
     planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
     planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
@@ -1325,6 +1327,7 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
             "subway_search_radius_m": int(config.subway_search_radius_m),
             "max_subway_walk_distance_m": int(config.max_subway_walk_distance_m),
             "nearby_cluster_radius_m": int(config.nearby_cluster_radius_m),
+            "comfort_load_factor": float(config.comfort_load_factor),
             "traffic_profile_name": resolve_traffic_profile(config.traffic_profile_name, input_records)[0],
             "service_direction": normalize_service_direction(config.service_direction),
             "matrix_nearest_neighbors": int(config.matrix_nearest_neighbors),

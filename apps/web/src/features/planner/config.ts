@@ -21,6 +21,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   subway_search_radius_m: 1500,
   max_subway_walk_distance_m: 800,
   nearby_cluster_radius_m: 500,
+  comfort_load_factor: 0.85,
   traffic_profile_name: "Off-Peak",
   service_direction: "From School",
   include_subway_aggregation_scenario: false,

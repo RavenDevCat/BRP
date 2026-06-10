@@ -18,7 +18,9 @@ else
 fi
 
 period="${1:-}"
+source="${BRP_LIVE_TRAFFIC_SUZHOU_SOURCE:-baseline_json}"
 run_id="${BRP_LIVE_TRAFFIC_SUZHOU_RUN_ID:-0048b194830c}"
+baseline_path="${BRP_LIVE_TRAFFIC_SUZHOU_BASELINE_PATH:-suzhou/suzhou_fleet_planner_0048b194830c_current_plan.json}"
 market="${BRP_LIVE_TRAFFIC_SUZHOU_MARKET:-CN}"
 city="${BRP_LIVE_TRAFFIC_SUZHOU_CITY:-Suzhou}"
 
@@ -40,11 +42,14 @@ esac
 
 shift || true
 cd "$ROOT_DIR/apps/backend"
-exec "$BACKEND_PYTHON" live_traffic_sampler.py \
-  --source fleet_planner \
-  --run-id "$run_id" \
-  --period "$period" \
-  --market "$market" \
-  --city "$city" \
-  "${timing_args[@]}" \
-  "$@"
+source_args=(--source "$source" --period "$period" --market "$market" --city "$city")
+if [ "$source" = "fleet_planner" ]; then
+  source_args+=(--run-id "$run_id")
+elif [ "$source" = "baseline_json" ]; then
+  source_args+=(--baseline-path "$baseline_path")
+else
+  echo "Unsupported Suzhou live traffic source: $source" >&2
+  exit 2
+fi
+
+exec "$BACKEND_PYTHON" live_traffic_sampler.py "${source_args[@]}" "${timing_args[@]}" "$@"

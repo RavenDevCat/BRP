@@ -73,6 +73,9 @@ Job result tab order:
   Audit job seeds, so missing historical job files should no longer break the
   timer. The baseline loader geocodes through the existing cache and computes
   OSRM durations before AMap sampling.
+- The Suzhou live traffic sampler also defaults to a shared runtime baseline
+  JSON extracted from the historical Fleet Planner sample, rather than relying
+  on the Fleet Planner run record staying present forever.
 
 ## Completed 2026-06-09 Evening
 

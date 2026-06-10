@@ -333,7 +333,7 @@ It is not a code changelog. Record changes here when users or operators should k
 ### Live Traffic Timers Moved To Baseline JSON
 
 - Live traffic sampling now supports a stable `baseline_json` source in addition to historical Route Audit jobs and Fleet Planner runs.
-- Shanghai AM/PM timer inputs can point at shared runtime baseline JSON files, so timers no longer depend on temporary job JSON records that may be cleaned up.
+- Shanghai AM/PM and the Suzhou sample timer inputs can point at shared runtime baseline JSON files, so timers no longer depend on temporary job JSON records or Fleet Planner run records that may be cleaned up.
 - The baseline loader geocodes the template stops through the existing cache and computes OSRM route durations before sampling AMap, preserving the same traffic-factor output shape.
 - Existing samples remain valid; future timer samples should use the configured baseline source.
 

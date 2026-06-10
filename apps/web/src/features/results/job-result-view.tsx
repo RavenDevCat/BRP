@@ -797,13 +797,13 @@ function MapsPanel({
         <div className="relative">
           {renderMapSurface()}
           <div className="absolute right-3 top-3 z-20 flex flex-wrap justify-end gap-2">
-            <button type="button" className={cn(buttonClassName("secondary"), "bg-white/88 shadow-lg backdrop-blur hover:bg-white")} onClick={() => setIsMapFullscreenOpen(true)}>
+            <button type="button" className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")} onClick={() => setIsMapFullscreenOpen(true)}>
               <Maximize2 className="h-4 w-4" aria-hidden="true" />
               Open
             </button>
             <button
               type="button"
-              className={cn(buttonClassName("secondary"), "bg-white/88 shadow-lg backdrop-blur hover:bg-white disabled:cursor-not-allowed disabled:opacity-60")}
+              className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60")}
               disabled={!interactiveQuery.data}
               onClick={downloadInteractiveMap}
             >

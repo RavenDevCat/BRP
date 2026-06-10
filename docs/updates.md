@@ -330,6 +330,13 @@ It is not a code changelog. Record changes here when users or operators should k
 - The baseline loader geocodes the template stops through the existing cache and computes OSRM route durations before sampling AMap, preserving the same traffic-factor output shape.
 - Existing samples remain valid; future timer samples should use the configured baseline source.
 
+### Comfortable Load Target No Longer Reduces Vehicle Capacity
+
+- Comfortable priority still reports the configured comfort target, currently 85% of physical seats, as a planning indicator.
+- The route solver, base-plan capacity checks, fleet trimming, and oversized-stop splitting now use physical vehicle capacity as the hard limit.
+- A route can exceed the comfort target without being marked overloaded as long as it remains within physical seats; maps now label this as seats plus comfort target instead of treating the target as capacity.
+- Existing jobs do not change automatically; rerun audits to get the corrected capacity behavior.
+
 ## Update Log Guidance
 
 Add a new dated entry when a change affects user workflow, operational behavior, or interpretation of results, such as:

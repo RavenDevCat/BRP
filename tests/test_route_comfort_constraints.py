@@ -78,40 +78,62 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self.assertLessEqual(max(route["stop_count"] for route in routes), 10)
         self.assertTrue(all(route["max_stops"] == 10 for route in routes))
 
-    def test_solver_uses_comfort_capacity_not_physical_capacity(self) -> None:
-        points = [_point(0), _point(1, 30), _point(2, 30), _point(3, 30)]
+    def test_solver_uses_physical_capacity_and_reports_comfort_target(self) -> None:
+        self._setattr("VEHICLE_FIXED_COST", {"Large Bus": 10000})
+        points = [_point(0)] + [_point(index, 20) for index in range(1, 5)]
         matrix = _simple_matrix(len(points))
+
+        self.assertEqual(self.planner._minimum_vehicle_count_for_demand(80, self.planner.build_vehicle_fleet()), 2)
 
         routes = self.planner.solve_routes(points, matrix, matrix)
 
-        self.assertGreaterEqual(len(routes), 3)
+        self.assertEqual(len(routes), 2)
+        self.assertEqual(sorted(route["load"] for route in routes), [40, 40])
+        self.assertTrue(all(route["bus_capacity"] == 42 for route in routes))
         self.assertTrue(all(route["comfort_capacity"] == 35 for route in routes))
-        self.assertTrue(all(route["load"] <= route["comfort_capacity"] for route in routes))
+        self.assertTrue(all(route["load"] <= route["bus_capacity"] for route in routes))
+        self.assertTrue(any(route["load"] > route["comfort_capacity"] for route in routes))
 
-    def test_oversized_stop_is_split_into_multiple_vehicle_batches(self) -> None:
+    def test_stop_within_physical_capacity_is_not_split_for_comfort_target(self) -> None:
         points = [_point(0), _point(1, 38)]
 
-        expanded = self.planner.split_oversized_demand_points(points, 35)
+        expanded = self.planner.split_oversized_demand_points(points, 42)
         matrix = _simple_matrix(len(expanded))
         routes = self.planner.solve_routes(expanded, matrix, matrix)
 
-        self.assertEqual([point["passenger_count"] for point in expanded[1:]], [19, 19])
+        self.assertEqual([point["passenger_count"] for point in expanded[1:]], [38])
+        self.assertEqual(len(routes), 1)
+        self.assertEqual(routes[0]["load"], 38)
+        self.assertEqual(routes[0]["bus_capacity"], 42)
+        self.assertEqual(routes[0]["comfort_capacity"], 35)
+        self.assertGreater(routes[0]["load"], routes[0]["comfort_capacity"])
+
+    def test_stop_over_physical_capacity_is_split_into_vehicle_batches(self) -> None:
+        points = [_point(0), _point(1, 43)]
+
+        expanded = self.planner.split_oversized_demand_points(points, 42)
+        matrix = _simple_matrix(len(expanded))
+        routes = self.planner.solve_routes(expanded, matrix, matrix)
+
+        self.assertEqual([point["passenger_count"] for point in expanded[1:]], [22, 21])
         self.assertEqual(len(routes), 2)
-        self.assertTrue(all(route["load"] <= route["comfort_capacity"] for route in routes))
+        self.assertTrue(all(route["load"] <= route["bus_capacity"] for route in routes))
+        self.assertTrue(all(route["comfort_capacity"] == 35 for route in routes))
         self.assertEqual(
             {expanded[node]["demand_batch_count"] for route in routes for node in route["nodes"] if node},
             {2},
         )
 
     def test_oversized_split_uses_target_load_ratio(self) -> None:
-        self.assertEqual(self.planner.balanced_demand_batch_sizes(38, 35), [19, 19])
-        self.assertEqual(self.planner.balanced_demand_batch_sizes(60, 35), [20, 20, 20])
-        self.assertEqual(self.planner.balanced_demand_batch_sizes(100, 35), [25, 25, 25, 25])
+        self.assertEqual(self.planner.balanced_demand_batch_sizes(38, 42), [38])
+        self.assertEqual(self.planner.balanced_demand_batch_sizes(43, 42), [22, 21])
+        self.assertEqual(self.planner.balanced_demand_batch_sizes(60, 42), [30, 30])
+        self.assertEqual(self.planner.balanced_demand_batch_sizes(100, 42), [25, 25, 25, 25])
 
     def test_oversized_split_caps_extra_batches(self) -> None:
         self._setattr("DEMAND_SPLIT_MAX_EXTRA_BATCHES", 1)
 
-        self.assertEqual(self.planner.balanced_demand_batch_sizes(140, 35), [28, 28, 28, 28, 28])
+        self.assertEqual(self.planner.balanced_demand_batch_sizes(140, 42), [28, 28, 28, 28, 28])
 
     def test_express_reservation_does_not_starve_regular_fleet_capacity(self) -> None:
         self._setattr("BUS_TYPE_CONFIGS", [{"name": "Compact", "capacity": 10, "max_count": 4}])

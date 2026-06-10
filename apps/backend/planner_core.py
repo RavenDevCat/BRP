@@ -4266,8 +4266,8 @@ def _compute_scenario_without_render(
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
     full_fleet = planner.build_vehicle_fleet()
     if full_fleet:
-        max_comfort_capacity = max(planner.solver_capacity_for_vehicle(item) for item in full_fleet)
-        expanded_points = planner.split_oversized_demand_points(points, max_comfort_capacity)
+        max_physical_capacity = max(planner.solver_capacity_for_vehicle(item) for item in full_fleet)
+        expanded_points = planner.split_oversized_demand_points(points, max_physical_capacity)
         if len(expanded_points) != len(points):
             planner.log(
                 f"[BACKEND] Split oversized demand stops for {scenario_label}: "

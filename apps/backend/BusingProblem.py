@@ -919,11 +919,7 @@ def comfort_capacity_for_vehicle(capacity: int) -> int:
 
 
 def solver_capacity_for_vehicle(vehicle: dict[str, Any]) -> int:
-    capacity = int(vehicle.get("capacity", 0) or 0)
-    comfort_capacity = int(vehicle.get("comfort_capacity", 0) or 0)
-    if comfort_capacity <= 0:
-        comfort_capacity = comfort_capacity_for_vehicle(capacity)
-    return min(capacity, comfort_capacity)
+    return max(0, int(vehicle.get("capacity", 0) or 0))
 
 
 def route_stop_limit() -> int:
@@ -1032,7 +1028,7 @@ def build_trivial_routes(
             "vehicle_id": 1,
             "bus_type_name": chosen_vehicle["name"],
             "bus_capacity": chosen_vehicle["capacity"],
-            "comfort_capacity": solver_capacity_for_vehicle(chosen_vehicle),
+            "comfort_capacity": comfort_capacity_for_vehicle(chosen_vehicle["capacity"]),
             "max_stops": route_stop_limit(),
             "nodes": [0, 1],
             "time_s": int(time_matrix[0][1]),
@@ -1127,8 +1123,8 @@ def solve_routes_for_fleet(
     oversized = [point["address"] for point in points[1:] if int(point.get("passenger_count", 1)) > largest_capacity]
     if oversized:
         raise RuntimeError(
-            "One or more stops exceed the largest comfort capacity. "
-            f"Current comfort load factor is {COMFORT_LOAD_FACTOR:.0%}; oversized stops above the largest comfort capacity: {', '.join(oversized[:10])}"
+            "One or more stops exceed the largest physical vehicle capacity. "
+            f"Oversized stops above the largest vehicle capacity: {', '.join(oversized[:10])}"
         )
 
     total_demand = points_total_demand(points)
@@ -1243,7 +1239,7 @@ def solve_routes_for_fleet(
                 "vehicle_id": vehicle_id + 1,
                 "bus_type_name": vehicle["name"],
                 "bus_capacity": vehicle["capacity"],
-                "comfort_capacity": solver_capacity_for_vehicle(vehicle),
+                "comfort_capacity": comfort_capacity_for_vehicle(vehicle["capacity"]),
                 "max_stops": route_stop_limit(),
                 "nodes": nodes,
                 "time_s": route_time_s,
@@ -1748,7 +1744,7 @@ def build_map_summary_html(
         stop_count = int(route.get("stop_count", max(0, len(route.get("nodes", [])) - 1)) or 0)
         max_stops = int(route.get("max_stops", route_stop_limit()) or route_stop_limit())
         passenger_line = (
-            f"<div>Passengers: {route['load']} / {comfort_capacity} comfort seats ({bus_capacity} physical)</div>"
+            f"<div>Passengers: {route['load']} / {bus_capacity} seats (comfort target {comfort_capacity})</div>"
             if comfort_capacity and comfort_capacity != bus_capacity
             else f"<div>Passengers: {route['load']} / {bus_capacity} seats</div>"
         )
@@ -1908,7 +1904,7 @@ def render_map(
                 opacity=0.9,
                 tooltip=(
                     f"Bus {route['vehicle_id']} | {route['bus_type_name']} | "
-                    f"{route['load']}/{route.get('comfort_capacity', route['bus_capacity'])} comfort | "
+                    f"{route['load']}/{route['bus_capacity']} seats | comfort target {route.get('comfort_capacity', route['bus_capacity'])} | "
                     f"{route.get('stop_count', max(0, len(route.get('nodes', [])) - 1))}/"
                     f"{route.get('max_stops', route_stop_limit())} stops"
                 ),
@@ -2131,8 +2127,8 @@ def build_scenario(points: list[dict[str, Any]], output_html: str, scenario_labe
         return build_scenario_result(points, routes, output_html)
     full_fleet = build_vehicle_fleet()
     if full_fleet:
-        max_comfort_capacity = max(solver_capacity_for_vehicle(item) for item in full_fleet)
-        points = split_oversized_demand_points(points, max_comfort_capacity)
+        max_physical_capacity = max(solver_capacity_for_vehicle(item) for item in full_fleet)
+        points = split_oversized_demand_points(points, max_physical_capacity)
     log(f"[INFO] Building {scenario_label} scenario with {len(points)} total points.")
     global OSRM_BASE_URL
     scenario_osrm_base_url = resolve_osrm_base_url(points)

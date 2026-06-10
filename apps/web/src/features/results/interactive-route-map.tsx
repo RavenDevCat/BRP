@@ -805,7 +805,7 @@ function routeSortLabel(route: JobMapRoute) {
 }
 
 function routeLoadRatio(route: JobMapRoute) {
-  const capacity = route.comfort_capacity || route.bus_capacity || 0;
+  const capacity = routeCapacity(route);
   return capacity > 0 ? route.load / capacity : 0;
 }
 
@@ -818,7 +818,7 @@ function routeWorkbookOrder(route: JobMapRoute, stopsByRouteId: Map<string, JobM
 }
 
 function routeCapacity(route: JobMapRoute) {
-  return route.comfort_capacity || route.bus_capacity || 0;
+  return route.bus_capacity || 0;
 }
 
 function routeLoadLabel(route: JobMapRoute) {

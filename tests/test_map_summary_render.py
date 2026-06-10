@@ -48,6 +48,8 @@ class MapSummaryRenderTests(unittest.TestCase):
 
         self.assertIn("Nearby Cluster Centers", html)
         self.assertIn("Clustered Rider", html)
+        self.assertIn("Passengers: 2 / 42 seats (comfort target 35)", html)
+        self.assertNotIn("35 comfort seats", html)
 
     def test_private_drive_summary_renders_route_private_stops(self) -> None:
         html = self.planner.build_map_summary_html(

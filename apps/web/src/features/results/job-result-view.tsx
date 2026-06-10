@@ -883,7 +883,7 @@ function MapsPanel({
                   </a>
                   <button
                     type="button"
-                    className={cn(buttonClassName("secondary"), "border-slate-300 bg-white/80 backdrop-blur hover:bg-white")}
+                    className={cn(buttonClassName("secondary"), "border-red-300 bg-red-50/90 text-red-700 backdrop-blur hover:border-red-400 hover:bg-red-100 hover:text-red-800")}
                     onClick={() => setIsMapFullscreenOpen(false)}
                   >
                     <X className="h-4 w-4" aria-hidden="true" />

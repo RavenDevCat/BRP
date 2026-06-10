@@ -305,9 +305,15 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
   }, [data]);
 
   const focusRoute = (route: JobMapRoute) => {
+    if (selectedRouteId === route.id) {
+      clearFocus();
+      return;
+    }
     setSelectedRouteId(route.id);
     setSelectedStop(null);
-    containerRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    if (!fullscreen) {
+      containerRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    }
     window.setTimeout(() => mapRef.current?.resize(), 120);
     fitRoute(mapRef.current, route);
   };

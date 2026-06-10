@@ -68,6 +68,11 @@ Job result tab order:
   leg 4 to 5 (`长宁路999号` to `长宁路63号`) changed from the 北横通道 detour
   to a local-road route. A backup was kept next to the job JSON in shared
   runtime storage.
+- Live traffic sampling supports `baseline_json` sources. CN staging Shanghai
+  AM/PM timer env now points at shared runtime baseline JSON instead of Route
+  Audit job seeds, so missing historical job files should no longer break the
+  timer. The baseline loader geocodes through the existing cache and computes
+  OSRM durations before AMap sampling.
 
 ## Completed 2026-06-09 Evening
 

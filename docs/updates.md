@@ -330,6 +330,13 @@ It is not a code changelog. Record changes here when users or operators should k
 - The chosen leg records `coordinate_source=raw_geocode_fallback` plus the original plot-route distance/duration for auditability.
 - CN staging job `ed918d069752` was patched so `21-fromschool` leg 4 to 5 (`长宁路999号` to `长宁路63号`) no longer loops through 北横通道; future jobs pick up the fix automatically after backend restart.
 
+### Live Traffic Timers Moved To Baseline JSON
+
+- Live traffic sampling now supports a stable `baseline_json` source in addition to historical Route Audit jobs and Fleet Planner runs.
+- Shanghai AM/PM timer inputs can point at shared runtime baseline JSON files, so timers no longer depend on temporary job JSON records that may be cleaned up.
+- The baseline loader geocodes the template stops through the existing cache and computes OSRM route durations before sampling AMap, preserving the same traffic-factor output shape.
+- Existing samples remain valid; future timer samples should use the configured baseline source.
+
 ## Update Log Guidance
 
 Add a new dated entry when a change affects user workflow, operational behavior, or interpretation of results, such as:

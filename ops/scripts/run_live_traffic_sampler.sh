@@ -23,6 +23,7 @@ case "$period" in
     job_id="${BRP_LIVE_TRAFFIC_TO_SCHOOL_JOB_ID:-}"
     source="${BRP_LIVE_TRAFFIC_TO_SCHOOL_SOURCE:-route_audit_job}"
     run_id="${BRP_LIVE_TRAFFIC_TO_SCHOOL_RUN_ID:-}"
+    baseline_path="${BRP_LIVE_TRAFFIC_TO_SCHOOL_BASELINE_PATH:-}"
     market="${BRP_LIVE_TRAFFIC_TO_SCHOOL_MARKET:-CN}"
     city="${BRP_LIVE_TRAFFIC_TO_SCHOOL_CITY:-Shanghai}"
     timing_args=(--target-arrival-local-time "${BRP_LIVE_TRAFFIC_AM_TARGET_ARRIVAL_LOCAL_TIME:-08:00}")
@@ -34,6 +35,7 @@ case "$period" in
     job_id="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_JOB_ID:-}"
     source="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_SOURCE:-route_audit_job}"
     run_id="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_RUN_ID:-}"
+    baseline_path="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_BASELINE_PATH:-}"
     market="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_MARKET:-CN}"
     city="${BRP_LIVE_TRAFFIC_FROM_SCHOOL_CITY:-Shanghai}"
     timing_args=(--departure-local-time "${BRP_LIVE_TRAFFIC_PM_DEPARTURE_LOCAL_TIME:-15:40}")
@@ -42,6 +44,7 @@ case "$period" in
     job_id="${BRP_LIVE_TRAFFIC_OFF_PEAK_JOB_ID:-${BRP_LIVE_TRAFFIC_TO_SCHOOL_JOB_ID:-}}"
     source="${BRP_LIVE_TRAFFIC_OFF_PEAK_SOURCE:-route_audit_job}"
     run_id="${BRP_LIVE_TRAFFIC_OFF_PEAK_RUN_ID:-}"
+    baseline_path="${BRP_LIVE_TRAFFIC_OFF_PEAK_BASELINE_PATH:-}"
     market="${BRP_LIVE_TRAFFIC_OFF_PEAK_MARKET:-CN}"
     city="${BRP_LIVE_TRAFFIC_OFF_PEAK_CITY:-Shanghai}"
     timing_args=()
@@ -53,8 +56,12 @@ case "$period" in
 esac
 
 if [ -z "$job_id" ]; then
-  if [ "$source" != "fleet_planner" ] || [ -z "$run_id" ]; then
-    echo "Missing job id for period $period. Set the matching BRP_LIVE_TRAFFIC_*_JOB_ID or fleet planner source/run id." >&2
+  if [ "$source" = "fleet_planner" ] && [ -n "$run_id" ]; then
+    :
+  elif [ "$source" = "baseline_json" ] && [ -n "$baseline_path" ]; then
+    :
+  else
+    echo "Missing source identifier for period $period. Set the matching job id, fleet planner run id, or baseline path." >&2
     exit 2
   fi
 fi
@@ -64,6 +71,8 @@ cd "$ROOT_DIR/apps/backend"
 source_args=(--source "$source" --period "$period" --market "$market" --city "$city")
 if [ "$source" = "fleet_planner" ]; then
   source_args+=(--run-id "$run_id")
+elif [ "$source" = "baseline_json" ]; then
+  source_args+=(--baseline-path "$baseline_path")
 else
   source_args+=(--job-id "$job_id")
 fi

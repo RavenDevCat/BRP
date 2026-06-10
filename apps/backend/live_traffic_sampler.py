@@ -23,6 +23,7 @@ DEFAULT_SLEEP_SECONDS = float(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_SLEEP_SEC
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_TIMEOUT_SECONDS", "20") or 20)
 DEFAULT_STRATEGY = os.environ.get("BRP_LIVE_TRAFFIC_AMAP_STRATEGY", "4").strip() or "4"
 DEFAULT_SIDE_TOOLS_DIR = Path(os.environ.get("BRP_SIDE_TOOLS_DIR", "/opt/brp/shared/runtime/side_tools"))
+DEFAULT_BASELINE_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_BASELINE_DIR", "/opt/brp/shared/runtime/traffic_baselines"))
 DEFAULT_TZ = ZoneInfo(os.environ.get("BRP_LIVE_TRAFFIC_TIMEZONE", "Asia/Shanghai") or "Asia/Shanghai")
 DEFAULT_DEPARTURE_MULTIPLIER = float(os.environ.get("BRP_LIVE_TRAFFIC_DEPARTURE_MULTIPLIER", "1.84") or 1.84)
 DEFAULT_DUE_WINDOW_MINUTES = int(os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_DUE_WINDOW_MINUTES", "5") or 5)
@@ -112,6 +113,127 @@ def _load_fleet_planner_run(run_id: str, side_tools_dir: Path) -> dict[str, Any]
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _normalize_service_direction(value: Any) -> str:
+    raw = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw == "to_school":
+        return "To School"
+    if raw == "from_school":
+        return "From School"
+    text = str(value or "").strip()
+    return text or "To School"
+
+
+def _baseline_point_key(stop: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(stop.get("country") or "").strip(),
+        str(stop.get("city") or "").strip(),
+        str(stop.get("address") or "").strip(),
+    )
+
+
+def _route_osrm_metrics(route_points: list[dict[str, Any]]) -> tuple[float, float, list[dict[str, Any]]]:
+    distance_m = 0.0
+    duration_s = 0.0
+    leg_details: list[dict[str, Any]] = []
+    for origin, destination in zip(route_points[:-1], route_points[1:]):
+        leg_distance_m, leg_duration_s, _geometry, metadata = planner.osrm_driving_direction_with_metadata(
+            origin,
+            destination,
+        )
+        distance_m += float(leg_distance_m)
+        duration_s += float(leg_duration_s)
+        leg_details.append(
+            {
+                "from_node": origin.get("node_id"),
+                "to_node": destination.get("node_id"),
+                "distance_m": int(leg_distance_m),
+                "raw_osrm_duration_s": int(leg_duration_s),
+                **metadata,
+            }
+        )
+    return distance_m, duration_s, leg_details
+
+
+def _scenario_from_baseline_json(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    path = Path(args.baseline_path)
+    if not path.is_absolute():
+        path = args.baseline_dir / path
+    if not path.exists():
+        raise FileNotFoundError(f"Baseline file not found: {path}")
+    baseline = json.loads(path.read_text(encoding="utf-8"))
+    raw_routes = list(baseline.get("routes") or [])
+    if not raw_routes:
+        raise ValueError(f"Baseline {path} does not contain routes")
+
+    school_address = str(baseline.get("school_address") or "").strip()
+    unique_records: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add_stop(stop: dict[str, Any]) -> None:
+        key = _baseline_point_key(stop)
+        if not key[2] or key in seen:
+            return
+        seen.add(key)
+        unique_records.append(
+            {
+                "country": key[0],
+                "city": key[1],
+                "address": key[2],
+                "passenger_count": int(stop.get("passenger_count", 0) or 0),
+            }
+        )
+
+    for route in raw_routes:
+        for stop in list(route.get("stops") or []):
+            if str(stop.get("address") or "").strip() == school_address or bool(stop.get("is_school")):
+                add_stop(stop)
+    for route in raw_routes:
+        for stop in list(route.get("stops") or []):
+            add_stop(stop)
+
+    previous_osrm_base_url = planner.OSRM_BASE_URL
+    points, warnings = planner.geocode_records(unique_records)
+    scenario_osrm_base_url = planner.resolve_osrm_base_url(points)
+    planner.OSRM_BASE_URL = scenario_osrm_base_url
+    point_by_key = {
+        _baseline_point_key(point): point
+        for point in points
+    }
+    routes: list[dict[str, Any]] = []
+    try:
+        for route_index, raw_route in enumerate(raw_routes, start=1):
+            stops = sorted(list(raw_route.get("stops") or []), key=lambda item: int(item.get("stop_sequence", 0) or 0))
+            route_points = [point_by_key[_baseline_point_key(stop)] for stop in stops if _baseline_point_key(stop) in point_by_key]
+            if len(route_points) < 2:
+                continue
+            distance_m, duration_s, leg_details = _route_osrm_metrics(route_points)
+            route_id = str(raw_route.get("route_id") or route_index).strip()
+            routes.append(
+                {
+                    "route_id": route_id,
+                    "vehicle_id": route_index,
+                    "bus_type_name": str(raw_route.get("bus_type") or "").strip(),
+                    "nodes": [int(point["node_id"]) for point in route_points],
+                    "raw_osrm_time_s": duration_s,
+                    "distance_m": distance_m,
+                    "leg_details": leg_details,
+                }
+            )
+    finally:
+        planner.OSRM_BASE_URL = previous_osrm_base_url
+
+    metadata = {
+        "source": "baseline_json",
+        "source_id": str(baseline.get("baseline_id") or path.stem),
+        "service_direction": _normalize_service_direction(baseline.get("service_direction")),
+        "title": str(baseline.get("source_workbook_name") or path.name),
+        "baseline_path": str(path),
+        "source_workbook_sha256": baseline.get("source_workbook_sha256"),
+        "geocode_warning_count": len(warnings),
+    }
+    return baseline, metadata, points, routes
+
+
 def _route_points(points: list[dict[str, Any]], route: dict[str, Any]) -> list[dict[str, Any]]:
     return [points[int(node_id)] for node_id in list(route.get("nodes") or [])]
 
@@ -170,6 +292,8 @@ def _load_source(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, An
         return _scenario_from_route_audit_job(args)
     if args.source == "fleet_planner":
         return _scenario_from_fleet_planner(args)
+    if args.source == "baseline_json":
+        return _scenario_from_baseline_json(args)
     raise ValueError(f"Unsupported source: {args.source}")
 
 
@@ -351,12 +475,14 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Sample live AMap driving durations for a current-plan job.")
-    parser.add_argument("--source", choices=("route_audit_job", "fleet_planner"), default="route_audit_job")
+    parser.add_argument("--source", choices=("route_audit_job", "fleet_planner", "baseline_json"), default="route_audit_job")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--run-id", default="")
+    parser.add_argument("--baseline-path", default="")
     parser.add_argument("--period", required=True, choices=("am_peak", "pm_peak", "off_peak"))
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--side-tools-dir", type=Path, default=DEFAULT_SIDE_TOOLS_DIR)
+    parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--market", default=os.environ.get("BRP_LIVE_TRAFFIC_MARKET", "CN"))
     parser.add_argument("--city", default=os.environ.get("BRP_LIVE_TRAFFIC_CITY", "Shanghai"))
@@ -378,6 +504,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--job-id is required for route_audit_job source")
     if args.source == "fleet_planner" and not args.run_id:
         parser.error("--run-id is required for fleet_planner source")
+    if args.source == "baseline_json" and not args.baseline_path:
+        parser.error("--baseline-path is required for baseline_json source")
     return args
 
 

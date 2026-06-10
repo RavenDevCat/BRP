@@ -6,6 +6,13 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-09
 
+### Side Tool History Rails Unified
+
+- Fleet Planner History and Distance & Cost History now use the same compact
+  desktop rail interaction as Route Audit History.
+- Users can open the rail to inspect saved runs, and it collapses after selecting
+  a run or clicking back into the workspace so the tool surface keeps focus.
+
 ### Interactive Route Map Polished
 
 - The Route Audit Maps tab now uses the React MapLibre interactive map as the

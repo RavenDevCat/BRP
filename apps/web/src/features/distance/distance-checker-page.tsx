@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Calculator, FileSpreadsheet, Fuel, History, Loader2, MapPinned, RefreshCw, Ruler, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -78,11 +78,32 @@ export function DistanceCheckerPage() {
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<DistanceCheckerHistoryRecord | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [deletingRunId, setDeletingRunId] = useState("");
+  const historyPanelRef = useRef<HTMLDivElement | null>(null);
 
   const historyQuery = useQuery({
     queryKey: ["distance-checker-history", activeTool],
     queryFn: () => listDistanceCheckerHistory(activeTool),
   });
+
+  useEffect(() => {
+    if (historyCollapsed) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (window.innerWidth < 1024) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Node && historyPanelRef.current?.contains(target)) {
+        return;
+      }
+      setHistoryCollapsed(true);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [historyCollapsed]);
 
   const previewMutation = useMutation({
     mutationFn: async (sheetName?: string) => {
@@ -422,25 +443,30 @@ export function DistanceCheckerPage() {
       <div
         className={cn(
           "grid gap-4 lg:items-start",
-          historyCollapsed ? "lg:grid-cols-[56px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
+          historyCollapsed ? "lg:grid-cols-[88px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
         )}
       >
-        <DistanceCheckerHistoryPanel
-          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
-          title={activeHistoryTitle}
-          emptyMessage={activeHistoryEmpty}
-          toolMode={activeTool}
-          jobs={historyQuery.data || []}
-          activeRunId={activeLoadedRunId || activeSavedRunId}
-          deletingRunId={deletingRunId}
-          isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending}
-          error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null)}
-          collapsed={historyCollapsed}
-          onCollapsedChange={setHistoryCollapsed}
-          onRefresh={() => void historyQuery.refetch()}
-          onOpen={(runId) => openHistoryMutation.mutate({ toolMode: activeTool, runId })}
-          onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
-        />
+        <div ref={historyPanelRef} className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+          <DistanceCheckerHistoryPanel
+            className="min-w-0"
+            title={activeHistoryTitle}
+            emptyMessage={activeHistoryEmpty}
+            toolMode={activeTool}
+            jobs={historyQuery.data || []}
+            activeRunId={activeLoadedRunId || activeSavedRunId}
+            deletingRunId={deletingRunId}
+            isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending}
+            error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null)}
+            collapsed={historyCollapsed}
+            onCollapsedChange={setHistoryCollapsed}
+            onRefresh={() => void historyQuery.refetch()}
+            onOpen={(runId) => {
+              setHistoryCollapsed(true);
+              openHistoryMutation.mutate({ toolMode: activeTool, runId });
+            }}
+            onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
+          />
+        </div>
 
         <div className="min-w-0 space-y-4">
           <Card>

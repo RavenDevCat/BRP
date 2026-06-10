@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -77,6 +77,7 @@ export function FleetPlannerPage() {
   const [fleetSettingHelpOpen, setFleetSettingHelpOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
+  const historyPanelRef = useRef<HTMLDivElement | null>(null);
 
   const historyQuery = useQuery({
     queryKey: ["fleet-planner-history"],
@@ -89,6 +90,26 @@ export function FleetPlannerPage() {
     queryFn: () => getFleetPlannerVehicleCatalog({ market, monitor_seats: monitorSeats }),
     staleTime: 60_000,
   });
+
+  useEffect(() => {
+    if (historyCollapsed) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (window.innerWidth < 1024) {
+        return;
+      }
+      const target = event.target;
+      if (target instanceof Node && historyPanelRef.current?.contains(target)) {
+        return;
+      }
+      setHistoryCollapsed(true);
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [historyCollapsed]);
 
   const defaultVehicleConfigs = useMemo(
     () => normalizeVehicleConfigDrafts(vehicleCatalogQuery.data?.catalog || [], market),
@@ -459,22 +480,27 @@ export function FleetPlannerPage() {
       <div
         className={cn(
           "grid gap-4 lg:items-start",
-          historyCollapsed ? "lg:grid-cols-[56px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
+          historyCollapsed ? "lg:grid-cols-[88px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
         )}
       >
-        <FleetPlannerHistoryPanel
-          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
-          jobs={historyQuery.data || []}
-          activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
-          isLoading={historyQuery.isLoading || loadHistoryMutation.isPending || deleteHistoryMutation.isPending}
-          error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error) as Error | null}
-          collapsed={historyCollapsed}
-          onCollapsedChange={setHistoryCollapsed}
-          onRefresh={() => void historyQuery.refetch()}
-          onOpen={(runId) => loadHistoryMutation.mutate(runId)}
-          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
-          deletingRunId={deleteHistoryMutation.variables}
-        />
+        <div ref={historyPanelRef} className="min-w-0 lg:sticky lg:top-20 lg:self-start">
+          <FleetPlannerHistoryPanel
+            className="min-w-0"
+            jobs={historyQuery.data || []}
+            activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
+            isLoading={historyQuery.isLoading || loadHistoryMutation.isPending || deleteHistoryMutation.isPending}
+            error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error) as Error | null}
+            collapsed={historyCollapsed}
+            onCollapsedChange={setHistoryCollapsed}
+            onRefresh={() => void historyQuery.refetch()}
+            onOpen={(runId) => {
+              setHistoryCollapsed(true);
+              loadHistoryMutation.mutate(runId);
+            }}
+            onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+            deletingRunId={deleteHistoryMutation.variables}
+          />
+        </div>
 
         <div className="min-w-0 space-y-4">
           <Card>

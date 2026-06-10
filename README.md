@@ -199,9 +199,10 @@ inventory outside this repository.
 
 ## Current Product Notes
 
-As of 2026-06-09, active product polish is centered on the Route Audit Maps tab.
-The React interactive map can switch scenarios through summary tiles, inspect
-routes and stops, focus selected routes, show route direction arrows, filter and
-search route lists, and keep legacy backend-rendered HTML maps available as a
-fallback. Continue UI/product work in CN staging first; promote production only
-when explicitly approved.
+As of 2026-06-11, Route Audit Maps has completed the main migration from legacy
+backend-rendered HTML previews to the React MapLibre interactive experience. The
+map can switch scenarios through summary tiles, inspect routes and stops, focus
+selected routes, show route direction arrows, filter and search route lists,
+open in an in-page fullscreen viewer, and export a standalone interactive HTML
+map. Continue UI/product work in CN staging first; promote production only when
+explicitly approved.

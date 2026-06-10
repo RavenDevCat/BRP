@@ -4,6 +4,25 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-11
+
+### Interactive Route Map Rollout Completed
+
+- Route Audit Maps now presents the React MapLibre interactive route map as the
+  user-facing map experience; the legacy HTML preview/toggle is no longer shown
+  in the product UI.
+- The map Open action launches an in-page fullscreen viewer with a glass-style
+  route list, route expand/collapse, route filters/search, route focus, stop
+  inspection, and route/stop hover details.
+- The map Download action now exports a standalone interactive HTML map named
+  from the job history label and scenario/map name. The exported file embeds
+  route and stop data, but still needs network access for MapLibre CDN assets
+  and OpenStreetMap tiles.
+- Map action buttons are solid white controls over the map for better legibility.
+- No rerun is required for compatible completed jobs because the interactive map
+  reads existing structured job results. Rerun only when users want results
+  rebuilt under newer planner or geocoding behavior.
+
 ## 2026-06-09
 
 ### Side Tool History Rails Unified

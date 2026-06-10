@@ -4017,6 +4017,9 @@ def build_further_most_stop_scenario(
         return deepcopy(source_result or {}), None
 
     scenario = deepcopy(source_result)
+    scenario_points = scenario.get("points")
+    if isinstance(scenario_points, list) and scenario_points:
+        points = scenario_points
     routes = [dict(route) for route in list(scenario.get("routes") or [])]
     if not routes:
         scenario["outlying_private_access_rows"] = []

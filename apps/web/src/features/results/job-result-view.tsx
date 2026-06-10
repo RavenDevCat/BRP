@@ -1236,17 +1236,17 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     .chip.active { border-color: #0f766e; background: #0f766e; color: white; }
     .showing { margin-top: 10px; color: #64748b; font-size: 12px; }
     .routes { min-height: 0; flex: 1; overflow: auto; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
-    .route-card { overflow: hidden; border: 1px solid rgba(255,255,255,.38); border-radius: 12px; background: rgba(255,255,255,.28); box-shadow: 0 4px 16px rgba(15,23,42,.10); backdrop-filter: blur(20px); }
+    .route-card { flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.38); border-radius: 12px; background: rgba(255,255,255,.28); box-shadow: 0 4px 16px rgba(15,23,42,.10); backdrop-filter: blur(20px); }
     .route-card.active { background: rgba(255,255,255,.58); }
-    .route-main { width: 100%; display: flex; gap: 12px; align-items: flex-start; border: 0; border-left: 3px solid transparent; background: transparent; padding: 13px 12px; text-align: left; cursor: pointer; }
+    .route-main { width: 100%; min-height: 76px; display: flex; gap: 12px; align-items: flex-start; border: 0; border-left: 3px solid transparent; background: transparent; padding: 13px 12px; text-align: left; cursor: pointer; color: #111827; }
     .dot { width: 12px; height: 12px; margin-top: 5px; flex: none; border-radius: 999px; box-shadow: 0 0 0 2px rgba(255,255,255,.9); }
-    .route-text { min-width: 0; flex: 1; }
-    .route-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; }
+    .route-text { display: block; min-width: 0; flex: 1; }
+    .route-title { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 15px; line-height: 1.3; }
     .route-title span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .badge { border: 1px solid #bae6fd; background: #eff6ff; color: #0369a1; border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+    .badge { flex: 0 0 auto; border: 1px solid #bae6fd; background: #eff6ff; color: #0369a1; border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
     .badge.capacity { border-color: #fecdd3; background: #fff1f2; color: #be123c; }
     .badge.high { border-color: #fde68a; background: #fffbeb; color: #b45309; }
-    .route-meta { margin-top: 7px; color: #64748b; font-size: 13px; line-height: 1.45; }
+    .route-meta { display: block; margin-top: 7px; color: #64748b; font-size: 13px; line-height: 1.45; }
     .chevron { width: 26px; height: 26px; margin-top: 2px; display: flex; align-items: center; justify-content: center; border-radius: 999px; background: rgba(255,255,255,.48); color: #475569; flex: none; }
     .stops { max-height: 300px; overflow: auto; border-top: 1px solid rgba(255,255,255,.32); background: rgba(255,255,255,.18); padding: 9px; }
     .stops-label { margin: 0 0 6px; color: #64748b; font-size: 11px; font-weight: 800; text-transform: uppercase; }

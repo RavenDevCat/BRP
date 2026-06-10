@@ -328,9 +328,38 @@ def is_likely_english_korean_address(country: str, address: str) -> bool:
 
 
 def expected_geocode_provider(country: str, address: str) -> str:
+    return geocode_provider_order(country, address)[0]
+
+
+def geocode_provider_order(country: str, address: str) -> list[str]:
+    if is_china_country(country):
+        return ["amap"]
     if is_korea_country(country):
-        return "google" if is_likely_english_korean_address(country, address) else "kakao"
-    return "amap"
+        primary = "google" if is_likely_english_korean_address(country, address) else "kakao"
+        fallback = "kakao" if primary == "google" else "google"
+        return [primary, fallback]
+    return ["google"]
+
+
+def failed_geocode_cache_providers(entry: dict[str, Any]) -> set[str]:
+    providers: set[str] = set()
+    attempted_providers = entry.get("attempted_providers")
+    if isinstance(attempted_providers, list):
+        providers.update(str(provider).strip().lower() for provider in attempted_providers if str(provider).strip())
+    attempted_provider = str(entry.get("attempted_provider", "")).strip().lower()
+    if attempted_provider:
+        providers.add(attempted_provider)
+    return providers
+
+
+def run_geocode_provider(provider_name: str, country: str, city: str, address: str) -> dict[str, Any]:
+    if provider_name == "google":
+        return google_geocode_query(country, city, address)
+    if provider_name == "kakao":
+        return kakao_geocode_query(country, city, address)
+    if provider_name == "amap":
+        return amap_geocode_query(country, city, address)
+    raise RuntimeError(f"Unsupported geocode provider: {provider_name}")
 
 
 def _normalize_korea_city_key(city: str) -> str:
@@ -650,6 +679,46 @@ def google_geocode_request_json(params: dict[str, Any]) -> dict[str, Any]:
     raise RuntimeError(f"Google geocode request failed: {status}{details}")
 
 
+def google_country_code(country: str) -> str:
+    normalized = " ".join(country.strip().lower().split())
+    values = {
+        "korea": "KR",
+        "south korea": "KR",
+        "republic of korea": "KR",
+        "대한민국": "KR",
+        "한국": "KR",
+        "thailand": "TH",
+        "thai": "TH",
+        "ประเทศไทย": "TH",
+        "united states": "US",
+        "usa": "US",
+        "us": "US",
+        "united kingdom": "GB",
+        "uk": "GB",
+        "great britain": "GB",
+        "japan": "JP",
+        "singapore": "SG",
+        "malaysia": "MY",
+        "vietnam": "VN",
+        "china": "CN",
+        "中国": "CN",
+        "中华人民共和国": "CN",
+    }
+    return values.get(normalized, "")
+
+
+def google_geocode_params(country: str, query: str) -> dict[str, Any]:
+    params: dict[str, Any] = {
+        "address": query,
+        "language": "en",
+    }
+    country_code = google_country_code(country)
+    if country_code:
+        params["components"] = f"country:{country_code}"
+        params["region"] = country_code.lower()
+    return params
+
+
 def geocode_cache_key(country: str, city: str, address: str) -> str:
     normalized_country = canonical_cache_country(country)
     normalized_city = canonical_cache_city(country, city)
@@ -767,17 +836,17 @@ def resolve_geocoded_point(
             cached = candidate
             matched_cache_key = lookup_key
             break
-    provider_name = expected_geocode_provider(country, address)
+    provider_names = geocode_provider_order(country, address)
     cache_changed = False
     if cached:
         if is_failed_geocode_cache_entry(cached):
-            attempted_provider = str(cached.get("attempted_provider", "")).strip().lower()
-            if attempted_provider == provider_name:
+            attempted_providers = failed_geocode_cache_providers(cached)
+            if attempted_providers.issuperset(set(provider_names)):
                 if matched_cache_key and matched_cache_key != cache_key:
                     GEOCODE_CACHE[cache_key] = dict(cached)
                     return None, build_geocode_warning(country, city, address, source_excel_rows), True
                 return None, build_geocode_warning(country, city, address, source_excel_rows), False
-        elif str(cached.get("provider", "")).strip().lower() == provider_name:
+        elif str(cached.get("provider", "")).strip().lower() in set(provider_names):
             cached_lat = float(cached.get("lat", 0.0) or 0.0)
             cached_lng = float(cached.get("lng", 0.0) or 0.0)
             cached_formatted_address = str(cached.get("formatted_address", "") or address).strip()
@@ -804,25 +873,34 @@ def resolve_geocoded_point(
                 GEOCODE_CACHE.pop(cache_key, None)
                 cache_changed = True
 
-    try:
-        if provider_name == "google":
-            point = google_geocode_query(country, city, address)
-        elif provider_name == "kakao":
-            point = kakao_geocode_query(country, city, address)
-        else:
-            point = amap_geocode_query(country, city, address)
-        GEOCODE_CACHE[cache_key] = point
-        return dict(point), None, True
-    except Exception as exc:
-        log(f"[WARN] geocode failed: {address} -> {exc}")
-        GEOCODE_CACHE[cache_key] = {
-            "cache_status": "failed",
-            "attempted_provider": provider_name,
-            "country": country,
-            "city": city,
-            "address": address,
-        }
-        return None, build_geocode_warning(country, city, address, source_excel_rows, reason=str(exc)), True
+    errors: list[str] = []
+    attempted_providers: list[str] = []
+    for provider_name in provider_names:
+        attempted_providers.append(provider_name)
+        try:
+            point = run_geocode_provider(provider_name, country, city, address)
+            point["geocode_provider_chain"] = " -> ".join(attempted_providers)
+            GEOCODE_CACHE[cache_key] = point
+            if len(attempted_providers) > 1:
+                log(f"[INFO] geocode fallback succeeded: {address} via {point.get('geocode_provider_chain')}")
+            return dict(point), None, True
+        except Exception as exc:
+            error_text = f"{provider_name}: {exc}"
+            errors.append(error_text)
+            log(f"[WARN] geocode provider failed: {address} -> {error_text}")
+
+    reason = "; ".join(errors) or "No geocode provider returned a usable coordinate."
+    log(f"[WARN] geocode failed: {address} -> {reason}")
+    GEOCODE_CACHE[cache_key] = {
+        "cache_status": "failed",
+        "attempted_provider": attempted_providers[-1] if attempted_providers else "",
+        "attempted_providers": attempted_providers,
+        "country": country,
+        "city": city,
+        "address": address,
+        "error": reason,
+    }
+    return None, build_geocode_warning(country, city, address, source_excel_rows, reason=reason), True
 
 
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
@@ -1026,14 +1104,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
 
     for query in queries:
         try:
-            payload = google_geocode_request_json(
-                {
-                    "address": query,
-                    "components": "country:KR",
-                    "region": "kr",
-                    "language": "en",
-                }
-            )
+            payload = google_geocode_request_json(google_geocode_params(country, query))
             results = payload.get("results") or []
             if not results:
                 continue

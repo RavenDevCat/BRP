@@ -125,7 +125,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
-      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} mapOutputs={mapOutputs} result={result} /> : null}
+      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} /> : null}
       {activeTab === "actions" ? (
         <ActionPanel
           priorityActions={priorityActions}
@@ -685,11 +685,23 @@ function DiagnosticsPanel({
   );
 }
 
-function MapsPanel({ jobId, mapOutputs, result }: { jobId: string; mapOutputs: MapOutput[]; result: Record<string, unknown> }) {
+function MapsPanel({
+  jobId,
+  mapOutputs,
+  result,
+  diagnostics,
+}: {
+  jobId: string;
+  mapOutputs: MapOutput[];
+  result: Record<string, unknown>;
+  diagnostics: Diagnostics;
+}) {
   const [selectedKey, setSelectedKey] = useState("");
   const [mapMode, setMapMode] = useState<"interactive" | "legacy">("interactive");
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
+  const excludedStopCount = diagnostics.excludedStops.length;
+  const geocodeWarningCount = diagnostics.geocodeWarnings.length;
   const interactiveQuery = useQuery({
     queryKey: ["job-map-data", jobId, selected?.key],
     queryFn: () => getJobMapData(jobId, selected.key),
@@ -745,6 +757,15 @@ function MapsPanel({ jobId, mapOutputs, result }: { jobId: string; mapOutputs: M
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {excludedStopCount || geocodeWarningCount ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <FileWarning className="h-4 w-4 flex-none" aria-hidden="true" />
+            <span className="font-medium">Input geocode review:</span>
+            {excludedStopCount ? <span>{formatNumber(excludedStopCount)} excluded stop(s)</span> : null}
+            {excludedStopCount && geocodeWarningCount ? <span aria-hidden="true">·</span> : null}
+            {geocodeWarningCount ? <span>{formatNumber(geocodeWarningCount)} warning(s)</span> : null}
+          </div>
+        ) : null}
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {scenarioSummaries.map((summary) => (
             <button
@@ -767,6 +788,7 @@ function MapsPanel({ jobId, mapOutputs, result }: { jobId: string; mapOutputs: M
                 <div>Riders: {formatNumber(summary.passengerCount)}</div>
                 <div>Total: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
                 <div>Longest: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
+                {excludedStopCount ? <div className="col-span-2 text-amber-700">Excluded: {formatNumber(excludedStopCount)} stop(s)</div> : null}
               </div>
             </button>
           ))}

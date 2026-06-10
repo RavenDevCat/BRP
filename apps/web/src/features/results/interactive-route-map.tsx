@@ -394,8 +394,13 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
       )}
       style={{ height: fullscreen ? "100%" : "clamp(560px, calc(100vh - 220px), 760px)" }}
     >
-      <aside className="flex min-h-0 flex-col border-b border-border bg-surface lg:border-b-0 lg:border-r">
-        <div className="border-b border-border p-3">
+      <aside
+        className={cn(
+          "flex min-h-0 flex-col border-b lg:border-b-0 lg:border-r",
+          fullscreen ? "border-white/35 bg-surface/68 shadow-xl backdrop-blur-xl lg:border-r-white/35" : "border-border bg-surface",
+        )}
+      >
+        <div className={cn("border-b p-3", fullscreen ? "border-white/35 bg-white/20 backdrop-blur-xl" : "border-border")}>
           <div className="flex items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-semibold">{data.scenario_name}</h3>
@@ -404,13 +409,16 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                 {formatNumber(data.summary.passenger_count)} riders
               </div>
             </div>
-            <Button className="h-8 px-3 text-xs" variant="secondary" onClick={clearFocus}>
+            <Button className={cn("h-8 px-3 text-xs", fullscreen ? "bg-white/70 backdrop-blur hover:bg-white" : "")} variant="secondary" onClick={clearFocus}>
               Fit all
             </Button>
           </div>
           <div className="mt-3 space-y-2">
             <input
-              className="h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary"
+              className={cn(
+                "h-9 w-full rounded-md border px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary",
+                fullscreen ? "border-white/45 bg-white/50 shadow-sm backdrop-blur placeholder:text-slate-500" : "border-border bg-surface",
+              )}
               value={routeSearch}
               onChange={(event) => setRouteSearch(event.target.value)}
               placeholder="Search route, bus, vehicle"
@@ -424,7 +432,9 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                     "h-7 rounded-md border px-2 text-xs font-medium transition",
                     routeFilter === option.key
                       ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                      : fullscreen
+                        ? "border-white/45 bg-white/45 text-muted-foreground backdrop-blur hover:bg-white/70 hover:text-foreground"
+                        : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
                   )}
                   onClick={() => setRouteFilter(option.key)}
                 >
@@ -437,7 +447,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
               Showing {formatNumber(visibleRoutes.length)} of {formatNumber(data.routes.length)} routes
             </div>
             {selectedRoute ? (
-              <div className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2">
+              <div className={cn("flex items-center justify-between gap-3 rounded-md border px-3 py-2", fullscreen ? "border-white/40 bg-white/30 backdrop-blur" : "border-border bg-muted/40")}>
                 <div>
                   <div className="text-xs font-medium text-foreground">Route context</div>
                   <div className="text-[11px] text-muted-foreground">
@@ -472,12 +482,12 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
             const active = selectedRouteId === route.id;
             const routeStops = stopsByRouteId.get(route.id) || [];
             return (
-              <div key={route.id} className="border-b border-border">
+              <div key={route.id} className={cn("border-b", fullscreen ? "border-white/30" : "border-border")}>
                 <button
                   type="button"
                   className={cn(
                     "flex w-full items-start gap-3 border-l-2 px-3 py-3 text-left transition",
-                    active ? "bg-primary/10" : "hover:bg-muted",
+                    active ? (fullscreen ? "bg-white/45 backdrop-blur" : "bg-primary/10") : fullscreen ? "hover:bg-white/32" : "hover:bg-muted",
                     routeListAccentClass(route),
                   )}
                   onClick={() => focusRoute(route)}
@@ -503,7 +513,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                   </span>
                 </button>
                 {active ? (
-                  <div className="max-h-[320px] overflow-auto bg-muted/45 px-3 pb-3">
+                  <div className={cn("max-h-[320px] overflow-auto px-3 pb-3", fullscreen ? "bg-white/24 backdrop-blur" : "bg-muted/45")}>
                     <div className="mb-2 pt-2 text-[11px] font-semibold uppercase text-muted-foreground">Stop sequence</div>
                     <div className="space-y-1">
                       {routeStops.map((stop) => (
@@ -512,7 +522,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                           type="button"
                           className={cn(
                             "grid w-full grid-cols-[28px_minmax(0,1fr)] gap-2 rounded-md px-2 py-2 text-left text-xs transition",
-                            selectedStop?.id === stop.id ? "bg-primary text-primary-foreground" : "hover:bg-surface",
+                            selectedStop?.id === stop.id ? "bg-primary text-primary-foreground" : fullscreen ? "hover:bg-white/45" : "hover:bg-surface",
                           )}
                           onClick={() => focusStop(stop)}
                         >
@@ -784,7 +794,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
                   {selectedRoute.traffic_time_source ? `${selectedRoute.traffic_time_source} timing` : "Planned route timing"}
                 </div>
               </div>
-              <Button className="h-8 px-3 text-xs" variant="secondary" onClick={clearFocus}>
+              <Button className={cn("h-8 px-3 text-xs", fullscreen ? "bg-white/70 backdrop-blur hover:bg-white" : "")} variant="secondary" onClick={clearFocus}>
                 Clear
               </Button>
             </div>

@@ -11,8 +11,10 @@ import {
   ListChecks,
   Loader2,
   Map,
+  Maximize2,
   RefreshCw,
   Route,
+  X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -697,6 +699,7 @@ function MapsPanel({
 }) {
   const [selectedKey, setSelectedKey] = useState("");
   const [mapMode, setMapMode] = useState<"interactive" | "legacy">("interactive");
+  const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
   const excludedStopCount = diagnostics.excludedStops.length;
@@ -710,6 +713,43 @@ function MapsPanel({
   if (!mapOutputs.length || !selected) {
     return <EmptyState title="No maps available" detail="This job did not include rendered route map artifacts." />;
   }
+
+  const renderMapSurface = (fullscreen = false) => {
+    if (mapMode === "interactive") {
+      if (interactiveQuery.isLoading) {
+        return (
+          <div
+            className={cn(
+              "flex items-center justify-center border border-border bg-muted text-sm text-muted-foreground",
+              fullscreen ? "h-full rounded-none" : "h-[560px] rounded-md",
+            )}
+          >
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+            Loading interactive map
+          </div>
+        );
+      }
+      if (interactiveQuery.isError) {
+        return (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+            Interactive map data is not available for this scenario yet. Use Legacy HTML while this view is being prepared.
+          </div>
+        );
+      }
+      return interactiveQuery.data ? <InteractiveRouteMap data={interactiveQuery.data} fullscreen={fullscreen} /> : null;
+    }
+
+    return (
+      <div className={cn("overflow-hidden border border-border bg-muted", fullscreen ? "h-full rounded-none" : "rounded-md")}>
+        <iframe
+          key={selected.key}
+          title={selected.name}
+          src={selected.url}
+          className={cn("w-full border-0", fullscreen ? "h-full" : "h-[720px] min-h-[560px] max-h-[75vh]")}
+        />
+      </div>
+    );
+  };
 
   return (
     <Card>
@@ -744,9 +784,9 @@ function MapsPanel({
             >
               Legacy HTML
             </button>
-            <button type="button" className={buttonClassName("secondary")} onClick={() => setMapMode("legacy")}>
-              <Map className="h-4 w-4" aria-hidden="true" />
-              Preview HTML
+            <button type="button" className={buttonClassName("secondary")} onClick={() => setIsMapFullscreenOpen(true)}>
+              <Maximize2 className="h-4 w-4" aria-hidden="true" />
+              Open
             </button>
             <a href={selected.downloadUrl} className={buttonClassName("secondary")}>
               <Download className="h-4 w-4" aria-hidden="true" />
@@ -792,24 +832,54 @@ function MapsPanel({
             </button>
           ))}
         </div>
-        {mapMode === "interactive" ? (
-          interactiveQuery.isLoading ? (
-            <div className="flex h-[560px] items-center justify-center rounded-md border border-border bg-muted text-sm text-muted-foreground">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-              Loading interactive map
+        {renderMapSurface()}
+        {isMapFullscreenOpen ? (
+          <div className="fixed inset-0 z-50 flex flex-col bg-surface" role="dialog" aria-modal="true" aria-label="Fullscreen route map">
+            <div className="flex min-h-14 flex-col gap-3 border-b border-border bg-surface px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <div className="truncate text-sm font-semibold">{selected.name}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">
+                  {mapMode === "interactive" ? "Interactive route map" : "Legacy HTML map"} · {formatNumber(dataRouteCountForSummary(scenarioSummaries, selected.key))} routes
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                <button
+                  type="button"
+                  className={cn(
+                    "h-9 rounded-md border px-3 text-sm font-medium transition",
+                    mapMode === "interactive"
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                  onClick={() => setMapMode("interactive")}
+                >
+                  Interactive
+                </button>
+                <button
+                  type="button"
+                  className={cn(
+                    "h-9 rounded-md border px-3 text-sm font-medium transition",
+                    mapMode === "legacy"
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                  onClick={() => setMapMode("legacy")}
+                >
+                  Legacy HTML
+                </button>
+                <a href={selected.downloadUrl} className={buttonClassName("secondary")}>
+                  <Download className="h-4 w-4" aria-hidden="true" />
+                  Download
+                </a>
+                <button type="button" className={buttonClassName("secondary")} onClick={() => setIsMapFullscreenOpen(false)}>
+                  <X className="h-4 w-4" aria-hidden="true" />
+                  Close
+                </button>
+              </div>
             </div>
-          ) : interactiveQuery.isError ? (
-            <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              Interactive map data is not available for this scenario yet. Use Legacy HTML while this view is being prepared.
-            </div>
-          ) : interactiveQuery.data ? (
-            <InteractiveRouteMap data={interactiveQuery.data} />
-          ) : null
-        ) : (
-          <div className="overflow-hidden rounded-md border border-border bg-muted">
-            <iframe key={selected.key} title={selected.name} src={selected.url} className="h-[720px] min-h-[560px] max-h-[75vh] w-full border-0" />
+            <div className="min-h-0 flex-1 bg-muted">{renderMapSurface(true)}</div>
           </div>
-        )}
+        ) : null}
       </CardContent>
     </Card>
   );
@@ -1148,6 +1218,10 @@ type MapScenarioSummary = {
   totalDistanceM: number;
   longestDurationS: number;
 };
+
+function dataRouteCountForSummary(summaries: MapScenarioSummary[], key: string) {
+  return summaries.find((summary) => summary.key === key)?.routeCount ?? 0;
+}
 
 function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
   const structured = asRecord(result.structured_results);

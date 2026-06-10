@@ -111,7 +111,7 @@ const INTERACTIVE_LAYER_IDS = [
   "route-lines",
 ];
 
-export function InteractiveRouteMap({ data }: { data: JobMapData }) {
+export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMapData; fullscreen?: boolean }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapRef | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string>("");
@@ -388,8 +388,11 @@ export function InteractiveRouteMap({ data }: { data: JobMapData }) {
   return (
     <div
       ref={containerRef}
-      className="grid min-h-[560px] overflow-hidden rounded-md border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]"
-      style={{ height: "clamp(560px, calc(100vh - 220px), 760px)" }}
+      className={cn(
+        "grid overflow-hidden border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]",
+        fullscreen ? "h-full min-h-0 rounded-none border-0 lg:grid-cols-[360px_minmax(0,1fr)]" : "min-h-[560px] rounded-md",
+      )}
+      style={{ height: fullscreen ? "100%" : "clamp(560px, calc(100vh - 220px), 760px)" }}
     >
       <aside className="flex min-h-0 flex-col border-b border-border bg-surface lg:border-b-0 lg:border-r">
         <div className="border-b border-border p-3">

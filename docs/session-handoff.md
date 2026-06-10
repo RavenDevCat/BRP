@@ -11,12 +11,8 @@ Use the private handoff/inventory for:
 - host-specific maintenance commands
 - incident notes and recovery details
 
-In a server checkout, the private copy is expected at:
-
-```text
-docs/private/ops-inventory.local.md
-```
-
-The portable canonical backup lives in the approved OneDrive private BRP
-directory. Keep this public file short so future sessions do not mistake stale
-repository notes for the current project state.
+The private handoff lives outside the public repository and outside public/server
+checkouts, in the operator-approved private storage location. Keep this public
+file short so future sessions do not mistake stale repository notes for the
+current project state, and do not create server mirrors of private material for
+convenience.

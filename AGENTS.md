@@ -11,14 +11,15 @@ Codex session, then read the private handoff.
 - Current progress, next tasks, environment status, host-specific commands,
   release ledger entries, and operational recovery notes live in the private
   handoff, not in public repository docs.
-- In this checkout, the private handoff is expected at
-  `docs/private/ops-inventory.local.md` when available. The OneDrive private
-  backup is the canonical portable copy.
+- The private handoff must stay outside public/server checkouts. Use the
+  operator-approved private storage copy; do not create a server mirror for
+  convenience.
 
 ## First Reads
 
 1. Read this file.
-2. Read the private handoff/inventory.
+2. Read the private handoff/inventory from the approved private storage location
+   outside the server checkout.
 3. Read `docs/development-release-workflow.md` for stable workflow rules.
 4. Read `docs/deployment-overview.md` only for environment setup or service
    maintenance.

@@ -834,50 +834,65 @@ function MapsPanel({
         </div>
         {renderMapSurface()}
         {isMapFullscreenOpen ? (
-          <div className="fixed inset-0 z-50 flex flex-col bg-surface" role="dialog" aria-modal="true" aria-label="Fullscreen route map">
-            <div className="flex min-h-14 flex-col gap-3 border-b border-border bg-surface px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold">{selected.name}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">
-                  {mapMode === "interactive" ? "Interactive route map" : "Legacy HTML map"} · {formatNumber(dataRouteCountForSummary(scenarioSummaries, selected.key))} routes
+          <div
+            className="fixed inset-0 z-50 bg-slate-950/42 p-2 backdrop-blur-sm sm:p-4 lg:p-6"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Fullscreen route map"
+            onClick={() => setIsMapFullscreenOpen(false)}
+          >
+            <div
+              className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-white/55 bg-surface/92 shadow-2xl ring-1 ring-slate-950/10 backdrop-blur-xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex min-h-14 flex-col gap-3 border-b border-white/45 bg-surface/82 px-4 py-3 shadow-sm backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold">{selected.name}</div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    {mapMode === "interactive" ? "Interactive route map" : "Legacy HTML map"} · {formatNumber(dataRouteCountForSummary(scenarioSummaries, selected.key))} routes
+                  </div>
+                </div>
+                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+                  <button
+                    type="button"
+                    className={cn(
+                      "h-9 rounded-md border px-3 text-sm font-medium transition",
+                      mapMode === "interactive"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-white/70 text-muted-foreground backdrop-blur hover:bg-white hover:text-foreground",
+                    )}
+                    onClick={() => setMapMode("interactive")}
+                  >
+                    Interactive
+                  </button>
+                  <button
+                    type="button"
+                    className={cn(
+                      "h-9 rounded-md border px-3 text-sm font-medium transition",
+                      mapMode === "legacy"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border bg-white/70 text-muted-foreground backdrop-blur hover:bg-white hover:text-foreground",
+                    )}
+                    onClick={() => setMapMode("legacy")}
+                  >
+                    Legacy HTML
+                  </button>
+                  <a href={selected.downloadUrl} className={cn(buttonClassName("secondary"), "bg-white/70 backdrop-blur hover:bg-white")}>
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    Download
+                  </a>
+                  <button
+                    type="button"
+                    className={cn(buttonClassName("secondary"), "border-slate-300 bg-white/80 backdrop-blur hover:bg-white")}
+                    onClick={() => setIsMapFullscreenOpen(false)}
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                    Close
+                  </button>
                 </div>
               </div>
-              <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
-                <button
-                  type="button"
-                  className={cn(
-                    "h-9 rounded-md border px-3 text-sm font-medium transition",
-                    mapMode === "interactive"
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                  onClick={() => setMapMode("interactive")}
-                >
-                  Interactive
-                </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "h-9 rounded-md border px-3 text-sm font-medium transition",
-                    mapMode === "legacy"
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
-                  )}
-                  onClick={() => setMapMode("legacy")}
-                >
-                  Legacy HTML
-                </button>
-                <a href={selected.downloadUrl} className={buttonClassName("secondary")}>
-                  <Download className="h-4 w-4" aria-hidden="true" />
-                  Download
-                </a>
-                <button type="button" className={buttonClassName("secondary")} onClick={() => setIsMapFullscreenOpen(false)}>
-                  <X className="h-4 w-4" aria-hidden="true" />
-                  Close
-                </button>
-              </div>
+              <div className="min-h-0 flex-1 bg-muted/70">{renderMapSurface(true)}</div>
             </div>
-            <div className="min-h-0 flex-1 bg-muted">{renderMapSurface(true)}</div>
           </div>
         ) : null}
       </CardContent>

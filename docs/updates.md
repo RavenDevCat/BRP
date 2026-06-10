@@ -186,7 +186,7 @@ It is not a code changelog. Record changes here when users or operators should k
 - `$CN_PROD_HOST` and `$KR_PROD_HOST` are final production endpoints
   and should not be repointed or restarted during staging work.
 - Future domain replacement should be handled through DNS, Cloudflare Access,
-  tunnel ingress, environment variables, and private inventory rather than
+  tunnel ingress, environment variables, and operator-maintained deployment records rather than
   hard-coded application behavior.
 
 ### React Static Proxy Access Guard

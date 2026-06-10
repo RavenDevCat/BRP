@@ -8,7 +8,7 @@ release targets only.
 
 ## Current Roles
 
-- Windows local machine: Codex communication, private notes, browser checks,
+- Windows local machine: Codex communication, operator notes, browser checks,
   and operator control commands only. Do not keep or recreate a BRP project
   checkout there for normal development.
 - CN server: owns the full dev -> stage -> domestic prod chain plus OSRM and
@@ -36,7 +36,7 @@ records after the staging audit, not as the primary project state.
 
 Current progress, next tasks, release ledger entries, environment status, and
 operator handoff notes are intentionally kept out of this public workflow file.
-Read the private handoff/inventory before deciding what to work on next.
+Ask the operator for the current handoff before deciding what to work on next.
 
 ## Environment Boundary Contract
 
@@ -62,7 +62,7 @@ The public domain is replaceable. Treat public hostnames as DNS,
 Cloudflare Tunnel, Cloudflare Access, and environment configuration, not product
 logic. When the company domain is ready, update domain references in Cloudflare
 DNS, Access applications, tunnel ingress, env files, smoke-test variables, and
-private inventory together.
+operator-maintained deployment records together.
 
 Authentication is environment-configurable. Keep production environments on
 their current provider until an explicit migration is approved. CN staging may
@@ -74,7 +74,7 @@ admin authorization to group claims.
 
 The Windows local control machine should not run OSRM Docker containers or BRP
 app services for ordinary development. Rare diagnostics can reach OSRM through
-the loopback mapping recorded in private inventory.
+the operator-provided loopback mapping.
 The React Google geocode usage counter is shown only when
 `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea
 deployment only. That counter is persistent runtime state. Preserve the current
@@ -138,7 +138,7 @@ For rare diagnostic local runs only, start local services:
 ```
 
 In PowerShell, start the diagnostic OSRM loopback mapping recorded in the
-private inventory first, then use the checked-in service helpers:
+operator-maintained runbook first, then use the checked-in service helpers:
 
 ```powershell
 .\ops\scripts\run_backend.ps1
@@ -390,19 +390,19 @@ High-level KR deploy flow:
 2. Commit and push the intended revision.
 3. Build React from CN staging with `npm run build` in `apps/web` when
    frontend assets changed.
-4. Connect to KR directly using the private inventory. Do not route KR work
+4. Connect to KR directly using the operator-provided access method. Do not route KR work
    through CN and do not rediscover the KR service model each session.
 5. Pull or realign the intended revision in the KR active checkout recorded in
-   the private inventory. After public-history rewrites, use a protected reset
+   the operator-provided runbook. After public-history rewrites, use a protected reset
    only after confirming there are no tracked local changes to preserve.
 6. Copy the same CN-staging-built `apps/web/dist` artifact to KR when frontend
    assets changed. KR should not be used as the React build host unless it has
    explicitly been provisioned with Node/npm.
 7. Restart KR through its existing scheduled tasks/process supervisor recorded
-   in the private inventory. In particular, use the backend task that calls the
+   in the operator-provided runbook. In particular, use the backend task that calls the
    repository backend start wrapper; do not launch a one-off backend process
    from an SSH command and treat it as production.
-8. Verify backend health, public React proxy health, private React preview
+8. Verify backend health, public React proxy health, internal React preview
    health, `/new`, `/jobs`, visible sidebar version when frontend assets changed,
    job count, cache counts, and Google usage continuity. The public Nginx origin
    should return `401` without an Access user header and `200` with one.

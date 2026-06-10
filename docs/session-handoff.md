@@ -1,8 +1,8 @@
 # Session Handoff
 
-Current handoff content has moved out of the public repository.
+Current handoff content is not stored in the public repository.
 
-Use the private handoff/inventory for:
+Ask the operator for the current handoff when you need:
 
 - current progress and next tasks
 - environment status for CN staging, CN production, and KR production
@@ -11,8 +11,6 @@ Use the private handoff/inventory for:
 - host-specific maintenance commands
 - incident notes and recovery details
 
-The private handoff lives outside the public repository and outside public/server
-checkouts, in the operator-approved private storage location. Keep this public
-file short so future sessions do not mistake stale repository notes for the
-current project state, and do not create server mirrors of private material for
-convenience.
+Keep this public file short so future sessions do not mistake stale repository
+notes for the current project state. Do not create server-side copies of current
+operational handoff material for convenience.

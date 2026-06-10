@@ -33,7 +33,7 @@ cloudflared.service           # public access layer
 ```
 
 Local checks do not run OSRM Docker. When diagnostics need OSRM from a local
-checkout, use the diagnostic loopback mapping recorded in the private inventory
+checkout, use the operator-provided diagnostic loopback mapping
 so the application still calls `127.0.0.1:5002-5006`.
 
 ## Environment Roles
@@ -83,7 +83,7 @@ Current status:
   - Fleet Planner
 - production-style serving uses Nginx with static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
 - KR public frontend serves React through local Nginx from the KR server's local `8501` origin
-- KR private preview can serve the same static/proxy stack from local `4173`
+- KR internal preview can serve the same static/proxy stack from local `4173`
 - CN staging uses Nginx for active React testing
 - CN production and KR production are separate public production endpoints
 
@@ -220,7 +220,7 @@ Current live OSRM coverage:
 
 Production and staging share OSRM because it is read-only routing infrastructure. Mutable runtime data such as jobs, outputs, and caches remains separate between staging and production.
 
-OSRM is intentionally private to the server runtime. Do not add public DNS or
+OSRM is intentionally not exposed outside the server runtime. Do not add public DNS or
 Cloudflare Tunnel routes for OSRM. The backend and side tools should use
 explicit `OSRM_BASE_URL_*` environment variables that point at local loopback
 ports. This avoids sending routing matrices through the public access layer and
@@ -241,14 +241,14 @@ Current public routes include:
 React frontend hostnames proxy same-origin `/api` to the backend; a separate public API hostname is not part of the normal deployment path.
 OSRM endpoints are not public routes. Application services call local
 `127.0.0.1:5002-5006` OSRM endpoints directly, and local diagnostic access
-should use the private inventory's diagnostic loopback mapping.
+should use the operator-provided diagnostic loopback mapping.
 
 The KR app hostname is access-protected and currently serves the React frontend
 from the KR server's local Nginx `8501` origin.
 
 The public domain is replaceable. Domain-specific values should stay in
 Cloudflare DNS, Cloudflare Access applications, tunnel ingress, environment
-files, and private inventory rather than in application logic.
+files, and operator-provided deployment records rather than in application logic.
 
 ## Runtime Data
 

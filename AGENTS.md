@@ -1,7 +1,7 @@
 # Codex Startup Card
 
 This repository is BRP / Bus Route Planner. Read this file first in every new
-Codex session, then read the private handoff.
+Codex session, then ask the operator for the current handoff.
 
 ## Source Of Truth
 
@@ -9,17 +9,15 @@ Codex session, then read the private handoff.
 - CN staging is the active development and test checkout.
 - CN production and KR production are release targets only.
 - Current progress, next tasks, environment status, host-specific commands,
-  release ledger entries, and operational recovery notes live in the private
-  handoff, not in public repository docs.
-- The private handoff must stay outside public/server checkouts. Use the
-  operator-approved private storage copy; do not create a server mirror for
+  release ledger entries, and operational recovery notes are not stored in this
+  repository.
+- Do not create server-side copies of current operational handoff material for
   convenience.
 
 ## First Reads
 
 1. Read this file.
-2. Read the private handoff/inventory from the approved private storage location
-   outside the server checkout.
+2. Ask the operator for the current handoff outside this repository.
 3. Read `docs/development-release-workflow.md` for stable workflow rules.
 4. Read `docs/deployment-overview.md` only for environment setup or service
    maintenance.
@@ -28,10 +26,9 @@ Codex session, then read the private handoff.
 
 ## Working Rules
 
-- Do not recreate a local or OneDrive BRP project checkout for normal
-  development.
+- Do not recreate a local synced BRP project checkout for normal development.
 - When taking over work, inspect CN staging first: Git revision, tracked status,
-  service health, runtime behavior, and private handoff.
+  service health, runtime behavior, and operator-provided current handoff.
 - Work in CN staging, validate there, commit/push the intended revision, and
   promote only when the user explicitly approves.
 - For frontend changes, build React from CN staging and reuse that verified
@@ -41,6 +38,6 @@ Codex session, then read the private handoff.
 
 ## Repository Hygiene
 
-Public docs must not contain real credentials, private hostnames, concrete
-access paths, tunnel tokens, operational passwords, or machine-specific recovery
-facts. Put those in the private handoff only.
+Public docs must not contain real credentials, hostnames, concrete access paths,
+tunnel tokens, operational passwords, machine-specific recovery facts, or
+current handoff details.

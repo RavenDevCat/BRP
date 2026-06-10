@@ -178,15 +178,12 @@ patterns.
   workflow
 - `docs/deployment-overview.md`: fresh environment checklist
 - `docs/updates.md`: major user/operator-facing updates
-- `docs/session-handoff.md`: concise current project handoff for future Codex
-  sessions, including the current staging revision, active product focus, and
-  next backlog
-- `docs/private-ops-template.md`: template for private server inventory
+- `docs/session-handoff.md`: public pointer explaining that current handoff
+  content is not stored in the repository
 
 Committed docs use aliases, example domains, and generic paths. Keep real server
 addresses, usernames, hostnames, environment-specific paths, and deployment
-inventory in ignored private files inside active server checkouts, or in the
-approved private backup outside Git.
+inventory outside this repository.
 
 ## Development Notes
 

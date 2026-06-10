@@ -49,7 +49,7 @@ Both scripts allow the Python executable to be overridden by environment variabl
 - `BACKEND_PYTHON`
 - `CLIENT_PYTHON`
 
-Server-local environment values can be kept in a private file copied from:
+Server-local environment values can be kept in an untracked local file copied from:
 
 - `ops/env/example.env`
 
@@ -344,7 +344,7 @@ React frontend hostnames should proxy same-origin `/api` to the backend; do not
 create a separate public API hostname unless a legacy integration explicitly
 needs it. Do not publish OSRM hostnames through Cloudflare Tunnel or DNS.
 Application services should call local OSRM endpoints directly; local
-diagnostics should use the private inventory's diagnostic loopback mapping when
+diagnostics should use the operator-provided diagnostic loopback mapping when
 needed.
 
 South Korea server hostnames:
@@ -376,7 +376,7 @@ For production-like environments, avoid exposing the backend publicly without an
   after explicit approval.
 - KR should follow the intended Git revision and reuse CN-staging-built frontend
   assets when frontend files changed. Keep KR service restart details in the
-  ignored private inventory so future operators do not rediscover the Windows
+  operator-maintained runbook so future operators do not rediscover the Windows
   scheduled-task setup each session.
 - If a checkout cannot fast-forward after an approved public-history rewrite,
   preserve untracked runtime backups, confirm there are no tracked local changes

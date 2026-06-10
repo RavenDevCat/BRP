@@ -15,5 +15,5 @@ ingress:
 
   # Do not expose OSRM through public tunnel hostnames. Application services
   # should call local OSRM endpoints directly; local development should use the
-  # private inventory's diagnostic loopback mapping when diagnostics need OSRM.
+  # operator-provided diagnostic loopback mapping when diagnostics need OSRM.
   - service: http_status:404

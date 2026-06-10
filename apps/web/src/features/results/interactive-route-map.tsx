@@ -570,7 +570,7 @@ export function InteractiveRouteMap({ data, fullscreen = false }: { data: JobMap
           onMouseLeave={() => setHoverInfo(null)}
           cursor={hoverInfo ? "pointer" : "grab"}
         >
-          <NavigationControl position="top-right" />
+          <NavigationControl position="bottom-right" />
           <Source id="private-links" type="geojson" data={privateLinkFeatures}>
             <Layer
               id="private-links-line"

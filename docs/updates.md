@@ -24,7 +24,7 @@ It is not a code changelog. Record changes here when users or operators should k
   label ordering, selected-route focus, route context toggle, selected-route
   direction arrows, route hover summaries, bottom route summary cards, status
   badges for long/high-load/capacity routes, and softer context stops.
-- The Maps Open control now launches an in-page fullscreen map viewer with a close control, mode switch, and download action instead of opening a raw HTML artifact in a new browser tab.
+- The Maps Open control now launches an in-page fullscreen interactive map viewer with a close control and download action instead of opening a raw HTML artifact in a new browser tab; the legacy HTML preview is no longer user-facing.
 - Stop inspection now prioritizes stop hover/click over route lines, keeps
   selected-route stops visually prominent, and shows stop address, riders, and
   cumulative timing/distance details.

@@ -5,10 +5,9 @@ current-plan workbooks, geocodes stops, compares existing routes with optimized
 baselines, produces map/report artifacts, and exposes auxiliary tools for
 distance, cost, and fleet planning.
 
-The production architecture is a Python backend with a React frontend. The
-legacy Streamlit client is still kept in the repository because it provides an
-operator UI and shared Python helpers used by server-side workbook and geocode
-flows.
+The production architecture is a Python backend with a React frontend.
+`apps/client/` provides shared Python helpers used by server-side workbook,
+geocode, and demand routing flows.
 
 ## What It Does
 
@@ -29,7 +28,7 @@ flows.
 
 ```text
 apps/backend/   Python backend service, planner execution, API routes, AI Audit
-apps/client/    Legacy Streamlit UI plus shared workbook/geocode/cache helpers
+apps/client/    Shared Python helpers for workbook, geocode, cache, and demand routing
 apps/web/       React frontend for Route Audit and Side Tools
 docs/           Architecture, deployment, workflow, updates, handoff notes
 ops/            Run scripts, env examples, Cloudflare examples
@@ -91,7 +90,6 @@ Default local ports:
 ```text
 Backend API:       http://127.0.0.1:8001
 React dev server:  http://127.0.0.1:5173
-Streamlit client:  http://127.0.0.1:8501
 ```
 
 The React dev server proxies `/api` to the backend. Production-style React
@@ -188,8 +186,7 @@ inventory outside this repository.
 ## Development Notes
 
 - Prefer React in `apps/web` for product UI work.
-- Keep Streamlit changes focused on legacy/operator needs or shared Python
-  helper behavior.
+- Keep `apps/client/` changes focused on shared Python helper behavior.
 - Do not bypass cross-process provider rate limiting when adding external API
   calls.
 - Do not write the Google usage JSON directly; use the reservation helpers in

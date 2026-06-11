@@ -6,6 +6,18 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-11
 
+### Legacy Streamlit Client Removed
+
+- The Streamlit client UI (`apps/client/app.py`, `distance_checker_page.py`,
+  `fleet_planner_page.py`) has been removed. The React frontend in `apps/web`
+  is now the sole user-facing UI.
+- `apps/client/` continues to serve as the shared Python helper library for
+  workbook processing, geocoding, caching, demand clustering/routing, and fleet
+  planning — all modules used by the backend API routes are intact.
+- The `run_client.sh` and `run_client.ps1` scripts now emit a deprecation
+  message and exit; they are kept as stubs to fail early if any automation still
+  references them.
+
 ### Interactive Route Map Rollout Completed
 
 - Route Audit Maps now presents the React MapLibre interactive route map as the

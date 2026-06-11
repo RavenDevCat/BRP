@@ -4,7 +4,7 @@ This is the maintained high-level architecture note. For daily commands and rele
 
 ## Repository Layout
 
-- `apps/client`: legacy Streamlit/operator UI plus shared Python helpers for workbook intake, geocoding, caches, demand preview, and map/result rendering.
+- `apps/client`: shared Python helpers for workbook intake, geocoding, caches, demand preview, and map/result rendering (the legacy Streamlit UI has been removed).
 - `apps/web`: React frontend for Route Audit plus side tools such as Distance & Cost and Fleet Planner.
 - `apps/backend`: HTTP job service, planner execution, route solving, AI audit integration, generated output handling.
 - `ops`: environment examples, Cloudflare examples, and local/server run scripts.
@@ -53,20 +53,19 @@ CN production and KR production are pull-and-restart release targets. Staging
 changes must not repoint production hostnames or restart production services
 unless the user explicitly asks for a production promotion.
 
-## Streamlit Client And Python Helpers
+## Client Python Helpers
 
 Location: `apps/client`
 
 Responsibilities:
 
-- provide the legacy Streamlit/operator UI where a deployment has not cut over to React
-- accept workbook uploads
+- accept workbook uploads (shared helpers used by the backend)
 - build and download workbook templates
 - validate current-plan and demand workbooks
 - geocode addresses through configured providers
 - reuse client cache files under `apps/client/cache`
 - provide Python helper modules used by backend `/api/*` routes so provider keys stay server-side
-- submit prepared jobs to the backend in the legacy UI
+- submit prepared jobs to the backend
 - display job history, audit summaries, maps, and downloads
 
 ## React Frontend

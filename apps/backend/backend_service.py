@@ -1,47 +1,47 @@
 from __future__ import annotations
 
 import base64
-from copy import deepcopy
-from dataclasses import asdict, fields
-from datetime import datetime, timezone
 import importlib
 import io
 import json
 import math
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import os
-from pathlib import Path
-import signal
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import traceback
+from copy import deepcopy
+from dataclasses import asdict, fields
+from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote, unquote, urlparse
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 try:
+    from .ai_audit import generate_ai_audit_report
     from .planner_core import (
         PlannerConfig,
-        build_excel_template_bytes,
         build_baseline_template_workbook_bytes,
+        build_excel_template_bytes,
         rerender_html_from_structured_results,
         run_backend_planner_with_prepared_data,
     )
-    from .ai_audit import generate_ai_audit_report
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from ai_audit import generate_ai_audit_report
     from planner_core import (
         PlannerConfig,
-        build_excel_template_bytes,
         build_baseline_template_workbook_bytes,
+        build_excel_template_bytes,
         rerender_html_from_structured_results,
         run_backend_planner_with_prepared_data,
     )
-    from ai_audit import generate_ai_audit_report
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -58,21 +58,31 @@ JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
 AUTH_PROVIDER = (
-    os.environ.get("BRP_AUTH_PROVIDER")
-    or os.environ.get("BRP_AUTH_MODE")
-    or "cloudflare_header"
-).strip().lower()
+    (
+        os.environ.get("BRP_AUTH_PROVIDER")
+        or os.environ.get("BRP_AUTH_MODE")
+        or "cloudflare_header"
+    )
+    .strip()
+    .lower()
+)
 AUTH_LOGIN_URL = os.environ.get("BRP_AUTH_LOGIN_URL", "").strip()
 AUTH_LOGOUT_URL = os.environ.get("BRP_AUTH_LOGOUT_URL", "").strip()
 AUTH_DISPLAY_NAME = os.environ.get("BRP_AUTH_DISPLAY_NAME", "").strip()
 try:
-    MAX_CONCURRENT_JOBS = max(0, int(os.environ.get("BRP_MAX_CONCURRENT_JOBS", "0") or "0"))
+    MAX_CONCURRENT_JOBS = max(
+        0, int(os.environ.get("BRP_MAX_CONCURRENT_JOBS", "0") or "0")
+    )
 except ValueError:
     MAX_CONCURRENT_JOBS = 0
 RAW_JOB_CONCURRENCY_DIR = os.environ.get("BRP_JOB_CONCURRENCY_DIR", "").strip()
-JOB_CONCURRENCY_DIR = Path(RAW_JOB_CONCURRENCY_DIR or str(REPO_ROOT / "state" / "job_concurrency")).expanduser()
+JOB_CONCURRENCY_DIR = Path(
+    RAW_JOB_CONCURRENCY_DIR or str(REPO_ROOT / "state" / "job_concurrency")
+).expanduser()
 try:
-    JOB_QUEUE_POLL_SECONDS = max(1.0, float(os.environ.get("BRP_JOB_QUEUE_POLL_SECONDS", "5") or "5"))
+    JOB_QUEUE_POLL_SECONDS = max(
+        1.0, float(os.environ.get("BRP_JOB_QUEUE_POLL_SECONDS", "5") or "5")
+    )
 except ValueError:
     JOB_QUEUE_POLL_SECONDS = 5.0
 try:
@@ -82,7 +92,9 @@ try:
     )
 except ValueError:
     JOB_SLOT_ATTACH_STALE_SECONDS = 300.0
-MAX_WORKBOOK_UPLOAD_BYTES = int(os.environ.get("BRP_MAX_WORKBOOK_UPLOAD_BYTES", str(20 * 1024 * 1024)))
+MAX_WORKBOOK_UPLOAD_BYTES = int(
+    os.environ.get("BRP_MAX_WORKBOOK_UPLOAD_BYTES", str(20 * 1024 * 1024))
+)
 ADMIN_EMAILS = {
     item.strip().lower()
     for item in os.environ.get("BRP_ADMIN_EMAILS", "").split(",")
@@ -113,9 +125,13 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "further_most": "further_most_html",
     "further_most_nearby": "further_most_nearby_html",
 }
-WORKBOOK_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+WORKBOOK_CONTENT_TYPE = (
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
 MAX_DISTANCE_CHECKER_JOBS = 80
-CLIENT_CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(CLIENT_DIR / "cache"))).expanduser()
+CLIENT_CACHE_DIR = Path(
+    os.environ.get("BRP_CLIENT_CACHE_DIR", str(CLIENT_DIR / "cache"))
+).expanduser()
 DISTANCE_CHECKER_JOBS_PATH = CLIENT_CACHE_DIR / "distance_checker_jobs.json"
 GOOGLE_GEOCODE_USAGE_PATH = CLIENT_CACHE_DIR / "google_geocode_usage.json"
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
@@ -129,6 +145,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 
 GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
+ENABLE_LANGUAGE_SWITCH = not _env_flag("BRP_DISABLE_LANGUAGE_SWITCH", False)
 
 
 def utc_now_iso() -> str:
@@ -170,7 +187,9 @@ def _client_module(module_name: str) -> Any:
     return importlib.import_module(module_name)
 
 
-def _build_client_planner_config(client_core: Any, config_payload: dict[str, Any]) -> Any:
+def _build_client_planner_config(
+    client_core: Any, config_payload: dict[str, Any]
+) -> Any:
     allowed_field_names = {field.name for field in fields(client_core.PlannerConfig)}
     filtered_payload = {
         key: value
@@ -189,7 +208,9 @@ def _build_job_display_name(source_label: str, custom_name: str = "") -> str:
 
 
 def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:
-    source_label = str(payload.get("file_name") or payload.get("source_label") or "workbook.xlsx").strip()
+    source_label = str(
+        payload.get("file_name") or payload.get("source_label") or "workbook.xlsx"
+    ).strip()
     suffix = Path(source_label).suffix.lower()
     if suffix not in {".xlsx", ".xlsm"}:
         raise ValueError("Workbook upload must be an .xlsx or .xlsm file.")
@@ -202,7 +223,9 @@ def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:
     if not workbook_bytes:
         raise ValueError("Uploaded workbook is empty.")
     if len(workbook_bytes) > MAX_WORKBOOK_UPLOAD_BYTES:
-        raise ValueError(f"Workbook upload exceeds {MAX_WORKBOOK_UPLOAD_BYTES // (1024 * 1024)} MB.")
+        raise ValueError(
+            f"Workbook upload exceeds {MAX_WORKBOOK_UPLOAD_BYTES // (1024 * 1024)} MB."
+        )
     return source_label, workbook_bytes
 
 
@@ -240,7 +263,12 @@ def _save_distance_checker_job(job: dict[str, Any]) -> None:
     jobs = _distance_checker_jobs()
     jobs.insert(0, job)
     DISTANCE_CHECKER_JOBS_PATH.write_text(
-        json.dumps(_json_safe(jobs[:MAX_DISTANCE_CHECKER_JOBS]), ensure_ascii=False, indent=2, allow_nan=False),
+        json.dumps(
+            _json_safe(jobs[:MAX_DISTANCE_CHECKER_JOBS]),
+            ensure_ascii=False,
+            indent=2,
+            allow_nan=False,
+        ),
         encoding="utf-8",
     )
 
@@ -253,7 +281,9 @@ def _handle_distance_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]
         if not sheet_names:
             raise ValueError("Workbook has no readable sheets.")
         requested_sheet = str(payload.get("selected_sheet") or "").strip()
-        selected_sheet = requested_sheet if requested_sheet in sheet_names else sheet_names[0]
+        selected_sheet = (
+            requested_sheet if requested_sheet in sheet_names else sheet_names[0]
+        )
         source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
         columns = [str(column) for column in list(source_df.columns)]
         inferred = distance_tool.infer_current_plan_columns(source_df)
@@ -292,7 +322,11 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
     def run_check(source_label: str, temp_path: str) -> dict[str, Any]:
         sheet_names = list(distance_tool.get_excel_sheet_names(temp_path))
         requested_sheet = str(payload.get("selected_sheet") or "").strip()
-        selected_sheet = requested_sheet if requested_sheet in sheet_names else (sheet_names[0] if sheet_names else "")
+        selected_sheet = (
+            requested_sheet
+            if requested_sheet in sheet_names
+            else (sheet_names[0] if sheet_names else "")
+        )
         if not selected_sheet:
             raise ValueError("Workbook has no readable sheets.")
         source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
@@ -319,7 +353,11 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
         )
         origin_row = dict(origin_rows[0])
         if origin_row.get("status") != "ok":
-            raise RuntimeError(str(origin_row.get("warning") or "Reference stop could not be geocoded."))
+            raise RuntimeError(
+                str(
+                    origin_row.get("warning") or "Reference stop could not be geocoded."
+                )
+            )
 
         input_rows = distance_tool.build_distance_input_rows(
             source_df,
@@ -340,8 +378,12 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
         )
         records = _dataframe_records(results_df)
         ok_count = sum(1 for row in records if str(row.get("status")) == "ok")
-        failed_count = sum(1 for row in records if str(row.get("status")) == "geocode_failed")
-        blank_count = sum(1 for row in records if str(row.get("status")) == "blank_address")
+        failed_count = sum(
+            1 for row in records if str(row.get("status")) == "geocode_failed"
+        )
+        blank_count = sum(
+            1 for row in records if str(row.get("status")) == "blank_address"
+        )
         job = {
             "job_id": uuid4().hex[:12],
             "type": "reference_distance",
@@ -381,7 +423,9 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
     default_city = str(payload.get("default_city") or "").strip()
     default_country = str(payload.get("default_country") or "").strip()
     diesel_price_per_liter = float(payload.get("diesel_price_per_liter") or 0.0)
-    fuel_efficiency_km_per_liter = float(payload.get("fuel_efficiency_km_per_liter") or 0.0)
+    fuel_efficiency_km_per_liter = float(
+        payload.get("fuel_efficiency_km_per_liter") or 0.0
+    )
     currency_code = str(payload.get("currency_code") or "").strip().upper()
     currency_label = str(payload.get("currency_label") or currency_code or "").strip()
     if diesel_price_per_liter < 0:
@@ -392,7 +436,11 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
     def run_route_cost(source_label: str, temp_path: str) -> dict[str, Any]:
         sheet_names = list(distance_tool.get_excel_sheet_names(temp_path))
         requested_sheet = str(payload.get("selected_sheet") or "").strip()
-        selected_sheet = requested_sheet if requested_sheet in sheet_names else (sheet_names[0] if sheet_names else "")
+        selected_sheet = (
+            requested_sheet
+            if requested_sheet in sheet_names
+            else (sheet_names[0] if sheet_names else "")
+        )
         if not selected_sheet:
             raise ValueError("Workbook has no readable sheets.")
         source_df = distance_tool.read_excel_sheet(temp_path, sheet_name=selected_sheet)
@@ -403,7 +451,10 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
         bus_type_column = str(payload.get("bus_type_column") or "").strip() or None
         city_column = str(payload.get("city_column") or "").strip() or None
         country_column = str(payload.get("country_column") or "").strip() or None
-        required_columns = {"route_column": route_column, "address_column": address_column}
+        required_columns = {
+            "route_column": route_column,
+            "address_column": address_column,
+        }
         for label, column in required_columns.items():
             if column not in columns:
                 raise ValueError(f"Select a valid {label.replace('_', ' ')}.")
@@ -415,7 +466,9 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
         }
         for label, column in optional_columns.items():
             if column and column not in columns:
-                raise ValueError(f"Select a valid {label.replace('_', ' ')} or leave it blank.")
+                raise ValueError(
+                    f"Select a valid {label.replace('_', ' ')} or leave it blank."
+                )
 
         input_rows = distance_tool.build_current_plan_route_input_rows(
             source_df,
@@ -429,18 +482,31 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
             default_country=default_country,
         )
         geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows)
-        route_results_df, leg_results_df = distance_tool.build_current_plan_route_cost_dataframe(
-            input_rows,
-            geocoded_rows,
-            diesel_price_per_liter=diesel_price_per_liter,
-            fuel_efficiency_km_per_liter=fuel_efficiency_km_per_liter,
+        route_results_df, leg_results_df = (
+            distance_tool.build_current_plan_route_cost_dataframe(
+                input_rows,
+                geocoded_rows,
+                diesel_price_per_liter=diesel_price_per_liter,
+                fuel_efficiency_km_per_liter=fuel_efficiency_km_per_liter,
+            )
         )
         route_records = _dataframe_records(route_results_df)
         leg_records = _dataframe_records(leg_results_df)
-        total_distance = sum(float(row.get("route_distance_km") or 0.0) for row in route_records)
-        total_cost = sum(float(row.get("estimated_one_way_fuel_cost") or 0.0) for row in route_records)
-        unresolved_routes = sum(1 for row in route_records if float(row.get("failed_stops") or 0.0) > 0)
-        electric_routes = sum(1 for row in route_records if str(row.get("diesel_cost_status") or "") == "skipped_electric_bus")
+        total_distance = sum(
+            float(row.get("route_distance_km") or 0.0) for row in route_records
+        )
+        total_cost = sum(
+            float(row.get("estimated_one_way_fuel_cost") or 0.0)
+            for row in route_records
+        )
+        unresolved_routes = sum(
+            1 for row in route_records if float(row.get("failed_stops") or 0.0) > 0
+        )
+        electric_routes = sum(
+            1
+            for row in route_records
+            if str(row.get("diesel_cost_status") or "") == "skipped_electric_bus"
+        )
         job = {
             "job_id": uuid4().hex[:12],
             "type": "route_cost",
@@ -467,7 +533,11 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
         }
         _save_distance_checker_job(job)
         return {
-            "job": {key: value for key, value in job.items() if key not in {"route_results", "leg_results"}},
+            "job": {
+                key: value
+                for key, value in job.items()
+                if key not in {"route_results", "leg_results"}
+            },
             "summary": {
                 "route_count": len(route_records),
                 "leg_count": len(leg_records),
@@ -528,7 +598,9 @@ def _fleet_route_time_target(payload: dict[str, Any]) -> int | None:
     return minutes
 
 
-def _fleet_vehicle_catalog_payload(payload: dict[str, Any]) -> list[dict[str, Any]] | None:
+def _fleet_vehicle_catalog_payload(
+    payload: dict[str, Any],
+) -> list[dict[str, Any]] | None:
     raw_catalog = payload.get("vehicle_catalog")
     if raw_catalog is None:
         return None
@@ -592,7 +664,9 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
             "school": dict(demand_workbook.school),
             "summary": dict(demand_workbook.summary),
             "warnings": list(demand_workbook.warnings),
-            "riders": _dataframe_records(demand_input.demand_riders_to_dataframe(demand_workbook.riders)),
+            "riders": _dataframe_records(
+                demand_input.demand_riders_to_dataframe(demand_workbook.riders)
+            ),
         }
     else:
         rider_counts = _parse_rider_counts_payload(payload.get("rider_counts"))
@@ -618,7 +692,9 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
         recommendations.append(
             {
                 "riders": rider_count,
-                "recommended_vehicle": selected.get("display_name", "No feasible vehicle"),
+                "recommended_vehicle": selected.get(
+                    "display_name", "No feasible vehicle"
+                ),
                 "student_capacity": selected.get("student_capacity", ""),
                 "load_factor": selected.get("load_factor"),
                 "empty_seats": selected.get("empty_seats", ""),
@@ -649,7 +725,9 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
         custom_catalog=custom_catalog,
     )
     if custom_catalog is not None and not catalog:
-        raise ValueError("Custom vehicle catalog has no enabled vehicles with usable seats.")
+        raise ValueError(
+            "Custom vehicle catalog has no enabled vehicles with usable seats."
+        )
 
     return {
         "summary": {
@@ -659,8 +737,12 @@ def _handle_fleet_planner_preview(payload: dict[str, Any]) -> dict[str, Any]:
             "max_route_duration_minutes": assumptions.max_route_duration_minutes,
             "group_count": len(rider_counts),
             "total_riders": sum(rider_counts),
-            "source": "demand_workbook" if demand_workbook is not None else "manual_rider_groups",
-            "vehicle_catalog_source": "custom" if custom_catalog is not None else "default",
+            "source": "demand_workbook"
+            if demand_workbook is not None
+            else "manual_rider_groups",
+            "vehicle_catalog_source": "custom"
+            if custom_catalog is not None
+            else "default",
             "vehicle_catalog_count": len(catalog),
         },
         "assumptions": assumptions.to_dict(),
@@ -683,7 +765,9 @@ def _handle_fleet_planner_geocode(payload: dict[str, Any]) -> dict[str, Any]:
         "summary": dict(geocode_result.get("summary") or {}),
         "school": dict(geocode_result.get("school") or {}),
         "demand_points": list(geocode_result.get("demand_points") or []),
-        "rows": _dataframe_records(demand_input.demand_geocode_results_to_dataframe(geocode_result)),
+        "rows": _dataframe_records(
+            demand_input.demand_geocode_results_to_dataframe(geocode_result)
+        ),
         "map_html": demand_input.build_demand_geocode_map_html(geocode_result),
     }
 
@@ -715,8 +799,12 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
         "school": dict(cluster_result.get("school") or {}),
         "clusters": list(cluster_result.get("clusters") or []),
         "failed_points": list(cluster_result.get("failed_points") or []),
-        "rows": _dataframe_records(demand_clustering.demand_clusters_to_dataframe(cluster_result)),
-        "stop_rows": _dataframe_records(demand_clustering.cluster_points_to_dataframe(cluster_result)),
+        "rows": _dataframe_records(
+            demand_clustering.demand_clusters_to_dataframe(cluster_result)
+        ),
+        "stop_rows": _dataframe_records(
+            demand_clustering.cluster_points_to_dataframe(cluster_result)
+        ),
         "map_html": demand_clustering.build_demand_cluster_map_html(cluster_result),
     }
 
@@ -744,7 +832,9 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
     overlong_route_ids = {
         str(row.get("cluster_id", "")).strip()
         for row in list(route_preview.get("route_rows") or [])
-        if max_route_duration_minutes and float(row.get("duration_min", 0.0) or 0.0) > float(max_route_duration_minutes)
+        if max_route_duration_minutes
+        and float(row.get("duration_min", 0.0) or 0.0)
+        > float(max_route_duration_minutes)
     }
     if overlong_route_ids:
         refined_cluster_result = demand_clustering.split_cluster_result_by_route_limit(
@@ -765,22 +855,34 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
             "One or more clusters exceeded the route-duration target and were split once by distance from school."
         )
 
-    return _route_plan_response(route_preview, workbook_file_name="fleet_planner_generated_plan.xlsx")
+    return _route_plan_response(
+        route_preview, workbook_file_name="fleet_planner_generated_plan.xlsx"
+    )
 
 
 def _service_direction_label(service_direction: str) -> str:
-    return "To School" if str(service_direction).strip().lower() == "to_school" else "From School"
+    return (
+        "To School"
+        if str(service_direction).strip().lower() == "to_school"
+        else "From School"
+    )
 
 
-def _route_plan_response(route_preview: dict[str, Any], *, workbook_file_name: str) -> dict[str, Any]:
+def _route_plan_response(
+    route_preview: dict[str, Any], *, workbook_file_name: str
+) -> dict[str, Any]:
     demand_routing = _client_module("demand_routing")
     workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
     return {
         "summary": dict(route_preview.get("summary") or {}),
         "school": dict(route_preview.get("school") or {}),
         "routes": list(route_preview.get("routes") or []),
-        "rows": _dataframe_records(demand_routing.route_preview_to_dataframe(route_preview)),
-        "stop_rows": _dataframe_records(demand_routing.route_preview_stop_detail_to_dataframe(route_preview)),
+        "rows": _dataframe_records(
+            demand_routing.route_preview_to_dataframe(route_preview)
+        ),
+        "stop_rows": _dataframe_records(
+            demand_routing.route_preview_stop_detail_to_dataframe(route_preview)
+        ),
         "map_html": demand_routing.build_route_preview_map_html(route_preview),
         "refinement_note": str(route_preview.get("refinement_note") or ""),
         "workbook_file_name": workbook_file_name,
@@ -810,10 +912,14 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         custom_catalog=custom_catalog,
         service_direction=service_direction,
     )
-    return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx")
+    return _route_plan_response(
+        global_plan, workbook_file_name="fleet_planner_global_plan.xlsx"
+    )
 
 
-def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+def _handle_fleet_planner_history_create(
+    payload: dict[str, Any], user_email: str
+) -> dict[str, Any]:
     preview_result = dict(payload.get("preview_result") or {})
     global_plan_result = dict(payload.get("global_plan_result") or {})
     if not preview_result:
@@ -835,25 +941,35 @@ def _handle_fleet_planner_history_create(payload: dict[str, Any], user_email: st
         "summary": {
             "market": scenario.get("market") or preview_summary.get("market"),
             "mode": scenario.get("mode") or preview_summary.get("mode"),
-            "monitor_seats": scenario.get("monitor_seats") or preview_summary.get("monitor_seats"),
+            "monitor_seats": scenario.get("monitor_seats")
+            or preview_summary.get("monitor_seats"),
             "max_route_duration_minutes": (
                 scenario.get("max_route_duration_minutes")
                 or plan_summary.get("max_route_duration_minutes")
                 or preview_summary.get("max_route_duration_minutes")
             ),
-            "vehicle_catalog_source": scenario.get("vehicle_catalog_source") or preview_summary.get("vehicle_catalog_source"),
-            "vehicle_catalog_count": scenario.get("vehicle_catalog_count") or preview_summary.get("vehicle_catalog_count"),
-            "service_direction": scenario.get("service_direction") or plan_summary.get("service_direction"),
+            "vehicle_catalog_source": scenario.get("vehicle_catalog_source")
+            or preview_summary.get("vehicle_catalog_source"),
+            "vehicle_catalog_count": scenario.get("vehicle_catalog_count")
+            or preview_summary.get("vehicle_catalog_count"),
+            "service_direction": scenario.get("service_direction")
+            or plan_summary.get("service_direction"),
             "routes": plan_summary.get("route_count"),
             "students": preview_summary.get("total_riders"),
             "total_distance_km": plan_summary.get("total_distance_km"),
             "total_duration_min": plan_summary.get("total_duration_min"),
         },
     }
-    return {"job": FLEET_PLANNER_HISTORY_STORE.create(history_payload, owner_email=user_email)}
+    return {
+        "job": FLEET_PLANNER_HISTORY_STORE.create(
+            history_payload, owner_email=user_email
+        )
+    }
 
 
-def _handle_distance_checker_history_create(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+def _handle_distance_checker_history_create(
+    payload: dict[str, Any], user_email: str
+) -> dict[str, Any]:
     tool_mode = str(payload.get("tool_mode") or "").strip()
     reference_result = dict(payload.get("reference_result") or {})
     route_cost_result = dict(payload.get("route_cost_result") or {})
@@ -900,7 +1016,8 @@ def _handle_distance_checker_history_create(payload: dict[str, Any], user_email:
                 "resolved_count": result_summary.get("resolved_count"),
                 "failed_count": result_summary.get("failed_count"),
                 "blank_count": result_summary.get("blank_count"),
-                "distance_mode": result_summary.get("distance_mode") or scenario.get("distance_mode"),
+                "distance_mode": result_summary.get("distance_mode")
+                or scenario.get("distance_mode"),
                 "origin_address": (
                     dict(scenario.get("origin") or {}).get("address")
                     or metadata.get("origin_address")
@@ -913,12 +1030,20 @@ def _handle_distance_checker_history_create(payload: dict[str, Any], user_email:
             {
                 "route_count": result_summary.get("route_count"),
                 "leg_count": result_summary.get("leg_count"),
-                "total_one_way_distance_km": result_summary.get("total_one_way_distance_km"),
-                "estimated_one_way_fuel_cost": result_summary.get("estimated_one_way_fuel_cost"),
+                "total_one_way_distance_km": result_summary.get(
+                    "total_one_way_distance_km"
+                ),
+                "estimated_one_way_fuel_cost": result_summary.get(
+                    "estimated_one_way_fuel_cost"
+                ),
                 "currency_code": result_summary.get("currency_code"),
                 "currency_label": result_summary.get("currency_label"),
-                "routes_with_unresolved_stops": result_summary.get("routes_with_unresolved_stops"),
-                "electric_routes_skipped": result_summary.get("electric_routes_skipped"),
+                "routes_with_unresolved_stops": result_summary.get(
+                    "routes_with_unresolved_stops"
+                ),
+                "electric_routes_skipped": result_summary.get(
+                    "electric_routes_skipped"
+                ),
             }
         )
 
@@ -930,7 +1055,11 @@ def _handle_distance_checker_history_create(payload: dict[str, Any], user_email:
         "route_cost_result": route_cost_result,
         "summary": summary,
     }
-    return {"job": _distance_history_store_for_mode(tool_mode).create(history_payload, owner_email=user_email)}
+    return {
+        "job": _distance_history_store_for_mode(tool_mode).create(
+            history_payload, owner_email=user_email
+        )
+    }
 
 
 def _list_demo_workbooks() -> list[dict[str, Any]]:
@@ -947,7 +1076,9 @@ def _list_demo_workbooks() -> list[dict[str, Any]]:
             {
                 "name": path.name,
                 "size_bytes": stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0).isoformat(),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+                .replace(microsecond=0)
+                .isoformat(),
             }
         )
     return demos
@@ -968,7 +1099,9 @@ def _resolve_demo_workbook_path(name: str) -> Path | None:
     return candidate
 
 
-def _read_current_plan_upload(payload: dict[str, Any]) -> tuple[Any, str, dict[str, Any]]:
+def _read_current_plan_upload(
+    payload: dict[str, Any],
+) -> tuple[Any, str, dict[str, Any]]:
     client_core = _client_core_module()
     source_label, workbook_bytes = _decode_workbook_bytes(payload)
     config_payload = dict(payload.get("config") or {})
@@ -983,7 +1116,9 @@ def _read_current_plan_upload(payload: dict[str, Any]) -> tuple[Any, str, dict[s
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(workbook_bytes)
             temp_path = temp_file.name
-        current_plan = client_core.read_current_plan_from_excel(temp_path, service_direction=service_direction)
+        current_plan = client_core.read_current_plan_from_excel(
+            temp_path, service_direction=service_direction
+        )
     finally:
         if temp_path:
             try:
@@ -993,8 +1128,12 @@ def _read_current_plan_upload(payload: dict[str, Any]) -> tuple[Any, str, dict[s
     return client_core, source_label, current_plan
 
 
-def _find_subway_aggregation_block_reason(client_core: Any, records: list[dict[str, Any]]) -> str | None:
-    is_likely_english_korean_address = getattr(client_core.runtime, "is_likely_english_korean_address", None)
+def _find_subway_aggregation_block_reason(
+    client_core: Any, records: list[dict[str, Any]]
+) -> str | None:
+    is_likely_english_korean_address = getattr(
+        client_core.runtime, "is_likely_english_korean_address", None
+    )
     if not is_likely_english_korean_address:
         return None
     for item in records:
@@ -1039,14 +1178,22 @@ def _suggest_planner_config_from_current_plan(
     ]
     for index, (slot_key, default_name, default_capacity) in enumerate(slot_defaults):
         fleet_item = normalized_fleet[index] if index < len(normalized_fleet) else {}
-        slot_name = str(fleet_item.get("bus_type", default_name)).strip() or default_name
-        seat_count = int(fleet_item.get("seat_count", default_capacity) or default_capacity)
+        slot_name = (
+            str(fleet_item.get("bus_type", default_name)).strip() or default_name
+        )
+        seat_count = int(
+            fleet_item.get("seat_count", default_capacity) or default_capacity
+        )
         vehicle_count = int(fleet_item.get("vehicle_count", 0) or 0)
         suggested[f"{slot_key}_bus_name"] = slot_name
         suggested[f"{slot_key}_bus_capacity"] = seat_count
         suggested[f"{slot_key}_bus_max_count"] = vehicle_count
         suggested[f"free_baseline_{slot_key}_bus_ratio"] = float(vehicle_count)
-    suggested["service_direction"] = str(current_plan.get("service_direction") or suggested.get("service_direction") or "From School")
+    suggested["service_direction"] = str(
+        current_plan.get("service_direction")
+        or suggested.get("service_direction")
+        or "From School"
+    )
     if "include_subway_aggregation_scenario" not in config_payload:
         suggested["include_subway_aggregation_scenario"] = False
     if "include_nearby_aggregation_scenario" not in config_payload:
@@ -1057,9 +1204,13 @@ def _suggest_planner_config_from_current_plan(
 def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
     config_payload = dict(payload.get("config") or {})
-    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    input_records = [
+        dict(item) for item in list(current_plan.get("input_records") or [])
+    ]
     block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
-    suggested_config = _suggest_planner_config_from_current_plan(current_plan, config_payload)
+    suggested_config = _suggest_planner_config_from_current_plan(
+        current_plan, config_payload
+    )
     if block_reason:
         suggested_config["include_subway_aggregation_scenario"] = False
     return {
@@ -1081,7 +1232,9 @@ def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
 def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
     config_payload = _planner_config_payload(dict(payload.get("config") or {}))
-    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    input_records = [
+        dict(item) for item in list(current_plan.get("input_records") or [])
+    ]
     block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
     if block_reason:
         config_payload["include_subway_aggregation_scenario"] = False
@@ -1223,10 +1376,21 @@ def _summarize_prepared_payload(prepared_payload: dict[str, Any]) -> dict[str, A
             }
         )[:10],
         "has_current_plan": bool(current_plan),
-        "current_plan_route_count": int(current_plan_summary.get("route_count", 0) or 0),
-        "current_plan_assignment_count": int(current_plan_summary.get("assignment_count", 0) or 0),
-        "current_plan_service_stop_count": int(current_plan_summary.get("service_stop_count", current_plan_summary.get("stop_count", 0)) or 0),
-        "current_plan_scheduled_assignment_count": int(current_plan_summary.get("scheduled_assignment_count", 0) or 0),
+        "current_plan_route_count": int(
+            current_plan_summary.get("route_count", 0) or 0
+        ),
+        "current_plan_assignment_count": int(
+            current_plan_summary.get("assignment_count", 0) or 0
+        ),
+        "current_plan_service_stop_count": int(
+            current_plan_summary.get(
+                "service_stop_count", current_plan_summary.get("stop_count", 0)
+            )
+            or 0
+        ),
+        "current_plan_scheduled_assignment_count": int(
+            current_plan_summary.get("scheduled_assignment_count", 0) or 0
+        ),
     }
 
 
@@ -1239,7 +1403,11 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
         return {"enabled": False}
     month_key = _google_geocode_usage_month_key()
     try:
-        payload = json.loads(GOOGLE_GEOCODE_USAGE_PATH.read_text(encoding="utf-8")) if GOOGLE_GEOCODE_USAGE_PATH.exists() else {}
+        payload = (
+            json.loads(GOOGLE_GEOCODE_USAGE_PATH.read_text(encoding="utf-8"))
+            if GOOGLE_GEOCODE_USAGE_PATH.exists()
+            else {}
+        )
     except Exception:
         payload = {}
     try:
@@ -1253,6 +1421,22 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
         "limit": GOOGLE_GEOCODE_MONTHLY_LIMIT,
         "label": f"Google geocode usage this month: {used:,} / {GOOGLE_GEOCODE_MONTHLY_LIMIT:,}",
     }
+
+
+def _deployment_features_payload() -> dict[str, Any]:
+    return {
+        "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
+    }
+
+
+def _resolve_staleness_seconds(timestamp: datetime | None) -> float | None:
+    if timestamp is None:
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    return (
+        datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
+    ).total_seconds()
 
 
 def _pid_is_alive(pid: int | None) -> bool:
@@ -1279,7 +1463,9 @@ def _seconds_since_iso(value: object) -> float | None:
         return None
     if timestamp.tzinfo is None:
         timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)).total_seconds()
+    return (
+        datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
+    ).total_seconds()
 
 
 class JobConcurrencyGate:
@@ -1354,7 +1540,11 @@ class JobConcurrencyGate:
                     slot_age = time.time() - slot_path.stat().st_mtime
                 except OSError:
                     slot_age = None
-            if not worker_pid and slot_age is not None and slot_age > JOB_SLOT_ATTACH_STALE_SECONDS:
+            if (
+                not worker_pid
+                and slot_age is not None
+                and slot_age > JOB_SLOT_ATTACH_STALE_SECONDS
+            ):
                 self.release(slot_path)
 
     def _metadata_path(self, slot_path: Path) -> Path:
@@ -1362,14 +1552,18 @@ class JobConcurrencyGate:
 
     def _read_metadata(self, slot_path: Path) -> dict[str, Any]:
         try:
-            payload = json.loads(self._metadata_path(slot_path).read_text(encoding="utf-8"))
+            payload = json.loads(
+                self._metadata_path(slot_path).read_text(encoding="utf-8")
+            )
             return payload if isinstance(payload, dict) else {}
         except Exception:
             return {}
 
     def _write_metadata(self, slot_path: Path, metadata: dict[str, Any]) -> None:
         self._metadata_path(slot_path).write_text(
-            json.dumps(_json_safe(metadata), ensure_ascii=False, indent=2, allow_nan=False),
+            json.dumps(
+                _json_safe(metadata), ensure_ascii=False, indent=2, allow_nan=False
+            ),
             encoding="utf-8",
         )
 
@@ -1398,7 +1592,12 @@ class JobStore:
         return []
 
     def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
-        self.index_path.write_text(json.dumps(_json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+        self.index_path.write_text(
+            json.dumps(
+                _json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False
+            ),
+            encoding="utf-8",
+        )
 
     def _load_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
         job_path = self._job_path(job_id)
@@ -1411,7 +1610,12 @@ class JobStore:
             return None
 
     def _save_job_unlocked(self, job_id: str, record: dict[str, Any]) -> None:
-        self._job_path(job_id).write_text(json.dumps(_json_safe(record), ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+        self._job_path(job_id).write_text(
+            json.dumps(
+                _json_safe(record), ensure_ascii=False, indent=2, allow_nan=False
+            ),
+            encoding="utf-8",
+        )
 
     def _upsert_index_entry_unlocked(self, record: dict[str, Any]) -> None:
         job_id = str(record.get("job_id", "")).strip()
@@ -1424,7 +1628,9 @@ class JobStore:
             "started_at": record.get("started_at"),
             "finished_at": record.get("finished_at"),
             "metadata": deepcopy(record.get("metadata") or {}),
-            "prepared_payload_summary": deepcopy(record.get("prepared_payload_summary") or {}),
+            "prepared_payload_summary": deepcopy(
+                record.get("prepared_payload_summary") or {}
+            ),
             "error": record.get("error"),
         }
         updated = False
@@ -1454,7 +1660,12 @@ class JobStore:
             if not records:
                 return
             records.sort(
-                key=lambda item: str(item.get("created_at") or item.get("started_at") or item.get("finished_at") or ""),
+                key=lambda item: str(
+                    item.get("created_at")
+                    or item.get("started_at")
+                    or item.get("finished_at")
+                    or ""
+                ),
                 reverse=True,
             )
             for record in records:
@@ -1481,7 +1692,9 @@ class JobStore:
             "job_slot_path": None,
             "config": deepcopy(config_payload or {}),
             "prepared_payload": deepcopy(prepared_payload or {}),
-            "prepared_payload_summary": _summarize_prepared_payload(prepared_payload or {}),
+            "prepared_payload_summary": _summarize_prepared_payload(
+                prepared_payload or {}
+            ),
             "metadata": deepcopy(metadata or {}),
             "result": None,
             "error": None,
@@ -1512,7 +1725,9 @@ class JobStore:
             self._upsert_index_entry_unlocked(record)
             return deepcopy(record)
 
-    def begin_ai_audit(self, job_id: str, *, force: bool = False) -> tuple[str, dict[str, Any] | None]:
+    def begin_ai_audit(
+        self, job_id: str, *, force: bool = False
+    ) -> tuple[str, dict[str, Any] | None]:
         with self.lock:
             record = self._load_job_unlocked(job_id)
             if not record:
@@ -1535,7 +1750,9 @@ class JobStore:
             record = self._load_job_unlocked(job_id)
             return deepcopy(record) if record else None
 
-    def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
+    def list_jobs(
+        self, user_email: str = "", include_all: bool = False
+    ) -> list[dict[str, Any]]:
         with self.lock:
             entries = self._load_index_unlocked()
             if include_all:
@@ -1605,7 +1822,9 @@ class JobStore:
                 if status == "running":
                     record["status"] = "failed"
                     record["finished_at"] = utc_now_iso()
-                    record["error"] = "Job was interrupted because the backend service restarted."
+                    record["error"] = (
+                        "Job was interrupted because the backend service restarted."
+                    )
                     record["traceback"] = None
                     record["worker_pid"] = None
                     record["job_slot_path"] = None
@@ -1624,7 +1843,9 @@ class JobStore:
                             "started_at": record.get("started_at"),
                             "finished_at": record.get("finished_at"),
                             "metadata": deepcopy(record.get("metadata") or {}),
-                            "prepared_payload_summary": deepcopy(record.get("prepared_payload_summary") or {}),
+                            "prepared_payload_summary": deepcopy(
+                                record.get("prepared_payload_summary") or {}
+                            ),
                             "error": record.get("error"),
                         }
                     )
@@ -1655,7 +1876,9 @@ class SideToolHistoryStore:
 
     def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
         self.index_path.write_text(
-            json.dumps(_json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False),
+            json.dumps(
+                _json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False
+            ),
             encoding="utf-8",
         )
 
@@ -1673,7 +1896,10 @@ class SideToolHistoryStore:
         run_id = uuid4().hex[:12]
         created_at = utc_now_iso()
         normalized_owner_email = _normalize_email(owner_email)
-        title = str(payload.get("title") or "").strip() or f"Fleet Planner Run - {datetime.now().strftime('%Y-%m-%d %H%M')}"
+        title = (
+            str(payload.get("title") or "").strip()
+            or f"Fleet Planner Run - {datetime.now().strftime('%Y-%m-%d %H%M')}"
+        )
         record = {
             "run_id": run_id,
             "tool_key": self.tool_key,
@@ -1694,7 +1920,9 @@ class SideToolHistoryStore:
         summary = self._summary_for_record(record)
         with self.lock:
             self._record_path(run_id).write_text(
-                json.dumps(_json_safe(record), ensure_ascii=False, indent=2, allow_nan=False),
+                json.dumps(
+                    _json_safe(record), ensure_ascii=False, indent=2, allow_nan=False
+                ),
                 encoding="utf-8",
             )
             entries = [
@@ -1717,7 +1945,9 @@ class SideToolHistoryStore:
             except Exception:
                 return None
 
-    def list(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
+    def list(
+        self, user_email: str = "", include_all: bool = False
+    ) -> list[dict[str, Any]]:
         with self.lock:
             entries = self._load_index_unlocked()
             if include_all:
@@ -1745,8 +1975,12 @@ class SideToolHistoryStore:
 
 
 JOB_STORE = JobStore(JOBS_DIR)
-DISTANCE_CHECKER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "distance_checker")
-REFERENCE_DISTANCE_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "reference_distance")
+DISTANCE_CHECKER_HISTORY_STORE = SideToolHistoryStore(
+    SIDE_TOOLS_DIR, "distance_checker"
+)
+REFERENCE_DISTANCE_HISTORY_STORE = SideToolHistoryStore(
+    SIDE_TOOLS_DIR, "reference_distance"
+)
 ROUTE_COST_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "route_cost")
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
 JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
@@ -1755,11 +1989,19 @@ _SCHEDULER_STARTED = False
 
 
 def _normalize_distance_history_mode(value: Any) -> str:
-    return "route_cost" if str(value or "").strip().lower() == "route_cost" else "reference"
+    return (
+        "route_cost"
+        if str(value or "").strip().lower() == "route_cost"
+        else "reference"
+    )
 
 
 def _distance_history_store_for_mode(tool_mode: str) -> SideToolHistoryStore:
-    return ROUTE_COST_HISTORY_STORE if _normalize_distance_history_mode(tool_mode) == "route_cost" else REFERENCE_DISTANCE_HISTORY_STORE
+    return (
+        ROUTE_COST_HISTORY_STORE
+        if _normalize_distance_history_mode(tool_mode) == "route_cost"
+        else REFERENCE_DISTANCE_HISTORY_STORE
+    )
 
 
 def _distance_history_mode_for_summary(entry: dict[str, Any]) -> str:
@@ -1776,7 +2018,9 @@ def _distance_history_mode_for_record(record: dict[str, Any]) -> str:
     return _normalize_distance_history_mode(mode_value)
 
 
-def _list_distance_history(tool_mode: str, *, user_email: str, include_all: bool) -> list[dict[str, Any]]:
+def _list_distance_history(
+    tool_mode: str, *, user_email: str, include_all: bool
+) -> list[dict[str, Any]]:
     mode = _normalize_distance_history_mode(tool_mode) if tool_mode else ""
     stores = (
         [REFERENCE_DISTANCE_HISTORY_STORE, ROUTE_COST_HISTORY_STORE]
@@ -1788,14 +2032,18 @@ def _list_distance_history(tool_mode: str, *, user_email: str, include_all: bool
         entries.extend(store.list(user_email=user_email, include_all=include_all))
     legacy_entries = [
         entry
-        for entry in DISTANCE_CHECKER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)
+        for entry in DISTANCE_CHECKER_HISTORY_STORE.list(
+            user_email=user_email, include_all=include_all
+        )
         if not mode or _distance_history_mode_for_summary(entry) == mode
     ]
     entries.extend(legacy_entries)
 
     seen: set[str] = set()
     deduped: list[dict[str, Any]] = []
-    for entry in sorted(entries, key=lambda item: str(item.get("created_at") or ""), reverse=True):
+    for entry in sorted(
+        entries, key=lambda item: str(item.get("created_at") or ""), reverse=True
+    ):
         run_id = str(entry.get("run_id") or "").strip()
         if not run_id or run_id in seen:
             continue
@@ -1804,7 +2052,9 @@ def _list_distance_history(tool_mode: str, *, user_email: str, include_all: bool
     return deduped
 
 
-def _get_distance_history_record(run_id: str, tool_mode: str = "") -> tuple[dict[str, Any] | None, SideToolHistoryStore | None]:
+def _get_distance_history_record(
+    run_id: str, tool_mode: str = ""
+) -> tuple[dict[str, Any] | None, SideToolHistoryStore | None]:
     mode = _normalize_distance_history_mode(tool_mode) if tool_mode else ""
     stores = (
         [REFERENCE_DISTANCE_HISTORY_STORE, ROUTE_COST_HISTORY_STORE]
@@ -1854,9 +2104,16 @@ def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
     latest_record = JOB_STORE.get_job(job_id)
     if not latest_record:
         return None
-    if str(latest_record.get("status", "")).strip().lower() not in {"queued", "running"}:
+    if str(latest_record.get("status", "")).strip().lower() not in {
+        "queued",
+        "running",
+    }:
         return latest_record
-    return JOB_STORE.update_job(job_id, worker_pid=int(process.pid), job_slot_path=str(slot_path) if slot_path else None)
+    return JOB_STORE.update_job(
+        job_id,
+        worker_pid=int(process.pid),
+        job_slot_path=str(slot_path) if slot_path else None,
+    )
 
 
 def _schedule_queued_jobs() -> None:
@@ -1886,7 +2143,9 @@ def _start_job_scheduler() -> None:
     if _SCHEDULER_STARTED:
         return
     _SCHEDULER_STARTED = True
-    threading.Thread(target=_job_scheduler_loop, name="brp-job-scheduler", daemon=True).start()
+    threading.Thread(
+        target=_job_scheduler_loop, name="brp-job-scheduler", daemon=True
+    ).start()
 
 
 def _cancel_job(job_id: str) -> dict[str, Any] | None:
@@ -1918,10 +2177,14 @@ def _cancel_job(job_id: str) -> dict[str, Any] | None:
     return updated
 
 
-def _can_access_job(job_record: dict[str, Any], user_email: str, include_all: bool = False) -> bool:
+def _can_access_job(
+    job_record: dict[str, Any], user_email: str, include_all: bool = False
+) -> bool:
     if include_all:
         return True
-    return _normalize_email(job_record.get("owner_email")) == _normalize_email(user_email)
+    return _normalize_email(job_record.get("owner_email")) == _normalize_email(
+        user_email
+    )
 
 
 def _strip_api_prefix(path: str) -> str:
@@ -1940,7 +2203,9 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
     return True
 
 
-def _resolve_job_map_artifact(job_record: dict[str, Any], artifact_key: str) -> tuple[Path | None, str | None]:
+def _resolve_job_map_artifact(
+    job_record: dict[str, Any], artifact_key: str
+) -> tuple[Path | None, str | None]:
     scenario_key = MAP_ARTIFACT_KEYS.get(artifact_key.strip().lower())
     if not scenario_key:
         return None, f"Unknown artifact: {artifact_key}"
@@ -1989,14 +2254,20 @@ def _int_or_none(value: Any) -> int | None:
 
 
 def _map_point_coordinates(point: dict[str, Any]) -> tuple[float, float] | None:
-    lat = _float_or_none(point.get("plot_lat") if point.get("plot_lat") is not None else point.get("lat"))
-    lng = _float_or_none(point.get("plot_lng") if point.get("plot_lng") is not None else point.get("lng"))
+    lat = _float_or_none(
+        point.get("plot_lat") if point.get("plot_lat") is not None else point.get("lat")
+    )
+    lng = _float_or_none(
+        point.get("plot_lng") if point.get("plot_lng") is not None else point.get("lng")
+    )
     if lat is None or lng is None:
         return None
     return lat, lng
 
 
-def _map_bounds_from_coordinates(coordinates: list[tuple[float, float]]) -> dict[str, float] | None:
+def _map_bounds_from_coordinates(
+    coordinates: list[tuple[float, float]],
+) -> dict[str, float] | None:
     if not coordinates:
         return None
     lats = [lat for lat, _lng in coordinates]
@@ -2026,7 +2297,9 @@ def _route_geometry_coordinates(route: dict[str, Any]) -> list[list[float]]:
     return coordinates
 
 
-def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[dict[str, Any] | None, str | None]:
+def _build_job_map_data(
+    job_record: dict[str, Any], artifact_key: str
+) -> tuple[dict[str, Any] | None, str | None]:
     scenario_key = MAP_ARTIFACT_KEYS.get(artifact_key.strip().lower())
     if not scenario_key:
         return None, f"Unknown map scenario: {artifact_key}"
@@ -2044,7 +2317,9 @@ def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[
     all_coordinates: list[tuple[float, float]] = []
 
     for route_index, route in enumerate(routes):
-        route_id = str(route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}")
+        route_id = str(
+            route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}"
+        )
         geometry = _route_geometry_coordinates(dict(route))
         for lng, lat in geometry:
             all_coordinates.append((lat, lng))
@@ -2076,8 +2351,12 @@ def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[
                     "route_index": route_index,
                     "order": order,
                     "node_index": node_index,
-                    "address": str(point.get("display_address") or point.get("address") or "").strip(),
-                    "requested_address": str(point.get("requested_address") or "").strip(),
+                    "address": str(
+                        point.get("display_address") or point.get("address") or ""
+                    ).strip(),
+                    "requested_address": str(
+                        point.get("requested_address") or ""
+                    ).strip(),
                     "passenger_count": int(point.get("passenger_count", 0) or 0),
                     "is_depot": bool(point.get("is_depot")),
                     "lat": lat,
@@ -2097,24 +2376,36 @@ def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[
                 "load": int(route.get("load", 0) or 0),
                 "bus_capacity": _int_or_none(route.get("bus_capacity")),
                 "comfort_capacity": _int_or_none(route.get("comfort_capacity")),
-                "stop_count": _int_or_none(route.get("stop_count")) or max(0, len(nodes) - 1),
+                "stop_count": _int_or_none(route.get("stop_count"))
+                or max(0, len(nodes) - 1),
                 "max_stops": _int_or_none(route.get("max_stops")),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
-                "duration_s": float(route.get("traffic_api_duration_s") or route.get("traffic_adjusted_drive_time_s") or route.get("time_s") or 0.0),
+                "duration_s": float(
+                    route.get("traffic_api_duration_s")
+                    or route.get("traffic_adjusted_drive_time_s")
+                    or route.get("time_s")
+                    or 0.0
+                ),
                 "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
-                "traffic_time_source": str(route.get("traffic_time_source") or "").strip(),
+                "traffic_time_source": str(
+                    route.get("traffic_time_source") or ""
+                ).strip(),
                 "geometry": geometry,
                 "stop_ids": route_stop_ids,
             }
         )
 
     point_by_address = {
-        str(point.get("address") or point.get("display_address") or "").strip(): dict(point)
+        str(point.get("address") or point.get("display_address") or "").strip(): dict(
+            point
+        )
         for point in points
         if str(point.get("address") or point.get("display_address") or "").strip()
     }
     private_links: list[dict[str, Any]] = []
-    for index, item in enumerate(list(scenario.get("outlying_private_access_rows") or [])):
+    for index, item in enumerate(
+        list(scenario.get("outlying_private_access_rows") or [])
+    ):
         row = dict(item or {})
         geometry: list[list[float]] = []
         for raw_pair in list(row.get("private_drive_geometry") or []):
@@ -2128,25 +2419,38 @@ def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[
             all_coordinates.append((lat, lng))
         if len(geometry) < 2:
             stop_point = point_by_address.get(str(row.get("address") or "").strip())
-            pickup_point = point_by_address.get(str(row.get("pickup_address") or "").strip())
+            pickup_point = point_by_address.get(
+                str(row.get("pickup_address") or "").strip()
+            )
             stop_coords = _map_point_coordinates(stop_point or row)
-            pickup_coords = _map_point_coordinates(pickup_point or {
-                "plot_lat": row.get("pickup_plot_lat"),
-                "plot_lng": row.get("pickup_plot_lng"),
-            })
+            pickup_coords = _map_point_coordinates(
+                pickup_point
+                or {
+                    "plot_lat": row.get("pickup_plot_lat"),
+                    "plot_lng": row.get("pickup_plot_lng"),
+                }
+            )
             if stop_coords and pickup_coords:
-                geometry = [[stop_coords[1], stop_coords[0]], [pickup_coords[1], pickup_coords[0]]]
+                geometry = [
+                    [stop_coords[1], stop_coords[0]],
+                    [pickup_coords[1], pickup_coords[0]],
+                ]
                 all_coordinates.extend([stop_coords, pickup_coords])
         if geometry:
             private_links.append(
                 {
                     "id": f"private-link-{index}",
-                    "access_type": str(row.get("private_access_type") or "clustered_rider").strip() or "clustered_rider",
+                    "access_type": str(
+                        row.get("private_access_type") or "clustered_rider"
+                    ).strip()
+                    or "clustered_rider",
                     "address": str(row.get("address") or "").strip(),
                     "pickup_address": str(row.get("pickup_address") or "").strip(),
                     "pickup_route_id": str(row.get("pickup_route_id") or "").strip(),
                     "drive_time_s": float(row.get("private_drive_time_s", 0.0) or 0.0),
-                    "drive_distance_m": float(row.get("private_drive_distance_m", 0.0) or 0.0),
+                    "drive_distance_m": float(
+                        row.get("private_drive_distance_m", 0.0) or 0.0
+                    ),
                     "geometry": geometry,
                 }
             )
@@ -2155,18 +2459,30 @@ def _build_job_map_data(job_record: dict[str, Any], artifact_key: str) -> tuple[
         "job_id": str(job_record.get("job_id") or ""),
         "scenario_key": scenario_key,
         "scenario_name": MAP_SCENARIO_LABELS.get(scenario_key, scenario_key),
-        "service_direction": str(result.get("service_direction") or structured.get("service_direction") or "").strip(),
-        "traffic_profile_name": str(result.get("traffic_profile_name") or structured.get("traffic_profile_name") or "").strip(),
+        "service_direction": str(
+            result.get("service_direction") or structured.get("service_direction") or ""
+        ).strip(),
+        "traffic_profile_name": str(
+            result.get("traffic_profile_name")
+            or structured.get("traffic_profile_name")
+            or ""
+        ).strip(),
         "bounds": _map_bounds_from_coordinates(all_coordinates),
         "routes": route_payloads,
         "stops": stop_payloads,
         "private_links": private_links,
         "summary": {
             "route_count": len(route_payloads),
-            "stop_count": len([item for item in stop_payloads if not item.get("is_depot")]),
+            "stop_count": len(
+                [item for item in stop_payloads if not item.get("is_depot")]
+            ),
             "passenger_count": sum(int(route.get("load", 0) or 0) for route in routes),
-            "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in routes),
-            "duration_s": max([float(route.get("time_s", 0.0) or 0.0) for route in routes] or [0.0]),
+            "distance_m": sum(
+                float(route.get("distance_m", 0.0) or 0.0) for route in routes
+            ),
+            "duration_s": max(
+                [float(route.get("time_s", 0.0) or 0.0) for route in routes] or [0.0]
+            ),
         },
     }, None
 
@@ -2176,7 +2492,9 @@ def _infer_output_directory_name(result: dict[str, Any]) -> str:
     outputs_root = (BASE_DIR / "outputs").resolve()
     for scenario_key in MAP_ARTIFACT_TOP_LEVEL_KEYS:
         scenario = dict(structured.get(scenario_key) or {})
-        raw_path = scenario.get("output_html") or result.get(MAP_ARTIFACT_TOP_LEVEL_KEYS.get(scenario_key, ""))
+        raw_path = scenario.get("output_html") or result.get(
+            MAP_ARTIFACT_TOP_LEVEL_KEYS.get(scenario_key, "")
+        )
         if not raw_path:
             continue
         artifact_path = Path(str(raw_path)).expanduser().resolve()
@@ -2187,20 +2505,28 @@ def _infer_output_directory_name(result: dict[str, Any]) -> str:
 
 def _build_rerender_config_for_job(job_record: dict[str, Any]) -> PlannerConfig:
     metadata = dict(job_record.get("metadata") or {})
-    config_payload = dict(job_record.get("config") or metadata.get("planner_config") or {})
+    config_payload = dict(
+        job_record.get("config") or metadata.get("planner_config") or {}
+    )
     config = _build_planner_config(config_payload)
     if not config.output_directory_name:
         result = dict(job_record.get("result") or {})
-        config.output_directory_name = _infer_output_directory_name(result) or str(job_record.get("job_id") or uuid4().hex)
+        config.output_directory_name = _infer_output_directory_name(result) or str(
+            job_record.get("job_id") or uuid4().hex
+        )
     return config
 
 
-def _rerender_job_map_artifacts(job_id: str, job_record: dict[str, Any]) -> dict[str, Any]:
+def _rerender_job_map_artifacts(
+    job_id: str, job_record: dict[str, Any]
+) -> dict[str, Any]:
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
     if not structured:
         return job_record
-    hydrated = rerender_html_from_structured_results(structured, _build_rerender_config_for_job(job_record))
+    hydrated = rerender_html_from_structured_results(
+        structured, _build_rerender_config_for_job(job_record)
+    )
     updated_result = dict(result)
     updated_result["structured_results"] = hydrated
     output_paths = dict(hydrated.get("output_paths") or {})
@@ -2215,7 +2541,9 @@ def _rerender_job_map_artifacts(job_id: str, job_record: dict[str, Any]) -> dict
     return rerendered
 
 
-def _build_free_baseline_template_export(job_record: dict[str, Any]) -> tuple[bytes | None, str | None]:
+def _build_free_baseline_template_export(
+    job_record: dict[str, Any],
+) -> tuple[bytes | None, str | None]:
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
     scenario = (
@@ -2225,10 +2553,18 @@ def _build_free_baseline_template_export(job_record: dict[str, Any]) -> tuple[by
     )
     if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
         return None, "Free optimization baseline has no route table to export."
-    planner_config = dict(result.get("planner_config") or job_record.get("config") or {})
-    service_direction = str(result.get("service_direction") or planner_config.get("service_direction") or "From School")
+    planner_config = dict(
+        result.get("planner_config") or job_record.get("config") or {}
+    )
+    service_direction = str(
+        result.get("service_direction")
+        or planner_config.get("service_direction")
+        or "From School"
+    )
     try:
-        return build_baseline_template_workbook_bytes(scenario, service_direction=service_direction), None
+        return build_baseline_template_workbook_bytes(
+            scenario, service_direction=service_direction
+        ), None
     except Exception as exc:
         return None, str(exc)
 
@@ -2237,7 +2573,9 @@ class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
     def _send_json(self, status_code: int, payload: dict[str, Any] | list[Any]) -> bool:
-        body = json.dumps(_json_safe(payload), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        body = json.dumps(
+            _json_safe(payload), ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
         try:
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -2246,7 +2584,9 @@ class BackendHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
             return True
         except (BrokenPipeError, ConnectionResetError):
-            print(f"[WARN] Client disconnected before response was fully sent: {self.path}")
+            print(
+                f"[WARN] Client disconnected before response was fully sent: {self.path}"
+            )
             return False
 
     def _send_bytes(
@@ -2266,12 +2606,17 @@ class BackendHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store")
             if filename:
                 disposition = "inline" if inline else "attachment"
-                self.send_header("Content-Disposition", f"{disposition}; filename*=UTF-8''{quote(filename)}")
+                self.send_header(
+                    "Content-Disposition",
+                    f"{disposition}; filename*=UTF-8''{quote(filename)}",
+                )
             self.end_headers()
             self.wfile.write(body)
             return True
         except (BrokenPipeError, ConnectionResetError):
-            print(f"[WARN] Client disconnected before response was fully sent: {self.path}")
+            print(
+                f"[WARN] Client disconnected before response was fully sent: {self.path}"
+            )
             return False
 
     def _send_redirect(self, location: str, status_code: int = 302) -> bool:
@@ -2294,7 +2639,9 @@ class BackendHandler(BaseHTTPRequestHandler):
 
     def _current_user_email(self) -> str:
         if AUTH_PROVIDER == "local":
-            return _normalize_email(self.headers.get("X-BRP-User-Email")) or DEV_USER_EMAIL
+            return (
+                _normalize_email(self.headers.get("X-BRP-User-Email")) or DEV_USER_EMAIL
+            )
         return (
             _normalize_email(self.headers.get("X-BRP-User-Email"))
             or _normalize_email(self.headers.get("Cf-Access-Authenticated-User-Email"))
@@ -2363,6 +2710,9 @@ class BackendHandler(BaseHTTPRequestHandler):
         if path == "/google-geocode-usage":
             self._send_json(200, _google_geocode_usage_payload())
             return
+        if path == "/deployment-features":
+            self._send_json(200, _deployment_features_payload())
+            return
         if path == "/workbooks/template":
             self._send_bytes(
                 200,
@@ -2387,58 +2737,115 @@ class BackendHandler(BaseHTTPRequestHandler):
             self._send_json(200, _handle_fleet_planner_vehicle_catalog(query_params))
             return
         if path == "/distance-checker/reference-history":
-            self._send_json(200, {"jobs": _list_distance_history("reference", user_email=user_email, include_all=include_all)})
+            self._send_json(
+                200,
+                {
+                    "jobs": _list_distance_history(
+                        "reference", user_email=user_email, include_all=include_all
+                    )
+                },
+            )
             return
         if path.startswith("/distance-checker/reference-history/"):
             run_id = unquote(path.rsplit("/", 1)[-1]).strip()
             record, _store = _get_distance_history_record(run_id, "reference")
             if not record:
-                self._send_json(404, {"error": f"Reference Distance history run not found: {run_id}"})
+                self._send_json(
+                    404,
+                    {"error": f"Reference Distance history run not found: {run_id}"},
+                )
                 return
             if not _can_access_job(record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Reference Distance history run is not available for user: {user_email}"})
+                self._send_json(
+                    403,
+                    {
+                        "error": f"Reference Distance history run is not available for user: {user_email}"
+                    },
+                )
                 return
             self._send_json(200, record)
             return
         if path == "/distance-checker/route-cost-history":
-            self._send_json(200, {"jobs": _list_distance_history("route_cost", user_email=user_email, include_all=include_all)})
+            self._send_json(
+                200,
+                {
+                    "jobs": _list_distance_history(
+                        "route_cost", user_email=user_email, include_all=include_all
+                    )
+                },
+            )
             return
         if path.startswith("/distance-checker/route-cost-history/"):
             run_id = unquote(path.rsplit("/", 1)[-1]).strip()
             record, _store = _get_distance_history_record(run_id, "route_cost")
             if not record:
-                self._send_json(404, {"error": f"Route Cost history run not found: {run_id}"})
+                self._send_json(
+                    404, {"error": f"Route Cost history run not found: {run_id}"}
+                )
                 return
             if not _can_access_job(record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Route Cost history run is not available for user: {user_email}"})
+                self._send_json(
+                    403,
+                    {
+                        "error": f"Route Cost history run is not available for user: {user_email}"
+                    },
+                )
                 return
             self._send_json(200, record)
             return
         if path == "/distance-checker/history":
-            self._send_json(200, {"jobs": _list_distance_history("", user_email=user_email, include_all=include_all)})
+            self._send_json(
+                200,
+                {
+                    "jobs": _list_distance_history(
+                        "", user_email=user_email, include_all=include_all
+                    )
+                },
+            )
             return
         if path.startswith("/distance-checker/history/"):
             run_id = unquote(path.rsplit("/", 1)[-1]).strip()
             record, _store = _get_distance_history_record(run_id)
             if not record:
-                self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
+                self._send_json(
+                    404, {"error": f"Distance & Cost history run not found: {run_id}"}
+                )
                 return
             if not _can_access_job(record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Distance & Cost history run is not available for user: {user_email}"})
+                self._send_json(
+                    403,
+                    {
+                        "error": f"Distance & Cost history run is not available for user: {user_email}"
+                    },
+                )
                 return
             self._send_json(200, record)
             return
         if path == "/fleet-planner/history":
-            self._send_json(200, {"jobs": FLEET_PLANNER_HISTORY_STORE.list(user_email=user_email, include_all=include_all)})
+            self._send_json(
+                200,
+                {
+                    "jobs": FLEET_PLANNER_HISTORY_STORE.list(
+                        user_email=user_email, include_all=include_all
+                    )
+                },
+            )
             return
         if path.startswith("/fleet-planner/history/"):
             run_id = unquote(path.rsplit("/", 1)[-1]).strip()
             record = FLEET_PLANNER_HISTORY_STORE.get(run_id)
             if not record:
-                self._send_json(404, {"error": f"Fleet Planner history run not found: {run_id}"})
+                self._send_json(
+                    404, {"error": f"Fleet Planner history run not found: {run_id}"}
+                )
                 return
             if not _can_access_job(record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Fleet Planner history run is not available for user: {user_email}"})
+                self._send_json(
+                    403,
+                    {
+                        "error": f"Fleet Planner history run is not available for user: {user_email}"
+                    },
+                )
                 return
             self._send_json(200, record)
             return
@@ -2460,7 +2867,14 @@ class BackendHandler(BaseHTTPRequestHandler):
             )
             return
         if path == "/jobs":
-            self._send_json(200, {"jobs": JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)})
+            self._send_json(
+                200,
+                {
+                    "jobs": JOB_STORE.list_jobs(
+                        user_email=user_email, include_all=include_all
+                    )
+                },
+            )
             return
         if path.startswith("/jobs/"):
             parts = [part for part in path.split("/") if part]
@@ -2472,14 +2886,20 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 if not _can_access_job(job_record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
                     return
                 if export_key != "free-optimization-template":
                     self._send_json(404, {"error": f"Unknown export: {export_key}"})
                     return
-                workbook_bytes, export_error = _build_free_baseline_template_export(job_record)
+                workbook_bytes, export_error = _build_free_baseline_template_export(
+                    job_record
+                )
                 if export_error or not workbook_bytes:
-                    self._send_json(404, {"error": export_error or "Export is not available."})
+                    self._send_json(
+                        404, {"error": export_error or "Export is not available."}
+                    )
                     return
                 self._send_bytes(
                     200,
@@ -2497,17 +2917,29 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 if not _can_access_job(job_record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
                     return
                 query_params = dict(parse_qsl(parsed.query))
                 if query_params.get("refresh") in {"1", "true", "yes"}:
                     job_record = _rerender_job_map_artifacts(job_id, job_record)
-                artifact_path, artifact_error = _resolve_job_map_artifact(job_record, artifact_key)
+                artifact_path, artifact_error = _resolve_job_map_artifact(
+                    job_record, artifact_key
+                )
                 if artifact_error and "file is missing" in artifact_error:
                     job_record = _rerender_job_map_artifacts(job_id, job_record)
-                    artifact_path, artifact_error = _resolve_job_map_artifact(job_record, artifact_key)
+                    artifact_path, artifact_error = _resolve_job_map_artifact(
+                        job_record, artifact_key
+                    )
                 if artifact_error or not artifact_path:
-                    self._send_json(404, {"error": artifact_error or f"Artifact not found: {artifact_key}"})
+                    self._send_json(
+                        404,
+                        {
+                            "error": artifact_error
+                            or f"Artifact not found: {artifact_key}"
+                        },
+                    )
                     return
                 inline = query_params.get("download") not in {"1", "true", "yes"}
                 self._send_bytes(
@@ -2526,11 +2958,19 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 if not _can_access_job(job_record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
                     return
                 map_data, map_data_error = _build_job_map_data(job_record, scenario_key)
                 if map_data_error or not map_data:
-                    self._send_json(404, {"error": map_data_error or f"Map data not found: {scenario_key}"})
+                    self._send_json(
+                        404,
+                        {
+                            "error": map_data_error
+                            or f"Map data not found: {scenario_key}"
+                        },
+                    )
                     return
                 self._send_json(200, map_data)
                 return
@@ -2543,7 +2983,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return
             if not _can_access_job(job_record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                self._send_json(
+                    403, {"error": f"Job is not available for user: {user_email}"}
+                )
                 return
             self._send_json(200, job_record)
             return
@@ -2565,7 +3007,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._send_json(200, _handle_workbook_preview(payload))
                 return
             if path == "/workbooks/submit":
-                self._send_json(202, _handle_workbook_submit(payload, user_email=user_email))
+                self._send_json(
+                    202, _handle_workbook_submit(payload, user_email=user_email)
+                )
                 return
             if path == "/distance-checker/workbook-preview":
                 self._send_json(200, _handle_distance_workbook_preview(payload))
@@ -2576,8 +3020,17 @@ class BackendHandler(BaseHTTPRequestHandler):
             if path == "/distance-checker/route-cost":
                 self._send_json(200, _handle_current_plan_route_cost(payload))
                 return
-            if path in {"/distance-checker/history", "/distance-checker/reference-history", "/distance-checker/route-cost-history"}:
-                self._send_json(201, _handle_distance_checker_history_create(payload, user_email=user_email))
+            if path in {
+                "/distance-checker/history",
+                "/distance-checker/reference-history",
+                "/distance-checker/route-cost-history",
+            }:
+                self._send_json(
+                    201,
+                    _handle_distance_checker_history_create(
+                        payload, user_email=user_email
+                    ),
+                )
                 return
             if path == "/fleet-planner/preview":
                 self._send_json(200, _handle_fleet_planner_preview(payload))
@@ -2595,7 +3048,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._send_json(200, _handle_fleet_planner_global_plan(payload))
                 return
             if path == "/fleet-planner/history":
-                self._send_json(201, _handle_fleet_planner_history_create(payload, user_email=user_email))
+                self._send_json(
+                    201,
+                    _handle_fleet_planner_history_create(
+                        payload, user_email=user_email
+                    ),
+                )
                 return
             if path == "/jobs":
                 config_payload = payload.get("config") or {}
@@ -2623,7 +3081,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 if not _can_access_job(job_record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
                     return
                 updated = _cancel_job(job_id)
                 if not updated:
@@ -2642,10 +3102,14 @@ class BackendHandler(BaseHTTPRequestHandler):
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
                 if not _can_access_job(job_record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
                     return
                 force_ai_audit = bool(payload.get("force"))
-                audit_state, audit_record = JOB_STORE.begin_ai_audit(job_id, force=force_ai_audit)
+                audit_state, audit_record = JOB_STORE.begin_ai_audit(
+                    job_id, force=force_ai_audit
+                )
                 if audit_state == "missing" or not audit_record:
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
@@ -2655,7 +3119,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                         {
                             "job_id": job_id,
                             "ai_audit_status": "succeeded",
-                            "ai_audit_report": dict(audit_record.get("ai_audit_report") or {}),
+                            "ai_audit_report": dict(
+                                audit_record.get("ai_audit_report") or {}
+                            ),
                             "cached": True,
                         },
                     )
@@ -2666,7 +3132,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                         {
                             "job_id": job_id,
                             "ai_audit_status": "running",
-                            "ai_audit_report": dict(audit_record.get("ai_audit_report") or {}),
+                            "ai_audit_report": dict(
+                                audit_record.get("ai_audit_report") or {}
+                            ),
                             "message": "AI audit generation is already running for this job.",
                         },
                     )
@@ -2695,14 +3163,23 @@ class BackendHandler(BaseHTTPRequestHandler):
                 if updated:
                     updated["config"] = None
                     updated["prepared_payload"] = None
-                    self._send_json(200, {"job_id": job_id, "ai_audit_status": "succeeded", "ai_audit_report": ai_report})
+                    self._send_json(
+                        200,
+                        {
+                            "job_id": job_id,
+                            "ai_audit_status": "succeeded",
+                            "ai_audit_report": ai_report,
+                        },
+                    )
                     return
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return
             self._send_json(404, {"error": f"Unknown path: {path}"})
         except Exception as exc:
             if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
-                print(f"[WARN] Client disconnected during request handling: {self.path}")
+                print(
+                    f"[WARN] Client disconnected during request handling: {self.path}"
+                )
                 return
             self._send_json(
                 500,
@@ -2728,10 +3205,20 @@ class BackendHandler(BaseHTTPRequestHandler):
                 run_id = unquote(parts[2]).strip()
                 record, store = _get_distance_history_record(run_id, "reference")
                 if not record or not store:
-                    self._send_json(404, {"error": f"Reference Distance history run not found: {run_id}"})
+                    self._send_json(
+                        404,
+                        {
+                            "error": f"Reference Distance history run not found: {run_id}"
+                        },
+                    )
                     return
                 if not _can_access_job(record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Reference Distance history run is not available for user: {user_email}"})
+                    self._send_json(
+                        403,
+                        {
+                            "error": f"Reference Distance history run is not available for user: {user_email}"
+                        },
+                    )
                     return
                 store.delete(run_id)
                 self._send_json(200, {"deleted": True, "run_id": run_id})
@@ -2744,10 +3231,17 @@ class BackendHandler(BaseHTTPRequestHandler):
                 run_id = unquote(parts[2]).strip()
                 record, store = _get_distance_history_record(run_id, "route_cost")
                 if not record or not store:
-                    self._send_json(404, {"error": f"Route Cost history run not found: {run_id}"})
+                    self._send_json(
+                        404, {"error": f"Route Cost history run not found: {run_id}"}
+                    )
                     return
                 if not _can_access_job(record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Route Cost history run is not available for user: {user_email}"})
+                    self._send_json(
+                        403,
+                        {
+                            "error": f"Route Cost history run is not available for user: {user_email}"
+                        },
+                    )
                     return
                 store.delete(run_id)
                 self._send_json(200, {"deleted": True, "run_id": run_id})
@@ -2760,10 +3254,18 @@ class BackendHandler(BaseHTTPRequestHandler):
                 run_id = unquote(parts[2]).strip()
                 record, store = _get_distance_history_record(run_id)
                 if not record or not store:
-                    self._send_json(404, {"error": f"Distance & Cost history run not found: {run_id}"})
+                    self._send_json(
+                        404,
+                        {"error": f"Distance & Cost history run not found: {run_id}"},
+                    )
                     return
                 if not _can_access_job(record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Distance & Cost history run is not available for user: {user_email}"})
+                    self._send_json(
+                        403,
+                        {
+                            "error": f"Distance & Cost history run is not available for user: {user_email}"
+                        },
+                    )
                     return
                 store.delete(run_id)
                 self._send_json(200, {"deleted": True, "run_id": run_id})
@@ -2776,10 +3278,17 @@ class BackendHandler(BaseHTTPRequestHandler):
                 run_id = unquote(parts[2]).strip()
                 record = FLEET_PLANNER_HISTORY_STORE.get(run_id)
                 if not record:
-                    self._send_json(404, {"error": f"Fleet Planner history run not found: {run_id}"})
+                    self._send_json(
+                        404, {"error": f"Fleet Planner history run not found: {run_id}"}
+                    )
                     return
                 if not _can_access_job(record, user_email, include_all=include_all):
-                    self._send_json(403, {"error": f"Fleet Planner history run is not available for user: {user_email}"})
+                    self._send_json(
+                        403,
+                        {
+                            "error": f"Fleet Planner history run is not available for user: {user_email}"
+                        },
+                    )
                     return
                 FLEET_PLANNER_HISTORY_STORE.delete(run_id)
                 self._send_json(200, {"deleted": True, "run_id": run_id})
@@ -2797,7 +3306,9 @@ class BackendHandler(BaseHTTPRequestHandler):
                 self._send_json(404, {"error": f"Job not found: {job_id}"})
                 return
             if not _can_access_job(job_record, user_email, include_all=include_all):
-                self._send_json(403, {"error": f"Job is not available for user: {user_email}"})
+                self._send_json(
+                    403, {"error": f"Job is not available for user: {user_email}"}
+                )
                 return
             _cancel_job(job_id)
             JOB_STORE.delete_job(job_id)

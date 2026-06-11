@@ -2837,6 +2837,28 @@ def _build_free_baseline_template_export(
         or planner_config.get("service_direction")
         or "From School"
     )
+    impact_payload, _impact_error = _build_job_map_payload(
+        job_record,
+        "original",
+        "original",
+        attach_impact=True,
+    )
+    if impact_payload:
+        points_with_impact = [
+            dict(point) for point in list(scenario.get("points") or [])
+        ]
+        for stop in list(impact_payload.get("stops") or []):
+            node_index = _int_or_none(stop.get("node_index"))
+            if node_index is None or node_index < 0 or node_index >= len(points_with_impact):
+                continue
+            time_impact = dict(stop.get("time_impact") or {})
+            if not bool(time_impact.get("comparison_available")):
+                continue
+            point = dict(points_with_impact[node_index] or {})
+            point["time_impact"] = time_impact
+            points_with_impact[node_index] = point
+        scenario = dict(scenario)
+        scenario["points"] = points_with_impact
     try:
         return build_baseline_template_workbook_bytes(
             scenario, service_direction=service_direction

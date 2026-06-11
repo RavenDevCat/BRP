@@ -1143,6 +1143,7 @@ def build_baseline_template_workbook_bytes(
             except (TypeError, ValueError):
                 node_id = -1
             point = point_by_node.get(node_id, {})
+            time_impact = dict(point.get("time_impact") or {})
             assignment_rows.append(
                 {
                     "route_id": route_id,
@@ -1152,6 +1153,12 @@ def build_baseline_template_workbook_bytes(
                     "city": str(point.get("city", "") or "").strip(),
                     "address": str(point.get("address", "") or "").strip(),
                     "passenger_count": int(point.get("passenger_count", 0) or 0),
+                    "original pick up/drop off time": str(
+                        time_impact.get("current_time_label") or ""
+                    ).strip(),
+                    "new pick up/drop off time": str(
+                        time_impact.get("new_time_label") or ""
+                    ).strip(),
                     "note": "Free optimization baseline export",
                 }
             )

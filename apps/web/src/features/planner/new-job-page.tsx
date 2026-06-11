@@ -283,10 +283,7 @@ export function NewJobPage() {
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <label
-                  className={toggleClassName}
-                  title="Limits planned load to 85% of vehicle capacity so routes are less crowded; may require more buses."
-                >
+                <ToggleOption tooltip="Limits planned load to 85% of vehicle capacity so routes are less crowded; may require more buses.">
                   <input
                     type="checkbox"
                     checked={Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) < FULL_CAPACITY_LOAD_FACTOR}
@@ -297,11 +294,8 @@ export function NewJobPage() {
                     }
                   />
                   <span>Improve comfort</span>
-                </label>
-                <label
-                  className={toggleClassName}
-                  title="Adds a comparison scenario that groups eligible stops near subway stations before optimizing."
-                >
+                </ToggleOption>
+                <ToggleOption tooltip="Adds a comparison scenario that groups eligible stops near subway stations before optimizing.">
                   <input
                     type="checkbox"
                     checked={config.include_subway_aggregation_scenario}
@@ -309,18 +303,15 @@ export function NewJobPage() {
                     onChange={(event) => updateUserConfig({ include_subway_aggregation_scenario: event.target.checked })}
                   />
                   <span>Subway baseline</span>
-                </label>
-                <label
-                  className={toggleClassName}
-                  title="Adds a comparison scenario that clusters nearby stops before optimizing."
-                >
+                </ToggleOption>
+                <ToggleOption tooltip="Adds a comparison scenario that clusters nearby stops before optimizing.">
                   <input
                     type="checkbox"
                     checked={config.include_nearby_aggregation_scenario}
                     onChange={(event) => updateUserConfig({ include_nearby_aggregation_scenario: event.target.checked })}
                   />
                   <span>Nearby baseline</span>
-                </label>
+                </ToggleOption>
               </div>
 
               <SettingsSection
@@ -439,6 +430,17 @@ const fieldClassName =
 
 const toggleClassName =
   "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
+
+function ToggleOption({ tooltip, children }: { tooltip: string; children: ReactNode }) {
+  return (
+    <label className={`${toggleClassName} group relative cursor-pointer`}>
+      {children}
+      <span className="pointer-events-none absolute left-3 top-[calc(100%+6px)] z-20 w-72 translate-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs font-normal leading-relaxed text-muted-foreground opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
+        {tooltip}
+      </span>
+    </label>
+  );
+}
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (

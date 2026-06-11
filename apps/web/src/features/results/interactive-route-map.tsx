@@ -603,64 +603,6 @@ export function InteractiveRouteMap({
                                 )}{" "}
                                 high risk
                             </div>
-                            {topImpactedStops.length ? (
-                                <div className="mt-3 border-t border-inherit pt-2">
-                                    <div className="flex items-center justify-between gap-3 text-[11px]">
-                                        <span className="font-semibold uppercase text-muted-foreground">
-                                            Review first
-                                        </span>
-                                        <span className="text-muted-foreground">
-                                            Top {formatNumber(topImpactedStops.length)}
-                                        </span>
-                                    </div>
-                                    <div className="mt-2 space-y-1.5">
-                                        {topImpactedStops.map((stop) => {
-                                            const route = routesById.get(
-                                                stop.route_id,
-                                            );
-                                            return (
-                                                <button
-                                                    key={stop.id}
-                                                    type="button"
-                                                    className={cn(
-                                                        "grid w-full grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-md px-2 py-1.5 text-left transition",
-                                                        fullscreen
-                                                            ? "bg-white/18 hover:bg-white/42"
-                                                            : "bg-surface/70 hover:bg-surface",
-                                                    )}
-                                                    onClick={() =>
-                                                        focusStop(stop)
-                                                    }
-                                                >
-                                                    <span className="min-w-0">
-                                                        <span className="block truncate font-medium text-foreground">
-                                                            {stop.address ||
-                                                                stop.requested_address ||
-                                                                "Unknown address"}
-                                                        </span>
-                                                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                                                            {route
-                                                                ? routeLabel(
-                                                                      route,
-                                                                  )
-                                                                : stop.route_id}{" "}
-                                                            ·{" "}
-                                                            {stopScheduleImpactLabel(
-                                                                stop,
-                                                            )}
-                                                        </span>
-                                                    </span>
-                                                    <span className="flex items-center">
-                                                        <StopTimeImpactBadge
-                                                            stop={stop}
-                                                        />
-                                                    </span>
-                                                </button>
-                                            );
-                                        })}
-                                    </div>
-                                </div>
-                            ) : null}
                         </div>
                     ) : null}
                     <div className="mt-3 space-y-2">
@@ -1404,6 +1346,65 @@ export function InteractiveRouteMap({
                         </Popup>
                     ) : null}
                 </MapView>
+                {topImpactedStops.length ? (
+                    <div
+                        className={cn(
+                            "absolute right-3 top-14 z-10 max-h-[42%] w-[min(340px,calc(100%-24px))] overflow-auto rounded-md border p-3 text-xs shadow-xl",
+                            fullscreen
+                                ? "border-white/45 bg-white/35 backdrop-blur-2xl"
+                                : "border-border bg-surface/95 backdrop-blur",
+                        )}
+                    >
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <div className="font-semibold text-foreground">
+                                    Review first
+                                </div>
+                                <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                    Top {formatNumber(topImpactedStops.length)} time impacts
+                                </div>
+                            </div>
+                            <span className="text-[11px] text-muted-foreground">
+                                Time impact
+                            </span>
+                        </div>
+                        <div className="mt-2 space-y-1.5">
+                            {topImpactedStops.map((stop) => {
+                                const route = routesById.get(stop.route_id);
+                                return (
+                                    <button
+                                        key={stop.id}
+                                        type="button"
+                                        className={cn(
+                                            "grid w-full grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-md px-2 py-1.5 text-left transition",
+                                            fullscreen
+                                                ? "bg-white/22 hover:bg-white/48"
+                                                : "bg-muted/70 hover:bg-muted",
+                                        )}
+                                        onClick={() => focusStop(stop)}
+                                    >
+                                        <span className="min-w-0">
+                                            <span className="block truncate font-medium text-foreground">
+                                                {stop.address ||
+                                                    stop.requested_address ||
+                                                    "Unknown address"}
+                                            </span>
+                                            <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                                                {route
+                                                    ? routeLabel(route)
+                                                    : stop.route_id}{" "}
+                                                · {stopScheduleImpactLabel(stop)}
+                                            </span>
+                                        </span>
+                                        <span className="flex items-center">
+                                            <StopTimeImpactBadge stop={stop} />
+                                        </span>
+                                    </button>
+                                );
+                            })}
+                        </div>
+                    </div>
+                ) : null}
                 {selectedRoute ? (
                     <div className="absolute bottom-3 left-3 right-3 rounded-md border border-border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto md:w-[420px]">
                         <div className="flex items-start justify-between gap-3">

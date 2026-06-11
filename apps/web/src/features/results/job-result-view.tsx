@@ -1196,6 +1196,7 @@ function sanitizeDownloadFilename(value: string) {
 function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
   const title = `${jobName} - ${mapName}`;
+  const tileUrl = `${window.location.origin}/api/map-tiles/{z}/{x}/{y}.png`;
   const routeColors = [
     "#0f766e", "#2563eb", "#c2410c", "#7c3aed", "#15803d", "#be123c", "#0891b2", "#a16207",
     "#4338ca", "#db2777", "#047857", "#b45309", "#0369a1", "#9333ea", "#4d7c0f", "#dc2626",
@@ -1307,7 +1308,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     for (const stop of data.stops) { const list = stopsByRouteId.get(stop.route_id) || []; list.push(stop); stopsByRouteId.set(stop.route_id, list); }
     for (const list of stopsByRouteId.values()) list.sort((a,b) => a.order - b.order);
     const longThreshold = percentile(data.routes.map(route => route.duration_s), 0.75);
-    const map = new maplibregl.Map({ container: "map", style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.de/{z}/{x}/{y}.png"], tileSize: 256, attribution: "OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] }, center: data.bounds ? [(data.bounds.min_lng + data.bounds.max_lng) / 2, (data.bounds.min_lat + data.bounds.max_lat) / 2] : [121.4737,31.2304], zoom: 11 });
+    const map = new maplibregl.Map({ container: "map", style: { version: 8, sources: { osm: { type: "raster", tiles: [${JSON.stringify(tileUrl)}], tileSize: 256, attribution: "OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] }, center: data.bounds ? [(data.bounds.min_lng + data.bounds.max_lng) / 2, (data.bounds.min_lat + data.bounds.max_lat) / 2] : [121.4737,31.2304], zoom: 11 });
     map.addControl(new maplibregl.NavigationControl(), "bottom-right");
     map.on("load", () => { addLayers(); fitAll(); renderRoutes(); });
     document.getElementById("search").addEventListener("input", event => { search = event.target.value.toLowerCase().trim(); renderRoutes(); });

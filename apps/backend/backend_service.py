@@ -20,7 +20,9 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, quote, unquote, urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -131,8 +133,18 @@ MAX_DISTANCE_CHECKER_JOBS = 80
 CLIENT_CACHE_DIR = Path(
     os.environ.get("BRP_CLIENT_CACHE_DIR", str(CLIENT_DIR / "cache"))
 ).expanduser()
+MAP_TILE_CACHE_DIR = Path(
+    os.environ.get("BRP_MAP_TILE_CACHE_DIR", str(BASE_DIR / "cache" / "map_tiles"))
+).expanduser()
 DISTANCE_CHECKER_JOBS_PATH = CLIENT_CACHE_DIR / "distance_checker_jobs.json"
 GOOGLE_GEOCODE_USAGE_PATH = CLIENT_CACHE_DIR / "google_geocode_usage.json"
+MAP_TILE_UPSTREAM_TEMPLATE = os.environ.get(
+    "BRP_MAP_TILE_UPSTREAM_TEMPLATE",
+    "https://tile.openstreetmap.de/{z}/{x}/{y}.png",
+).strip()
+MAP_TILE_FALLBACK_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
+)
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
 
 
@@ -2867,6 +2879,67 @@ def _build_free_baseline_template_export(
         return None, str(exc)
 
 
+def _map_tile_cache_path(z: int, x: int, y: int) -> Path:
+    return MAP_TILE_CACHE_DIR / str(z) / str(x) / f"{y}.png"
+
+
+def _parse_map_tile_path(path: str) -> tuple[int, int, int] | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) != 4 or parts[0] != "map-tiles":
+        return None
+    raw_y = parts[3]
+    if not raw_y.endswith(".png"):
+        return None
+    try:
+        z = int(parts[1])
+        x = int(parts[2])
+        y = int(raw_y[:-4])
+    except ValueError:
+        return None
+    if z < 0 or z > 22:
+        return None
+    max_tile = 2**z
+    if x < 0 or y < 0 or x >= max_tile or y >= max_tile:
+        return None
+    return z, x, y
+
+
+def _load_or_fetch_map_tile(z: int, x: int, y: int) -> tuple[bytes, bool]:
+    tile_path = _map_tile_cache_path(z, x, y)
+    if tile_path.exists():
+        try:
+            return tile_path.read_bytes(), True
+        except OSError:
+            pass
+
+    upstream_url = MAP_TILE_UPSTREAM_TEMPLATE.format(z=z, x=x, y=y)
+    request = Request(
+        upstream_url,
+        headers={"User-Agent": "BRP route planner tile proxy/1.0"},
+    )
+    try:
+        with urlopen(request, timeout=8) as response:
+            if getattr(response, "status", 200) != 200:
+                raise HTTPError(
+                    upstream_url,
+                    getattr(response, "status", 502),
+                    "Tile upstream returned non-200",
+                    response.headers,
+                    None,
+                )
+            body = response.read()
+            if body:
+                tile_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    tile_path.write_bytes(body)
+                except OSError:
+                    pass
+                return body, False
+    except (HTTPError, URLError, TimeoutError, OSError) as exc:
+        print(f"[WARN] Map tile fetch failed z={z} x={x} y={y}: {exc}")
+    return MAP_TILE_FALLBACK_BYTES, False
+
+
 class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
@@ -2895,13 +2968,14 @@ class BackendHandler(BaseHTTPRequestHandler):
         content_type: str,
         filename: str | None = None,
         inline: bool = True,
+        cache_control: str = "no-store",
     ) -> bool:
         try:
             self.send_response(status_code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache_control)
             if filename:
                 disposition = "inline" if inline else "attachment"
                 self.send_header(
@@ -2973,6 +3047,20 @@ class BackendHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"status": "ok"})
             return
         if not self._require_authorized_request():
+            return
+        map_tile = _parse_map_tile_path(path)
+        if map_tile:
+            tile_body, from_cache = _load_or_fetch_map_tile(*map_tile)
+            self._send_bytes(
+                200,
+                tile_body,
+                content_type="image/png",
+                cache_control=(
+                    "public, max-age=604800, immutable"
+                    if from_cache
+                    else "public, max-age=86400"
+                ),
+            )
             return
         if path == "/auth/config":
             self._send_json(200, _auth_config_payload())

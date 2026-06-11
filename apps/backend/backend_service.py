@@ -1585,6 +1585,7 @@ class JobStore:
         summary = {
             "job_id": job_id,
             "owner_email": _normalize_email(record.get("owner_email")),
+            "shared_with_all": bool(record.get("shared_with_all")),
             "status": str(record.get("status", "queued")),
             "created_at": record.get("created_at"),
             "started_at": record.get("started_at"),
@@ -1723,7 +1724,8 @@ class JobStore:
             return [
                 deepcopy(entry)
                 for entry in entries
-                if _normalize_email(entry.get("owner_email")) == normalized_user_email
+                if bool(entry.get("shared_with_all"))
+                or _normalize_email(entry.get("owner_email")) == normalized_user_email
             ]
 
     def list_queued_jobs(self) -> list[dict[str, Any]]:
@@ -2143,6 +2145,8 @@ def _can_access_job(
     job_record: dict[str, Any], user_email: str, include_all: bool = False
 ) -> bool:
     if include_all:
+        return True
+    if bool(job_record.get("shared_with_all")):
         return True
     return _normalize_email(job_record.get("owner_email")) == _normalize_email(
         user_email

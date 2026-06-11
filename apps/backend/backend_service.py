@@ -1802,6 +1802,7 @@ class JobStore:
                         {
                             "job_id": job_id,
                             "owner_email": _normalize_email(record.get("owner_email")),
+                            "shared_with_all": bool(record.get("shared_with_all")),
                             "status": str(record.get("status", "queued")),
                             "created_at": record.get("created_at"),
                             "started_at": record.get("started_at"),

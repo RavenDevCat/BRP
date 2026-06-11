@@ -1,6 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -9,15 +9,13 @@ import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DEFAULT_PLANNER_CONFIG, SERVICE_DIRECTION_OPTIONS, TRAFFIC_PROFILE_OPTIONS } from "@/features/planner/config";
 import {
-  getDemoWorkbookUrl,
   getWorkbookTemplateUrl,
-  listDemoWorkbooks,
   previewWorkbook,
   submitWorkbookJob,
   type PlannerConfigPayload,
   type WorkbookPreview,
 } from "@/lib/api";
-import { formatDateTime, formatNumber } from "@/lib/format";
+import { formatNumber } from "@/lib/format";
 
 type PlannerConfigKey = keyof PlannerConfigPayload;
 
@@ -37,22 +35,13 @@ const FULL_CAPACITY_LOAD_FACTOR = 1.0;
 export function NewJobPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const [sourceMode, setSourceMode] = useState<"upload" | "demo">("upload");
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
   const [jobCustomName, setJobCustomName] = useState("");
-  const [selectedDemoName, setSelectedDemoName] = useState("");
   const [config, setConfig] = useState<PlannerConfigPayload>(DEFAULT_PLANNER_CONFIG);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
-  const demosQuery = useQuery({
-    queryKey: ["workbook-demos"],
-    queryFn: listDemoWorkbooks,
-    enabled: sourceMode === "demo",
-  });
-  const demoOptions = demosQuery.data || [];
-  const resolvedDemoName = selectedDemoName || demoOptions[0]?.name || "";
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
@@ -98,26 +87,6 @@ export function NewJobPage() {
       Boolean(payload.subway_aggregation_block_reason),
     );
   }
-
-  const demoMutation = useMutation({
-    mutationFn: async (demoName: string) => {
-      const response = await fetch(getDemoWorkbookUrl(demoName), { headers: { Accept: "application/octet-stream" } });
-      if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
-        throw new Error(typeof payload?.error === "string" ? payload.error : `Demo download failed with ${response.status}`);
-      }
-      const blob = await response.blob();
-      const demoFile = new File([blob], demoName, { type: blob.type || workbookMimeType });
-      return { file: demoFile, fileBase64: await fileToBase64(demoFile) };
-    },
-    onSuccess: (payload) => {
-      setFile(payload.file);
-      setFileBase64(payload.fileBase64);
-      setFileError("");
-      setPreview(null);
-      resetConfigToDefaultsWithOverrides();
-    },
-  });
 
   const previewMutation = useMutation({
     mutationFn: async () => {
@@ -185,14 +154,7 @@ export function NewJobPage() {
     }
   }
 
-  function resetWorkbookState() {
-    setFile(null);
-    setPreview(null);
-    setFileError("");
-    setFileBase64("");
-  }
-
-  const busy = previewMutation.isPending || submitMutation.isPending || demoMutation.isPending;
+  const busy = previewMutation.isPending || submitMutation.isPending;
   const canSubmit = Boolean(fileBase64 && !busy);
 
   return (
@@ -218,96 +180,24 @@ export function NewJobPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                <div className="inline-flex rounded-md border border-border bg-muted p-1">
-                  <SourceModeButton
-                    active={sourceMode === "upload"}
-                    onClick={() => {
-                      setSourceMode("upload");
-                      resetWorkbookState();
-                      resetConfigToDefaultsWithOverrides();
-                    }}
-                  >
-                    Upload Workbook
-                  </SourceModeButton>
-                  <SourceModeButton
-                    active={sourceMode === "demo"}
-                    onClick={() => {
-                      setSourceMode("demo");
-                      resetWorkbookState();
-                      resetConfigToDefaultsWithOverrides();
-                    }}
-                  >
-                    Demo Workbook
-                  </SourceModeButton>
-                </div>
+                <div className="text-sm text-muted-foreground">Upload a completed current-plan workbook.</div>
                 <a className={buttonClassName("secondary")} href={getWorkbookTemplateUrl()}>
                   <Download className="h-4 w-4" aria-hidden="true" />
                   Template
                 </a>
               </div>
 
-              {sourceMode === "upload" ? (
-                <label className="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
-                  <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
-                  <span className="text-sm font-medium">{file?.name || "Select workbook"}</span>
-                  <span className="mt-1 text-xs text-muted-foreground">current_plan_assignments + current_plan_fleet</span>
-                  <input
-                    className="sr-only"
-                    type="file"
-                    accept=".xlsx,.xlsm"
-                    onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
-                  />
-                </label>
-              ) : (
-                <div className="space-y-3 rounded-lg border border-border bg-muted/60 p-4">
-                  <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-                    <select
-                      className={fieldClassName}
-                      value={resolvedDemoName}
-                      disabled={demosQuery.isLoading || !demoOptions.length}
-                      onChange={(event) => {
-                        setSelectedDemoName(event.target.value);
-                        resetWorkbookState();
-                        resetConfigToDefaultsWithOverrides();
-                      }}
-                    >
-                      {demoOptions.map((demo) => (
-                        <option key={demo.name} value={demo.name}>
-                          {demo.name}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      disabled={!resolvedDemoName || busy}
-                      icon={demoMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                      onClick={() => demoMutation.mutate(resolvedDemoName)}
-                    >
-                      Load demo
-                    </Button>
-                    <a
-                      className={buttonClassName("secondary", resolvedDemoName ? "" : "pointer-events-none opacity-50")}
-                      href={resolvedDemoName ? getDemoWorkbookUrl(resolvedDemoName) : "#"}
-                    >
-                      <Download className="h-4 w-4" aria-hidden="true" />
-                      Download
-                    </a>
-                  </div>
-                  {demosQuery.isLoading ? (
-                    <div className="flex items-center text-sm text-muted-foreground">
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-                      Loading demos
-                    </div>
-                  ) : null}
-                  {resolvedDemoName ? <DemoMeta demo={demoOptions.find((item) => item.name === resolvedDemoName)} /> : null}
-                  {!demosQuery.isLoading && !demoOptions.length ? (
-                    <InlineError message="No demo workbook was found in apps/client/demodata." />
-                  ) : null}
-                  {demosQuery.error ? <InlineError message={(demosQuery.error as Error).message} /> : null}
-                  {demoMutation.error ? <InlineError message={(demoMutation.error as Error).message} /> : null}
-                </div>
-              )}
+              <label className="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
+                <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
+                <span className="text-sm font-medium">{file?.name || "Select workbook"}</span>
+                <span className="mt-1 text-xs text-muted-foreground">current_plan_assignments + current_plan_fleet</span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept=".xlsx,.xlsm"
+                  onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                />
+              </label>
               {fileError ? <InlineError message={fileError} /> : null}
               {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
             </CardContent>
@@ -393,7 +283,10 @@ export function NewJobPage() {
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <label className={toggleClassName}>
+                <label
+                  className={toggleClassName}
+                  title="Limits planned load to 85% of vehicle capacity so routes are less crowded; may require more buses."
+                >
                   <input
                     type="checkbox"
                     checked={Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) < FULL_CAPACITY_LOAD_FACTOR}
@@ -405,7 +298,10 @@ export function NewJobPage() {
                   />
                   <span>Improve comfort</span>
                 </label>
-                <label className={toggleClassName}>
+                <label
+                  className={toggleClassName}
+                  title="Adds a comparison scenario that groups eligible stops near subway stations before optimizing."
+                >
                   <input
                     type="checkbox"
                     checked={config.include_subway_aggregation_scenario}
@@ -414,7 +310,10 @@ export function NewJobPage() {
                   />
                   <span>Subway baseline</span>
                 </label>
-                <label className={toggleClassName}>
+                <label
+                  className={toggleClassName}
+                  title="Adds a comparison scenario that clusters nearby stops before optimizing."
+                >
                   <input
                     type="checkbox"
                     checked={config.include_nearby_aggregation_scenario}
@@ -541,31 +440,6 @@ const fieldClassName =
 const toggleClassName =
   "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
 
-const workbookMimeType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-
-function SourceModeButton({
-  active,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  children: ReactNode;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      className={[
-        "h-8 rounded px-3 text-sm font-medium transition",
-        active ? "bg-surface text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-      ].join(" ")}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
-
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
@@ -653,18 +527,6 @@ function NumberField({
   );
 }
 
-function DemoMeta({ demo }: { demo?: { name: string; size_bytes: number; modified_at?: string } }) {
-  if (!demo) {
-    return null;
-  }
-  return (
-    <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-      <span>{formatWorkbookSize(demo.size_bytes)}</span>
-      {demo.modified_at ? <span>Updated {formatDateTime(demo.modified_at)}</span> : null}
-    </div>
-  );
-}
-
 function PreviewSummary({ preview }: { preview: WorkbookPreview }) {
   const summary = preview.summary;
   return (
@@ -718,16 +580,6 @@ function FleetSlot({ label, seats, count }: { label: string; seats: number; coun
 
 function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{message}</div>;
-}
-
-function formatWorkbookSize(value: number) {
-  if (!Number.isFinite(value) || value <= 0) {
-    return "0 KB";
-  }
-  if (value >= 1024 * 1024) {
-    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-  }
-  return `${Math.max(1, Math.round(value / 1024))} KB`;
 }
 
 function updateConfig(

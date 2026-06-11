@@ -47,7 +47,6 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent.parent
 CLIENT_DIR = BASE_DIR.parent / "client"
-DEMO_DATA_DIR = CLIENT_DIR / "demodata"
 DEFAULT_JOBS_DIR = REPO_ROOT / "state" / "jobs"
 RAW_JOBS_DIR = os.environ.get("BRP_BACKEND_JOBS_DIR", "").strip()
 JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
@@ -1060,43 +1059,6 @@ def _handle_distance_checker_history_create(
             history_payload, owner_email=user_email
         )
     }
-
-
-def _list_demo_workbooks() -> list[dict[str, Any]]:
-    if not DEMO_DATA_DIR.exists():
-        return []
-    demos: list[dict[str, Any]] = []
-    for path in sorted(DEMO_DATA_DIR.iterdir(), key=lambda item: item.name.lower()):
-        if not path.is_file() or path.suffix.lower() not in {".xlsx", ".xlsm"}:
-            continue
-        if path.name.lower().startswith("demand-"):
-            continue
-        stat = path.stat()
-        demos.append(
-            {
-                "name": path.name,
-                "size_bytes": stat.st_size,
-                "modified_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
-                .replace(microsecond=0)
-                .isoformat(),
-            }
-        )
-    return demos
-
-
-def _resolve_demo_workbook_path(name: str) -> Path | None:
-    demo_name = Path(str(name or "")).name
-    if not demo_name or Path(demo_name).suffix.lower() not in {".xlsx", ".xlsm"}:
-        return None
-    root = DEMO_DATA_DIR.resolve()
-    candidate = (root / demo_name).resolve()
-    try:
-        candidate.relative_to(root)
-    except ValueError:
-        return None
-    if not candidate.is_file():
-        return None
-    return candidate
 
 
 def _read_current_plan_upload(
@@ -3157,23 +3119,6 @@ class BackendHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(200, record)
-            return
-        if path == "/workbooks/demos":
-            self._send_json(200, {"demos": _list_demo_workbooks()})
-            return
-        if path.startswith("/workbooks/demos/"):
-            demo_name = unquote(path.rsplit("/", 1)[-1])
-            demo_path = _resolve_demo_workbook_path(demo_name)
-            if not demo_path:
-                self._send_json(404, {"error": f"Demo workbook not found: {demo_name}"})
-                return
-            self._send_bytes(
-                200,
-                demo_path.read_bytes(),
-                content_type=WORKBOOK_CONTENT_TYPE,
-                filename=demo_path.name,
-                inline=False,
-            )
             return
         if path == "/jobs":
             self._send_json(

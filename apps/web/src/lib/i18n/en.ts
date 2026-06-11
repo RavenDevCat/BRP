@@ -43,11 +43,8 @@ const en: Translations = {
     "Upload a current bus plan workbook (.xlsx or .xlsm)":
         "Upload a current bus plan workbook (.xlsx or .xlsm)",
     "Download template": "Download template",
-    "Try a demo workbook": "Try a demo workbook",
     "Run settings": "Run settings",
     "Improve comfort": "Improve comfort",
-    "Limits solver capacity to 85% of each vehicle":
-        "Limits solver capacity to 85% of each vehicle",
     "Service direction": "Service direction",
     "Traffic profile": "Traffic profile",
     "Submit Audit": "Submit Audit",

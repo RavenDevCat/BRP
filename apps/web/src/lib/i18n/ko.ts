@@ -40,10 +40,8 @@ const ko: Translations = {
     "Upload a current bus plan workbook (.xlsx or .xlsm)":
         "현재 버스 운영 계획 워크북 업로드 (.xlsx 또는 .xlsm)",
     "Download template": "템플릿 다운로드",
-    "Try a demo workbook": "데모 워크북 사용",
     "Run settings": "실행 설정",
     "Improve comfort": "승차감 개선",
-    "Limits solver capacity to 85% of each vehicle": "차량당 정원의 85%로 제한",
     "Service direction": "운행 방향",
     "Traffic profile": "교통 프로필",
     "Submit Audit": "감사 제출",

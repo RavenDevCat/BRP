@@ -215,12 +215,6 @@ export type WorkbookPreview = {
     suggested_config: PlannerConfigPayload;
 };
 
-export type DemoWorkbook = {
-    name: string;
-    size_bytes: number;
-    modified_at?: string;
-};
-
 export type WorkbookSubmitResponse = {
     job: JobSummary & { worker_pid?: number };
     source_label: string;
@@ -457,10 +451,6 @@ type FleetPlannerHistoryResponse = {
     jobs: FleetPlannerHistorySummary[];
 };
 
-type DemoWorkbooksResponse = {
-    demos: DemoWorkbook[];
-};
-
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...init,
@@ -506,21 +496,12 @@ export function getDeploymentFeatures() {
     return apiFetch<DeploymentFeatures>("/deployment-features");
 }
 
-export async function listDemoWorkbooks() {
-    const payload = await apiFetch<DemoWorkbooksResponse>("/workbooks/demos");
-    return payload.demos;
-}
-
 export function getWorkbookTemplateUrl() {
     return `${API_BASE_URL}/workbooks/template`;
 }
 
 export function getDemandTemplateUrl() {
     return `${API_BASE_URL}/fleet-planner/demand-template`;
-}
-
-export function getDemoWorkbookUrl(name: string) {
-    return `${API_BASE_URL}/workbooks/demos/${encodeURIComponent(name)}`;
 }
 
 export async function listJobs() {

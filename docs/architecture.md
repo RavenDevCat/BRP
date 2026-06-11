@@ -5,7 +5,7 @@ This is the maintained high-level architecture note. For daily commands and rele
 ## Repository Layout
 
 - `apps/client`: shared Python helpers for workbook intake, geocoding, caches, demand preview, and map/result rendering (the legacy Streamlit UI has been removed).
-- `apps/web`: React frontend for Route Audit plus side tools such as Distance & Cost and Fleet Planner.
+- `apps/web`: React frontend for Route Audit plus side tools such as Distance & Cost and Fleet Planner. Includes a lightweight i18n module at `apps/web/src/lib/i18n/` for multi-language UI support.
 - `apps/backend`: HTTP job service, planner execution, route solving, AI audit integration, generated output handling.
 - `ops`: environment examples, Cloudflare examples, and local/server run scripts.
 - `docs`: maintained architecture, deployment, workflow, and Codex handoff notes.

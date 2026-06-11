@@ -281,6 +281,17 @@ keep that default and configure Nginx to proxy `/api/*` to the backend.
 Use `VITE_API_BASE_URL` only for special builds that intentionally target a
 different API origin.
 
+### UI language
+
+The React frontend supports English (default) and Korean.
+A language toggle appears in the sidebar when the server has
+`BRP_DISABLE_LANGUAGE_SWITCH` unset or `false` (staging, KR).
+Set it to `true` only on servers where the toggle should stay hidden:
+
+```bash
+export BRP_DISABLE_LANGUAGE_SWITCH=true
+```
+
 For public React static/proxy hosts behind Cloudflare Access, the managed Nginx
 site should reject requests that reach the origin without the
 `Cf-Access-Authenticated-User-Email` header. Install the site with:

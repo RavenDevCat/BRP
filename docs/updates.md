@@ -35,6 +35,20 @@ It is not a code changelog. Record changes here when users or operators should k
   reads existing structured job results. Rerun only when users want results
   rebuilt under newer planner or geocoding behavior.
 
+### Korean Language Support
+
+- The frontend now supports Korean (한국어) as an alternative UI language.
+  English remains the default.
+- A language toggle (`EN` / `한`) appears in the sidebar on staging and KR
+  production servers. CN production hides the toggle by default.
+- Server behavior is controlled by `BRP_DISABLE_LANGUAGE_SWITCH`:
+  unset or `false` shows the toggle; set to `true` hides it.
+- Translated pages include the navigation shell, dashboard, job history,
+  job detail, route audit results, and the interactive route map.
+  Untranslated strings fall back to English.
+- All translation keys are maintained in `apps/web/src/lib/i18n/en.ts` and
+  `ko.ts`. Add new keys to both files when introducing user-facing text.
+
 ## 2026-06-09
 
 ### Side Tool History Rails Unified

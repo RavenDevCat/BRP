@@ -241,6 +241,23 @@ export function InteractiveRouteMap({
             return true;
         });
     }, [longRouteThreshold, routeFilter, routeSearch, sortedRoutes]);
+    const topImpactedStops = useMemo(
+        () =>
+            data.stops
+                .filter(
+                    (stop) =>
+                        !stop.is_depot &&
+                        Boolean(stop.time_impact?.comparison_available) &&
+                        stopAdverseDeltaMinutes(stop) > 10,
+                )
+                .sort(
+                    (a, b) =>
+                        stopAdverseDeltaMinutes(b) -
+                        stopAdverseDeltaMinutes(a),
+                )
+                .slice(0, 5),
+        [data.stops],
+    );
 
     const routeFeatures = useMemo<FeatureCollection>(
         () => ({
@@ -586,6 +603,64 @@ export function InteractiveRouteMap({
                                 )}{" "}
                                 high risk
                             </div>
+                            {topImpactedStops.length ? (
+                                <div className="mt-3 border-t border-inherit pt-2">
+                                    <div className="flex items-center justify-between gap-3 text-[11px]">
+                                        <span className="font-semibold uppercase text-muted-foreground">
+                                            Review first
+                                        </span>
+                                        <span className="text-muted-foreground">
+                                            Top {formatNumber(topImpactedStops.length)}
+                                        </span>
+                                    </div>
+                                    <div className="mt-2 space-y-1.5">
+                                        {topImpactedStops.map((stop) => {
+                                            const route = routesById.get(
+                                                stop.route_id,
+                                            );
+                                            return (
+                                                <button
+                                                    key={stop.id}
+                                                    type="button"
+                                                    className={cn(
+                                                        "grid w-full grid-cols-[minmax(0,1fr)_auto] gap-2 rounded-md px-2 py-1.5 text-left transition",
+                                                        fullscreen
+                                                            ? "bg-white/18 hover:bg-white/42"
+                                                            : "bg-surface/70 hover:bg-surface",
+                                                    )}
+                                                    onClick={() =>
+                                                        focusStop(stop)
+                                                    }
+                                                >
+                                                    <span className="min-w-0">
+                                                        <span className="block truncate font-medium text-foreground">
+                                                            {stop.address ||
+                                                                stop.requested_address ||
+                                                                "Unknown address"}
+                                                        </span>
+                                                        <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                                                            {route
+                                                                ? routeLabel(
+                                                                      route,
+                                                                  )
+                                                                : stop.route_id}{" "}
+                                                            ·{" "}
+                                                            {stopScheduleImpactLabel(
+                                                                stop,
+                                                            )}
+                                                        </span>
+                                                    </span>
+                                                    <span className="flex items-center">
+                                                        <StopTimeImpactBadge
+                                                            stop={stop}
+                                                        />
+                                                    </span>
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ) : null}
                         </div>
                     ) : null}
                     <div className="mt-3 space-y-2">
@@ -1402,6 +1477,11 @@ function formatDeltaMinutes(value: unknown) {
         return "0 min";
     }
     return `${formatNumber(Math.round(Math.abs(numericValue)))} min`;
+}
+
+function stopAdverseDeltaMinutes(stop: JobMapStop) {
+    const numericValue = Number(stop.time_impact?.adverse_delta_minutes || 0);
+    return Number.isFinite(numericValue) ? numericValue : 0;
 }
 
 function stopScheduleImpactLabel(stop: JobMapStop) {

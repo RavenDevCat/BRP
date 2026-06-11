@@ -321,7 +321,7 @@ export function NewJobPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="grid gap-3 xl:grid-cols-3">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Service Direction">
                   <select
                     className={fieldClassName}
@@ -338,6 +338,25 @@ export function NewJobPage() {
                     ))}
                   </select>
                 </Field>
+                {config.service_direction === "To School" ? (
+                  <Field label="School Arrival">
+                    <input
+                      className={fieldClassName}
+                      type="time"
+                      value={config.to_school_arrival_time}
+                      onChange={(event) => updateUserConfig({ to_school_arrival_time: event.target.value })}
+                    />
+                  </Field>
+                ) : (
+                  <Field label="School Departure">
+                    <input
+                      className={fieldClassName}
+                      type="time"
+                      value={config.from_school_departure_time}
+                      onChange={(event) => updateUserConfig({ from_school_departure_time: event.target.value })}
+                    />
+                  </Field>
+                )}
                 <Field label="Traffic Assumptions">
                   <select
                     className={fieldClassName}

@@ -192,6 +192,8 @@ export type PlannerConfigPayload = {
     comfort_load_factor: number;
     traffic_profile_name: string;
     service_direction: string;
+    to_school_arrival_time: string;
+    from_school_departure_time: string;
     include_subway_aggregation_scenario: boolean;
     include_nearby_aggregation_scenario: boolean;
     operating_cost_per_km: number;

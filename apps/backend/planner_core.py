@@ -139,6 +139,8 @@ class PlannerConfig:
     comfort_load_factor: float = 1.0
     traffic_profile_name: str = "Off-Peak"
     service_direction: str = "From School"
+    to_school_arrival_time: str = "08:00"
+    from_school_departure_time: str = "15:40"
     matrix_nearest_neighbors: int = 10
     matrix_candidate_radius_km: float = 15.0
     operating_cost_per_km: float = 0.0

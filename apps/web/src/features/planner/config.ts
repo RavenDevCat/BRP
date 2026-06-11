@@ -24,6 +24,8 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   comfort_load_factor: 1.0,
   traffic_profile_name: "Off-Peak",
   service_direction: "From School",
+  to_school_arrival_time: "08:00",
+  from_school_departure_time: "15:40",
   include_subway_aggregation_scenario: false,
   include_nearby_aggregation_scenario: false,
   operating_cost_per_km: 0,

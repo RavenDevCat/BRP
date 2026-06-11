@@ -83,6 +83,7 @@ export type JobMapRoute = {
     traffic_time_source?: string;
     geometry: number[][];
     stop_ids: string[];
+    time_impact?: JobMapTimeImpactSummary;
 };
 
 export type JobMapStop = {
@@ -101,6 +102,39 @@ export type JobMapStop = {
     cumulative_distance_m: number;
     demand_batch_index?: number | null;
     demand_batch_count?: number | null;
+    schedule_anchor_label?: string;
+    schedule_anchor_kind?: string;
+    scheduled_offset_s?: number;
+    scheduled_time_minutes?: number;
+    scheduled_time_label?: string;
+    time_impact?: JobMapStopTimeImpact;
+};
+
+export type JobMapStopTimeImpact = {
+    comparison_available?: boolean;
+    current_route_id?: string;
+    new_route_id?: string;
+    current_time_label?: string;
+    new_time_label?: string;
+    delta_minutes?: number;
+    adverse_delta_minutes?: number;
+    adverse_direction?: "earlier_pickup" | "later_dropoff" | string;
+    level?: "better" | "acceptable" | "notice" | "elevated" | "severe" | "critical" | string;
+    route_changed?: boolean;
+};
+
+export type JobMapTimeImpactSummary = {
+    available?: boolean;
+    compared_stop_count?: number;
+    avg_adverse_delta_minutes?: number;
+    p90_adverse_delta_minutes?: number;
+    max_adverse_delta_minutes?: number;
+    notice_stop_count?: number;
+    elevated_stop_count?: number;
+    severe_stop_count?: number;
+    critical_stop_count?: number;
+    high_risk_stop_count?: number;
+    route_changed_stop_count?: number;
 };
 
 export type JobMapPrivateLink = {
@@ -130,6 +164,7 @@ export type JobMapData = {
         passenger_count: number;
         distance_m: number;
         duration_s: number;
+        time_impact?: JobMapTimeImpactSummary;
     };
 };
 

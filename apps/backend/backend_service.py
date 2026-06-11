@@ -2297,6 +2297,285 @@ def _route_geometry_coordinates(route: dict[str, Any]) -> list[list[float]]:
     return coordinates
 
 
+DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
+DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
+
+
+def _job_planner_config_payload(job_record: dict[str, Any]) -> dict[str, Any]:
+    result = dict(job_record.get("result") or {})
+    metadata = dict(job_record.get("metadata") or {})
+    return dict(result.get("planner_config") or job_record.get("config") or metadata.get("planner_config") or {})
+
+
+def _parse_clock_minutes(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    parts = text.split(":")
+    if len(parts) < 2:
+        return None
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+    except ValueError:
+        return None
+    if hours < 0 or minutes < 0 or minutes > 59:
+        return None
+    return (hours * 60 + minutes) % (24 * 60)
+
+
+def _format_clock_minutes(minutes: float | int | None) -> str:
+    if minutes is None:
+        return ""
+    total_minutes = int(round(float(minutes))) % (24 * 60)
+    hours = total_minutes // 60
+    minute = total_minutes % 60
+    return f"{hours:02d}:{minute:02d}"
+
+
+def _schedule_anchor_minutes(
+    job_record: dict[str, Any], service_direction: str
+) -> tuple[int, str, str]:
+    config = _job_planner_config_payload(job_record)
+    if service_direction == "To School":
+        candidate_keys = (
+            "to_school_arrival_time",
+            "school_arrival_time",
+            "target_arrival_time",
+            "arrival_time",
+        )
+        default_minutes = DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES
+        label = "School arrival"
+    else:
+        candidate_keys = (
+            "from_school_departure_time",
+            "school_departure_time",
+            "target_departure_time",
+            "departure_time",
+        )
+        default_minutes = DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES
+        label = "School departure"
+    for key in candidate_keys:
+        parsed = _parse_clock_minutes(config.get(key))
+        if parsed is not None:
+            return parsed, _format_clock_minutes(parsed), label
+    return default_minutes, _format_clock_minutes(default_minutes), label
+
+
+def _map_route_duration_scale(route: dict[str, Any], stops: list[dict[str, Any]]) -> tuple[float, float]:
+    raw_duration_s = float(route.get("raw_duration_s", 0.0) or 0.0)
+    display_duration_s = float(route.get("duration_s", 0.0) or 0.0)
+    max_cumulative_s = max(
+        [float(stop.get("cumulative_duration_s", 0.0) or 0.0) for stop in stops] or [0.0]
+    )
+    base_duration_s = raw_duration_s if raw_duration_s > 0 else max_cumulative_s
+    if display_duration_s <= 0:
+        display_duration_s = base_duration_s
+    scale = (display_duration_s / base_duration_s) if base_duration_s > 0 else 1.0
+    return max(display_duration_s, max_cumulative_s * scale), scale
+
+
+def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -> None:
+    service_direction = (
+        "To School"
+        if str(payload.get("service_direction") or "").strip() == "To School"
+        else "From School"
+    )
+    anchor_minutes, anchor_label, anchor_kind = _schedule_anchor_minutes(
+        job_record, service_direction
+    )
+    config = _job_planner_config_payload(job_record)
+    try:
+        dwell_seconds = max(0.0, float(config.get("stop_service_minutes", 1) or 1) * 60.0)
+    except (TypeError, ValueError):
+        dwell_seconds = 60.0
+
+    routes_by_id = {str(route.get("id") or ""): route for route in list(payload.get("routes") or [])}
+    stops_by_route: dict[str, list[dict[str, Any]]] = {}
+    for stop in list(payload.get("stops") or []):
+        stops_by_route.setdefault(str(stop.get("route_id") or ""), []).append(stop)
+
+    for route_id, route_stops in stops_by_route.items():
+        route_stops.sort(key=lambda item: int(item.get("order", 0) or 0))
+        route = routes_by_id.get(route_id, {})
+        route_duration_s, scale = _map_route_duration_scale(route, route_stops)
+        service_orders = sorted(
+            int(stop.get("order", 0) or 0)
+            for stop in route_stops
+            if not bool(stop.get("is_depot"))
+        )
+        service_order_count = len(service_orders)
+        for stop in route_stops:
+            order = int(stop.get("order", 0) or 0)
+            drive_elapsed_s = float(stop.get("cumulative_duration_s", 0.0) or 0.0) * scale
+            if service_direction == "To School":
+                if bool(stop.get("is_depot")):
+                    offset_s = 0.0
+                else:
+                    downstream_dwell_count = len([item for item in service_orders if item >= order])
+                    remaining_drive_s = max(0.0, route_duration_s - drive_elapsed_s)
+                    offset_s = -(remaining_drive_s + downstream_dwell_count * dwell_seconds)
+            else:
+                prior_dwell_count = len([item for item in service_orders if item < order])
+                if service_order_count == 0 or bool(stop.get("is_depot")):
+                    prior_dwell_count = 0
+                offset_s = drive_elapsed_s + prior_dwell_count * dwell_seconds
+            scheduled_minutes = anchor_minutes + (offset_s / 60.0)
+            stop["schedule_anchor_label"] = anchor_label
+            stop["schedule_anchor_kind"] = anchor_kind
+            stop["scheduled_offset_s"] = offset_s
+            stop["scheduled_time_minutes"] = scheduled_minutes
+            stop["scheduled_time_label"] = _format_clock_minutes(scheduled_minutes)
+
+
+def _normalize_stop_match_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _stop_match_keys(stop: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    node_index = _int_or_none(stop.get("node_index"))
+    if node_index is not None:
+        keys.append(f"node:{node_index}")
+    demand_batch_index = _int_or_none(stop.get("demand_batch_index"))
+    if demand_batch_index is not None:
+        keys.append(f"batch:{demand_batch_index}")
+    for field in ("requested_address", "address"):
+        normalized = _normalize_stop_match_text(stop.get(field))
+        if normalized:
+            keys.append(f"addr:{normalized}")
+    return keys
+
+
+def _time_impact_level(adverse_delta_minutes: float) -> str:
+    if adverse_delta_minutes <= 0.5:
+        return "better"
+    if adverse_delta_minutes <= 10:
+        return "acceptable"
+    if adverse_delta_minutes <= 20:
+        return "notice"
+    if adverse_delta_minutes <= 30:
+        return "elevated"
+    if adverse_delta_minutes <= 45:
+        return "severe"
+    return "critical"
+
+
+def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
+    compared = [
+        stop
+        for stop in stops
+        if not bool(stop.get("is_depot"))
+        and bool(dict(stop.get("time_impact") or {}).get("comparison_available"))
+    ]
+    adverse_values = [
+        float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        for stop in compared
+    ]
+    adverse_values.sort()
+    p90 = 0.0
+    if adverse_values:
+        p90_index = min(len(adverse_values) - 1, max(0, math.ceil(len(adverse_values) * 0.9) - 1))
+        p90 = adverse_values[p90_index]
+    levels = [
+        str(dict(stop.get("time_impact") or {}).get("level") or "")
+        for stop in compared
+    ]
+    return {
+        "available": bool(compared),
+        "compared_stop_count": len(compared),
+        "avg_adverse_delta_minutes": (
+            sum(adverse_values) / len(adverse_values) if adverse_values else 0.0
+        ),
+        "p90_adverse_delta_minutes": p90,
+        "max_adverse_delta_minutes": adverse_values[-1] if adverse_values else 0.0,
+        "notice_stop_count": len([level for level in levels if level == "notice"]),
+        "elevated_stop_count": len([level for level in levels if level == "elevated"]),
+        "severe_stop_count": len([level for level in levels if level == "severe"]),
+        "critical_stop_count": len([level for level in levels if level == "critical"]),
+        "high_risk_stop_count": len([level for level in levels if level in {"severe", "critical"}]),
+        "route_changed_stop_count": len(
+            [
+                stop
+                for stop in compared
+                if bool(dict(stop.get("time_impact") or {}).get("route_changed"))
+            ]
+        ),
+    }
+
+
+def _attach_schedule_impact(
+    payload: dict[str, Any],
+    current_payload: dict[str, Any] | None,
+) -> None:
+    stops = list(payload.get("stops") or [])
+    if not current_payload:
+        payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(stops)
+        return
+
+    current_lookup: dict[str, dict[str, Any]] = {}
+    for current_stop in list(current_payload.get("stops") or []):
+        if bool(current_stop.get("is_depot")):
+            continue
+        if not str(current_stop.get("scheduled_time_label") or "").strip():
+            continue
+        for key in _stop_match_keys(current_stop):
+            current_lookup.setdefault(key, current_stop)
+
+    service_direction = (
+        "To School"
+        if str(payload.get("service_direction") or "").strip() == "To School"
+        else "From School"
+    )
+    for stop in stops:
+        if bool(stop.get("is_depot")):
+            continue
+        current_stop = None
+        for key in _stop_match_keys(stop):
+            current_stop = current_lookup.get(key)
+            if current_stop:
+                break
+        if not current_stop:
+            continue
+        current_minutes = _float_or_none(current_stop.get("scheduled_time_minutes"))
+        new_minutes = _float_or_none(stop.get("scheduled_time_minutes"))
+        if current_minutes is None or new_minutes is None:
+            continue
+        delta_minutes = new_minutes - current_minutes
+        if service_direction == "To School":
+            adverse_delta_minutes = max(0.0, -delta_minutes)
+            adverse_direction = "earlier_pickup"
+        else:
+            adverse_delta_minutes = max(0.0, delta_minutes)
+            adverse_direction = "later_dropoff"
+        route_changed = str(current_stop.get("route_id") or "") != str(stop.get("route_id") or "")
+        stop["time_impact"] = {
+            "comparison_available": True,
+            "current_route_id": str(current_stop.get("route_id") or ""),
+            "new_route_id": str(stop.get("route_id") or ""),
+            "current_time_label": str(current_stop.get("scheduled_time_label") or ""),
+            "new_time_label": str(stop.get("scheduled_time_label") or ""),
+            "delta_minutes": delta_minutes,
+            "adverse_delta_minutes": adverse_delta_minutes,
+            "adverse_direction": adverse_direction,
+            "level": _time_impact_level(adverse_delta_minutes),
+            "route_changed": route_changed,
+        }
+
+    summary = _time_impact_summary(stops)
+    payload.setdefault("summary", {})["time_impact"] = summary
+
+    stops_by_route: dict[str, list[dict[str, Any]]] = {}
+    for stop in stops:
+        stops_by_route.setdefault(str(stop.get("route_id") or ""), []).append(stop)
+    for route in list(payload.get("routes") or []):
+        route["time_impact"] = _time_impact_summary(
+            stops_by_route.get(str(route.get("id") or ""), [])
+        )
+
+
 def _build_job_map_data(
     job_record: dict[str, Any], artifact_key: str
 ) -> tuple[dict[str, Any] | None, str | None]:
@@ -2304,6 +2583,21 @@ def _build_job_map_data(
     if not scenario_key:
         return None, f"Unknown map scenario: {artifact_key}"
 
+    return _build_job_map_payload(
+        job_record,
+        scenario_key,
+        artifact_key,
+        attach_impact=True,
+    )
+
+
+def _build_job_map_payload(
+    job_record: dict[str, Any],
+    scenario_key: str,
+    artifact_key: str,
+    *,
+    attach_impact: bool,
+) -> tuple[dict[str, Any] | None, str | None]:
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
     scenario = dict(structured.get(scenario_key) or {})
@@ -2455,7 +2749,7 @@ def _build_job_map_data(
                 }
             )
 
-    return {
+    payload = {
         "job_id": str(job_record.get("job_id") or ""),
         "scenario_key": scenario_key,
         "scenario_name": MAP_SCENARIO_LABELS.get(scenario_key, scenario_key),
@@ -2484,7 +2778,22 @@ def _build_job_map_data(
                 [float(route.get("time_s", 0.0) or 0.0) for route in routes] or [0.0]
             ),
         },
-    }, None
+    }
+    _apply_schedule_times(payload, job_record)
+    if attach_impact and scenario_key != "current_plan":
+        current_payload, _current_error = _build_job_map_payload(
+            job_record,
+            "current_plan",
+            "current_plan",
+            attach_impact=False,
+        )
+        if current_payload:
+            _attach_schedule_impact(payload, current_payload)
+    else:
+        payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(
+            list(payload.get("stops") or [])
+        )
+    return payload, None
 
 
 def _infer_output_directory_name(result: dict[str, Any]) -> str:

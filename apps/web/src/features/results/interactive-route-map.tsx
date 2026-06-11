@@ -547,6 +547,47 @@ export function InteractiveRouteMap({
                             Fit all
                         </Button>
                     </div>
+                    {data.summary.time_impact?.available ? (
+                        <div
+                            className={cn(
+                                "mt-3 rounded-md border px-3 py-2 text-xs",
+                                fullscreen
+                                    ? "border-white/40 bg-white/28 backdrop-blur"
+                                    : "border-border bg-muted/35",
+                            )}
+                        >
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="font-medium text-foreground">
+                                    Time impact
+                                </span>
+                                <span className="text-muted-foreground">
+                                    {formatNumber(
+                                        data.summary.time_impact
+                                            .compared_stop_count || 0,
+                                    )}{" "}
+                                    stops
+                                </span>
+                            </div>
+                            <div className="mt-1 text-muted-foreground">
+                                P90{" "}
+                                {formatDeltaMinutes(
+                                    data.summary.time_impact
+                                        .p90_adverse_delta_minutes,
+                                )}{" "}
+                                · Max{" "}
+                                {formatDeltaMinutes(
+                                    data.summary.time_impact
+                                        .max_adverse_delta_minutes,
+                                )}{" "}
+                                ·{" "}
+                                {formatNumber(
+                                    data.summary.time_impact
+                                        .high_risk_stop_count || 0,
+                                )}{" "}
+                                high risk
+                            </div>
+                        </div>
+                    ) : null}
                     <div className="mt-3 space-y-2">
                         <input
                             className={cn(
@@ -787,6 +828,28 @@ export function InteractiveRouteMap({
                                                                 stop.cumulative_duration_s,
                                                             )}
                                                         </span>
+                                                        {stopScheduleImpactLabel(
+                                                            stop,
+                                                        ) ? (
+                                                            <span
+                                                                className={cn(
+                                                                    "mt-1 flex flex-wrap items-center gap-1",
+                                                                    selectedStop?.id ===
+                                                                        stop.id
+                                                                        ? "text-primary-foreground/85"
+                                                                        : "text-muted-foreground",
+                                                                )}
+                                                            >
+                                                                <span>
+                                                                    {stopScheduleImpactLabel(
+                                                                        stop,
+                                                                    )}
+                                                                </span>
+                                                                <StopTimeImpactBadge
+                                                                    stop={stop}
+                                                                />
+                                                            </span>
+                                                        ) : null}
                                                     </span>
                                                 </button>
                                             ))}
@@ -1256,6 +1319,12 @@ export function InteractiveRouteMap({
                                         selectedStop.cumulative_distance_m,
                                     )}
                                 </div>
+                                {stopScheduleImpactLabel(selectedStop) ? (
+                                    <div className="text-muted-foreground">
+                                        {stopScheduleImpactLabel(selectedStop)}
+                                    </div>
+                                ) : null}
+                                <StopTimeImpactBadge stop={selectedStop} />
                             </div>
                         </Popup>
                     ) : null}
@@ -1325,6 +1394,89 @@ export function InteractiveRouteMap({
 
 function routeColor(index: number) {
     return ROUTE_COLORS[index % ROUTE_COLORS.length];
+}
+
+function formatDeltaMinutes(value: unknown) {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+        return "0 min";
+    }
+    return `${formatNumber(Math.round(Math.abs(numericValue)))} min`;
+}
+
+function stopScheduleImpactLabel(stop: JobMapStop) {
+    const impact = stop.time_impact;
+    if (impact?.comparison_available) {
+        const currentTime = impact.current_time_label || "";
+        const newTime = impact.new_time_label || stop.scheduled_time_label || "";
+        const delta = Number(impact.delta_minutes || 0);
+        const absoluteDelta = formatDeltaMinutes(delta);
+        const direction =
+            impact.adverse_direction === "earlier_pickup"
+                ? delta < 0
+                    ? "earlier pickup"
+                    : delta > 0
+                      ? "later pickup"
+                      : "no change"
+                : delta > 0
+                  ? "later dropoff"
+                  : delta < 0
+                    ? "earlier dropoff"
+                    : "no change";
+        if (direction === "no change") {
+            return `${currentTime || newTime} · no time change`;
+        }
+        return `${currentTime} -> ${newTime} · ${absoluteDelta} ${direction}`;
+    }
+    if (stop.scheduled_time_label) {
+        return `Estimated time ${stop.scheduled_time_label}`;
+    }
+    return "";
+}
+
+function stopTimeImpactBadgeClass(level: string | undefined) {
+    if (level === "critical") {
+        return "border-rose-300 bg-rose-50 text-rose-700";
+    }
+    if (level === "severe") {
+        return "border-orange-300 bg-orange-50 text-orange-700";
+    }
+    if (level === "elevated") {
+        return "border-amber-300 bg-amber-50 text-amber-700";
+    }
+    if (level === "notice") {
+        return "border-sky-300 bg-sky-50 text-sky-700";
+    }
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+}
+
+function StopTimeImpactBadge({ stop }: { stop: JobMapStop }) {
+    const impact = stop.time_impact;
+    if (!impact?.comparison_available) {
+        return null;
+    }
+    const adverseDelta = Number(impact.adverse_delta_minutes || 0);
+    if (adverseDelta <= 10) {
+        return null;
+    }
+    const label =
+        impact.level === "critical"
+            ? "Critical"
+            : impact.level === "severe"
+              ? "Severe"
+              : impact.level === "elevated"
+                ? "Elevated"
+                : "Notice";
+    return (
+        <span
+            className={cn(
+                "inline-flex w-fit items-center rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                stopTimeImpactBadgeClass(impact.level),
+            )}
+        >
+            {label}
+        </span>
+    );
 }
 
 function routeLabel(route: JobMapRoute) {

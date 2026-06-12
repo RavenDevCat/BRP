@@ -11,21 +11,40 @@ export function JobMetrics({ job }: { job: JobRecord }) {
   const currentDistanceM = currentPlan.total_distance_m ?? currentPlan.total_route_distance_m;
 
   const metrics = [
-    ["Input stops", formatNumber(jobInputStopCount(summary))],
-    ["Current routes", formatNumber(summary.current_plan_route_count)],
-    ["Assignments", formatNumber(currentPlanAssignmentCount(summary))],
-    ["Current distance", formatDistanceKmFromMeters(currentDistanceM)],
+    {
+      label: "Effective stops",
+      value: formatNumber(jobInputStopCount(summary)),
+      detail: "Unique stop points used for route planning.",
+    },
+    {
+      label: "Current routes",
+      value: formatNumber(summary.current_plan_route_count),
+      detail: "Routes in the uploaded current plan.",
+    },
+    {
+      label: "Student assignments",
+      value: formatNumber(currentPlanAssignmentCount(summary)),
+      detail: "Rider records from the workbook; this can exceed stops when students share a pickup point.",
+    },
+    {
+      label: "Current distance",
+      value: formatDistanceKmFromMeters(currentDistanceM),
+      detail: "Total distance in the uploaded current plan.",
+    },
   ];
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-      {metrics.map(([label, value]) => (
-        <Card key={label}>
+      {metrics.map((metric) => (
+        <Card key={metric.label}>
           <CardHeader>
-            <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+            <div className="text-xs font-medium uppercase text-muted-foreground" title={metric.detail}>
+              {metric.label}
+            </div>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-semibold text-foreground">{value}</div>
+            <div className="text-2xl font-semibold text-foreground">{metric.value}</div>
+            <div className="mt-1 min-h-8 text-xs leading-4 text-muted-foreground">{metric.detail}</div>
           </CardContent>
         </Card>
       ))}

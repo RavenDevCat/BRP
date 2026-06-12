@@ -169,6 +169,10 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(stop_impact["new_time_label"], "16:05")
         self.assertEqual(stop_impact["delta_minutes"], 15)
         self.assertEqual(stop_impact["adverse_delta_minutes"], 15)
+        self.assertEqual(stop_impact["acceptance_threshold_minutes"], 15)
+        self.assertTrue(stop_impact["within_acceptance"])
+        self.assertEqual(stop_impact["acceptance_status"], "within")
+        self.assertEqual(stop_impact["over_acceptance_minutes"], 0)
         self.assertEqual(stop_impact["absolute_delta_minutes"], 15)
         self.assertEqual(stop_impact["impact_direction"], "worse")
         self.assertEqual(stop_impact["change_direction"], "later")
@@ -183,6 +187,12 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(summary["compared_rider_count"], 3)
         self.assertEqual(summary["worse_stop_count"], 1)
         self.assertEqual(summary["worse_rider_count"], 3)
+        self.assertEqual(summary["acceptance_threshold_minutes"], 15)
+        self.assertEqual(summary["within_acceptance_stop_count"], 1)
+        self.assertEqual(summary["within_acceptance_rider_count"], 3)
+        self.assertEqual(summary["over_acceptance_stop_count"], 0)
+        self.assertEqual(summary["over_acceptance_rider_count"], 0)
+        self.assertEqual(summary["acceptance_rider_ratio"], 1)
         self.assertEqual(summary["weighted_avg_adverse_delta_minutes"], 15)
         self.assertEqual(summary["total_adverse_rider_minutes"], 45)
         self.assertEqual(summary["route_changed_rider_count"], 3)
@@ -274,6 +284,13 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(workbook["Summary"]["A1"].value, "Metric")
         self.assertEqual(workbook["Routes"]["A1"].value, "Scenario")
         self.assertEqual(workbook["Stops"]["D2"].value, "Stop A")
+        summary_rows = {
+            row[0]: row[1]
+            for row in workbook["Summary"].iter_rows(min_row=2, values_only=True)
+        }
+        self.assertEqual(summary_rows["Acceptance threshold minutes"], 15)
+        self.assertEqual(summary_rows["Within-threshold riders"], 3)
+        self.assertEqual(summary_rows["Over-threshold riders"], 0)
 
     def test_to_school_time_impact_treats_earlier_pickup_as_adverse(self) -> None:
         job_record = {
@@ -370,10 +387,18 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(stop_impact["new_time_label"], "07:19")
         self.assertEqual(stop_impact["delta_minutes"], -20)
         self.assertEqual(stop_impact["adverse_delta_minutes"], 20)
+        self.assertEqual(stop_impact["acceptance_threshold_minutes"], 15)
+        self.assertFalse(stop_impact["within_acceptance"])
+        self.assertEqual(stop_impact["acceptance_status"], "over")
+        self.assertEqual(stop_impact["over_acceptance_minutes"], 5)
         self.assertEqual(stop_impact["adverse_direction"], "earlier_pickup")
         self.assertEqual(stop_impact["impact_direction"], "worse")
         self.assertEqual(stop_impact["affected_rider_count"], 2)
         self.assertEqual(stop_impact["adverse_rider_minutes"], 40)
+        summary = payload["summary"]["time_impact"]
+        self.assertEqual(summary["over_acceptance_stop_count"], 1)
+        self.assertEqual(summary["over_acceptance_rider_count"], 2)
+        self.assertEqual(summary["max_over_acceptance_delta_minutes"], 5)
 
 
 if __name__ == "__main__":

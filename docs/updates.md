@@ -16,6 +16,9 @@ It is not a code changelog. Record changes here when users or operators should k
 - Users can switch between optimized scenarios, filter stop impacts, focus one
   route from the route-impact table, search stops/routes, and export an Excel
   workbook for operations review.
+- The Time Impact review now treats an adverse pickup/dropoff shift of 15
+  minutes or less as acceptable and reports over-threshold stops/riders,
+  acceptance rate, and maximum over-threshold minutes.
 - This is a reporting surface only. Time impact is not yet used as a solver
   constraint or penalty.
 

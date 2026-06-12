@@ -699,7 +699,7 @@ function DiagnosticsPanel({
   );
 }
 
-type TimeImpactFilter = "all" | "worse" | "high_risk" | "route_changed" | "unavailable";
+type TimeImpactFilter = "all" | "worse" | "over_acceptance" | "high_risk" | "route_changed" | "unavailable";
 
 function TimeImpactPanel({
   jobId,
@@ -737,6 +737,7 @@ function TimeImpactPanel({
 
   const data = impactQuery.data;
   const summary = data?.summary.time_impact;
+  const acceptanceThresholdLabel = formatImpactMinutes(summary?.acceptance_threshold_minutes ?? 15);
   const routeRows = data ? buildTimeImpactRouteRows(data) : [];
   const stopRows = data ? buildTimeImpactStopRows(data, { filter, search, selectedRouteId }) : [];
   const comparedStops = data ? data.stops.filter((stop) => stop.time_impact?.comparison_available) : [];
@@ -797,6 +798,29 @@ function TimeImpactPanel({
       {data && summary?.available ? (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard
+              label="Acceptance rate"
+              value={formatPercent(summary.acceptance_rider_ratio, 100)}
+              tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
+            />
+            <MetricCard
+              label={`Over ${acceptanceThresholdLabel} riders`}
+              value={formatNumber(summary.over_acceptance_rider_count)}
+              tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
+            />
+            <MetricCard
+              label={`Over ${acceptanceThresholdLabel} stops`}
+              value={formatNumber(summary.over_acceptance_stop_count)}
+              tone={Number(summary.over_acceptance_stop_count || 0) ? "warning" : "success"}
+            />
+            <MetricCard
+              label="Max over threshold"
+              value={formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}
+              tone={Number(summary.max_over_acceptance_delta_minutes || 0) ? "warning" : "success"}
+            />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <MetricCard label="Worse riders" value={formatNumber(summary.worse_rider_count)} tone="warning" />
             <MetricCard label="High-risk stops" value={formatNumber(summary.high_risk_stop_count)} tone="warning" />
             <MetricCard label="Weighted adverse" value={formatImpactMinutes(summary.weighted_avg_adverse_delta_minutes)} tone="info" />
@@ -855,7 +879,7 @@ function TimeImpactPanel({
                   <Badge tone="neutral">{formatNumber(stopRows.length)} shown</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {(["all", "worse", "high_risk", "route_changed", "unavailable"] as const).map((key) => (
+                  {(["all", "worse", "over_acceptance", "high_risk", "route_changed", "unavailable"] as const).map((key) => (
                     <button
                       key={key}
                       type="button"
@@ -914,6 +938,8 @@ function buildTimeImpactRouteRows(data: JobMapData): TimeImpactRouteRow[] {
     .filter((route) => route.time_impact?.available)
     .sort(
       (left, right) =>
+        Number(right.time_impact?.over_acceptance_rider_count || 0) -
+          Number(left.time_impact?.over_acceptance_rider_count || 0) ||
         Number(right.time_impact?.high_risk_rider_count || 0) -
           Number(left.time_impact?.high_risk_rider_count || 0) ||
         Number(right.time_impact?.weighted_avg_adverse_delta_minutes || 0) -
@@ -964,6 +990,9 @@ function buildTimeImpactStopRows(
       if (filter === "worse") {
         return impact.impact_direction === "worse";
       }
+      if (filter === "over_acceptance") {
+        return Boolean(impact.comparison_available) && impact.within_acceptance === false;
+      }
       if (filter === "high_risk") {
         return impact.level === "severe" || impact.level === "critical";
       }
@@ -998,12 +1027,13 @@ function TimeImpactRouteTable({
 
   return (
     <div className="max-h-[360px] overflow-auto">
-      <table className="w-full min-w-[860px] border-collapse text-sm">
+      <table className="w-full min-w-[940px] border-collapse text-sm">
         <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
             <th className="px-3 py-2">Route</th>
             <th className="px-3 py-2">Bus</th>
             <th className="px-3 py-2">Riders</th>
+            <th className="px-3 py-2">Over threshold</th>
             <th className="px-3 py-2">Worse riders</th>
             <th className="px-3 py-2">High risk</th>
             <th className="px-3 py-2">Weighted adverse</th>
@@ -1028,6 +1058,7 @@ function TimeImpactRouteTable({
                 </td>
                 <td className="px-3 py-2">{route.bus_type_name || "N/A"}</td>
                 <td className="px-3 py-2">{formatNumber(route.load)}</td>
+                <td className="px-3 py-2">{formatNumber(impact.over_acceptance_rider_count)}</td>
                 <td className="px-3 py-2">{formatNumber(impact.worse_rider_count)}</td>
                 <td className="px-3 py-2">
                   <Badge tone={Number(impact.high_risk_stop_count || 0) ? "warning" : "neutral"}>
@@ -1076,12 +1107,15 @@ function TimeImpactStopTable({
           {stops.map((stop) => {
             const impact = stop.time_impact || {};
             const comparisonAvailable = Boolean(impact.comparison_available);
+            const overAcceptance = comparisonAvailable && impact.within_acceptance === false;
             return (
               <tr key={stop.id} className="border-t border-border">
                 <td className="px-3 py-2">
                   {comparisonAvailable ? (
-                    <Badge tone={timeImpactBadgeTone(impact.level, impact.impact_direction)}>
-                      {timeImpactLabel(impact.level, impact.impact_direction)}
+                    <Badge tone={overAcceptance ? "warning" : timeImpactBadgeTone(impact.level, impact.impact_direction)}>
+                      {overAcceptance
+                        ? `Over ${formatImpactMinutes(impact.acceptance_threshold_minutes ?? 15)}`
+                        : timeImpactLabel(impact.level, impact.impact_direction)}
                     </Badge>
                   ) : (
                     <Badge tone="warning">Unmatched</Badge>
@@ -1139,6 +1173,9 @@ function TimeImpactStopTable({
 function timeImpactFilterLabel(filter: TimeImpactFilter) {
   if (filter === "worse") {
     return "Worse";
+  }
+  if (filter === "over_acceptance") {
+    return "Over 15m";
   }
   if (filter === "high_risk") {
     return "High risk";

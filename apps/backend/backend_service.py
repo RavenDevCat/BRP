@@ -131,6 +131,9 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
 WORKBOOK_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
+TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES = float(
+    os.environ.get("BRP_TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES", "15") or 15
+)
 MAX_DISTANCE_CHECKER_JOBS = 80
 CLIENT_CACHE_DIR = Path(
     os.environ.get("BRP_CLIENT_CACHE_DIR", str(CLIENT_DIR / "cache"))
@@ -2500,6 +2503,15 @@ def _time_impact_top_stops(
                 "absolute_delta_minutes": float(
                     impact.get("absolute_delta_minutes", 0.0) or 0.0
                 ),
+                "acceptance_threshold_minutes": float(
+                    impact.get("acceptance_threshold_minutes", TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+                    or TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES
+                ),
+                "within_acceptance": bool(impact.get("within_acceptance")),
+                "acceptance_status": str(impact.get("acceptance_status") or ""),
+                "over_acceptance_minutes": float(
+                    impact.get("over_acceptance_minutes", 0.0) or 0.0
+                ),
                 "affected_rider_count": _time_impact_passenger_count(stop),
                 "level": str(impact.get("level") or ""),
                 "impact_direction": str(impact.get("impact_direction") or ""),
@@ -2560,12 +2572,55 @@ def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
         for stop in compared
     )
     high_risk_levels = {"severe", "critical"}
+    acceptance_threshold = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    within_acceptance = [
+        stop
+        for stop in compared
+        if float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        <= acceptance_threshold
+    ]
+    over_acceptance = [
+        stop
+        for stop in compared
+        if float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        > acceptance_threshold
+    ]
+    within_acceptance_rider_count = sum(
+        _time_impact_passenger_count(stop) for stop in within_acceptance
+    )
+    over_acceptance_rider_count = sum(
+        _time_impact_passenger_count(stop) for stop in over_acceptance
+    )
+    over_acceptance_values = [
+        max(
+            0.0,
+            float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+            - acceptance_threshold,
+        )
+        for stop in over_acceptance
+    ]
     return {
         "available": bool(compared),
+        "acceptance_threshold_minutes": acceptance_threshold,
         "service_stop_count": len(service_stops),
         "compared_stop_count": len(compared),
         "unavailable_stop_count": len(unavailable),
         "compared_rider_count": compared_rider_count,
+        "within_acceptance_stop_count": len(within_acceptance),
+        "within_acceptance_rider_count": within_acceptance_rider_count,
+        "over_acceptance_stop_count": len(over_acceptance),
+        "over_acceptance_rider_count": over_acceptance_rider_count,
+        "acceptance_stop_ratio": (
+            len(within_acceptance) / len(compared) if compared else 0.0
+        ),
+        "acceptance_rider_ratio": (
+            within_acceptance_rider_count / compared_rider_count
+            if compared_rider_count
+            else 0.0
+        ),
+        "max_over_acceptance_delta_minutes": (
+            max(over_acceptance_values) if over_acceptance_values else 0.0
+        ),
         "avg_adverse_delta_minutes": (
             sum(adverse_values) / len(adverse_values) if adverse_values else 0.0
         ),
@@ -2720,6 +2775,8 @@ def _attach_schedule_impact(
         benefit_delta_minutes = (
             absolute_delta_minutes if impact_direction == "better" else 0.0
         )
+        acceptance_threshold = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+        within_acceptance = adverse_delta_minutes <= acceptance_threshold
         stop["time_impact"] = {
             "comparison_available": True,
             "comparison_status": "matched",
@@ -2740,6 +2797,10 @@ def _attach_schedule_impact(
             "delta_minutes": delta_minutes,
             "absolute_delta_minutes": absolute_delta_minutes,
             "adverse_delta_minutes": adverse_delta_minutes,
+            "acceptance_threshold_minutes": acceptance_threshold,
+            "within_acceptance": within_acceptance,
+            "acceptance_status": "within" if within_acceptance else "over",
+            "over_acceptance_minutes": max(0.0, adverse_delta_minutes - acceptance_threshold),
             "benefit_delta_minutes": benefit_delta_minutes,
             "adverse_direction": adverse_direction,
             "change_direction": _time_impact_change_direction(delta_minutes),
@@ -3144,8 +3205,14 @@ def _build_time_impact_workbook_export(
         ["Job ID", payload.get("job_id")],
         ["Scenario", payload.get("scenario_name")],
         ["Service direction", payload.get("service_direction")],
+        ["Acceptance threshold minutes", summary.get("acceptance_threshold_minutes")],
         ["Compared stops", summary.get("compared_stop_count")],
         ["Compared riders", summary.get("compared_rider_count")],
+        ["Within-threshold stops", summary.get("within_acceptance_stop_count")],
+        ["Within-threshold riders", summary.get("within_acceptance_rider_count")],
+        ["Over-threshold stops", summary.get("over_acceptance_stop_count")],
+        ["Over-threshold riders", summary.get("over_acceptance_rider_count")],
+        ["Acceptance rider ratio", summary.get("acceptance_rider_ratio")],
         ["Worse stops", summary.get("worse_stop_count")],
         ["Worse riders", summary.get("worse_rider_count")],
         ["High-risk stops", summary.get("high_risk_stop_count")],
@@ -3167,6 +3234,8 @@ def _build_time_impact_workbook_export(
         "Bus type",
         "Riders",
         "Stops",
+        "Over-threshold riders",
+        "Over-threshold stops",
         "Worse riders",
         "High-risk stops",
         "Weighted adverse minutes",
@@ -3183,6 +3252,8 @@ def _build_time_impact_workbook_export(
                 route.get("bus_type_name"),
                 route.get("load"),
                 route.get("stop_count"),
+                route_impact.get("over_acceptance_rider_count"),
+                route_impact.get("over_acceptance_stop_count"),
                 route_impact.get("worse_rider_count"),
                 route_impact.get("high_risk_stop_count"),
                 route_impact.get("weighted_avg_adverse_delta_minutes"),
@@ -3204,6 +3275,8 @@ def _build_time_impact_workbook_export(
         "Optimized time",
         "Delta minutes",
         "Adverse minutes",
+        "Acceptance status",
+        "Over-threshold minutes",
         "Absolute minutes",
         "Impact direction",
         "Level",
@@ -3229,6 +3302,8 @@ def _build_time_impact_workbook_export(
                 impact.get("new_time_label") or stop.get("scheduled_time_label"),
                 impact.get("delta_minutes"),
                 impact.get("adverse_delta_minutes"),
+                impact.get("acceptance_status"),
+                impact.get("over_acceptance_minutes"),
                 impact.get("absolute_delta_minutes"),
                 impact.get("impact_direction"),
                 impact.get("level"),

@@ -130,6 +130,10 @@ export type JobMapStopTimeImpact = {
     delta_minutes?: number;
     absolute_delta_minutes?: number;
     adverse_delta_minutes?: number;
+    acceptance_threshold_minutes?: number;
+    within_acceptance?: boolean;
+    acceptance_status?: "within" | "over" | string;
+    over_acceptance_minutes?: number;
     benefit_delta_minutes?: number;
     adverse_direction?: "earlier_pickup" | "later_dropoff" | string;
     change_direction?: "earlier" | "later" | "same" | string;
@@ -153,6 +157,10 @@ export type JobMapTimeImpactTopStop = {
     delta_minutes?: number;
     adverse_delta_minutes?: number;
     absolute_delta_minutes?: number;
+    acceptance_threshold_minutes?: number;
+    within_acceptance?: boolean;
+    acceptance_status?: string;
+    over_acceptance_minutes?: number;
     affected_rider_count?: number;
     level?: string;
     impact_direction?: string;
@@ -165,6 +173,14 @@ export type JobMapTimeImpactSummary = {
     compared_stop_count?: number;
     unavailable_stop_count?: number;
     compared_rider_count?: number;
+    acceptance_threshold_minutes?: number;
+    within_acceptance_stop_count?: number;
+    within_acceptance_rider_count?: number;
+    over_acceptance_stop_count?: number;
+    over_acceptance_rider_count?: number;
+    acceptance_stop_ratio?: number;
+    acceptance_rider_ratio?: number;
+    max_over_acceptance_delta_minutes?: number;
     avg_adverse_delta_minutes?: number;
     avg_absolute_delta_minutes?: number;
     avg_signed_delta_minutes?: number;

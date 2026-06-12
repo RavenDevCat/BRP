@@ -138,7 +138,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
-      {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} jobName={jobDisplayName} mapOutputs={mapOutputs} /> : null}
+      {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
       {activeTab === "maps" ? <MapsPanel jobId={job.job_id} jobName={jobDisplayName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} /> : null}
       {activeTab === "actions" ? (
         <ActionPanel
@@ -703,11 +703,9 @@ type TimeImpactFilter = "all" | "worse" | "high_risk" | "route_changed" | "unava
 
 function TimeImpactPanel({
   jobId,
-  jobName,
   mapOutputs,
 }: {
   jobId: string;
-  jobName: string;
   mapOutputs: MapOutput[];
 }) {
   const scenarioOptions = useMemo(
@@ -829,14 +827,13 @@ function TimeImpactPanel({
                       All routes
                     </button>
                   ) : null}
-                  <button
-                    type="button"
+                  <a
+                    href={getJobExportUrl(jobId, `time-impact-${selected.key}`)}
                     className={cn(buttonClassName("secondary"), "h-8")}
-                    onClick={() => downloadTimeImpactCsv(data, jobName, selected.name)}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
-                    Export CSV
-                  </button>
+                    Export Excel
+                  </a>
                 </div>
               </div>
             </CardHeader>
@@ -1225,68 +1222,6 @@ function stopAbsoluteMinutes(stop: JobMapStop) {
 
 function stopAffectedRiders(stop: JobMapStop) {
   return Number(stop.time_impact?.affected_rider_count ?? stop.passenger_count ?? 0);
-}
-
-function downloadTimeImpactCsv(data: JobMapData, jobName: string, scenarioName: string) {
-  const rows = data.stops
-    .filter((stop) => !stop.is_depot)
-    .map((stop) => {
-      const impact = stop.time_impact || {};
-      return [
-        data.scenario_name,
-        stop.route_id,
-        stop.order,
-        stop.address || stop.requested_address || "",
-        impact.affected_rider_count ?? stop.passenger_count,
-        impact.current_route_id || "",
-        impact.new_route_id || stop.route_id,
-        impact.current_time_label || "",
-        impact.new_time_label || stop.scheduled_time_label || "",
-        impact.delta_minutes ?? "",
-        impact.adverse_delta_minutes ?? "",
-        impact.absolute_delta_minutes ?? "",
-        impact.impact_direction || "",
-        impact.level || "",
-        impact.route_changed ? "yes" : "no",
-        impact.comparison_status || "",
-        impact.matched_key || "",
-      ];
-    });
-  const header = [
-    "scenario",
-    "route",
-    "stop_order",
-    "address",
-    "riders",
-    "current_route",
-    "optimized_route",
-    "current_time",
-    "optimized_time",
-    "delta_minutes",
-    "adverse_minutes",
-    "absolute_minutes",
-    "impact_direction",
-    "level",
-    "route_changed",
-    "comparison_status",
-    "matched_key",
-  ];
-  const csv = [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
-  const filename = `${sanitizeDownloadFilename(jobName)} - ${sanitizeDownloadFilename(scenarioName)} time impact.csv`;
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function csvEscape(value: unknown) {
-  const text = String(value ?? "");
-  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function MapsPanel({

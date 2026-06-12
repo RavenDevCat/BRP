@@ -1,5 +1,8 @@
 import importlib
+import io
 import unittest
+
+from openpyxl import load_workbook
 
 
 class InteractiveMapDataTests(unittest.TestCase):
@@ -185,6 +188,92 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(summary["route_changed_rider_count"], 3)
         self.assertEqual(summary["top_impacted_stops"][0]["address"], "Stop A")
         self.assertEqual(payload["routes"][0]["time_impact"]["worse_stop_count"], 1)
+
+    def test_time_impact_excel_export_contains_review_sheets(self) -> None:
+        job_record = {
+            "job_id": "job-impact-export",
+            "config": {
+                "from_school_departure_time": "15:40",
+                "stop_service_minutes": 0,
+            },
+            "result": {
+                "service_direction": "From School",
+                "structured_results": {
+                    "current_plan": {
+                        "points": [
+                            {
+                                "address": "School",
+                                "plot_lat": 31.2,
+                                "plot_lng": 121.4,
+                                "passenger_count": 0,
+                                "is_depot": True,
+                            },
+                            {
+                                "address": "Stop A",
+                                "plot_lat": 31.21,
+                                "plot_lng": 121.41,
+                                "passenger_count": 3,
+                                "is_depot": False,
+                            },
+                        ],
+                        "routes": [
+                            {
+                                "vehicle_id": 1,
+                                "bus_type_name": "Large Bus",
+                                "load": 3,
+                                "nodes": [0, 1],
+                                "time_s": 600,
+                                "distance_m": 1200,
+                                "leg_details": [{"duration_s": 600, "distance_m": 1200}],
+                            }
+                        ],
+                    },
+                    "original": {
+                        "points": [
+                            {
+                                "address": "School",
+                                "plot_lat": 31.2,
+                                "plot_lng": 121.4,
+                                "passenger_count": 0,
+                                "is_depot": True,
+                            },
+                            {
+                                "address": "Stop A",
+                                "plot_lat": 31.21,
+                                "plot_lng": 121.41,
+                                "passenger_count": 3,
+                                "is_depot": False,
+                            },
+                        ],
+                        "routes": [
+                            {
+                                "route_id": "R6",
+                                "vehicle_id": 6,
+                                "bus_type_name": "Large Bus",
+                                "load": 3,
+                                "nodes": [0, 1],
+                                "time_s": 1500,
+                                "distance_m": 2200,
+                                "leg_details": [{"duration_s": 1500, "distance_m": 2200}],
+                            }
+                        ],
+                    },
+                },
+            },
+        }
+
+        workbook_bytes, error = self.service._build_time_impact_workbook_export(
+            job_record, "original"
+        )
+
+        self.assertIsNone(error)
+        self.assertIsNotNone(workbook_bytes)
+        assert workbook_bytes is not None
+        workbook = load_workbook(io.BytesIO(workbook_bytes), read_only=True)
+        self.assertEqual(workbook.sheetnames, ["Summary", "Routes", "Stops"])
+        self.assertEqual(workbook["Summary"]["A1"].value, "Metric")
+        self.assertEqual(workbook["Routes"]["A1"].value, "Scenario")
+        self.assertEqual(workbook["Stops"]["D2"].value, "Stop A")
 
     def test_to_school_time_impact_treats_earlier_pickup_as_adverse(self) -> None:
         job_record = {

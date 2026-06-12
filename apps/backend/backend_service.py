@@ -26,6 +26,8 @@ from urllib.request import Request, urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+from openpyxl import Workbook
+
 try:
     from .ai_audit import generate_ai_audit_report
     from .planner_core import (
@@ -3086,6 +3088,162 @@ def _build_free_baseline_template_export(
         return None, str(exc)
 
 
+def _excel_safe_value(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _append_excel_table(
+    sheet: Any,
+    headers: list[str],
+    rows: list[list[Any]],
+) -> None:
+    sheet.append(headers)
+    for row in rows:
+        sheet.append([_excel_safe_value(value) for value in row])
+    sheet.freeze_panes = "A2"
+    if rows:
+        sheet.auto_filter.ref = sheet.dimensions
+    for column_cells in sheet.columns:
+        header_cell = column_cells[0]
+        max_length = max(
+            [len(str(cell.value or "")) for cell in column_cells] or [0]
+        )
+        sheet.column_dimensions[header_cell.column_letter].width = min(
+            max(max_length + 2, 10), 42
+        )
+
+
+def _build_time_impact_workbook_export(
+    job_record: dict[str, Any],
+    scenario_key: str,
+) -> tuple[bytes | None, str | None]:
+    normalized_key = scenario_key.strip().lower() or "original"
+    scenario_key = MAP_ARTIFACT_KEYS.get(normalized_key, normalized_key)
+    if scenario_key == "current_plan" or scenario_key not in MAP_SCENARIO_LABELS:
+        return None, f"Unknown time impact scenario: {normalized_key}"
+
+    payload, payload_error = _build_job_map_payload(
+        job_record,
+        scenario_key,
+        scenario_key,
+        attach_impact=True,
+    )
+    if payload_error or not payload:
+        return None, payload_error or "Time impact data is not available."
+
+    summary = dict(dict(payload.get("summary") or {}).get("time_impact") or {})
+    if not bool(summary.get("available")):
+        return None, "Time impact comparison is not available for this scenario."
+
+    wb = Workbook()
+    summary_sheet = wb.active
+    summary_sheet.title = "Summary"
+    summary_rows = [
+        ["Job ID", payload.get("job_id")],
+        ["Scenario", payload.get("scenario_name")],
+        ["Service direction", payload.get("service_direction")],
+        ["Compared stops", summary.get("compared_stop_count")],
+        ["Compared riders", summary.get("compared_rider_count")],
+        ["Worse stops", summary.get("worse_stop_count")],
+        ["Worse riders", summary.get("worse_rider_count")],
+        ["High-risk stops", summary.get("high_risk_stop_count")],
+        ["High-risk riders", summary.get("high_risk_rider_count")],
+        ["Route-changed stops", summary.get("route_changed_stop_count")],
+        ["Route-changed riders", summary.get("route_changed_rider_count")],
+        ["Weighted average adverse minutes", summary.get("weighted_avg_adverse_delta_minutes")],
+        ["P90 adverse minutes", summary.get("p90_adverse_delta_minutes")],
+        ["Max adverse minutes", summary.get("max_adverse_delta_minutes")],
+        ["Total adverse rider-minutes", summary.get("total_adverse_rider_minutes")],
+        ["Total benefit rider-minutes", summary.get("total_benefit_rider_minutes")],
+    ]
+    _append_excel_table(summary_sheet, ["Metric", "Value"], summary_rows)
+
+    route_sheet = wb.create_sheet("Routes")
+    route_headers = [
+        "Scenario",
+        "Route",
+        "Bus type",
+        "Riders",
+        "Stops",
+        "Worse riders",
+        "High-risk stops",
+        "Weighted adverse minutes",
+        "Max adverse minutes",
+        "Route-changed riders",
+    ]
+    route_rows = []
+    for route in list(payload.get("routes") or []):
+        route_impact = dict(dict(route).get("time_impact") or {})
+        route_rows.append(
+            [
+                payload.get("scenario_name"),
+                route.get("id"),
+                route.get("bus_type_name"),
+                route.get("load"),
+                route.get("stop_count"),
+                route_impact.get("worse_rider_count"),
+                route_impact.get("high_risk_stop_count"),
+                route_impact.get("weighted_avg_adverse_delta_minutes"),
+                route_impact.get("max_adverse_delta_minutes"),
+                route_impact.get("route_changed_rider_count"),
+            ]
+        )
+    _append_excel_table(route_sheet, route_headers, route_rows)
+
+    stop_sheet = wb.create_sheet("Stops")
+    stop_headers = [
+        "Scenario",
+        "Optimized route",
+        "Stop order",
+        "Address",
+        "Riders",
+        "Current route",
+        "Current time",
+        "Optimized time",
+        "Delta minutes",
+        "Adverse minutes",
+        "Absolute minutes",
+        "Impact direction",
+        "Level",
+        "Route changed",
+        "Comparison status",
+        "Matched key",
+    ]
+    stop_rows = []
+    for stop in list(payload.get("stops") or []):
+        stop = dict(stop or {})
+        if bool(stop.get("is_depot")):
+            continue
+        impact = dict(stop.get("time_impact") or {})
+        stop_rows.append(
+            [
+                payload.get("scenario_name"),
+                stop.get("route_id"),
+                stop.get("order"),
+                stop.get("address") or stop.get("requested_address"),
+                impact.get("affected_rider_count", stop.get("passenger_count")),
+                impact.get("current_route_id"),
+                impact.get("current_time_label"),
+                impact.get("new_time_label") or stop.get("scheduled_time_label"),
+                impact.get("delta_minutes"),
+                impact.get("adverse_delta_minutes"),
+                impact.get("absolute_delta_minutes"),
+                impact.get("impact_direction"),
+                impact.get("level"),
+                "yes" if impact.get("route_changed") else "no",
+                impact.get("comparison_status"),
+                impact.get("matched_key"),
+            ]
+        )
+    _append_excel_table(stop_sheet, stop_headers, stop_rows)
+
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    return buffer.getvalue(), None
+
+
 def _map_tile_cache_path(z: int, x: int, y: int) -> Path:
     return MAP_TILE_CACHE_DIR / str(z) / str(x) / f"{y}.png"
 
@@ -3466,12 +3624,24 @@ class BackendHandler(BaseHTTPRequestHandler):
                         403, {"error": f"Job is not available for user: {user_email}"}
                     )
                     return
-                if export_key != "free-optimization-template":
+                if export_key == "free-optimization-template":
+                    workbook_bytes, export_error = _build_free_baseline_template_export(
+                        job_record
+                    )
+                    filename = f"free_optimization_baseline_{job_id}.xlsx"
+                elif export_key == "time-impact" or export_key.startswith("time-impact-"):
+                    scenario_key = (
+                        export_key[len("time-impact-") :]
+                        if export_key.startswith("time-impact-")
+                        else "original"
+                    )
+                    workbook_bytes, export_error = _build_time_impact_workbook_export(
+                        job_record, scenario_key
+                    )
+                    filename = f"time_impact_{scenario_key}_{job_id}.xlsx"
+                else:
                     self._send_json(404, {"error": f"Unknown export: {export_key}"})
                     return
-                workbook_bytes, export_error = _build_free_baseline_template_export(
-                    job_record
-                )
                 if export_error or not workbook_bytes:
                     self._send_json(
                         404, {"error": export_error or "Export is not available."}
@@ -3481,7 +3651,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     200,
                     workbook_bytes,
                     content_type=WORKBOOK_CONTENT_TYPE,
-                    filename=f"free_optimization_baseline_{job_id}.xlsx",
+                    filename=filename,
                     inline=False,
                 )
                 return

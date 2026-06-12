@@ -75,7 +75,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             ? Math.round((googleUsage.used / googleUsage.limit) * 100)
             : 0;
     const signOut = () => {
-        if (userQuery.data?.test_login) {
+        const hasTesterSession =
+            userQuery.data?.test_login ||
+            window.localStorage.getItem("brp_test_login") === "1";
+        if (hasTesterSession) {
+            window.localStorage.removeItem("brp_test_login");
             window.location.assign(resolveAuthUrl("/api/auth/test-logout"));
             return;
         }

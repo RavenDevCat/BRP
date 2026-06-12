@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -77,6 +78,18 @@ AMAP_TRAFFIC_CALIBRATION_TZ = ZoneInfo("Asia/Shanghai")
 TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES = max(
     0.0,
     float(os.environ.get("BRP_TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES", "15") or 15),
+)
+INPUT_ADDRESS_REVIEW_SCHOOL_DISTANCE_KM = max(
+    0.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_SCHOOL_DISTANCE_KM", "50") or 50),
+)
+INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM = max(
+    0.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM", "12") or 12),
+)
+INPUT_ADDRESS_REVIEW_DETOUR_RATIO = max(
+    1.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_DETOUR_RATIO", "2.5") or 2.5),
 )
 TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
     "Off-Peak": 1.0,
@@ -1417,6 +1430,8 @@ def summarize_structured_results(results: dict[str, Any], uploaded_address_count
     subway = results.get("subway", {})
     nearby = results.get("nearby", {})
     currency_code = str(results.get("currency_code", "USD"))
+    input_address_review = dict(results.get("input_address_review") or {})
+    input_address_review_summary = dict(input_address_review.get("summary") or {})
 
     original_valid_stops = int(original.get("stop_count", uploaded_address_count))
     subway_valid_stops = int(subway.get("stop_count", original_valid_stops))
@@ -1459,6 +1474,9 @@ def summarize_structured_results(results: dict[str, Any], uploaded_address_count
     return {
         "uploaded_address_count": uploaded_address_count,
         "currency_code": currency_code,
+        "input_address_review_warning_count": int(
+            input_address_review_summary.get("warning_count", 0) or 0
+        ),
         "original_uploaded_stops": uploaded_address_count,
         "original_valid_stops": original_valid_stops,
         "subway_valid_stops": subway_valid_stops,
@@ -1699,6 +1717,212 @@ def extract_geocode_warnings(log_text: str, original_addresses: list[str]) -> li
             seen_addresses.add(matched_address)
 
     return warnings
+
+
+def _point_coordinate(point: dict[str, Any]) -> tuple[float, float] | None:
+    for lat_key, lng_key in (("lat", "lng"), ("plot_lat", "plot_lng")):
+        try:
+            lat = float(point.get(lat_key, 0.0) or 0.0)
+            lng = float(point.get(lng_key, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if lat and lng:
+            return lat, lng
+    return None
+
+
+def _point_display_address(point: dict[str, Any]) -> str:
+    return str(
+        point.get("display_address")
+        or point.get("address")
+        or point.get("requested_address")
+        or ""
+    ).strip()
+
+
+def _point_source_rows(point: dict[str, Any]) -> str:
+    return str(point.get("source_excel_rows") or point.get("excel_rows") or "").strip()
+
+
+def _address_warning_base(
+    point: dict[str, Any],
+    *,
+    warning_type: str,
+    reason: str,
+    severity: str = "warning",
+) -> dict[str, Any]:
+    return {
+        "type": warning_type,
+        "severity": severity,
+        "status": "needs_review",
+        "accepted": True,
+        "address": _point_display_address(point),
+        "source_excel_rows": _point_source_rows(point),
+        "country": str(point.get("country", point.get("requested_country", ""))).strip(),
+        "city": str(point.get("city", point.get("requested_city", ""))).strip(),
+        "formatted_address": str(point.get("formatted_address", "") or "").strip(),
+        "provider": str(point.get("provider", "") or "").strip(),
+        "reason": reason,
+        "suggestion": (
+            "Review the workbook address and the resolved map address. "
+            "If this location is intentional, keep the result; otherwise correct the workbook and rerun."
+        ),
+    }
+
+
+def _dedupe_address_warnings(warnings: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    severity_order = {"critical": 3, "warning": 2, "info": 1}
+    for warning in sorted(
+        warnings,
+        key=lambda item: (
+            -severity_order.get(str(item.get("severity", "warning")), 2),
+            str(item.get("address", "")),
+            str(item.get("type", "")),
+        ),
+    ):
+        key = (
+            str(warning.get("type", "")).strip(),
+            str(warning.get("address", "")).strip().lower(),
+            str(warning.get("route_id", "")).strip().lower(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(warning)
+    return deduped
+
+
+def build_input_address_review(
+    planner: Any,
+    original_points: list[dict[str, Any]],
+    *,
+    service_direction: str,
+    current_plan_assessment: dict[str, Any] | None = None,
+    current_plan_distance_matrix: list[list[float]] | None = None,
+) -> dict[str, Any]:
+    warnings: list[dict[str, Any]] = []
+    points = [dict(point) for point in list(original_points or [])]
+    if len(points) <= 1:
+        return {
+            "summary": {
+                "warning_count": 0,
+                "school_distance_warning_count": 0,
+                "route_context_warning_count": 0,
+            },
+            "warnings": [],
+        }
+
+    school_point = next((point for point in points if bool(point.get("is_depot"))), points[0])
+    school_coords = _point_coordinate(school_point)
+    if school_coords is not None and INPUT_ADDRESS_REVIEW_SCHOOL_DISTANCE_KM > 0:
+        for point in points:
+            if bool(point.get("is_depot")):
+                continue
+            point_coords = _point_coordinate(point)
+            if point_coords is None:
+                continue
+            distance_km = float(
+                planner.haversine_distance_km(
+                    school_coords[0],
+                    school_coords[1],
+                    point_coords[0],
+                    point_coords[1],
+                )
+            )
+            if distance_km <= INPUT_ADDRESS_REVIEW_SCHOOL_DISTANCE_KM:
+                continue
+            warning = _address_warning_base(
+                point,
+                warning_type="school_distance",
+                reason="Resolved address is unusually far from the school.",
+            )
+            warning.update(
+                {
+                    "distance_to_school_km": round(distance_km, 1),
+                    "threshold_km": round(INPUT_ADDRESS_REVIEW_SCHOOL_DISTANCE_KM, 1),
+                    "message": (
+                        f"{_point_display_address(point) or 'This stop'} is {distance_km:.1f} km from the school. "
+                        "The coordinate was accepted, but the source address should be reviewed."
+                    ),
+                }
+            )
+            warnings.append(warning)
+
+    if current_plan_assessment and current_plan_distance_matrix:
+        point_by_node = {
+            int(point.get("node_id", index) or index): point
+            for index, point in enumerate(points)
+        }
+        route_summaries = list(current_plan_assessment.get("route_summaries") or [])
+        for route_summary in route_summaries:
+            node_ids = [
+                int(node_id)
+                for node_id in list(route_summary.get("matched_node_ids") or [])
+                if str(node_id).strip()
+            ]
+            if len(node_ids) < 3:
+                continue
+            route_id = str(route_summary.get("route_id", "") or "").strip()
+            for stop_index in range(1, len(node_ids) - 1):
+                node_id = node_ids[stop_index]
+                point = point_by_node.get(node_id)
+                if not point or bool(point.get("is_depot")):
+                    continue
+                prev_node = node_ids[stop_index - 1]
+                next_node = node_ids[stop_index + 1]
+                if prev_node == next_node:
+                    continue
+                try:
+                    prev_to_stop_m = float(current_plan_distance_matrix[prev_node][node_id] or 0.0)
+                    stop_to_next_m = float(current_plan_distance_matrix[node_id][next_node] or 0.0)
+                    prev_to_next_m = float(current_plan_distance_matrix[prev_node][next_node] or 0.0)
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if prev_to_stop_m <= 0 or stop_to_next_m <= 0 or prev_to_next_m <= 0:
+                    continue
+                detour_extra_km = max(0.0, (prev_to_stop_m + stop_to_next_m - prev_to_next_m) / 1000.0)
+                detour_ratio = (prev_to_stop_m + stop_to_next_m) / max(prev_to_next_m, 1.0)
+                if (
+                    detour_extra_km < INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM
+                    or detour_ratio < INPUT_ADDRESS_REVIEW_DETOUR_RATIO
+                ):
+                    continue
+                warning = _address_warning_base(
+                    point,
+                    warning_type="route_context_detour",
+                    reason="Stop creates an unusually large detour between adjacent route stops.",
+                )
+                warning.update(
+                    {
+                        "route_id": route_id,
+                        "stop_sequence": stop_index,
+                        "previous_address": _point_display_address(point_by_node.get(prev_node, {})),
+                        "next_address": _point_display_address(point_by_node.get(next_node, {})),
+                        "detour_extra_km": round(detour_extra_km, 1),
+                        "detour_ratio": round(detour_ratio, 2),
+                        "threshold_extra_km": round(INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM, 1),
+                        "threshold_ratio": round(INPUT_ADDRESS_REVIEW_DETOUR_RATIO, 2),
+                        "message": (
+                            f"{_point_display_address(point) or 'This stop'} adds about {detour_extra_km:.1f} km "
+                            f"between adjacent stops on route {route_id or 'N/A'}."
+                        ),
+                    }
+                )
+                warnings.append(warning)
+
+    warnings = _dedupe_address_warnings(warnings)
+    by_type = Counter(str(warning.get("type", "unknown")) for warning in warnings)
+    return {
+        "summary": {
+            "warning_count": len(warnings),
+            "school_distance_warning_count": int(by_type.get("school_distance", 0)),
+            "route_context_warning_count": int(by_type.get("route_context_detour", 0)),
+            "service_direction": normalize_service_direction(service_direction),
+        },
+        "warnings": warnings,
+    }
 
 
 
@@ -4744,6 +4968,13 @@ def run_backend_planner_with_prepared_data(
     log_stream.flush()
 
     service_original_points = [point for point in original_points if not bool(point.get("is_depot"))]
+    input_address_review = build_input_address_review(
+        planner,
+        original_points,
+        service_direction=service_direction,
+        current_plan_assessment=current_plan_assessment,
+        current_plan_distance_matrix=assessment_distance,
+    )
 
     structured_results = {
         "original": original_result,
@@ -4768,6 +4999,7 @@ def run_backend_planner_with_prepared_data(
         "nearby_private_access_analysis": nearby_private_access_analysis,
         "further_most_private_access_analysis": further_most_private_access_analysis,
         "further_most_nearby_private_access_analysis": further_most_nearby_private_access_analysis,
+        "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
@@ -4791,6 +5023,7 @@ def run_backend_planner_with_prepared_data(
         "nearby_private_access_analysis": nearby_private_access_analysis,
         "further_most_private_access_analysis": further_most_private_access_analysis,
         "further_most_nearby_private_access_analysis": further_most_nearby_private_access_analysis,
+        "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,

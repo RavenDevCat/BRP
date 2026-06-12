@@ -122,6 +122,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           reallocation={reallocation}
           reallocationSummary={reallocationSummary}
           scenarios={scenarios}
+          onOpenReview={() => setActiveTab("review")}
         />
       ) : null}
       {activeTab === "plans" ? (
@@ -159,6 +160,7 @@ function SummaryPanel({
   reallocation,
   reallocationSummary,
   scenarios,
+  onOpenReview,
 }: {
   job: JobRecord;
   currentPlan: Record<string, unknown>;
@@ -168,13 +170,18 @@ function SummaryPanel({
   reallocation: Record<string, unknown>;
   reallocationSummary: Record<string, unknown>;
   scenarios: ScenarioRow[];
+  onOpenReview: () => void;
 }) {
   const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.name === "15-Minute Constrained" && scenario.enabled);
-  const reviewCount = diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
+  const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
 
   return (
     <div className="space-y-4">
+      {diagnostics.inputAddressWarnings.length ? (
+        <InputAddressWarningBanner count={diagnostics.inputAddressWarnings.length} onOpenReview={onOpenReview} />
+      ) : null}
+
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
         <MetricCard
@@ -209,6 +216,36 @@ function SummaryPanel({
           reallocation={reallocation}
         />
       </CollapsibleSection>
+    </div>
+  );
+}
+
+function InputAddressWarningBanner({
+  count,
+  onOpenReview,
+}: {
+  count: number;
+  onOpenReview: () => void;
+}) {
+  return (
+    <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-4 shadow-panel">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+        <div className="flex gap-3">
+          <div className="flex h-10 w-10 flex-none items-center justify-center rounded-full bg-amber-100 text-amber-800">
+            <FileWarning className="h-5 w-5" aria-hidden="true" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-amber-950">Input addresses need review</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-6 text-amber-900">
+              {formatNumber(count)} accepted address{count === 1 ? "" : "es"} look unusual in the route context or are far
+              from school. The plan still ran, but review these workbook rows before sharing or operating it.
+            </p>
+          </div>
+        </div>
+        <Button type="button" variant="secondary" icon={<ListChecks className="h-4 w-4" />} onClick={onOpenReview}>
+          Review details
+        </Button>
+      </div>
     </div>
   );
 }
@@ -759,9 +796,26 @@ function DiagnosticsPanel({
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard label="Client prep" value={formatDurationSeconds(diagnostics.clientPrepElapsedSeconds)} />
         <MetricCard label="Backend compute" value={formatDurationSeconds(result.elapsed_seconds)} />
+        <MetricCard label="Input review" value={formatNumber(diagnostics.inputAddressWarnings.length)} tone="warning" />
         <MetricCard label="Geocode warnings" value={formatNumber(diagnostics.geocodeWarnings.length)} tone="warning" />
         <MetricCard label="Excluded stops" value={formatNumber(diagnostics.excludedStops.length)} tone="warning" />
       </div>
+
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <FileWarning className="h-4 w-4 text-amber-700" aria-hidden="true" />
+            <h2 className="text-sm font-semibold">Input address review</h2>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {diagnostics.inputAddressWarnings.length ? (
+            <SimpleObjectTable rows={diagnostics.inputAddressWarnings} />
+          ) : (
+            <div className="text-sm text-muted-foreground">No accepted input addresses were flagged for review.</div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card>
         <CardHeader>
@@ -2099,6 +2153,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
 }
 
 type Diagnostics = {
+  inputAddressWarnings: Array<Record<string, unknown>>;
   geocodeWarnings: Array<Record<string, unknown>>;
   excludedStops: Array<Record<string, unknown>>;
   clientPrepElapsedSeconds: unknown;
@@ -2107,7 +2162,11 @@ type Diagnostics = {
 function getDiagnostics(job: JobRecord): Diagnostics {
   const metadata = asRecord(job.metadata);
   const clientPrep = asRecord(metadata.client_prep);
+  const result = asRecord(job.result);
+  const structured = asRecord(result.structured_results);
+  const inputAddressReview = asRecord(result.input_address_review || structured.input_address_review);
   return {
+    inputAddressWarnings: asRecordArray(inputAddressReview.warnings),
     geocodeWarnings: asRecordArray(clientPrep.geocode_warnings),
     excludedStops: asRecordArray(clientPrep.excluded_stops),
     clientPrepElapsedSeconds: clientPrep.elapsed_seconds,

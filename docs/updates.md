@@ -4,6 +4,16 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-13
+
+### Input Address Review Warnings
+
+- Route Audit now surfaces accepted input addresses that may still need human review.
+- The Summary tab shows a prominent warning when accepted addresses are unusually far from the school or create a suspicious route-context detour.
+- The Review tab lists the affected address, workbook row references where available, accepted geocode details, route context, and the suggested workbook check.
+- These warnings are informational quality checks: they do not block solving, delete cache entries, auto-correct coordinates, or treat normal cross-district travel inside a large city as an error.
+- Existing completed jobs are immutable snapshots. Rerun an audit to generate the new address-review warnings under the updated backend logic.
+
 ## 2026-06-12
 
 ### Route Audit Result Workspace Consolidated

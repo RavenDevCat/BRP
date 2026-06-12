@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import importlib
 import io
 import json
@@ -16,6 +17,7 @@ import time
 import traceback
 from copy import deepcopy
 from dataclasses import asdict, fields
+from http.cookies import SimpleCookie
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -58,6 +60,12 @@ SIDE_TOOLS_DIR = Path(RAW_SIDE_TOOLS_DIR or str(DEFAULT_SIDE_TOOLS_DIR)).expandu
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
+TEST_LOGIN_TOKEN = os.environ.get("BRP_TEST_LOGIN_TOKEN", "").strip()
+TEST_LOGIN_EMAIL = (
+    os.environ.get("BRP_TEST_LOGIN_EMAIL", "brp.tester@local.test").strip().lower()
+)
+TEST_LOGIN_COOKIE_NAME = "brp_test_login"
+TEST_LOGIN_MAX_AGE_SECONDS = 12 * 60 * 60
 AUTH_PROVIDER = (
     (
         os.environ.get("BRP_AUTH_PROVIDER")
@@ -1311,6 +1319,7 @@ def _auth_config_payload() -> dict[str, Any]:
         "logout_url": _auth_logout_url(),
         "sso_ready": AUTH_PROVIDER not in {"microsoft_sso_pending"},
         "admin_source": "local_env",
+        "test_login_enabled": bool(TEST_LOGIN_TOKEN and TEST_LOGIN_EMAIL),
     }
 
 
@@ -2943,7 +2952,13 @@ def _load_or_fetch_map_tile(z: int, x: int, y: int) -> tuple[bytes, bool]:
 class BackendHandler(BaseHTTPRequestHandler):
     server_version = "BusingRoutingBackend/1.0"
 
-    def _send_json(self, status_code: int, payload: dict[str, Any] | list[Any]) -> bool:
+    def _send_json(
+        self,
+        status_code: int,
+        payload: dict[str, Any] | list[Any],
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> bool:
         body = json.dumps(
             _json_safe(payload), ensure_ascii=False, allow_nan=False
         ).encode("utf-8")
@@ -2951,6 +2966,8 @@ class BackendHandler(BaseHTTPRequestHandler):
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            for header_name, header_value in (extra_headers or {}).items():
+                self.send_header(header_name, header_value)
             self.end_headers()
             self.wfile.write(body)
             return True
@@ -2991,12 +3008,20 @@ class BackendHandler(BaseHTTPRequestHandler):
             )
             return False
 
-    def _send_redirect(self, location: str, status_code: int = 302) -> bool:
+    def _send_redirect(
+        self,
+        location: str,
+        status_code: int = 302,
+        *,
+        extra_headers: dict[str, str] | None = None,
+    ) -> bool:
         try:
             self.send_response(status_code)
             self.send_header("Location", location)
             self.send_header("Content-Length", "0")
             self.send_header("Cache-Control", "no-store")
+            for header_name, header_value in (extra_headers or {}).items():
+                self.send_header(header_name, header_value)
             self.end_headers()
             return True
         except (BrokenPipeError, ConnectionResetError):
@@ -3009,16 +3034,66 @@ class BackendHandler(BaseHTTPRequestHandler):
         payload = json.loads(raw_body.decode("utf-8")) if raw_body else {}
         return payload if isinstance(payload, dict) else {}
 
-    def _current_user_email(self) -> str:
-        if AUTH_PROVIDER == "local":
-            return (
-                _normalize_email(self.headers.get("X-BRP-User-Email")) or DEV_USER_EMAIL
-            )
-        return (
-            _normalize_email(self.headers.get("X-BRP-User-Email"))
-            or _normalize_email(self.headers.get("Cf-Access-Authenticated-User-Email"))
-            or DEV_USER_EMAIL
+    def _cookie_value(self, name: str) -> str:
+        raw_cookie = str(self.headers.get("Cookie", "") or "")
+        if not raw_cookie:
+            return ""
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw_cookie)
+        except Exception:
+            return ""
+        morsel = cookie.get(name)
+        return str(morsel.value or "") if morsel else ""
+
+    def _is_valid_test_login_token(self, token: str) -> bool:
+        return bool(
+            TEST_LOGIN_TOKEN
+            and TEST_LOGIN_EMAIL
+            and token
+            and hmac.compare_digest(token, TEST_LOGIN_TOKEN)
         )
+
+    def _test_login_cookie_header(self, token: str, *, max_age: int) -> str:
+        secure_suffix = (
+            "; Secure"
+            if str(self.headers.get("X-Forwarded-Proto", "") or "").lower()
+            == "https"
+            else ""
+        )
+        return (
+            f"{TEST_LOGIN_COOKIE_NAME}={token}; Path=/; Max-Age={max_age}; "
+            f"HttpOnly; SameSite=Lax{secure_suffix}"
+        )
+
+    def _test_login_email(self) -> str:
+        token = self._cookie_value(TEST_LOGIN_COOKIE_NAME)
+        if self._is_valid_test_login_token(token):
+            return TEST_LOGIN_EMAIL
+        return ""
+
+    def _current_user_identity(self) -> tuple[str, str]:
+        header_email = _normalize_email(self.headers.get("X-BRP-User-Email"))
+        cloudflare_email = _normalize_email(
+            self.headers.get("Cf-Access-Authenticated-User-Email")
+        )
+        test_email = self._test_login_email()
+        if AUTH_PROVIDER == "local":
+            if header_email:
+                return header_email, "local_header"
+            if test_email:
+                return test_email, "test_session"
+            return DEV_USER_EMAIL, "dev_fallback"
+        if header_email:
+            return header_email, "brp_header"
+        if cloudflare_email:
+            return cloudflare_email, "cloudflare_header"
+        if test_email:
+            return test_email, "test_session"
+        return DEV_USER_EMAIL, "dev_fallback"
+
+    def _current_user_email(self) -> str:
+        return self._current_user_identity()[0]
 
     def _is_authorized_request(self) -> bool:
         if not SERVICE_TOKEN:
@@ -3077,10 +3152,19 @@ class BackendHandler(BaseHTTPRequestHandler):
                 return
             self._send_redirect(_auth_login_url())
             return
+        if path == "/auth/test-logout":
+            self._send_redirect(
+                "/",
+                status_code=302,
+                extra_headers={
+                    "Set-Cookie": self._test_login_cookie_header("", max_age=0)
+                },
+            )
+            return
         if path == "/auth/logout":
             self._send_redirect(_auth_logout_url())
             return
-        user_email = self._current_user_email()
+        user_email, identity_source = self._current_user_identity()
         include_all = _is_admin_email(user_email)
         if path == "/me":
             self._send_json(
@@ -3089,6 +3173,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                     "email": user_email,
                     "is_admin": include_all,
                     "auth_mode": AUTH_PROVIDER,
+                    "identity_source": identity_source,
+                    "test_login": identity_source == "test_session",
                     "auth": _auth_config_payload(),
                 },
             )
@@ -3369,6 +3455,37 @@ class BackendHandler(BaseHTTPRequestHandler):
             user_email = self._current_user_email()
             include_all = _is_admin_email(user_email)
             payload = self._read_json_body()
+            if path == "/auth/test-login":
+                token = str(payload.get("token") or "").strip()
+                if not TEST_LOGIN_TOKEN or not TEST_LOGIN_EMAIL:
+                    self._send_json(
+                        404,
+                        {"error": "Test access is not enabled."},
+                    )
+                    return
+                if not self._is_valid_test_login_token(token):
+                    self._send_json(
+                        401,
+                        {"error": "Invalid test access token."},
+                    )
+                    return
+                self._send_json(
+                    200,
+                    {
+                        "email": TEST_LOGIN_EMAIL,
+                        "is_admin": _is_admin_email(TEST_LOGIN_EMAIL),
+                        "auth_mode": AUTH_PROVIDER,
+                        "identity_source": "test_session",
+                        "test_login": True,
+                        "auth": _auth_config_payload(),
+                    },
+                    extra_headers={
+                        "Set-Cookie": self._test_login_cookie_header(
+                            token, max_age=TEST_LOGIN_MAX_AGE_SECONDS
+                        )
+                    },
+                )
+                return
             if path == "/compute":
                 self._handle_sync_compute(payload)
                 return

@@ -10,6 +10,7 @@ import {
     ChevronUp,
     Clock3,
     History,
+    KeyRound,
     ListChecks,
     Loader2,
     RefreshCw,
@@ -24,9 +25,12 @@ import {
     cancelJob,
     deleteJob,
     getDeploymentFeatures,
+    getAuthConfig,
+    getCurrentUser,
     getHealth,
     getJob,
     listJobs,
+    testLogin,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,21 +43,172 @@ import { jobInputStopCount } from "@/features/jobs/summary-metrics";
 import { LanguageProvider, useT } from "@/lib/i18n/context";
 
 export function RootLayout() {
+    const queryClient = useQueryClient();
     const featuresQuery = useQuery({
         queryKey: ["deployment-features"],
         queryFn: getDeploymentFeatures,
         staleTime: 60_000,
     });
+    const authQuery = useQuery({
+        queryKey: ["auth-config"],
+        queryFn: getAuthConfig,
+        staleTime: 60_000,
+    });
+    const userQuery = useQuery({
+        queryKey: ["me"],
+        queryFn: getCurrentUser,
+        staleTime: 15_000,
+    });
+    const shouldShowNoAuthGate =
+        authQuery.data?.test_login_enabled &&
+        userQuery.data?.identity_source === "dev_fallback" &&
+        !userQuery.data?.test_login;
 
     return (
         <LanguageProvider
             switchEnabled={featuresQuery.data?.language_switch_enabled ?? false}
         >
-            <AppShell>
-                <Outlet />
-            </AppShell>
+            {shouldShowNoAuthGate ? (
+                <NoAuthLoginPage
+                    loginUrl={authQuery.data?.login_url || "/api/auth/login"}
+                    ssoReady={authQuery.data?.sso_ready ?? false}
+                    onSuccess={async () => {
+                        await queryClient.invalidateQueries({
+                            queryKey: ["me"],
+                        });
+                    }}
+                />
+            ) : (
+                <AppShell>
+                    <Outlet />
+                </AppShell>
+            )}
         </LanguageProvider>
     );
+}
+
+function NoAuthLoginPage({
+    loginUrl,
+    ssoReady,
+    onSuccess,
+}: {
+    loginUrl: string;
+    ssoReady: boolean;
+    onSuccess: () => Promise<void>;
+}) {
+    const [testerOpen, setTesterOpen] = useState(false);
+    const [token, setToken] = useState("");
+    const loginMutation = useMutation({
+        mutationFn: () => testLogin(token),
+        onSuccess,
+    });
+    const canSubmit = token.trim().length > 0 && !loginMutation.isPending;
+
+    return (
+        <div className="flex min-h-screen items-center justify-center bg-background px-4 py-10">
+            <div className="w-full max-w-sm space-y-5 rounded-md border border-border bg-surface p-6 shadow-panel">
+                <div className="flex items-center gap-3">
+                    <img
+                        className="h-10 w-10 rounded-md"
+                        src="/bus-front.svg"
+                        alt=""
+                        aria-hidden="true"
+                    />
+                    <div>
+                        <h1 className="text-base font-semibold">
+                            BRP: Bus Route Planner
+                        </h1>
+                        <p className="text-xs text-muted-foreground">
+                            Planning console
+                        </p>
+                    </div>
+                </div>
+
+                <Button
+                    type="button"
+                    className="w-full"
+                    icon={<KeyRound className="h-4 w-4" aria-hidden="true" />}
+                    disabled={!ssoReady}
+                    onClick={() => {
+                        window.location.assign(resolveAuthUrl(loginUrl));
+                    }}
+                >
+                    Sign in
+                </Button>
+
+                <div className="border-t border-border pt-3">
+                    {testerOpen ? (
+                        <form
+                            className="space-y-2"
+                            onSubmit={(event) => {
+                                event.preventDefault();
+                                if (canSubmit) {
+                                    loginMutation.mutate();
+                                }
+                            }}
+                        >
+                            <label className="block space-y-1.5">
+                                <span className="text-[11px] font-medium uppercase text-muted-foreground">
+                                    Tester access
+                                </span>
+                                <input
+                                    className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20"
+                                    type="password"
+                                    autoComplete="one-time-code"
+                                    value={token}
+                                    onChange={(event) =>
+                                        setToken(event.target.value)
+                                    }
+                                />
+                            </label>
+                            {loginMutation.error ? (
+                                <div className="text-xs text-red-700">
+                                    {loginMutation.error instanceof Error
+                                        ? loginMutation.error.message
+                                        : "Tester access failed."}
+                                </div>
+                            ) : null}
+                            <Button
+                                type="submit"
+                                variant="secondary"
+                                className="h-9 w-full text-xs"
+                                disabled={!canSubmit}
+                                icon={
+                                    loginMutation.isPending ? (
+                                        <Loader2
+                                            className="h-3.5 w-3.5 animate-spin"
+                                            aria-hidden="true"
+                                        />
+                                    ) : undefined
+                                }
+                            >
+                                Continue
+                            </Button>
+                        </form>
+                    ) : (
+                        <button
+                            type="button"
+                            className="text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                            onClick={() => setTesterOpen(true)}
+                        >
+                            Tester access
+                        </button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
+
+function resolveAuthUrl(url?: string) {
+    const nextUrl = url || "/";
+    if (/^https?:\/\//i.test(nextUrl)) {
+        return nextUrl;
+    }
+    if (typeof window === "undefined") {
+        return nextUrl;
+    }
+    return `${window.location.origin}${nextUrl.startsWith("/") ? nextUrl : `/${nextUrl}`}`;
 }
 
 export function DashboardPage() {

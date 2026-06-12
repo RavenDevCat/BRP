@@ -75,6 +75,10 @@ export function AppShell({ children }: { children: ReactNode }) {
             ? Math.round((googleUsage.used / googleUsage.limit) * 100)
             : 0;
     const signOut = () => {
+        if (userQuery.data?.test_login) {
+            window.location.assign(resolveAuthUrl("/api/auth/test-logout"));
+            return;
+        }
         window.location.assign(
             resolveAuthUrl(
                 authQuery.data?.logout_url || userQuery.data?.auth?.logout_url,

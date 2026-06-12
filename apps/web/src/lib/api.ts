@@ -4,8 +4,6 @@ export type ApiUser = {
     email: string;
     is_admin: boolean;
     auth_mode: string;
-    identity_source?: string;
-    test_login?: boolean;
     auth?: AuthConfig;
 };
 
@@ -20,7 +18,6 @@ export type AuthConfig = {
     logout_url: string;
     sso_ready: boolean;
     admin_source: string;
-    test_login_enabled?: boolean;
 };
 
 export type GoogleGeocodeUsage = {
@@ -489,14 +486,6 @@ export function getCurrentUser() {
 
 export function getAuthConfig() {
     return apiFetch<AuthConfig>("/auth/config");
-}
-
-export function testLogin(token: string) {
-    return apiFetch<ApiUser>("/auth/test-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
-    });
 }
 
 export function getGoogleGeocodeUsage() {

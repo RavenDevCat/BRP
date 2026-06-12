@@ -100,10 +100,7 @@ function NoAuthLoginPage({
     const [token, setToken] = useState("");
     const loginMutation = useMutation({
         mutationFn: () => testLogin(token),
-        onSuccess: async () => {
-            window.localStorage.setItem("brp_test_login", "1");
-            await onSuccess();
-        },
+        onSuccess,
     });
     const canSubmit = token.trim().length > 0 && !loginMutation.isPending;
 

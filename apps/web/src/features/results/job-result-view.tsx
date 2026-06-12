@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
@@ -42,20 +42,17 @@ import {
   toTitle,
 } from "@/lib/format";
 
-type ResultTab = "ai" | "audit" | "impact" | "baselines" | "maps" | "actions" | "diagnostics";
+type ResultTab = "summary" | "plans" | "impact" | "review";
 
 const resultTabs: Array<{ key: ResultTab; label: string }> = [
-  { key: "ai", label: "AI Audit" },
-  { key: "audit", label: "Audit Detail" },
-  { key: "impact", label: "Time Impact" },
-  { key: "actions", label: "Actions" },
-  { key: "baselines", label: "Baselines" },
-  { key: "maps", label: "Maps" },
-  { key: "diagnostics", label: "Diagnostics" },
+  { key: "summary", label: "Summary" },
+  { key: "plans", label: "Plans" },
+  { key: "impact", label: "Impact" },
+  { key: "review", label: "Review" },
 ];
 
 export function JobResultView({ job }: { job: JobRecord }) {
-  const [activeTab, setActiveTab] = useState<ResultTab>("ai");
+  const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const result = asRecord(job.result);
   const currentPlan = asRecord(result.current_plan_assessment);
   const routeSummaries = asRecordArray(currentPlan.route_summaries);
@@ -114,40 +111,158 @@ export function JobResultView({ job }: { job: JobRecord }) {
         ))}
       </div>
 
-      {activeTab === "audit" ? (
-        <AuditPanel
-          currentPlan={currentPlan}
-          currentComparison={currentComparison}
-          routeSummaries={routeSummaries}
-          result={result}
-        />
-      ) : null}
-      {activeTab === "ai" ? (
-        <AiAuditPanel
+      {activeTab === "summary" ? (
+        <SummaryPanel
           job={job}
           currentPlan={currentPlan}
           currentComparison={currentComparison}
+          diagnostics={diagnostics}
+          priorityActions={priorityActions}
+          reallocation={reallocation}
           reallocationSummary={reallocationSummary}
           scenarios={scenarios}
         />
       ) : null}
-      {activeTab === "baselines" ? (
-        <BaselinePanel
+      {activeTab === "plans" ? (
+        <PlansPanel
           jobId={job.job_id}
+          jobName={jobDisplayName}
+          mapOutputs={mapOutputs}
+          result={result}
+          diagnostics={diagnostics}
           scenarios={scenarios}
           currentComparison={currentComparison}
         />
       ) : null}
       {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
-      {activeTab === "maps" ? <MapsPanel jobId={job.job_id} jobName={jobDisplayName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} /> : null}
-      {activeTab === "actions" ? (
+      {activeTab === "review" ? (
+        <ReviewPanel
+          currentPlan={currentPlan}
+          currentComparison={currentComparison}
+          routeSummaries={routeSummaries}
+          result={result}
+          diagnostics={diagnostics}
+          mapOutputs={mapOutputs}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function SummaryPanel({
+  job,
+  currentPlan,
+  currentComparison,
+  diagnostics,
+  priorityActions,
+  reallocation,
+  reallocationSummary,
+  scenarios,
+}: {
+  job: JobRecord;
+  currentPlan: Record<string, unknown>;
+  currentComparison: Record<string, unknown>;
+  diagnostics: Diagnostics;
+  priorityActions: Array<Record<string, unknown>>;
+  reallocation: Record<string, unknown>;
+  reallocationSummary: Record<string, unknown>;
+  scenarios: ScenarioRow[];
+}) {
+  const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
+  const timeConstrained = scenarios.find((scenario) => scenario.name === "15-Minute Constrained" && scenario.enabled);
+  const reviewCount = diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
+        <MetricCard
+          label="Free optimization"
+          value={freeOptimization ? formatNumber(freeOptimization.routeCount) : "Skipped"}
+          tone={freeOptimization ? "success" : "warning"}
+        />
+        <MetricCard
+          label="15-min constrained"
+          value={timeConstrained ? formatNumber(timeConstrained.routeCount) : "Skipped"}
+          tone={timeConstrained ? "info" : "warning"}
+        />
+        <MetricCard
+          label="Data review"
+          value={reviewCount ? `${formatNumber(reviewCount)} item(s)` : "Clear"}
+          tone={reviewCount ? "warning" : "success"}
+        />
+      </div>
+
+      <AiAuditPanel
+        job={job}
+        currentPlan={currentPlan}
+        currentComparison={currentComparison}
+        reallocationSummary={reallocationSummary}
+        scenarios={scenarios}
+      />
+
+      <CollapsibleSection title="Detailed action signals">
         <ActionPanel
           priorityActions={priorityActions}
           reallocationSummary={reallocationSummary}
           reallocation={reallocation}
         />
-      ) : null}
-      {activeTab === "diagnostics" ? <DiagnosticsPanel diagnostics={diagnostics} mapOutputs={mapOutputs} result={result} /> : null}
+      </CollapsibleSection>
+    </div>
+  );
+}
+
+function PlansPanel({
+  jobId,
+  jobName,
+  mapOutputs,
+  result,
+  diagnostics,
+  scenarios,
+  currentComparison,
+}: {
+  jobId: string;
+  jobName: string;
+  mapOutputs: MapOutput[];
+  result: Record<string, unknown>;
+  diagnostics: Diagnostics;
+  scenarios: ScenarioRow[];
+  currentComparison: Record<string, unknown>;
+}) {
+  return (
+    <div className="space-y-4">
+      <MapsPanel jobId={jobId} jobName={jobName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} />
+      <CollapsibleSection title="Scenario tables and workbook export">
+        <BaselinePanel jobId={jobId} scenarios={scenarios} currentComparison={currentComparison} />
+      </CollapsibleSection>
+    </div>
+  );
+}
+
+function ReviewPanel({
+  currentPlan,
+  currentComparison,
+  routeSummaries,
+  result,
+  diagnostics,
+  mapOutputs,
+}: {
+  currentPlan: Record<string, unknown>;
+  currentComparison: Record<string, unknown>;
+  routeSummaries: Array<Record<string, unknown>>;
+  result: Record<string, unknown>;
+  diagnostics: Diagnostics;
+  mapOutputs: MapOutput[];
+}) {
+  return (
+    <div className="space-y-4">
+      <AuditPanel
+        currentPlan={currentPlan}
+        currentComparison={currentComparison}
+        routeSummaries={routeSummaries}
+        result={result}
+      />
+      <DiagnosticsPanel diagnostics={diagnostics} mapOutputs={mapOutputs} result={result} />
     </div>
   );
 }
@@ -1624,6 +1739,17 @@ function MarkdownReport({ markdown }: { markdown: string }) {
 
 function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{message}</div>;
+}
+
+function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <details className="rounded-lg border border-border bg-surface shadow-panel">
+      <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-muted">
+        {title}
+      </summary>
+      <div className="border-t border-border p-4">{children}</div>
+    </details>
+  );
 }
 
 function MetricCard({

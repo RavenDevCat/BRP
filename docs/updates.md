@@ -6,6 +6,19 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-12
 
+### Route Audit Result Workspace Consolidated
+
+- Route Audit job results are now organized around four user-facing tabs:
+  `Summary`, `Plans`, `Impact`, and `Review`.
+- Legacy comparison scenarios that users did not need to interpret directly
+  have been removed from the visible workflow. New audits focus on Current
+  Plan, Free Optimization Baseline, and the `15-Minute Constrained` plan.
+- The Impact summary has been condensed into fewer conclusion-oriented metrics
+  so operations teams can see acceptance, over-threshold riders, typical
+  adverse impact, and worst/high-risk stops without scanning repeated numbers.
+- Route map actions now keep the primary downloads together: Open map, Download
+  map, and Download workbook are available from the map action group.
+
 ### Time Impact Review Started
 
 - Route Audit results now include a Time Impact tab for compatible completed

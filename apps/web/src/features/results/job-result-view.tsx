@@ -1700,6 +1700,7 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     scenarioFromAssessment("Like-for-Like", "Same route allocation, improved order", asRecord(result.like_for_like_baseline)),
     scenarioFromAssessment("Constrained", "High-confidence transfer packages", asRecord(result.constrained_improvement_baseline)),
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
+    scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
   ];
 }
 
@@ -1981,6 +1982,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
   const keys = [
     ["current_plan", "Current Plan"],
     ["original", "Free Optimization Baseline"],
+    ["time_constrained", "15-Minute Constrained"],
     ["subway", "Subway Aggregated"],
     ["nearby", "Nearby Aggregated"],
     ["further_most", "Further Most"],

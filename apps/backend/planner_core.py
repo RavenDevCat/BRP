@@ -74,6 +74,10 @@ AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR = max(
     float(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR", "2.8") or 2.8),
 )
 AMAP_TRAFFIC_CALIBRATION_TZ = ZoneInfo("Asia/Shanghai")
+TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES = max(
+    0.0,
+    float(os.environ.get("BRP_TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES", "15") or 15),
+)
 TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
     "Off-Peak": 1.0,
     "AM Peak": 1.2,
@@ -149,6 +153,7 @@ class PlannerConfig:
     current_plan_output_name: str = "current_plan_routes.html"
     subway_output_name: str = "school_bus_routes_subway_aggregated.html"
     nearby_output_name: str = "school_bus_routes_nearby_aggregated.html"
+    time_constrained_output_name: str = "school_bus_routes_time_constrained.html"
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
@@ -937,6 +942,7 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
         "current_plan": str(output_dir / config.current_plan_output_name),
         "subway": str(output_dir / config.subway_output_name),
         "nearby": str(output_dir / config.nearby_output_name),
+        "time_constrained": str(output_dir / config.time_constrained_output_name),
         "further_most": str(output_dir / config.further_most_output_name),
         "further_most_nearby": str(output_dir / config.further_most_nearby_output_name),
     }
@@ -1521,7 +1527,15 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
     repriced = deepcopy(results)
     revenue_rules = _normalize_revenue_rules(config.revenue_rules)
 
-    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in (
+        "original",
+        "current_plan",
+        "subway",
+        "nearby",
+        "time_constrained",
+        "further_most",
+        "further_most_nearby",
+    ):
         scenario = repriced.get(scenario_key) or {}
         routes = scenario.get("routes") or []
         total_operating_cost = 0.0
@@ -1590,7 +1604,15 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
     if config.revenue_rules is not None:
         planner.REVENUE_RULES = config.revenue_rules
 
-    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in (
+        "original",
+        "current_plan",
+        "subway",
+        "nearby",
+        "time_constrained",
+        "further_most",
+        "further_most_nearby",
+    ):
         scenario = hydrated.get(scenario_key) or {}
         points = scenario.get("points")
         routes = scenario.get("routes")
@@ -4262,6 +4284,8 @@ def _compute_scenario_without_render(
     points: list[dict[str, Any]],
     scenario_label: str,
     bus_type_configs: list[dict[str, Any]] | None = None,
+    node_time_upper_bounds_builder: Any | None = None,
+    time_constraint_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if len(points) <= 1:
         routes: list[dict[str, Any]] = []
@@ -4271,6 +4295,7 @@ def _compute_scenario_without_render(
 
     planner.log(f"[BACKEND] Building {scenario_label} scenario with {len(points)} total points.")
     previous_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
+    previous_node_time_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}))
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
     full_fleet = planner.build_vehicle_fleet()
@@ -4294,31 +4319,57 @@ def _compute_scenario_without_render(
         except Exception as exc:
             planner.log(f"[WARN] OSRM full matrix failed for {scenario_label}; falling back to seed matrix: {exc}")
             solve_time, solve_distance = planner.seed_edge_metrics(points)
+        scenario_constraint_metadata = deepcopy(time_constraint_metadata or {})
+        if node_time_upper_bounds_builder is not None:
+            node_time_upper_bounds = node_time_upper_bounds_builder(points)
+            planner.NODE_TIME_UPPER_BOUNDS = dict(node_time_upper_bounds)
+            scenario_constraint_metadata.update(
+                {
+                    "enabled": bool(node_time_upper_bounds),
+                    "bounded_solver_stop_count": len(node_time_upper_bounds),
+                }
+            )
+            planner.log(
+                f"[BACKEND] Applied {len(node_time_upper_bounds)} stop time-impact "
+                f"constraint(s) for {scenario_label}."
+            )
+            if not node_time_upper_bounds:
+                raise RuntimeError("No solver stops matched the current-plan time-impact constraints.")
+        else:
+            planner.NODE_TIME_UPPER_BOUNDS = {}
         final_routes = planner.solve_routes(points, solve_time, solve_distance)
         planner.enrich_routes_with_actual_driving(points, final_routes)
         planner.annotate_and_price_routes(points, final_routes)
         result = planner.build_scenario_result(points, final_routes, "")
         result["output_html"] = ""
+        if scenario_constraint_metadata:
+            result["time_constraint"] = scenario_constraint_metadata
         return result
     finally:
         planner.OSRM_BASE_URL = previous_osrm_base_url
         planner.BUS_TYPE_CONFIGS = previous_bus_type_configs
+        planner.NODE_TIME_UPPER_BOUNDS = previous_node_time_upper_bounds
 
 
-def _build_skipped_scenario_result(reason: str) -> dict[str, Any]:
-    return {
-        "points": None,
-        "routes": None,
-        "output_html": "",
-        "bus_count": 0,
-        "stop_count": 0,
-        "service_stop_count": 0,
-        "map_point_count": 0,
-        "bus_mix": {},
-        "enabled": False,
-        "skipped_reason": reason,
+def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+    result = {
+        **dict(extra or {}),
     }
-
+    result.update(
+        {
+            "points": None,
+            "routes": None,
+            "output_html": "",
+            "bus_count": 0,
+            "stop_count": 0,
+            "service_stop_count": 0,
+            "map_point_count": 0,
+            "bus_mix": {},
+            "enabled": False,
+            "skipped_reason": reason,
+        }
+    )
+    return result
 
 def _attach_free_baseline_metadata(
     result: dict[str, Any],
@@ -4337,6 +4388,129 @@ def _attach_free_baseline_metadata(
         str(config.small_bus_name).strip() or "Small Bus": float(config.free_baseline_small_bus_ratio),
     }
     return enriched
+
+
+def _normalize_time_constraint_text(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _point_time_constraint_keys(point: dict[str, Any], fallback_index: int) -> list[str]:
+    keys: list[str] = []
+    try:
+        node_id = int(point.get("node_id", fallback_index))
+        keys.append(f"node:{node_id}")
+    except (TypeError, ValueError):
+        pass
+
+    demand_batch_key = _normalize_time_constraint_text(point.get("demand_batch_key"))
+    if demand_batch_key:
+        keys.append(f"batch:{demand_batch_key}")
+
+    country = _normalize_time_constraint_text(point.get("country"))
+    city = _normalize_time_constraint_text(point.get("city"))
+    for field in ("requested_address", "display_address", "address"):
+        address = _normalize_time_constraint_text(point.get(field))
+        if not address:
+            continue
+        if country or city:
+            keys.append(f"addr:{country}|{city}|{address}")
+        keys.append(f"addr:{address}")
+    return keys
+
+
+def _route_nodes_for_time_constraint(route_summary: dict[str, Any], service_direction: str) -> list[int]:
+    route_nodes = [int(item) for item in list(route_summary.get("matched_node_ids") or [])]
+    if not route_nodes:
+        return []
+    if normalize_service_direction(service_direction) == "To School":
+        route_nodes = list(reversed(route_nodes))
+    if 0 not in route_nodes:
+        return []
+    depot_index = route_nodes.index(0)
+    return route_nodes[depot_index:]
+
+
+def _build_time_acceptance_constraint_builder(
+    current_plan_assessment: dict[str, Any] | None,
+    original_points: list[dict[str, Any]],
+    assessment_time: list[list[float]] | None,
+    service_direction: str,
+    threshold_minutes: float,
+) -> tuple[Any | None, dict[str, Any]]:
+    threshold_seconds = max(0, int(round(float(threshold_minutes) * 60.0)))
+    metadata: dict[str, Any] = {
+        "enabled": False,
+        "threshold_minutes": float(threshold_minutes),
+        "threshold_seconds": threshold_seconds,
+        "source": "current_plan",
+        "service_direction": normalize_service_direction(service_direction),
+        "bounded_current_stop_count": 0,
+        "bounded_solver_stop_count": 0,
+    }
+    if not current_plan_assessment:
+        metadata["skipped_reason"] = "No current plan assessment was available."
+        return None, metadata
+    if not assessment_time:
+        metadata["skipped_reason"] = "No current-plan timing matrix was available."
+        return None, metadata
+    if len(original_points) <= 1:
+        metadata["skipped_reason"] = "No service stops were available for time-impact constraints."
+        return None, metadata
+
+    working_time = (
+        transpose_matrix(assessment_time)
+        if normalize_service_direction(service_direction) == "To School"
+        else assessment_time
+    )
+    limit_by_key: dict[str, int] = {}
+    bounded_nodes: set[int] = set()
+
+    for route_summary in list(current_plan_assessment.get("route_summaries") or []):
+        route_nodes = _route_nodes_for_time_constraint(route_summary, service_direction)
+        if len(route_nodes) <= 1:
+            continue
+        cumulative_s = 0.0
+        for from_node, to_node in zip(route_nodes[:-1], route_nodes[1:]):
+            if (
+                from_node < 0
+                or to_node < 0
+                or from_node >= len(working_time)
+                or to_node >= len(working_time)
+            ):
+                continue
+            cumulative_s += float(working_time[from_node][to_node] or 0.0)
+            if to_node == 0 or to_node >= len(original_points):
+                continue
+            bounded_nodes.add(to_node)
+            point = dict(original_points[to_node] or {})
+            upper_bound_s = int(round(cumulative_s + threshold_seconds))
+            for key in _point_time_constraint_keys(point, to_node):
+                existing = limit_by_key.get(key)
+                if existing is None or upper_bound_s < existing:
+                    limit_by_key[key] = upper_bound_s
+
+    if not limit_by_key:
+        metadata["skipped_reason"] = "No matched current-plan stops could be converted into time constraints."
+        return None, metadata
+
+    metadata["enabled"] = True
+    metadata["bounded_current_stop_count"] = len(bounded_nodes)
+
+    def build_node_time_upper_bounds(solver_points: list[dict[str, Any]]) -> dict[int, int]:
+        bounds: dict[int, int] = {}
+        for index, point in enumerate(list(solver_points or [])):
+            if index == 0 or bool(dict(point or {}).get("is_depot")):
+                continue
+            matched_limits = [
+                limit_by_key[key]
+                for key in _point_time_constraint_keys(dict(point or {}), index)
+                if key in limit_by_key
+            ]
+            if matched_limits:
+                bounds[index] = min(matched_limits)
+        return bounds
+
+    return build_node_time_upper_bounds, metadata
 
 
 def run_backend_planner_with_prepared_data(
@@ -4474,6 +4648,53 @@ def run_backend_planner_with_prepared_data(
             current_plan_assessment,
             original_points,
         )
+        time_constraint_builder, time_constraint_metadata = _build_time_acceptance_constraint_builder(
+            current_plan_assessment,
+            original_points,
+            assessment_time,
+            config.service_direction,
+            TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES,
+        )
+        if time_constraint_builder is not None:
+            try:
+                time_constrained_result = _compute_scenario_without_render(
+                    planner,
+                    original_points,
+                    "15-minute time-impact constrained optimization",
+                    bus_type_configs=free_baseline_bus_type_configs,
+                    node_time_upper_bounds_builder=time_constraint_builder,
+                    time_constraint_metadata=time_constraint_metadata,
+                )
+                time_constrained_result["baseline_name"] = "time_constrained_optimization"
+                time_constrained_result["time_constraint"] = {
+                    **dict(time_constrained_result.get("time_constraint") or {}),
+                    **time_constraint_metadata,
+                    "enabled": True,
+                    "bounded_solver_stop_count": int(
+                        dict(time_constrained_result.get("time_constraint") or {}).get(
+                            "bounded_solver_stop_count",
+                            time_constraint_metadata.get("bounded_solver_stop_count", 0),
+                        )
+                        or 0
+                    ),
+                }
+            except Exception as exc:
+                planner.log(f"[WARN] 15-minute time-impact constrained optimization skipped: {exc}")
+                time_constrained_result = _build_skipped_scenario_result(
+                    f"15-minute time-impact constrained optimization was infeasible: {exc}",
+                    {
+                        "time_constraint": {
+                            **time_constraint_metadata,
+                            "enabled": False,
+                            "error": str(exc),
+                        }
+                    },
+                )
+        else:
+            time_constrained_result = _build_skipped_scenario_result(
+                str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
+                {"time_constraint": time_constraint_metadata},
+            )
         like_for_like_baseline = assess_current_plan(
             planner,
             current_plan,
@@ -4554,6 +4775,7 @@ def run_backend_planner_with_prepared_data(
         "current_plan": current_plan_scenario,
         "subway": subway_result,
         "nearby": nearby_result,
+        "time_constrained": time_constrained_result,
         "further_most": further_most_result,
         "further_most_nearby": further_most_nearby_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
@@ -4571,6 +4793,7 @@ def run_backend_planner_with_prepared_data(
         "constrained_selected_moves": constrained_selected_moves,
         "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
+        "time_constrained_optimization": time_constrained_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
@@ -4599,6 +4822,7 @@ def run_backend_planner_with_prepared_data(
         "constrained_selected_moves": constrained_selected_moves,
         "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
+        "time_constrained_optimization": time_constrained_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,

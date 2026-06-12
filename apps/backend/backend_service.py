@@ -109,6 +109,8 @@ MAP_ARTIFACT_KEYS = {
     "free_optimization": "original",
     "subway": "subway",
     "nearby": "nearby",
+    "time_constrained": "time_constrained",
+    "time_constrained_optimization": "time_constrained",
     "further_most": "further_most",
     "further_most_nearby": "further_most_nearby",
 }
@@ -117,6 +119,7 @@ MAP_SCENARIO_LABELS = {
     "original": "Free Optimization Baseline",
     "subway": "Subway Aggregated",
     "nearby": "Nearby Aggregated",
+    "time_constrained": "15-Minute Constrained",
     "further_most": "Further Most",
     "further_most_nearby": "Further Most + Nearby Aggregate",
 }
@@ -125,6 +128,7 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "original": "original_html",
     "subway": "subway_html",
     "nearby": "nearby_html",
+    "time_constrained": "time_constrained_html",
     "further_most": "further_most_html",
     "further_most_nearby": "further_most_nearby_html",
 }

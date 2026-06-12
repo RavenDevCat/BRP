@@ -94,6 +94,7 @@ NEARBY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_nearby_aggreg
 
 CURRENT_CURRENCY_CODE = "USD"
 LAST_RUN_RESULTS: dict[str, Any] = {}
+NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
 
 HUGE_TIME_SECONDS = 6 * 3600
 HUGE_DISTANCE_METERS = 300_000
@@ -1105,11 +1106,51 @@ def fleet_total_capacity(fleet: list[dict[str, Any]]) -> int:
     return sum(solver_capacity_for_vehicle(item) for item in fleet)
 
 
+def subset_node_time_upper_bounds(
+    bounds: dict[int, int] | None,
+    subset_nodes: list[int],
+) -> dict[int, int]:
+    if not bounds:
+        return {}
+    remapped: dict[int, int] = {}
+    for local_node, source_node in enumerate(subset_nodes):
+        if local_node == 0:
+            continue
+        try:
+            source_node_int = int(source_node)
+        except (TypeError, ValueError):
+            continue
+        if source_node_int in bounds:
+            remapped[local_node] = int(bounds[source_node_int])
+    return remapped
+
+
+def validate_trivial_time_bounds(
+    points: list[dict[str, Any]],
+    time_matrix: list[list[int]],
+    bounds: dict[int, int] | None,
+) -> None:
+    if not bounds or len(points) <= 1:
+        return
+    working_time_matrix = transpose_matrix(time_matrix) if is_to_school_direction() else time_matrix
+    for node, upper_bound in bounds.items():
+        if node <= 0 or node >= len(points):
+            continue
+        elapsed_s = int(working_time_matrix[0][node])
+        if elapsed_s > int(upper_bound):
+            raise RuntimeError(
+                "No feasible route satisfies the configured time-impact acceptance limit. "
+                f"Stop `{points[node].get('address', f'node {node}')}` requires "
+                f"{elapsed_s / 60.0:.1f} minutes against a limit of {int(upper_bound) / 60.0:.1f} minutes."
+            )
+
+
 def solve_routes_for_fleet(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
     distance_matrix: list[list[int]],
     fleet: list[dict[str, Any]],
+    node_time_upper_bounds: dict[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -1158,6 +1199,17 @@ def solve_routes_for_fleet(
         "Time",
     )
     time_dimension = routing.GetDimensionOrDie("Time")
+    for node, upper_bound in dict(node_time_upper_bounds or {}).items():
+        try:
+            node_int = int(node)
+            upper_bound_int = int(upper_bound)
+        except (TypeError, ValueError):
+            continue
+        if node_int <= 0 or node_int >= len(points):
+            continue
+        time_dimension.CumulVar(manager.NodeToIndex(node_int)).SetMax(
+            max(0, min(hard_route_duration_seconds, upper_bound_int))
+        )
 
     def demand_callback(index: int) -> int:
         node = manager.IndexToNode(index)
@@ -1271,6 +1323,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
 
     # Small cases do not need the full VRP search; avoiding it keeps the backend responsive.
     if len(points) == 2:
+        validate_trivial_time_bounds(points, time_matrix, NODE_TIME_UPPER_BOUNDS)
         return build_trivial_routes(points, time_matrix, distance_matrix, full_fleet)
 
     depot_distances = compute_depot_distances(points)
@@ -1285,6 +1338,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
 
     express_fleet: list[dict[str, Any]] = []
     regular_fleet = trim_fleet_for_demand(points, full_fleet)
+    global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
     if remote_nodes and RESERVED_EXPRESS_BUSES > 0:
         sorted_for_express = sort_express_preference(full_fleet)
         candidate_express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
@@ -1316,7 +1370,13 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
             subset_points = [points[idx] for idx in subset_nodes]
             subset_time = subset_matrix(time_matrix, subset_nodes)
             subset_distance = subset_matrix(distance_matrix, subset_nodes)
-            express_routes = solve_routes_for_fleet(subset_points, subset_time, subset_distance, express_fleet)
+            express_routes = solve_routes_for_fleet(
+                subset_points,
+                subset_time,
+                subset_distance,
+                express_fleet,
+                subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
+            )
             combined_routes.extend(remap_subset_routes(express_routes, subset_nodes))
             served_remote_nodes = {
                 node
@@ -1336,7 +1396,13 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
         subset_points = [points[idx] for idx in subset_nodes]
         subset_time = subset_matrix(time_matrix, subset_nodes)
         subset_distance = subset_matrix(distance_matrix, subset_nodes)
-        regular_routes = solve_routes_for_fleet(subset_points, subset_time, subset_distance, regular_fleet or full_fleet)
+        regular_routes = solve_routes_for_fleet(
+            subset_points,
+            subset_time,
+            subset_distance,
+            regular_fleet or full_fleet,
+            subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
+        )
         combined_routes.extend(remap_subset_routes(regular_routes, subset_nodes))
 
     combined_routes.sort(key=lambda item: (item["bus_type_name"], item["vehicle_id"]))

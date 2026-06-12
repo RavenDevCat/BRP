@@ -4296,6 +4296,7 @@ def _compute_scenario_without_render(
     planner.log(f"[BACKEND] Building {scenario_label} scenario with {len(points)} total points.")
     previous_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
     previous_node_time_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}))
+    previous_min_solver_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
     full_fleet = planner.build_vehicle_fleet()
@@ -4323,20 +4324,29 @@ def _compute_scenario_without_render(
         if node_time_upper_bounds_builder is not None:
             node_time_upper_bounds = node_time_upper_bounds_builder(points)
             planner.NODE_TIME_UPPER_BOUNDS = dict(node_time_upper_bounds)
+            planner.MIN_SOLVER_VEHICLE_COUNT = max(
+                0,
+                int(scenario_constraint_metadata.get("current_route_count", 0) or 0),
+            )
             scenario_constraint_metadata.update(
                 {
                     "enabled": bool(node_time_upper_bounds),
                     "bounded_solver_stop_count": len(node_time_upper_bounds),
+                    "min_solver_vehicle_count": int(planner.MIN_SOLVER_VEHICLE_COUNT),
                 }
             )
+            if isinstance(time_constraint_metadata, dict):
+                time_constraint_metadata.update(scenario_constraint_metadata)
             planner.log(
                 f"[BACKEND] Applied {len(node_time_upper_bounds)} stop time-impact "
-                f"constraint(s) for {scenario_label}."
+                f"constraint(s) for {scenario_label}; solver vehicle floor "
+                f"{planner.MIN_SOLVER_VEHICLE_COUNT}."
             )
             if not node_time_upper_bounds:
                 raise RuntimeError("No solver stops matched the current-plan time-impact constraints.")
         else:
             planner.NODE_TIME_UPPER_BOUNDS = {}
+            planner.MIN_SOLVER_VEHICLE_COUNT = 0
         final_routes = planner.solve_routes(points, solve_time, solve_distance)
         planner.enrich_routes_with_actual_driving(points, final_routes)
         planner.annotate_and_price_routes(points, final_routes)
@@ -4349,6 +4359,7 @@ def _compute_scenario_without_render(
         planner.OSRM_BASE_URL = previous_osrm_base_url
         planner.BUS_TYPE_CONFIGS = previous_bus_type_configs
         planner.NODE_TIME_UPPER_BOUNDS = previous_node_time_upper_bounds
+        planner.MIN_SOLVER_VEHICLE_COUNT = previous_min_solver_vehicle_count
 
 
 def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -4444,6 +4455,9 @@ def _build_time_acceptance_constraint_builder(
         "threshold_seconds": threshold_seconds,
         "source": "current_plan",
         "service_direction": normalize_service_direction(service_direction),
+        "current_route_count": int(current_plan_assessment.get("route_count", 0) or 0)
+        if current_plan_assessment
+        else 0,
         "bounded_current_stop_count": 0,
         "bounded_solver_stop_count": 0,
     }

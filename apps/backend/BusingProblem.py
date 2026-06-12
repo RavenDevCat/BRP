@@ -95,6 +95,7 @@ NEARBY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_nearby_aggreg
 CURRENT_CURRENCY_CODE = "USD"
 LAST_RUN_RESULTS: dict[str, Any] = {}
 NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
+MIN_SOLVER_VEHICLE_COUNT = 0
 
 HUGE_TIME_SECONDS = 6 * 3600
 HUGE_DISTANCE_METERS = 300_000
@@ -1000,7 +1001,14 @@ def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, An
         stop_based_count,
     )
     operational_buffer = max(extra_buffer, int(math.ceil(stop_based_count * 0.75)))
-    target_vehicle_count = min(len(sorted_fleet), max(1, min_vehicle_count + operational_buffer))
+    target_vehicle_count = min(
+        len(sorted_fleet),
+        max(
+            1,
+            min_vehicle_count + operational_buffer,
+            int(MIN_SOLVER_VEHICLE_COUNT or 0),
+        ),
+    )
 
     trimmed = sorted_fleet[:target_vehicle_count]
     if largest_stop_demand > 0 and all(solver_capacity_for_vehicle(item) < largest_stop_demand for item in trimmed):
@@ -1339,7 +1347,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     express_fleet: list[dict[str, Any]] = []
     regular_fleet = trim_fleet_for_demand(points, full_fleet)
     global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
-    if remote_nodes and RESERVED_EXPRESS_BUSES > 0:
+    if remote_nodes and RESERVED_EXPRESS_BUSES > 0 and not global_time_upper_bounds:
         sorted_for_express = sort_express_preference(full_fleet)
         candidate_express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
         express_ids = {id(item) for item in candidate_express_fleet}

@@ -4709,19 +4709,6 @@ def run_backend_planner_with_prepared_data(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
                 {"time_constraint": time_constraint_metadata},
             )
-        like_for_like_baseline = assess_current_plan(
-            planner,
-            current_plan,
-            original_points,
-            config,
-            solve_time=assessment_time,
-            solve_distance=assessment_distance,
-            optimize_stop_order=True,
-        )
-        current_plan_like_for_like_comparison = compare_current_plan_to_like_for_like_baseline(
-            current_plan_assessment,
-            like_for_like_baseline,
-        )
         route_reallocation_analysis = analyze_route_reallocation_opportunities(
             planner,
             current_plan,
@@ -4730,32 +4717,6 @@ def run_backend_planner_with_prepared_data(
             config,
             solve_time=assessment_time,
             solve_distance=assessment_distance,
-        )
-        constrained_improvement_plan, constrained_selected_moves, constrained_package_summaries = build_constrained_improvement_current_plan(
-            current_plan,
-            route_reallocation_analysis,
-            config,
-        )
-        constrained_improvement_baseline = assess_current_plan(
-            planner,
-            constrained_improvement_plan,
-            original_points,
-            config,
-            solve_time=assessment_time,
-            solve_distance=assessment_distance,
-            optimize_stop_order=True,
-        )
-        constrained_package_summaries = _enrich_constrained_package_summaries(
-            constrained_package_summaries,
-            current_plan_assessment,
-            constrained_improvement_baseline,
-        )
-        current_plan_constrained_comparison = compare_current_plan_to_assessment_baseline(
-            current_plan_assessment,
-            constrained_improvement_baseline,
-            baseline_name="constrained-improvement baseline",
-            optimization_phrase="limited route-to-route reallocations",
-            constrained_package_summaries=constrained_package_summaries,
         )
         current_plan_comparison = compare_current_plan_to_baseline(current_plan_assessment, free_optimization_baseline)
         nearby_private_access_analysis = analyze_nearby_private_access(
@@ -4800,12 +4761,6 @@ def run_backend_planner_with_prepared_data(
         "job_id": config.output_directory_name,
         "current_plan_assessment": current_plan_assessment,
         "current_plan_scenario": current_plan_scenario,
-        "like_for_like_baseline": like_for_like_baseline,
-        "current_plan_like_for_like_comparison": current_plan_like_for_like_comparison,
-        "constrained_improvement_baseline": constrained_improvement_baseline,
-        "current_plan_constrained_comparison": current_plan_constrained_comparison,
-        "constrained_selected_moves": constrained_selected_moves,
-        "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "current_plan_comparison": current_plan_comparison,
@@ -4829,12 +4784,6 @@ def run_backend_planner_with_prepared_data(
         "elapsed_seconds": time.perf_counter() - started_at,
         "current_plan_assessment": current_plan_assessment,
         "current_plan_scenario": current_plan_scenario,
-        "like_for_like_baseline": like_for_like_baseline,
-        "current_plan_like_for_like_comparison": current_plan_like_for_like_comparison,
-        "constrained_improvement_baseline": constrained_improvement_baseline,
-        "current_plan_constrained_comparison": current_plan_constrained_comparison,
-        "constrained_selected_moves": constrained_selected_moves,
-        "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "current_plan_comparison": current_plan_comparison,

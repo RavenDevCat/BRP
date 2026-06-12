@@ -587,7 +587,7 @@ function BaselinePanel({
         <div>
           <h2 className="text-sm font-semibold">Baseline scenarios</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Compare the imported supplier plan against constrained, like-for-like, and upper-bound optimization evidence.
+            Compare the imported supplier plan against free optimization and the 15-minute time-impact constrained plan.
           </p>
         </div>
         {freeOptimization ? (
@@ -913,40 +913,30 @@ function TimeImpactPanel({
       {data && summary?.available ? (
         <>
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="Acceptance rate"
+            <ImpactSummaryCard
+              label="Within acceptance"
               value={formatPercent(summary.acceptance_rider_ratio, 100)}
+              detail={`${formatNumber(summary.compared_rider_count)} riders / ${formatNumber(summary.compared_stop_count)} stops compared`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
-            <MetricCard
-              label={`Over ${acceptanceThresholdLabel} riders`}
-              value={formatNumber(summary.over_acceptance_rider_count)}
+            <ImpactSummaryCard
+              label={`Over ${acceptanceThresholdLabel}`}
+              value={`${formatNumber(summary.over_acceptance_rider_count)} riders`}
+              detail={`${formatNumber(summary.over_acceptance_stop_count)} stops; max over by ${formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
-            <MetricCard
-              label={`Over ${acceptanceThresholdLabel} stops`}
-              value={formatNumber(summary.over_acceptance_stop_count)}
-              tone={Number(summary.over_acceptance_stop_count || 0) ? "warning" : "success"}
+            <ImpactSummaryCard
+              label="Typical adverse"
+              value={formatImpactMinutes(summary.weighted_avg_adverse_delta_minutes)}
+              detail={`${formatNumber(summary.worse_rider_count)} riders worse; P90 ${formatImpactMinutes(summary.p90_adverse_delta_minutes)}`}
+              tone="info"
             />
-            <MetricCard
-              label="Max over threshold"
-              value={formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}
-              tone={Number(summary.max_over_acceptance_delta_minutes || 0) ? "warning" : "success"}
+            <ImpactSummaryCard
+              label="Worst adverse"
+              value={formatImpactMinutes(summary.max_adverse_delta_minutes)}
+              detail={`${formatNumber(summary.high_risk_stop_count)} high-risk stops`}
+              tone={Number(summary.high_risk_stop_count || 0) ? "warning" : "success"}
             />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Worse riders" value={formatNumber(summary.worse_rider_count)} tone="warning" />
-            <MetricCard label="High-risk stops" value={formatNumber(summary.high_risk_stop_count)} tone="warning" />
-            <MetricCard label="Weighted adverse" value={formatImpactMinutes(summary.weighted_avg_adverse_delta_minutes)} tone="info" />
-            <MetricCard label="Route changed" value={formatNumber(summary.route_changed_rider_count)} tone="neutral" />
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <MetricCard label="Compared stops" value={formatNumber(summary.compared_stop_count)} />
-            <MetricCard label="Compared riders" value={formatNumber(summary.compared_rider_count)} />
-            <MetricCard label="P90 adverse" value={formatImpactMinutes(summary.p90_adverse_delta_minutes)} />
-            <MetricCard label="Max adverse" value={formatImpactMinutes(summary.max_adverse_delta_minutes)} tone="warning" />
           </div>
 
           <Card>
@@ -1752,6 +1742,26 @@ function CollapsibleSection({ title, children }: { title: string; children: Reac
   );
 }
 
+function ImpactSummaryCard({
+  label,
+  value,
+  detail,
+  tone = "neutral",
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: "neutral" | "success" | "warning" | "info";
+}) {
+  return (
+    <div className={cn("min-w-0 rounded-lg border bg-surface p-4 shadow-panel", metricToneClassName(tone))}>
+      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+      <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
+      <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
+    </div>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -1823,8 +1833,6 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
   const structured = asRecord(result.structured_results);
   return [
     scenarioFromAssessment("Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment)),
-    scenarioFromAssessment("Like-for-Like", "Same route allocation, improved order", asRecord(result.like_for_like_baseline)),
-    scenarioFromAssessment("Constrained", "High-confidence transfer packages", asRecord(result.constrained_improvement_baseline)),
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
   ];

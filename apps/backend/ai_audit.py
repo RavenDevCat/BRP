@@ -161,11 +161,8 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     route_reallocation = dict(result.get("route_reallocation_analysis") or {})
     reallocation_summary = dict(route_reallocation.get("summary") or {})
     free_baseline = dict(result.get("free_optimization_baseline") or {})
-    like_for_like = dict(result.get("like_for_like_baseline") or {})
-    constrained = dict(result.get("constrained_improvement_baseline") or {})
+    time_constrained = dict(result.get("time_constrained_optimization") or {})
     current_vs_free = dict(result.get("current_plan_comparison") or {})
-    current_vs_like = dict(result.get("current_plan_like_for_like_comparison") or {})
-    current_vs_constrained = dict(result.get("current_plan_constrained_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
     route_summaries = list(current_plan.get("route_summaries") or [])
     route_summaries = sorted(
@@ -207,25 +204,17 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
                 "avg_load_factor_pct": round(float(free_baseline.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
                 "bus_mix": free_baseline.get("bus_mix"),
             },
-            "like_for_like": {
-                "route_count": like_for_like.get("route_count"),
-                "stop_count": _assessment_service_stop_count(like_for_like),
-                "avg_route_distance_km": _float_km(like_for_like.get("avg_route_distance_m")),
-                "avg_route_duration_min": _float_minutes(like_for_like.get("avg_route_duration_s")),
-                "avg_load_factor_pct": round(float(like_for_like.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
-            },
-            "constrained_improvement": {
-                "route_count": constrained.get("route_count"),
-                "stop_count": _assessment_service_stop_count(constrained),
-                "avg_route_distance_km": _float_km(constrained.get("avg_route_distance_m")),
-                "avg_route_duration_min": _float_minutes(constrained.get("avg_route_duration_s")),
-                "avg_load_factor_pct": round(float(constrained.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
+            "time_constrained": {
+                "route_count": time_constrained.get("route_count") or time_constrained.get("bus_count"),
+                "stop_count": _scenario_service_stop_count(time_constrained),
+                "avg_route_distance_km": _float_km(time_constrained.get("avg_route_distance_m")),
+                "avg_route_duration_min": _float_minutes(time_constrained.get("avg_route_duration_s")),
+                "avg_load_factor_pct": round(float(time_constrained.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
+                "time_constraint": time_constrained.get("time_constraint"),
             },
         },
         "comparisons": {
             "current_vs_free": current_vs_free,
-            "current_vs_like_for_like": current_vs_like,
-            "current_vs_constrained": current_vs_constrained,
         },
         "local_reallocation": {
             "summary": reallocation_summary,

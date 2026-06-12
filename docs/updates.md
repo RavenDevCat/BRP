@@ -19,8 +19,14 @@ It is not a code changelog. Record changes here when users or operators should k
 - The Time Impact review now treats an adverse pickup/dropoff shift of 15
   minutes or less as acceptable and reports over-threshold stops/riders,
   acceptance rate, and maximum over-threshold minutes.
-- This is a reporting surface only. Time impact is not yet used as a solver
-  constraint or penalty.
+- Route Audit now also produces a `15-Minute Constrained` optimized scenario
+  after Free Optimization Baseline. It reruns optimization with a hard
+  15-minute adverse time-impact limit for matched stops, so users can compare
+  the most aggressive free optimization against a more family-acceptable
+  constrained plan.
+- If the 15-minute constrained solve is infeasible, the audit should still
+  complete and mark only that scenario as skipped while preserving the free
+  optimization result for comparison.
 
 ## 2026-06-11
 

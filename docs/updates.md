@@ -16,8 +16,10 @@ It is not a code changelog. Record changes here when users or operators should k
 - Users can switch between optimized scenarios, filter stop impacts, focus one
   route from the route-impact table, search stops/routes, and export an Excel
   workbook for operations review.
-- This is a reporting surface only. Time impact is not yet used as a solver
-  constraint or penalty.
+- The primary Free Optimization Baseline remains the unconstrained optimization
+  benchmark. Route Audit also includes a Balanced Optimization scenario that
+  applies current-route affinity during solving so users can compare a
+  lower-disruption option against the pure savings benchmark.
 
 ## 2026-06-11
 

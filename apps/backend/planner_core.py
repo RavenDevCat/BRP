@@ -49,6 +49,10 @@ LIVE_TRAFFIC_MIN_ROUTE_SAMPLES = max(
     1,
     int(os.environ.get("BRP_LIVE_TRAFFIC_MIN_ROUTE_SAMPLES", "1") or 1),
 )
+TIME_AWARE_ROUTE_AFFINITY_PENALTY_SECONDS = max(
+    0,
+    int(os.environ.get("BRP_TIME_AWARE_ROUTE_AFFINITY_PENALTY_SECONDS", "300") or 300),
+)
 AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
     "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
     "false",
@@ -149,6 +153,7 @@ class PlannerConfig:
     current_plan_output_name: str = "current_plan_routes.html"
     subway_output_name: str = "school_bus_routes_subway_aggregated.html"
     nearby_output_name: str = "school_bus_routes_nearby_aggregated.html"
+    time_aware_output_name: str = "school_bus_routes_time_aware.html"
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
@@ -937,6 +942,7 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
         "current_plan": str(output_dir / config.current_plan_output_name),
         "subway": str(output_dir / config.subway_output_name),
         "nearby": str(output_dir / config.nearby_output_name),
+        "time_aware": str(output_dir / config.time_aware_output_name),
         "further_most": str(output_dir / config.further_most_output_name),
         "further_most_nearby": str(output_dir / config.further_most_nearby_output_name),
     }
@@ -1521,7 +1527,7 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
     repriced = deepcopy(results)
     revenue_rules = _normalize_revenue_rules(config.revenue_rules)
 
-    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in ("original", "current_plan", "subway", "nearby", "time_aware", "further_most", "further_most_nearby"):
         scenario = repriced.get(scenario_key) or {}
         routes = scenario.get("routes") or []
         total_operating_cost = 0.0
@@ -1590,7 +1596,7 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
     if config.revenue_rules is not None:
         planner.REVENUE_RULES = config.revenue_rules
 
-    for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
+    for scenario_key in ("original", "current_plan", "subway", "nearby", "time_aware", "further_most", "further_most_nearby"):
         scenario = hydrated.get(scenario_key) or {}
         points = scenario.get("points")
         routes = scenario.get("routes")
@@ -4262,6 +4268,7 @@ def _compute_scenario_without_render(
     points: list[dict[str, Any]],
     scenario_label: str,
     bus_type_configs: list[dict[str, Any]] | None = None,
+    time_matrix_transform: Any | None = None,
 ) -> dict[str, Any]:
     if len(points) <= 1:
         routes: list[dict[str, Any]] = []
@@ -4294,10 +4301,20 @@ def _compute_scenario_without_render(
         except Exception as exc:
             planner.log(f"[WARN] OSRM full matrix failed for {scenario_label}; falling back to seed matrix: {exc}")
             solve_time, solve_distance = planner.seed_edge_metrics(points)
+        transform_metadata: dict[str, Any] = {}
+        if time_matrix_transform is not None:
+            solve_time, transform_metadata = time_matrix_transform(points, solve_time)
+            if transform_metadata:
+                planner.log(
+                    f"[BACKEND] {scenario_label} route-affinity strategy: "
+                    f"{json.dumps(transform_metadata, ensure_ascii=False)}"
+                )
         final_routes = planner.solve_routes(points, solve_time, solve_distance)
         planner.enrich_routes_with_actual_driving(points, final_routes)
         planner.annotate_and_price_routes(points, final_routes)
         result = planner.build_scenario_result(points, final_routes, "")
+        if transform_metadata:
+            result["time_aware_strategy"] = transform_metadata
         result["output_html"] = ""
         return result
     finally:
@@ -4317,6 +4334,123 @@ def _build_skipped_scenario_result(reason: str) -> dict[str, Any]:
         "bus_mix": {},
         "enabled": False,
         "skipped_reason": reason,
+    }
+
+
+def _normalize_time_aware_address(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip()).casefold()
+
+
+def _build_current_plan_route_affinity(
+    current_plan_assessment: dict[str, Any] | None,
+) -> dict[str, dict[Any, Any]]:
+    route_by_node: dict[int, str] = {}
+    order_by_node: dict[int, int] = {}
+    route_by_address: dict[str, str] = {}
+    order_by_address: dict[str, int] = {}
+
+    for route_summary in list((current_plan_assessment or {}).get("route_summaries") or []):
+        route_id = str(route_summary.get("route_id", "")).strip()
+        if not route_id:
+            continue
+
+        for order, node_id in enumerate(list(route_summary.get("matched_node_ids") or [])):
+            try:
+                node_index = int(node_id)
+            except (TypeError, ValueError):
+                continue
+            if node_index <= 0:
+                continue
+            route_by_node[node_index] = route_id
+            order_by_node[node_index] = order
+
+        address_candidates = (
+            list(route_summary.get("service_addresses") or [])
+            or list(route_summary.get("matched_addresses") or [])
+            or list(route_summary.get("addresses") or [])
+        )
+        for order, address in enumerate(address_candidates):
+            normalized = _normalize_time_aware_address(address)
+            if not normalized:
+                continue
+            route_by_address.setdefault(normalized, route_id)
+            order_by_address.setdefault(normalized, order)
+
+    return {
+        "route_by_node": route_by_node,
+        "order_by_node": order_by_node,
+        "route_by_address": route_by_address,
+        "order_by_address": order_by_address,
+    }
+
+
+def _resolve_time_aware_point_affinity(
+    point_index: int,
+    point: dict[str, Any],
+    affinity: dict[str, dict[Any, Any]],
+) -> tuple[str | None, int | None]:
+    route_by_node = affinity.get("route_by_node") or {}
+    order_by_node = affinity.get("order_by_node") or {}
+    route_by_address = affinity.get("route_by_address") or {}
+    order_by_address = affinity.get("order_by_address") or {}
+
+    route_id = route_by_node.get(point_index)
+    order = order_by_node.get(point_index)
+    if route_id:
+        return str(route_id), int(order) if order is not None else None
+
+    normalized_address = _normalize_time_aware_address(point.get("address"))
+    route_id = route_by_address.get(normalized_address)
+    order = order_by_address.get(normalized_address)
+    if route_id:
+        return str(route_id), int(order) if order is not None else None
+    return None, None
+
+
+def _apply_time_aware_route_affinity_penalty(
+    points: list[dict[str, Any]],
+    time_matrix: list[list[int]],
+    current_plan_assessment: dict[str, Any] | None,
+) -> tuple[list[list[int]], dict[str, Any]]:
+    penalty_seconds = int(TIME_AWARE_ROUTE_AFFINITY_PENALTY_SECONDS)
+    if penalty_seconds <= 0 or not points or not time_matrix:
+        return time_matrix, {"enabled": False, "reason": "penalty_disabled"}
+
+    affinity = _build_current_plan_route_affinity(current_plan_assessment)
+    point_affinity: dict[int, tuple[str, int | None]] = {}
+    for point_index, point in enumerate(points):
+        if point_index <= 0 or bool(point.get("is_depot")):
+            continue
+        route_id, order = _resolve_time_aware_point_affinity(point_index, point, affinity)
+        if route_id:
+            point_affinity[point_index] = (route_id, order)
+
+    if len(point_affinity) < 2:
+        return time_matrix, {
+            "enabled": False,
+            "reason": "insufficient_current_plan_affinity",
+            "matched_stop_count": len(point_affinity),
+        }
+
+    adjusted = [list(row) for row in time_matrix]
+    penalized_edges = 0
+    for from_node, (from_route_id, _) in point_affinity.items():
+        for to_node, (to_route_id, _) in point_affinity.items():
+            if from_node == to_node or from_route_id == to_route_id:
+                continue
+            try:
+                adjusted[from_node][to_node] = int(adjusted[from_node][to_node]) + penalty_seconds
+                penalized_edges += 1
+            except (IndexError, TypeError, ValueError):
+                continue
+
+    return adjusted, {
+        "enabled": True,
+        "strategy": "current_plan_route_affinity_penalty",
+        "penalty_seconds": penalty_seconds,
+        "matched_stop_count": len(point_affinity),
+        "current_route_count": len({route_id for route_id, _ in point_affinity.values()}),
+        "penalized_edge_count": penalized_edges,
     }
 
 
@@ -4474,6 +4608,35 @@ def run_backend_planner_with_prepared_data(
             current_plan_assessment,
             original_points,
         )
+        if list((current_plan_assessment or {}).get("route_summaries") or []):
+            try:
+                time_aware_candidate = _compute_scenario_without_render(
+                    planner,
+                    original_points,
+                    "Balanced optimization",
+                    bus_type_configs=free_baseline_bus_type_configs,
+                    time_matrix_transform=lambda scenario_points, solve_time: _apply_time_aware_route_affinity_penalty(
+                        scenario_points,
+                        solve_time,
+                        current_plan_assessment,
+                    ),
+                )
+                time_aware_result = _attach_free_baseline_metadata(
+                    time_aware_candidate,
+                    config,
+                    free_baseline_bus_type_configs,
+                )
+                time_aware_result["baseline_name"] = "time_aware_balanced_optimization"
+            except Exception as exc:
+                planner.log(f"[WARN] Balanced optimization scenario skipped: {exc}")
+                time_aware_result = _build_skipped_scenario_result(
+                    f"Balanced optimization could not be computed: {exc}"
+                )
+        else:
+            planner.log("[BACKEND] Skipping balanced optimization scenario because current-plan route timing was unavailable.")
+            time_aware_result = _build_skipped_scenario_result(
+                "Balanced optimization needs current-plan route timing for comparison."
+            )
         like_for_like_baseline = assess_current_plan(
             planner,
             current_plan,
@@ -4554,6 +4717,7 @@ def run_backend_planner_with_prepared_data(
         "current_plan": current_plan_scenario,
         "subway": subway_result,
         "nearby": nearby_result,
+        "time_aware": time_aware_result,
         "further_most": further_most_result,
         "further_most_nearby": further_most_nearby_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
@@ -4571,6 +4735,7 @@ def run_backend_planner_with_prepared_data(
         "constrained_selected_moves": constrained_selected_moves,
         "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
+        "time_aware_optimization": time_aware_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
@@ -4599,6 +4764,7 @@ def run_backend_planner_with_prepared_data(
         "constrained_selected_moves": constrained_selected_moves,
         "constrained_package_summaries": constrained_package_summaries,
         "free_optimization_baseline": free_optimization_baseline,
+        "time_aware_optimization": time_aware_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,

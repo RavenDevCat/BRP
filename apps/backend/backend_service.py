@@ -107,6 +107,9 @@ MAP_ARTIFACT_KEYS = {
     "current_plan": "current_plan",
     "original": "original",
     "free_optimization": "original",
+    "balanced": "time_aware",
+    "time_aware": "time_aware",
+    "time_impact_balanced": "time_aware",
     "subway": "subway",
     "nearby": "nearby",
     "further_most": "further_most",
@@ -115,6 +118,7 @@ MAP_ARTIFACT_KEYS = {
 MAP_SCENARIO_LABELS = {
     "current_plan": "Current Plan",
     "original": "Free Optimization Baseline",
+    "time_aware": "Balanced Optimization",
     "subway": "Subway Aggregated",
     "nearby": "Nearby Aggregated",
     "further_most": "Further Most",
@@ -123,6 +127,7 @@ MAP_SCENARIO_LABELS = {
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
     "original": "original_html",
+    "time_aware": "time_aware_html",
     "subway": "subway_html",
     "nearby": "nearby_html",
     "further_most": "further_most_html",

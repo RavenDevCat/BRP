@@ -14,8 +14,8 @@ It is not a code changelog. Record changes here when users or operators should k
   scenario timing and summarizes worse riders, high-risk stops, weighted adverse
   minutes, route-changed riders, P90 adverse impact, and maximum adverse impact.
 - Users can switch between optimized scenarios, filter stop impacts, focus one
-  route from the route-impact table, search stops/routes, and export a CSV for
-  operations review.
+  route from the route-impact table, search stops/routes, and export an Excel
+  workbook for operations review.
 - This is a reporting surface only. Time impact is not yet used as a solver
   constraint or penalty.
 

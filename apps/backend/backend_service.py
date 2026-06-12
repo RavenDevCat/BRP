@@ -2442,15 +2442,94 @@ def _time_impact_level(adverse_delta_minutes: float) -> str:
     return "critical"
 
 
+def _time_impact_direction(delta_minutes: float, adverse_delta_minutes: float) -> str:
+    if adverse_delta_minutes > 0.5:
+        return "worse"
+    if abs(delta_minutes) > 0.5:
+        return "better"
+    return "neutral"
+
+
+def _time_impact_change_direction(delta_minutes: float) -> str:
+    if delta_minutes < -0.5:
+        return "earlier"
+    if delta_minutes > 0.5:
+        return "later"
+    return "same"
+
+
+def _time_impact_passenger_count(stop: dict[str, Any]) -> int:
+    impact = dict(stop.get("time_impact") or {})
+    raw_count = impact.get("affected_rider_count", stop.get("passenger_count", 0))
+    try:
+        return max(0, int(raw_count or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _time_impact_top_stops(
+    compared: list[dict[str, Any]], *, limit: int = 5
+) -> list[dict[str, Any]]:
+    ranked = sorted(
+        compared,
+        key=lambda stop: (
+            float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0),
+            _time_impact_passenger_count(stop),
+            abs(float(dict(stop.get("time_impact") or {}).get("delta_minutes", 0.0) or 0.0)),
+        ),
+        reverse=True,
+    )
+    items: list[dict[str, Any]] = []
+    for stop in ranked[:limit]:
+        impact = dict(stop.get("time_impact") or {})
+        items.append(
+            {
+                "stop_id": str(stop.get("id") or ""),
+                "address": str(stop.get("address") or ""),
+                "route_id": str(stop.get("route_id") or ""),
+                "current_route_id": str(impact.get("current_route_id") or ""),
+                "new_route_id": str(impact.get("new_route_id") or ""),
+                "current_time_label": str(impact.get("current_time_label") or ""),
+                "new_time_label": str(impact.get("new_time_label") or ""),
+                "delta_minutes": float(impact.get("delta_minutes", 0.0) or 0.0),
+                "adverse_delta_minutes": float(
+                    impact.get("adverse_delta_minutes", 0.0) or 0.0
+                ),
+                "absolute_delta_minutes": float(
+                    impact.get("absolute_delta_minutes", 0.0) or 0.0
+                ),
+                "affected_rider_count": _time_impact_passenger_count(stop),
+                "level": str(impact.get("level") or ""),
+                "impact_direction": str(impact.get("impact_direction") or ""),
+                "route_changed": bool(impact.get("route_changed")),
+            }
+        )
+    return items
+
+
 def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
+    service_stops = [stop for stop in stops if not bool(stop.get("is_depot"))]
     compared = [
         stop
-        for stop in stops
-        if not bool(stop.get("is_depot"))
-        and bool(dict(stop.get("time_impact") or {}).get("comparison_available"))
+        for stop in service_stops
+        if bool(dict(stop.get("time_impact") or {}).get("comparison_available"))
     ]
+    unavailable = [
+        stop
+        for stop in service_stops
+        if dict(stop.get("time_impact") or {}).get("comparison_available") is False
+    ]
+    compared_rider_count = sum(_time_impact_passenger_count(stop) for stop in compared)
     adverse_values = [
         float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        for stop in compared
+    ]
+    absolute_values = [
+        float(dict(stop.get("time_impact") or {}).get("absolute_delta_minutes", 0.0) or 0.0)
+        for stop in compared
+    ]
+    signed_values = [
+        float(dict(stop.get("time_impact") or {}).get("delta_minutes", 0.0) or 0.0)
         for stop in compared
     ]
     adverse_values.sort()
@@ -2462,19 +2541,88 @@ def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
         str(dict(stop.get("time_impact") or {}).get("level") or "")
         for stop in compared
     ]
+    impact_directions = [
+        str(dict(stop.get("time_impact") or {}).get("impact_direction") or "")
+        for stop in compared
+    ]
+    total_adverse_rider_minutes = sum(
+        float(dict(stop.get("time_impact") or {}).get("adverse_rider_minutes", 0.0) or 0.0)
+        for stop in compared
+    )
+    total_absolute_rider_minutes = sum(
+        float(dict(stop.get("time_impact") or {}).get("absolute_rider_minutes", 0.0) or 0.0)
+        for stop in compared
+    )
+    total_benefit_rider_minutes = sum(
+        float(dict(stop.get("time_impact") or {}).get("benefit_rider_minutes", 0.0) or 0.0)
+        for stop in compared
+    )
+    high_risk_levels = {"severe", "critical"}
     return {
         "available": bool(compared),
+        "service_stop_count": len(service_stops),
         "compared_stop_count": len(compared),
+        "unavailable_stop_count": len(unavailable),
+        "compared_rider_count": compared_rider_count,
         "avg_adverse_delta_minutes": (
             sum(adverse_values) / len(adverse_values) if adverse_values else 0.0
         ),
+        "avg_absolute_delta_minutes": (
+            sum(absolute_values) / len(absolute_values) if absolute_values else 0.0
+        ),
+        "avg_signed_delta_minutes": (
+            sum(signed_values) / len(signed_values) if signed_values else 0.0
+        ),
+        "weighted_avg_adverse_delta_minutes": (
+            total_adverse_rider_minutes / compared_rider_count
+            if compared_rider_count
+            else 0.0
+        ),
+        "weighted_avg_absolute_delta_minutes": (
+            total_absolute_rider_minutes / compared_rider_count
+            if compared_rider_count
+            else 0.0
+        ),
         "p90_adverse_delta_minutes": p90,
         "max_adverse_delta_minutes": adverse_values[-1] if adverse_values else 0.0,
+        "max_absolute_delta_minutes": max(absolute_values) if absolute_values else 0.0,
         "notice_stop_count": len([level for level in levels if level == "notice"]),
         "elevated_stop_count": len([level for level in levels if level == "elevated"]),
         "severe_stop_count": len([level for level in levels if level == "severe"]),
         "critical_stop_count": len([level for level in levels if level == "critical"]),
-        "high_risk_stop_count": len([level for level in levels if level in {"severe", "critical"}]),
+        "high_risk_stop_count": len([level for level in levels if level in high_risk_levels]),
+        "worse_stop_count": len(
+            [direction for direction in impact_directions if direction == "worse"]
+        ),
+        "better_stop_count": len(
+            [direction for direction in impact_directions if direction == "better"]
+        ),
+        "neutral_stop_count": len(
+            [direction for direction in impact_directions if direction == "neutral"]
+        ),
+        "worse_rider_count": sum(
+            _time_impact_passenger_count(stop)
+            for stop in compared
+            if str(dict(stop.get("time_impact") or {}).get("impact_direction") or "") == "worse"
+        ),
+        "better_rider_count": sum(
+            _time_impact_passenger_count(stop)
+            for stop in compared
+            if str(dict(stop.get("time_impact") or {}).get("impact_direction") or "") == "better"
+        ),
+        "neutral_rider_count": sum(
+            _time_impact_passenger_count(stop)
+            for stop in compared
+            if str(dict(stop.get("time_impact") or {}).get("impact_direction") or "") == "neutral"
+        ),
+        "high_risk_rider_count": sum(
+            _time_impact_passenger_count(stop)
+            for stop in compared
+            if str(dict(stop.get("time_impact") or {}).get("level") or "") in high_risk_levels
+        ),
+        "total_adverse_rider_minutes": total_adverse_rider_minutes,
+        "total_absolute_rider_minutes": total_absolute_rider_minutes,
+        "total_benefit_rider_minutes": total_benefit_rider_minutes,
         "route_changed_stop_count": len(
             [
                 stop
@@ -2482,6 +2630,12 @@ def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
                 if bool(dict(stop.get("time_impact") or {}).get("route_changed"))
             ]
         ),
+        "route_changed_rider_count": sum(
+            _time_impact_passenger_count(stop)
+            for stop in compared
+            if bool(dict(stop.get("time_impact") or {}).get("route_changed"))
+        ),
+        "top_impacted_stops": _time_impact_top_stops(compared),
     }
 
 
@@ -2508,19 +2662,44 @@ def _attach_schedule_impact(
         if str(payload.get("service_direction") or "").strip() == "To School"
         else "From School"
     )
+    time_role = "pickup" if service_direction == "To School" else "dropoff"
     for stop in stops:
         if bool(stop.get("is_depot")):
             continue
         current_stop = None
+        matched_key = ""
         for key in _stop_match_keys(stop):
             current_stop = current_lookup.get(key)
             if current_stop:
+                matched_key = key
                 break
         if not current_stop:
+            stop["time_impact"] = {
+                "comparison_available": False,
+                "comparison_status": "current_stop_not_found",
+                "time_role": time_role,
+                "new_route_id": str(stop.get("route_id") or ""),
+                "new_route_index": _int_or_none(stop.get("route_index")),
+                "new_stop_order": _int_or_none(stop.get("order")),
+                "new_time_minutes": _float_or_none(stop.get("scheduled_time_minutes")),
+                "new_time_label": str(stop.get("scheduled_time_label") or ""),
+                "affected_rider_count": int(stop.get("passenger_count", 0) or 0),
+            }
             continue
         current_minutes = _float_or_none(current_stop.get("scheduled_time_minutes"))
         new_minutes = _float_or_none(stop.get("scheduled_time_minutes"))
         if current_minutes is None or new_minutes is None:
+            stop["time_impact"] = {
+                "comparison_available": False,
+                "comparison_status": "schedule_time_missing",
+                "time_role": time_role,
+                "current_route_id": str(current_stop.get("route_id") or ""),
+                "new_route_id": str(stop.get("route_id") or ""),
+                "current_time_label": str(current_stop.get("scheduled_time_label") or ""),
+                "new_time_label": str(stop.get("scheduled_time_label") or ""),
+                "affected_rider_count": int(stop.get("passenger_count", 0) or 0),
+                "matched_key": matched_key,
+            }
             continue
         delta_minutes = new_minutes - current_minutes
         if service_direction == "To School":
@@ -2530,15 +2709,43 @@ def _attach_schedule_impact(
             adverse_delta_minutes = max(0.0, delta_minutes)
             adverse_direction = "later_dropoff"
         route_changed = str(current_stop.get("route_id") or "") != str(stop.get("route_id") or "")
+        affected_rider_count = max(
+            int(current_stop.get("passenger_count", 0) or 0),
+            int(stop.get("passenger_count", 0) or 0),
+        )
+        absolute_delta_minutes = abs(delta_minutes)
+        impact_direction = _time_impact_direction(delta_minutes, adverse_delta_minutes)
+        benefit_delta_minutes = (
+            absolute_delta_minutes if impact_direction == "better" else 0.0
+        )
         stop["time_impact"] = {
             "comparison_available": True,
+            "comparison_status": "matched",
+            "matched_key": matched_key,
+            "time_role": time_role,
             "current_route_id": str(current_stop.get("route_id") or ""),
             "new_route_id": str(stop.get("route_id") or ""),
+            "current_route_index": _int_or_none(current_stop.get("route_index")),
+            "new_route_index": _int_or_none(stop.get("route_index")),
+            "current_stop_order": _int_or_none(current_stop.get("order")),
+            "new_stop_order": _int_or_none(stop.get("order")),
+            "current_time_minutes": current_minutes,
+            "new_time_minutes": new_minutes,
             "current_time_label": str(current_stop.get("scheduled_time_label") or ""),
             "new_time_label": str(stop.get("scheduled_time_label") or ""),
+            "current_offset_s": _float_or_none(current_stop.get("scheduled_offset_s")),
+            "new_offset_s": _float_or_none(stop.get("scheduled_offset_s")),
             "delta_minutes": delta_minutes,
+            "absolute_delta_minutes": absolute_delta_minutes,
             "adverse_delta_minutes": adverse_delta_minutes,
+            "benefit_delta_minutes": benefit_delta_minutes,
             "adverse_direction": adverse_direction,
+            "change_direction": _time_impact_change_direction(delta_minutes),
+            "impact_direction": impact_direction,
+            "affected_rider_count": affected_rider_count,
+            "adverse_rider_minutes": adverse_delta_minutes * affected_rider_count,
+            "absolute_rider_minutes": absolute_delta_minutes * affected_rider_count,
+            "benefit_rider_minutes": benefit_delta_minutes * affected_rider_count,
             "level": _time_impact_level(adverse_delta_minutes),
             "route_changed": route_changed,
         }

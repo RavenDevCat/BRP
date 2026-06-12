@@ -112,29 +112,85 @@ export type JobMapStop = {
 
 export type JobMapStopTimeImpact = {
     comparison_available?: boolean;
+    comparison_status?: "matched" | "current_stop_not_found" | "schedule_time_missing" | string;
+    matched_key?: string;
+    time_role?: "pickup" | "dropoff" | string;
+    current_route_id?: string;
+    new_route_id?: string;
+    current_route_index?: number | null;
+    new_route_index?: number | null;
+    current_stop_order?: number | null;
+    new_stop_order?: number | null;
+    current_time_minutes?: number | null;
+    new_time_minutes?: number | null;
+    current_time_label?: string;
+    new_time_label?: string;
+    current_offset_s?: number | null;
+    new_offset_s?: number | null;
+    delta_minutes?: number;
+    absolute_delta_minutes?: number;
+    adverse_delta_minutes?: number;
+    benefit_delta_minutes?: number;
+    adverse_direction?: "earlier_pickup" | "later_dropoff" | string;
+    change_direction?: "earlier" | "later" | "same" | string;
+    impact_direction?: "worse" | "better" | "neutral" | string;
+    affected_rider_count?: number;
+    adverse_rider_minutes?: number;
+    absolute_rider_minutes?: number;
+    benefit_rider_minutes?: number;
+    level?: "better" | "acceptable" | "notice" | "elevated" | "severe" | "critical" | string;
+    route_changed?: boolean;
+};
+
+export type JobMapTimeImpactTopStop = {
+    stop_id: string;
+    address: string;
+    route_id: string;
     current_route_id?: string;
     new_route_id?: string;
     current_time_label?: string;
     new_time_label?: string;
     delta_minutes?: number;
     adverse_delta_minutes?: number;
-    adverse_direction?: "earlier_pickup" | "later_dropoff" | string;
-    level?: "better" | "acceptable" | "notice" | "elevated" | "severe" | "critical" | string;
+    absolute_delta_minutes?: number;
+    affected_rider_count?: number;
+    level?: string;
+    impact_direction?: string;
     route_changed?: boolean;
 };
 
 export type JobMapTimeImpactSummary = {
     available?: boolean;
+    service_stop_count?: number;
     compared_stop_count?: number;
+    unavailable_stop_count?: number;
+    compared_rider_count?: number;
     avg_adverse_delta_minutes?: number;
+    avg_absolute_delta_minutes?: number;
+    avg_signed_delta_minutes?: number;
+    weighted_avg_adverse_delta_minutes?: number;
+    weighted_avg_absolute_delta_minutes?: number;
     p90_adverse_delta_minutes?: number;
     max_adverse_delta_minutes?: number;
+    max_absolute_delta_minutes?: number;
     notice_stop_count?: number;
     elevated_stop_count?: number;
     severe_stop_count?: number;
     critical_stop_count?: number;
     high_risk_stop_count?: number;
+    worse_stop_count?: number;
+    better_stop_count?: number;
+    neutral_stop_count?: number;
+    worse_rider_count?: number;
+    better_rider_count?: number;
+    neutral_rider_count?: number;
+    high_risk_rider_count?: number;
+    total_adverse_rider_minutes?: number;
+    total_absolute_rider_minutes?: number;
+    total_benefit_rider_minutes?: number;
     route_changed_stop_count?: number;
+    route_changed_rider_count?: number;
+    top_impacted_stops?: JobMapTimeImpactTopStop[];
 };
 
 export type JobMapPrivateLink = {

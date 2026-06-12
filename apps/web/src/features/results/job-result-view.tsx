@@ -6,6 +6,7 @@ import {
   BarChart3,
   Bot,
   Download,
+  FileSpreadsheet,
   FileWarning,
   GitCompareArrows,
   ListChecks,
@@ -232,8 +233,8 @@ function PlansPanel({
   return (
     <div className="space-y-4">
       <MapsPanel jobId={jobId} jobName={jobName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} />
-      <CollapsibleSection title="Scenario tables and workbook export">
-        <BaselinePanel jobId={jobId} scenarios={scenarios} currentComparison={currentComparison} />
+      <CollapsibleSection title="Scenario tables">
+        <BaselinePanel scenarios={scenarios} currentComparison={currentComparison} />
       </CollapsibleSection>
     </div>
   );
@@ -571,16 +572,12 @@ function AiAuditPanel({
 }
 
 function BaselinePanel({
-  jobId,
   scenarios,
   currentComparison,
 }: {
-  jobId: string;
   scenarios: ScenarioRow[];
   currentComparison: Record<string, unknown>;
 }) {
-  const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
-
   return (
     <div className="space-y-4">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
@@ -590,12 +587,6 @@ function BaselinePanel({
             Compare the imported supplier plan against free optimization and the 15-minute time-impact constrained plan.
           </p>
         </div>
-        {freeOptimization ? (
-          <a className={buttonClassName("secondary", "whitespace-nowrap")} href={getJobExportUrl(jobId, "free-optimization-template")}>
-            <Download className="h-4 w-4" aria-hidden="true" />
-            Download workbook
-          </a>
-        ) : null}
       </div>
 
       <div className="grid gap-3 md:grid-cols-2 2xl:grid-cols-4">
@@ -1383,6 +1374,9 @@ function MapsPanel({
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
+  const workbookExportUrl = scenarioSummaries.some((summary) => summary.key === "original")
+    ? getJobExportUrl(jobId, "free-optimization-template")
+    : "";
   const excludedStopCount = diagnostics.excludedStops.length;
   const geocodeWarningCount = diagnostics.geocodeWarnings.length;
   const interactiveQuery = useQuery({
@@ -1476,7 +1470,13 @@ function MapsPanel({
         <div className="relative">
           {renderMapSurface()}
           <div className="absolute right-3 top-3 z-20 flex flex-wrap justify-end gap-2">
-            <button type="button" className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")} onClick={() => setIsMapFullscreenOpen(true)}>
+            <button
+              type="button"
+              className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")}
+              title="Open map"
+              aria-label="Open map"
+              onClick={() => setIsMapFullscreenOpen(true)}
+            >
               <Maximize2 className="h-4 w-4" aria-hidden="true" />
               Open
             </button>
@@ -1484,11 +1484,24 @@ function MapsPanel({
               type="button"
               className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60")}
               disabled={!interactiveQuery.data}
+              title="Download map"
+              aria-label="Download map"
               onClick={downloadInteractiveMap}
             >
               <Download className="h-4 w-4" aria-hidden="true" />
-              Download
+              Map
             </button>
+            {workbookExportUrl ? (
+              <a
+                className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")}
+                href={workbookExportUrl}
+                title="Download workbook"
+                aria-label="Download workbook"
+              >
+                <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
+                Workbook
+              </a>
+            ) : null}
           </div>
         </div>
         {isMapFullscreenOpen ? (

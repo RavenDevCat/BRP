@@ -1396,6 +1396,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
         except Exception as exc:
             log(f"[WARN] Express-route pool fallback to regular pool: {exc}")
             regular_nodes = list(range(1, len(points)))
+            regular_fleet = trim_fleet_for_demand(points, full_fleet)
     else:
         regular_nodes = list(range(1, len(points)))
 

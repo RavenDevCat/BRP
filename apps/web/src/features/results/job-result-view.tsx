@@ -22,7 +22,17 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
-import { generateAiAudit, getJobArtifactUrl, getJobExportUrl, getJobMapData, type JobMapData, type JobRecord } from "@/lib/api";
+import {
+  generateAiAudit,
+  getJobArtifactUrl,
+  getJobExportUrl,
+  getJobMapData,
+  type JobMapData,
+  type JobMapRoute,
+  type JobMapStop,
+  type JobMapTimeImpactSummary,
+  type JobRecord,
+} from "@/lib/api";
 import { cn } from "@/lib/cn";
 import {
   formatDistanceKmFromMeters,
@@ -32,11 +42,12 @@ import {
   toTitle,
 } from "@/lib/format";
 
-type ResultTab = "ai" | "audit" | "baselines" | "maps" | "actions" | "diagnostics";
+type ResultTab = "ai" | "audit" | "impact" | "baselines" | "maps" | "actions" | "diagnostics";
 
 const resultTabs: Array<{ key: ResultTab; label: string }> = [
   { key: "ai", label: "AI Audit" },
   { key: "audit", label: "Audit Detail" },
+  { key: "impact", label: "Time Impact" },
   { key: "actions", label: "Actions" },
   { key: "baselines", label: "Baselines" },
   { key: "maps", label: "Maps" },
@@ -127,6 +138,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
+      {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} jobName={jobDisplayName} mapOutputs={mapOutputs} /> : null}
       {activeTab === "maps" ? <MapsPanel jobId={job.job_id} jobName={jobDisplayName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} /> : null}
       {activeTab === "actions" ? (
         <ActionPanel
@@ -685,6 +697,596 @@ function DiagnosticsPanel({
       </Card>
     </div>
   );
+}
+
+type TimeImpactFilter = "all" | "worse" | "high_risk" | "route_changed" | "unavailable";
+
+function TimeImpactPanel({
+  jobId,
+  jobName,
+  mapOutputs,
+}: {
+  jobId: string;
+  jobName: string;
+  mapOutputs: MapOutput[];
+}) {
+  const scenarioOptions = useMemo(
+    () => mapOutputs.filter((output) => output.key !== "current_plan"),
+    [mapOutputs],
+  );
+  const [selectedKey, setSelectedKey] = useState("");
+  const [filter, setFilter] = useState<TimeImpactFilter>("worse");
+  const [search, setSearch] = useState("");
+  const [selectedRouteId, setSelectedRouteId] = useState("");
+  const selected =
+    scenarioOptions.find((item) => item.key === selectedKey) ||
+    scenarioOptions.find((item) => item.key === "original") ||
+    scenarioOptions[0];
+  const impactQuery = useQuery({
+    queryKey: ["job-map-data", jobId, "time-impact", selected?.key],
+    queryFn: () => getJobMapData(jobId, selected?.key || ""),
+    enabled: Boolean(selected),
+  });
+
+  if (!scenarioOptions.length || !selected) {
+    return (
+      <EmptyState
+        title="No optimized scenarios available"
+        detail="Time impact review needs an optimized scenario to compare against the current plan."
+      />
+    );
+  }
+
+  const data = impactQuery.data;
+  const summary = data?.summary.time_impact;
+  const routeRows = data ? buildTimeImpactRouteRows(data) : [];
+  const stopRows = data ? buildTimeImpactStopRows(data, { filter, search, selectedRouteId }) : [];
+  const comparedStops = data ? data.stops.filter((stop) => stop.time_impact?.comparison_available) : [];
+  const unavailableStops = data
+    ? data.stops.filter((stop) => !stop.is_depot && stop.time_impact?.comparison_available === false)
+    : [];
+
+  return (
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center gap-2">
+              <GitCompareArrows className="h-4 w-4 text-primary" aria-hidden="true" />
+              <h2 className="text-sm font-semibold">Time impact review</h2>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {scenarioOptions.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  className={cn(
+                    "h-9 rounded-md border px-3 text-sm font-medium transition",
+                    selected.key === option.key
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                  )}
+                  onClick={() => {
+                    setSelectedKey(option.key);
+                    setSelectedRouteId("");
+                  }}
+                >
+                  {option.name}
+                </button>
+              ))}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {impactQuery.isLoading ? (
+            <div className="flex h-32 items-center justify-center rounded-md border border-border bg-muted text-sm text-muted-foreground">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
+              Loading time impact model
+            </div>
+          ) : null}
+          {impactQuery.isError ? (
+            <InlineError message="Time impact data is not available for this scenario yet." />
+          ) : null}
+          {data && !summary?.available ? (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              <AlertCircle className="mr-2 inline h-4 w-4 align-text-bottom" aria-hidden="true" />
+              No comparable stop timing was found for this scenario.
+            </div>
+          ) : null}
+        </CardContent>
+      </Card>
+
+      {data && summary?.available ? (
+        <>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Worse riders" value={formatNumber(summary.worse_rider_count)} tone="warning" />
+            <MetricCard label="High-risk stops" value={formatNumber(summary.high_risk_stop_count)} tone="warning" />
+            <MetricCard label="Weighted adverse" value={formatImpactMinutes(summary.weighted_avg_adverse_delta_minutes)} tone="info" />
+            <MetricCard label="Route changed" value={formatNumber(summary.route_changed_rider_count)} tone="neutral" />
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <MetricCard label="Compared stops" value={formatNumber(summary.compared_stop_count)} />
+            <MetricCard label="Compared riders" value={formatNumber(summary.compared_rider_count)} />
+            <MetricCard label="P90 adverse" value={formatImpactMinutes(summary.p90_adverse_delta_minutes)} />
+            <MetricCard label="Max adverse" value={formatImpactMinutes(summary.max_adverse_delta_minutes)} tone="warning" />
+          </div>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex items-center gap-2">
+                  <Route className="h-4 w-4 text-primary" aria-hidden="true" />
+                  <h2 className="text-sm font-semibold">Route impact</h2>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {selectedRouteId ? (
+                    <button
+                      type="button"
+                      className={cn(buttonClassName("secondary"), "h-8")}
+                      onClick={() => setSelectedRouteId("")}
+                    >
+                      All routes
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={cn(buttonClassName("secondary"), "h-8")}
+                    onClick={() => downloadTimeImpactCsv(data, jobName, selected.name)}
+                  >
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    Export CSV
+                  </button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <TimeImpactRouteTable
+                routes={routeRows}
+                selectedRouteId={selectedRouteId}
+                onSelectRoute={setSelectedRouteId}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                <div className="flex items-center gap-2">
+                  <ListChecks className="h-4 w-4 text-primary" aria-hidden="true" />
+                  <h2 className="text-sm font-semibold">Stop impact</h2>
+                  <Badge tone="neutral">{formatNumber(stopRows.length)} shown</Badge>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {(["all", "worse", "high_risk", "route_changed", "unavailable"] as const).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      className={cn(
+                        "h-8 rounded-md border px-2.5 text-xs font-semibold transition",
+                        filter === key
+                          ? "border-primary bg-primary text-primary-foreground"
+                          : "border-border bg-surface text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                      onClick={() => setFilter(key)}
+                    >
+                      {timeImpactFilterLabel(key)}
+                    </button>
+                  ))}
+                  <input
+                    className="h-8 min-w-[220px] rounded-md border border-border bg-surface px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary"
+                    placeholder="Search stop or route"
+                    value={search}
+                    onChange={(event) => setSearch(event.target.value)}
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <TimeImpactStopTable stops={stopRows} serviceDirection={data.service_direction || ""} />
+              {unavailableStops.length ? (
+                <div className="mt-3 text-xs text-muted-foreground">
+                  {formatNumber(unavailableStops.length)} stop(s) could not be matched to the current plan timing model.
+                </div>
+              ) : null}
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+
+      {data && !comparedStops.length && unavailableStops.length ? (
+        <Card>
+          <CardHeader>
+            <h2 className="text-sm font-semibold">Unmatched stops</h2>
+          </CardHeader>
+          <CardContent>
+            <TimeImpactStopTable stops={unavailableStops} serviceDirection={data.service_direction || ""} />
+          </CardContent>
+        </Card>
+      ) : null}
+    </div>
+  );
+}
+
+type TimeImpactRouteRow = JobMapRoute & {
+  time_impact?: JobMapTimeImpactSummary;
+};
+
+function buildTimeImpactRouteRows(data: JobMapData): TimeImpactRouteRow[] {
+  return [...data.routes]
+    .filter((route) => route.time_impact?.available)
+    .sort(
+      (left, right) =>
+        Number(right.time_impact?.high_risk_rider_count || 0) -
+          Number(left.time_impact?.high_risk_rider_count || 0) ||
+        Number(right.time_impact?.weighted_avg_adverse_delta_minutes || 0) -
+          Number(left.time_impact?.weighted_avg_adverse_delta_minutes || 0) ||
+        Number(right.time_impact?.worse_rider_count || 0) -
+          Number(left.time_impact?.worse_rider_count || 0),
+    );
+}
+
+function buildTimeImpactStopRows(
+  data: JobMapData,
+  {
+    filter,
+    search,
+    selectedRouteId,
+  }: {
+    filter: TimeImpactFilter;
+    search: string;
+    selectedRouteId: string;
+  },
+): JobMapStop[] {
+  const normalizedSearch = search.trim().toLowerCase();
+  return data.stops
+    .filter((stop) => !stop.is_depot)
+    .filter((stop) => {
+      if (selectedRouteId && stop.route_id !== selectedRouteId) {
+        return false;
+      }
+      if (!normalizedSearch) {
+        return true;
+      }
+      const impact = stop.time_impact || {};
+      const haystack = [
+        stop.route_id,
+        stop.address,
+        stop.requested_address,
+        impact.current_route_id,
+        impact.new_route_id,
+        impact.current_time_label,
+        impact.new_time_label,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedSearch);
+    })
+    .filter((stop) => {
+      const impact = stop.time_impact || {};
+      if (filter === "worse") {
+        return impact.impact_direction === "worse";
+      }
+      if (filter === "high_risk") {
+        return impact.level === "severe" || impact.level === "critical";
+      }
+      if (filter === "route_changed") {
+        return Boolean(impact.route_changed);
+      }
+      if (filter === "unavailable") {
+        return impact.comparison_available === false;
+      }
+      return true;
+    })
+    .sort(
+      (left, right) =>
+        stopAdverseMinutes(right) - stopAdverseMinutes(left) ||
+        stopAffectedRiders(right) - stopAffectedRiders(left) ||
+        stopAbsoluteMinutes(right) - stopAbsoluteMinutes(left),
+    );
+}
+
+function TimeImpactRouteTable({
+  routes,
+  selectedRouteId,
+  onSelectRoute,
+}: {
+  routes: TimeImpactRouteRow[];
+  selectedRouteId: string;
+  onSelectRoute: (routeId: string) => void;
+}) {
+  if (!routes.length) {
+    return <div className="text-sm text-muted-foreground">No route-level impact rows were generated.</div>;
+  }
+
+  return (
+    <div className="max-h-[360px] overflow-auto">
+      <table className="w-full min-w-[860px] border-collapse text-sm">
+        <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2">Route</th>
+            <th className="px-3 py-2">Bus</th>
+            <th className="px-3 py-2">Riders</th>
+            <th className="px-3 py-2">Worse riders</th>
+            <th className="px-3 py-2">High risk</th>
+            <th className="px-3 py-2">Weighted adverse</th>
+            <th className="px-3 py-2">Max adverse</th>
+            <th className="px-3 py-2">Changed riders</th>
+          </tr>
+        </thead>
+        <tbody>
+          {routes.map((route) => {
+            const impact = route.time_impact || {};
+            const active = selectedRouteId === route.id;
+            return (
+              <tr key={route.id} className={cn("border-t border-border", active ? "bg-primary/10" : "")}>
+                <td className="px-3 py-2">
+                  <button
+                    type="button"
+                    className="font-semibold text-primary hover:underline"
+                    onClick={() => onSelectRoute(active ? "" : route.id)}
+                  >
+                    {route.id}
+                  </button>
+                </td>
+                <td className="px-3 py-2">{route.bus_type_name || "N/A"}</td>
+                <td className="px-3 py-2">{formatNumber(route.load)}</td>
+                <td className="px-3 py-2">{formatNumber(impact.worse_rider_count)}</td>
+                <td className="px-3 py-2">
+                  <Badge tone={Number(impact.high_risk_stop_count || 0) ? "warning" : "neutral"}>
+                    {formatNumber(impact.high_risk_stop_count)}
+                  </Badge>
+                </td>
+                <td className="px-3 py-2">{formatImpactMinutes(impact.weighted_avg_adverse_delta_minutes)}</td>
+                <td className="px-3 py-2">{formatImpactMinutes(impact.max_adverse_delta_minutes)}</td>
+                <td className="px-3 py-2">{formatNumber(impact.route_changed_rider_count)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function TimeImpactStopTable({
+  stops,
+  serviceDirection,
+}: {
+  stops: JobMapStop[];
+  serviceDirection: string;
+}) {
+  if (!stops.length) {
+    return <div className="text-sm text-muted-foreground">No stops match the current filter.</div>;
+  }
+
+  return (
+    <div className="max-h-[520px] overflow-auto">
+      <table className="w-full min-w-[980px] border-collapse text-sm">
+        <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
+          <tr>
+            <th className="px-3 py-2">Impact</th>
+            <th className="px-3 py-2">Stop</th>
+            <th className="px-3 py-2">Riders</th>
+            <th className="px-3 py-2">Current</th>
+            <th className="px-3 py-2">Optimized</th>
+            <th className="px-3 py-2">Delta</th>
+            <th className="px-3 py-2">Route</th>
+            <th className="px-3 py-2">Match</th>
+          </tr>
+        </thead>
+        <tbody>
+          {stops.map((stop) => {
+            const impact = stop.time_impact || {};
+            const comparisonAvailable = Boolean(impact.comparison_available);
+            return (
+              <tr key={stop.id} className="border-t border-border">
+                <td className="px-3 py-2">
+                  {comparisonAvailable ? (
+                    <Badge tone={timeImpactBadgeTone(impact.level, impact.impact_direction)}>
+                      {timeImpactLabel(impact.level, impact.impact_direction)}
+                    </Badge>
+                  ) : (
+                    <Badge tone="warning">Unmatched</Badge>
+                  )}
+                </td>
+                <td className="max-w-[320px] px-3 py-2">
+                  <div className="truncate font-medium">{stop.address || stop.requested_address || "Unknown address"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">
+                    {stop.route_id} · Stop {formatNumber(stop.order)}
+                  </div>
+                </td>
+                <td className="px-3 py-2">{formatNumber(impact.affected_rider_count ?? stop.passenger_count)}</td>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{impact.current_time_label || "N/A"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{impact.current_route_id || "Current plan"}</div>
+                </td>
+                <td className="px-3 py-2">
+                  <div className="font-medium">{impact.new_time_label || stop.scheduled_time_label || "N/A"}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{impact.new_route_id || stop.route_id}</div>
+                </td>
+                <td className="px-3 py-2">
+                  {comparisonAvailable ? (
+                    <>
+                      <div className={cn("font-semibold", timeImpactDeltaClassName(impact.impact_direction))}>
+                        {formatImpactMinutes(impact.delta_minutes, { signed: true })}
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {timeImpactAdversePhrase(serviceDirection, Number(impact.adverse_delta_minutes || 0))}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-muted-foreground">N/A</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {impact.route_changed ? (
+                    <Badge tone="info">Changed</Badge>
+                  ) : (
+                    <Badge tone="neutral">Same</Badge>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-xs text-muted-foreground">
+                  {impact.comparison_status || "matched"}
+                  {impact.matched_key ? <div>{impact.matched_key}</div> : null}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function timeImpactFilterLabel(filter: TimeImpactFilter) {
+  if (filter === "worse") {
+    return "Worse";
+  }
+  if (filter === "high_risk") {
+    return "High risk";
+  }
+  if (filter === "route_changed") {
+    return "Route changed";
+  }
+  if (filter === "unavailable") {
+    return "Unmatched";
+  }
+  return "All";
+}
+
+function timeImpactBadgeTone(level: unknown, direction: unknown): "neutral" | "success" | "warning" | "danger" | "info" {
+  if (level === "critical" || level === "severe") {
+    return "danger";
+  }
+  if (level === "elevated" || level === "notice") {
+    return "warning";
+  }
+  if (direction === "better") {
+    return "success";
+  }
+  return "neutral";
+}
+
+function timeImpactLabel(level: unknown, direction: unknown) {
+  if (level === "critical") {
+    return "Critical";
+  }
+  if (level === "severe") {
+    return "Severe";
+  }
+  if (level === "elevated") {
+    return "Elevated";
+  }
+  if (level === "notice") {
+    return "Notice";
+  }
+  if (direction === "better") {
+    return "Better";
+  }
+  return "Neutral";
+}
+
+function timeImpactDeltaClassName(direction: unknown) {
+  if (direction === "worse") {
+    return "text-amber-800";
+  }
+  if (direction === "better") {
+    return "text-emerald-700";
+  }
+  return "text-foreground";
+}
+
+function timeImpactAdversePhrase(serviceDirection: string, adverseMinutes: number) {
+  if (!Number.isFinite(adverseMinutes) || adverseMinutes <= 0.5) {
+    return "No adverse shift";
+  }
+  const label = serviceDirection === "To School" ? "earlier pickup" : "later dropoff";
+  return `${formatImpactMinutes(adverseMinutes)} ${label}`;
+}
+
+function formatImpactMinutes(value: unknown, options: { signed?: boolean } = {}) {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "0 min";
+  }
+  const rounded = Math.round(numericValue);
+  const prefix = options.signed && rounded > 0 ? "+" : "";
+  return `${prefix}${formatNumber(rounded)} min`;
+}
+
+function stopAdverseMinutes(stop: JobMapStop) {
+  return Number(stop.time_impact?.adverse_delta_minutes || 0);
+}
+
+function stopAbsoluteMinutes(stop: JobMapStop) {
+  return Number(stop.time_impact?.absolute_delta_minutes || 0);
+}
+
+function stopAffectedRiders(stop: JobMapStop) {
+  return Number(stop.time_impact?.affected_rider_count ?? stop.passenger_count ?? 0);
+}
+
+function downloadTimeImpactCsv(data: JobMapData, jobName: string, scenarioName: string) {
+  const rows = data.stops
+    .filter((stop) => !stop.is_depot)
+    .map((stop) => {
+      const impact = stop.time_impact || {};
+      return [
+        data.scenario_name,
+        stop.route_id,
+        stop.order,
+        stop.address || stop.requested_address || "",
+        impact.affected_rider_count ?? stop.passenger_count,
+        impact.current_route_id || "",
+        impact.new_route_id || stop.route_id,
+        impact.current_time_label || "",
+        impact.new_time_label || stop.scheduled_time_label || "",
+        impact.delta_minutes ?? "",
+        impact.adverse_delta_minutes ?? "",
+        impact.absolute_delta_minutes ?? "",
+        impact.impact_direction || "",
+        impact.level || "",
+        impact.route_changed ? "yes" : "no",
+        impact.comparison_status || "",
+        impact.matched_key || "",
+      ];
+    });
+  const header = [
+    "scenario",
+    "route",
+    "stop_order",
+    "address",
+    "riders",
+    "current_route",
+    "optimized_route",
+    "current_time",
+    "optimized_time",
+    "delta_minutes",
+    "adverse_minutes",
+    "absolute_minutes",
+    "impact_direction",
+    "level",
+    "route_changed",
+    "comparison_status",
+    "matched_key",
+  ];
+  const csv = [header, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
+  const filename = `${sanitizeDownloadFilename(jobName)} - ${sanitizeDownloadFilename(scenarioName)} time impact.csv`;
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function csvEscape(value: unknown) {
+  const text = String(value ?? "");
+  return `"${text.replace(/"/g, '""')}"`;
 }
 
 function MapsPanel({

@@ -4,6 +4,21 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-12
+
+### Time Impact Review Started
+
+- Route Audit results now include a Time Impact tab for compatible completed
+  jobs with optimized route scenarios.
+- The first review surface compares current-plan stop timing against optimized
+  scenario timing and summarizes worse riders, high-risk stops, weighted adverse
+  minutes, route-changed riders, P90 adverse impact, and maximum adverse impact.
+- Users can switch between optimized scenarios, filter stop impacts, focus one
+  route from the route-impact table, search stops/routes, and export a CSV for
+  operations review.
+- This is a reporting surface only. Time impact is not yet used as a solver
+  constraint or penalty.
+
 ## 2026-06-11
 
 ### Legacy Streamlit Client Removed

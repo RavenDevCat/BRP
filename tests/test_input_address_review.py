@@ -33,7 +33,7 @@ class InputAddressReviewTests(unittest.TestCase):
                 "node_id": 1,
                 "address": "Far accepted stop",
                 "lat": 31.24,
-                "lng": 120.80,
+                "lng": 120.86,
                 "city": "Shanghai",
                 "country": "China",
                 "formatted_address": "上海市远距离站点",
@@ -78,6 +78,89 @@ class InputAddressReviewTests(unittest.TestCase):
         self.assertEqual(len(route_warnings), 1)
         self.assertEqual(route_warnings[0]["route_id"], "R1")
         self.assertEqual(route_warnings[0]["address"], "Suspicious stop")
+
+    def test_region_mismatch_warning_for_accepted_china_point(self) -> None:
+        points = [
+            {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.23, "lng": 121.43},
+            {
+                "node_id": 1,
+                "address": "Ambiguous accepted stop",
+                "lat": 31.31,
+                "lng": 120.62,
+                "country": "China",
+                "city": "Shanghai",
+                "formatted_address": "江苏省苏州市工业园区星湖街",
+                "adcode": "320571",
+            },
+        ]
+
+        review = planner_core.build_input_address_review(
+            FakePlanner(),
+            points,
+            service_direction="To School",
+        )
+
+        region_warnings = [item for item in review["warnings"] if item["type"] == "region_mismatch"]
+        self.assertEqual(len(region_warnings), 1)
+        self.assertEqual(region_warnings[0]["expected_city"], "Shanghai")
+        self.assertIn("320571", region_warnings[0]["reason"])
+
+    def test_route_context_corridor_and_reverse_direction_warnings(self) -> None:
+        points = [
+            {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.0, "lng": 121.0},
+            {"node_id": 1, "address": "Previous stop", "lat": 31.0, "lng": 121.0},
+            {"node_id": 2, "address": "Backwards stop", "lat": 31.0, "lng": 120.78},
+            {"node_id": 3, "address": "Next stop", "lat": 31.0, "lng": 121.08},
+        ]
+        distance_matrix = [
+            [0, 1000, 25000, 8000],
+            [1000, 0, 25000, 8000],
+            [25000, 25000, 0, 32000],
+            [8000, 8000, 32000, 0],
+        ]
+
+        review = planner_core.build_input_address_review(
+            FakePlanner(),
+            points,
+            service_direction="To School",
+            current_plan_assessment={"route_summaries": [{"route_id": "R1", "matched_node_ids": [0, 1, 2, 3]}]},
+            current_plan_distance_matrix=distance_matrix,
+        )
+
+        warning_types = {item["type"] for item in review["warnings"]}
+        self.assertIn("route_context_reverse_direction", warning_types)
+        self.assertGreaterEqual(review["summary"]["route_context_warning_count"], 1)
+
+    def test_route_context_isolated_warning_uses_route_spacing(self) -> None:
+        points = [
+            {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.00, "lng": 121.00},
+            {"node_id": 1, "address": "Stop 1", "lat": 31.00, "lng": 121.01},
+            {"node_id": 2, "address": "Stop 2", "lat": 31.00, "lng": 121.02},
+            {"node_id": 3, "address": "Isolated stop", "lat": 31.35, "lng": 121.35},
+            {"node_id": 4, "address": "Stop 4", "lat": 31.00, "lng": 121.03},
+            {"node_id": 5, "address": "Stop 5", "lat": 31.00, "lng": 121.04},
+            {"node_id": 6, "address": "Stop 6", "lat": 31.00, "lng": 121.05},
+        ]
+        size = len(points)
+        distance_matrix = [[1000 for _ in range(size)] for _ in range(size)]
+        for index in range(size):
+            distance_matrix[index][index] = 0
+        distance_matrix[2][3] = distance_matrix[3][2] = 45000
+        distance_matrix[3][4] = distance_matrix[4][3] = 45000
+        distance_matrix[2][4] = distance_matrix[4][2] = 1000
+
+        review = planner_core.build_input_address_review(
+            FakePlanner(),
+            points,
+            service_direction="From School",
+            current_plan_assessment={"route_summaries": [{"route_id": "R2", "matched_node_ids": [0, 1, 2, 3, 4, 5, 6]}]},
+            current_plan_distance_matrix=distance_matrix,
+        )
+
+        isolated = [item for item in review["warnings"] if item["type"] == "route_context_isolated"]
+        self.assertEqual(len(isolated), 1)
+        self.assertEqual(isolated[0]["address"], "Isolated stop")
+
 
 
 if __name__ == "__main__":

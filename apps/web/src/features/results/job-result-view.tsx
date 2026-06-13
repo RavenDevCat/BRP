@@ -237,8 +237,8 @@ function InputAddressWarningBanner({
           <div className="min-w-0">
             <h2 className="text-base font-semibold text-amber-950">Input addresses need review</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-amber-900">
-              {formatNumber(count)} accepted address{count === 1 ? "" : "es"} look unusual in the route context or are far
-              from school. The plan still ran, but review these workbook rows before sharing or operating it.
+              {formatNumber(count)} accepted address{count === 1 ? "" : "es"} may be outside the expected service area, far
+              from school, or unusual in the route sequence. The plan still ran, but review these workbook rows before sharing or operating it.
             </p>
           </div>
         </div>

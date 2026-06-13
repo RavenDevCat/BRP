@@ -10,6 +10,7 @@ import importlib.util
 import io
 import itertools
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -90,6 +91,26 @@ INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM = max(
 INPUT_ADDRESS_REVIEW_DETOUR_RATIO = max(
     1.0,
     float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_DETOUR_RATIO", "2.5") or 2.5),
+)
+INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM = max(
+    0.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM", "8") or 8),
+)
+INPUT_ADDRESS_REVIEW_ORDER_EXTRA_KM = max(
+    0.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_ORDER_EXTRA_KM", "5") or 5),
+)
+INPUT_ADDRESS_REVIEW_ORDER_RATIO = max(
+    1.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_ORDER_RATIO", "1.4") or 1.4),
+)
+INPUT_ADDRESS_REVIEW_ISOLATED_NEIGHBOR_KM = max(
+    0.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_ISOLATED_NEIGHBOR_KM", "12") or 12),
+)
+INPUT_ADDRESS_REVIEW_ISOLATED_ROUTE_MULTIPLIER = max(
+    1.0,
+    float(os.environ.get("BRP_INPUT_ADDRESS_REVIEW_ISOLATED_ROUTE_MULTIPLIER", "3") or 3),
 )
 TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
     "Off-Peak": 1.0,
@@ -1744,6 +1765,197 @@ def _point_source_rows(point: dict[str, Any]) -> str:
     return str(point.get("source_excel_rows") or point.get("excel_rows") or "").strip()
 
 
+_INPUT_REVIEW_CHINA_CITY_CONFIGS: dict[str, dict[str, Any]] = {
+    "shanghai": {
+        "aliases": ["shanghai", "shanghai city", "上海", "上海市"],
+        "adcode_prefixes": ["31"],
+        "bbox": (31.90, 122.25, 30.65, 120.85),
+    },
+    "beijing": {
+        "aliases": ["beijing", "beijing city", "北京", "北京市"],
+        "adcode_prefixes": ["11"],
+        "bbox": (41.10, 117.60, 39.40, 115.40),
+    },
+    "suzhou": {
+        "aliases": ["suzhou", "suzhou city", "苏州", "苏州市"],
+        "adcode_prefixes": ["3205"],
+        "bbox": (32.15, 121.35, 30.75, 119.85),
+    },
+    "xian": {
+        "aliases": ["xian", "xi'an", "xi an", "西安", "西安市"],
+        "adcode_prefixes": ["6101"],
+        "bbox": (34.85, 109.85, 33.40, 107.50),
+    },
+}
+_INPUT_REVIEW_KOREA_BBOX = (38.75, 132.2, 33.0, 124.0)
+
+
+def _input_review_is_china(country: str) -> bool:
+    return country.strip().lower() in {"china", "中国", "中华人民共和国"}
+
+
+def _input_review_is_korea(country: str) -> bool:
+    return country.strip().lower() in {
+        "korea",
+        "south korea",
+        "republic of korea",
+        "대한민국",
+        "한국",
+        "남한",
+    }
+
+
+def _input_review_city_key(city: str) -> str:
+    normalized = city.strip().lower().replace("'", "").replace(" ", "")
+    if normalized in {"shanghai", "shanghaicity", "上海", "上海市"}:
+        return "shanghai"
+    if normalized in {"beijing", "beijingcity", "北京", "北京市"}:
+        return "beijing"
+    if normalized in {"suzhou", "suzhoucity", "苏州", "苏州市"}:
+        return "suzhou"
+    if normalized in {"xian", "xi’an", "西安", "西安市"}:
+        return "xian"
+    return ""
+
+
+def _input_review_within_bbox(lat: float, lng: float, bbox: tuple[float, float, float, float]) -> bool:
+    north, east, south, west = bbox
+    return south <= lat <= north and west <= lng <= east
+
+
+def _input_review_region_issue(point: dict[str, Any]) -> dict[str, Any] | None:
+    coords = _point_coordinate(point)
+    if coords is None:
+        return None
+    lat, lng = coords
+    country = str(point.get("country", point.get("requested_country", "")) or "").strip()
+    city = str(point.get("city", point.get("requested_city", "")) or "").strip()
+    formatted_address = str(point.get("formatted_address", "") or "").strip()
+    adcode = str(point.get("adcode", "") or "").strip()
+
+    if _input_review_is_china(country):
+        city_key = _input_review_city_key(city)
+        config = _INPUT_REVIEW_CHINA_CITY_CONFIGS.get(city_key)
+        if not config:
+            return None
+        reason = ""
+        if adcode and not any(adcode.startswith(prefix) for prefix in config["adcode_prefixes"]):
+            reason = f"Resolved adcode {adcode} does not match the workbook city {city or 'N/A'}."
+        else:
+            address_text = formatted_address.lower()
+            for other_key, other_config in _INPUT_REVIEW_CHINA_CITY_CONFIGS.items():
+                if other_key == city_key:
+                    continue
+                if any(alias.lower() in address_text for alias in other_config["aliases"]):
+                    reason = f"Resolved address appears to be in {other_key}, not the workbook city {city or 'N/A'}."
+                    break
+        if not reason and not _input_review_within_bbox(lat, lng, config["bbox"]):
+            reason = f"Resolved coordinates are outside the supported service area for {city or 'this city'}."
+        if not reason:
+            return None
+        warning = _address_warning_base(
+            point,
+            warning_type="region_mismatch",
+            reason=reason,
+        )
+        warning.update(
+            {
+                "expected_country": country,
+                "expected_city": city,
+                "resolved_adcode": adcode,
+                "lat": round(lat, 6),
+                "lng": round(lng, 6),
+                "message": (
+                    f"{_point_display_address(point) or 'This stop'} resolved outside the expected service area. "
+                    "The coordinate was accepted, but the workbook location should be reviewed."
+                ),
+            }
+        )
+        return warning
+
+    if _input_review_is_korea(country) and not _input_review_within_bbox(lat, lng, _INPUT_REVIEW_KOREA_BBOX):
+        warning = _address_warning_base(
+            point,
+            warning_type="region_mismatch",
+            reason="Resolved coordinates are outside South Korea.",
+        )
+        warning.update(
+            {
+                "expected_country": country,
+                "expected_city": city,
+                "lat": round(lat, 6),
+                "lng": round(lng, 6),
+                "message": (
+                    f"{_point_display_address(point) or 'This stop'} resolved outside South Korea. "
+                    "The coordinate was accepted, but the workbook location should be reviewed."
+                ),
+            }
+        )
+        return warning
+    return None
+
+
+def _median(values: list[float]) -> float | None:
+    clean = sorted(value for value in values if value > 0)
+    if not clean:
+        return None
+    middle = len(clean) // 2
+    if len(clean) % 2:
+        return clean[middle]
+    return (clean[middle - 1] + clean[middle]) / 2.0
+
+
+def _route_distance_km(
+    planner: Any,
+    points_by_node: dict[int, dict[str, Any]],
+    distance_matrix: list[list[float]] | None,
+    from_node: int,
+    to_node: int,
+) -> float | None:
+    if distance_matrix:
+        try:
+            value_m = float(distance_matrix[from_node][to_node] or 0.0)
+        except (IndexError, TypeError, ValueError):
+            value_m = 0.0
+        if value_m > 0:
+            return value_m / 1000.0
+    from_coords = _point_coordinate(points_by_node.get(from_node, {}))
+    to_coords = _point_coordinate(points_by_node.get(to_node, {}))
+    if from_coords is None or to_coords is None:
+        return None
+    return float(planner.haversine_distance_km(from_coords[0], from_coords[1], to_coords[0], to_coords[1]))
+
+
+def _local_xy_km(origin: tuple[float, float], coords: tuple[float, float]) -> tuple[float, float]:
+    lat0 = origin[0]
+    return (
+        (coords[1] - origin[1]) * 111.320 * max(0.1, abs(math.cos(math.radians(lat0)))),
+        (coords[0] - origin[0]) * 110.574,
+    )
+
+
+def _point_segment_context_km(
+    prev_coords: tuple[float, float],
+    stop_coords: tuple[float, float],
+    next_coords: tuple[float, float],
+) -> tuple[float, float]:
+    px, py = _local_xy_km(prev_coords, prev_coords)
+    sx, sy = _local_xy_km(prev_coords, stop_coords)
+    nx, ny = _local_xy_km(prev_coords, next_coords)
+    vx, vy = nx - px, ny - py
+    wx, wy = sx - px, sy - py
+    denom = vx * vx + vy * vy
+    if denom <= 0:
+        distance = ((sx - px) ** 2 + (sy - py) ** 2) ** 0.5
+        return distance, 0.0
+    projection = (wx * vx + wy * vy) / denom
+    clamped = min(1.0, max(0.0, projection))
+    closest_x = px + clamped * vx
+    closest_y = py + clamped * vy
+    distance = ((sx - closest_x) ** 2 + (sy - closest_y) ** 2) ** 0.5
+    return distance, projection
+
+
 def _address_warning_base(
     point: dict[str, Any],
     *,
@@ -1809,6 +2021,7 @@ def build_input_address_review(
             "summary": {
                 "warning_count": 0,
                 "school_distance_warning_count": 0,
+                "region_warning_count": 0,
                 "route_context_warning_count": 0,
             },
             "warnings": [],
@@ -1850,7 +2063,14 @@ def build_input_address_review(
             )
             warnings.append(warning)
 
-    if current_plan_assessment and current_plan_distance_matrix:
+    for point in points:
+        if bool(point.get("is_depot")):
+            continue
+        region_warning = _input_review_region_issue(point)
+        if region_warning:
+            warnings.append(region_warning)
+
+    if current_plan_assessment:
         point_by_node = {
             int(point.get("node_id", index) or index): point
             for index, point in enumerate(points)
@@ -1865,6 +2085,15 @@ def build_input_address_review(
             if len(node_ids) < 3:
                 continue
             route_id = str(route_summary.get("route_id", "") or "").strip()
+            route_leg_lengths = [
+                value
+                for value in (
+                    _route_distance_km(planner, point_by_node, current_plan_distance_matrix, from_node, to_node)
+                    for from_node, to_node in zip(node_ids, node_ids[1:])
+                )
+                if value is not None and value > 0
+            ]
+            median_route_leg_km = _median(route_leg_lengths)
             for stop_index in range(1, len(node_ids) - 1):
                 node_id = node_ids[stop_index]
                 point = point_by_node.get(node_id)
@@ -1874,43 +2103,151 @@ def build_input_address_review(
                 next_node = node_ids[stop_index + 1]
                 if prev_node == next_node:
                     continue
-                try:
-                    prev_to_stop_m = float(current_plan_distance_matrix[prev_node][node_id] or 0.0)
-                    stop_to_next_m = float(current_plan_distance_matrix[node_id][next_node] or 0.0)
-                    prev_to_next_m = float(current_plan_distance_matrix[prev_node][next_node] or 0.0)
-                except (IndexError, TypeError, ValueError):
-                    continue
-                if prev_to_stop_m <= 0 or stop_to_next_m <= 0 or prev_to_next_m <= 0:
-                    continue
-                detour_extra_km = max(0.0, (prev_to_stop_m + stop_to_next_m - prev_to_next_m) / 1000.0)
-                detour_ratio = (prev_to_stop_m + stop_to_next_m) / max(prev_to_next_m, 1.0)
-                if (
-                    detour_extra_km < INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM
-                    or detour_ratio < INPUT_ADDRESS_REVIEW_DETOUR_RATIO
-                ):
-                    continue
-                warning = _address_warning_base(
-                    point,
-                    warning_type="route_context_detour",
-                    reason="Stop creates an unusually large detour between adjacent route stops.",
+                prev_to_stop_km = _route_distance_km(
+                    planner,
+                    point_by_node,
+                    current_plan_distance_matrix,
+                    prev_node,
+                    node_id,
                 )
-                warning.update(
-                    {
-                        "route_id": route_id,
-                        "stop_sequence": stop_index,
-                        "previous_address": _point_display_address(point_by_node.get(prev_node, {})),
-                        "next_address": _point_display_address(point_by_node.get(next_node, {})),
-                        "detour_extra_km": round(detour_extra_km, 1),
-                        "detour_ratio": round(detour_ratio, 2),
-                        "threshold_extra_km": round(INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM, 1),
-                        "threshold_ratio": round(INPUT_ADDRESS_REVIEW_DETOUR_RATIO, 2),
-                        "message": (
+                stop_to_next_km = _route_distance_km(
+                    planner,
+                    point_by_node,
+                    current_plan_distance_matrix,
+                    node_id,
+                    next_node,
+                )
+                prev_to_next_km = _route_distance_km(
+                    planner,
+                    point_by_node,
+                    current_plan_distance_matrix,
+                    prev_node,
+                    next_node,
+                )
+                if not prev_to_stop_km or not stop_to_next_km or not prev_to_next_km:
+                    continue
+
+                detour_extra_km = max(0.0, prev_to_stop_km + stop_to_next_km - prev_to_next_km)
+                detour_ratio = (prev_to_stop_km + stop_to_next_km) / max(prev_to_next_km, 0.001)
+                signals: list[tuple[str, str, dict[str, Any]]] = []
+                if (
+                    detour_extra_km >= INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM
+                    and detour_ratio >= INPUT_ADDRESS_REVIEW_DETOUR_RATIO
+                ):
+                    signals.append(
+                        (
+                            "detour",
+                            "Stop creates an unusually large detour between adjacent route stops.",
+                            {
+                                "detour_extra_km": round(detour_extra_km, 1),
+                                "detour_ratio": round(detour_ratio, 2),
+                                "threshold_extra_km": round(INPUT_ADDRESS_REVIEW_DETOUR_EXTRA_KM, 1),
+                                "threshold_ratio": round(INPUT_ADDRESS_REVIEW_DETOUR_RATIO, 2),
+                            },
+                        )
+                    )
+
+                prev_coords = _point_coordinate(point_by_node.get(prev_node, {}))
+                stop_coords = _point_coordinate(point)
+                next_coords = _point_coordinate(point_by_node.get(next_node, {}))
+                corridor_distance_km: float | None = None
+                projection: float | None = None
+                if prev_coords is not None and stop_coords is not None and next_coords is not None:
+                    corridor_distance_km, projection = _point_segment_context_km(prev_coords, stop_coords, next_coords)
+                    if (
+                        INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM > 0
+                        and corridor_distance_km >= INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM
+                        and detour_extra_km >= max(2.0, INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM / 2.0)
+                    ):
+                        signals.append(
+                            (
+                                "corridor",
+                                "Stop is far from the corridor implied by adjacent route stops.",
+                                {
+                                    "corridor_distance_km": round(corridor_distance_km, 1),
+                                    "threshold_corridor_km": round(INPUT_ADDRESS_REVIEW_CORRIDOR_DISTANCE_KM, 1),
+                                    "detour_extra_km": round(detour_extra_km, 1),
+                                },
+                            )
+                        )
+                    if (
+                        projection is not None
+                        and (projection < -0.25 or projection > 1.25)
+                        and detour_extra_km >= INPUT_ADDRESS_REVIEW_ORDER_EXTRA_KM
+                        and detour_ratio >= INPUT_ADDRESS_REVIEW_ORDER_RATIO
+                    ):
+                        signals.append(
+                            (
+                                "reverse_direction",
+                                "Stop falls outside the direction implied by adjacent route stops.",
+                                {
+                                    "projection_on_adjacent_segment": round(projection, 2),
+                                    "detour_extra_km": round(detour_extra_km, 1),
+                                    "detour_ratio": round(detour_ratio, 2),
+                                    "threshold_extra_km": round(INPUT_ADDRESS_REVIEW_ORDER_EXTRA_KM, 1),
+                                    "threshold_ratio": round(INPUT_ADDRESS_REVIEW_ORDER_RATIO, 2),
+                                },
+                            )
+                        )
+
+                if median_route_leg_km is not None:
+                    isolation_threshold_km = max(
+                        INPUT_ADDRESS_REVIEW_ISOLATED_NEIGHBOR_KM,
+                        median_route_leg_km * INPUT_ADDRESS_REVIEW_ISOLATED_ROUTE_MULTIPLIER,
+                    )
+                    nearest_adjacent_km = min(prev_to_stop_km, stop_to_next_km)
+                    if nearest_adjacent_km >= isolation_threshold_km:
+                        signals.append(
+                            (
+                                "isolated",
+                                "Stop is unusually isolated from both adjacent stops on this route.",
+                                {
+                                    "nearest_adjacent_km": round(nearest_adjacent_km, 1),
+                                    "median_route_leg_km": round(median_route_leg_km, 1),
+                                    "isolation_threshold_km": round(isolation_threshold_km, 1),
+                                },
+                            )
+                        )
+
+                for signal_type, reason, details in signals:
+                    warning = _address_warning_base(
+                        point,
+                        warning_type=f"route_context_{signal_type}",
+                        reason=reason,
+                    )
+                    warning.update(
+                        {
+                            "route_id": route_id,
+                            "stop_sequence": stop_index,
+                            "previous_address": _point_display_address(point_by_node.get(prev_node, {})),
+                            "next_address": _point_display_address(point_by_node.get(next_node, {})),
+                            "prev_to_stop_km": round(prev_to_stop_km, 1),
+                            "stop_to_next_km": round(stop_to_next_km, 1),
+                            "prev_to_next_km": round(prev_to_next_km, 1),
+                            **details,
+                        }
+                    )
+                    if signal_type == "detour":
+                        warning["message"] = (
                             f"{_point_display_address(point) or 'This stop'} adds about {detour_extra_km:.1f} km "
                             f"between adjacent stops on route {route_id or 'N/A'}."
-                        ),
-                    }
-                )
-                warnings.append(warning)
+                        )
+                    elif signal_type == "corridor":
+                        warning["message"] = (
+                            f"{_point_display_address(point) or 'This stop'} is about {corridor_distance_km:.1f} km "
+                            f"away from the line between adjacent stops on route {route_id or 'N/A'}."
+                        )
+                    elif signal_type == "reverse_direction":
+                        warning["message"] = (
+                            f"{_point_display_address(point) or 'This stop'} appears outside the forward sequence "
+                            f"between adjacent stops on route {route_id or 'N/A'}."
+                        )
+                    else:
+                        warning["message"] = (
+                            f"{_point_display_address(point) or 'This stop'} is unusually far from both adjacent "
+                            f"stops on route {route_id or 'N/A'}."
+                        )
+                    warnings.append(warning)
 
     warnings = _dedupe_address_warnings(warnings)
     by_type = Counter(str(warning.get("type", "unknown")) for warning in warnings)
@@ -1918,7 +2255,10 @@ def build_input_address_review(
         "summary": {
             "warning_count": len(warnings),
             "school_distance_warning_count": int(by_type.get("school_distance", 0)),
-            "route_context_warning_count": int(by_type.get("route_context_detour", 0)),
+            "region_warning_count": int(by_type.get("region_mismatch", 0)),
+            "route_context_warning_count": sum(
+                count for warning_type, count in by_type.items() if warning_type.startswith("route_context_")
+            ),
             "service_direction": normalize_service_direction(service_direction),
         },
         "warnings": warnings,

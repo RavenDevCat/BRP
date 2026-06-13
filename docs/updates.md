@@ -9,8 +9,9 @@ It is not a code changelog. Record changes here when users or operators should k
 ### Input Address Review Warnings
 
 - Route Audit now surfaces accepted input addresses that may still need human review.
-- The Summary tab shows a prominent warning when accepted addresses are unusually far from the school or create a suspicious route-context detour.
+- The Summary tab shows a prominent warning when accepted addresses appear outside the expected service area, unusually far from the school, or suspicious in the route sequence.
 - The Review tab lists the affected address, workbook row references where available, accepted geocode details, route context, and the suggested workbook check.
+- Route-context review can now flag large adjacent-stop detours, stops far from the adjacent-stop corridor, isolated stops, and stops that appear backwards relative to neighboring stops.
 - These warnings are informational quality checks: they do not block solving, delete cache entries, auto-correct coordinates, or treat normal cross-district travel inside a large city as an error.
 - Existing completed jobs are immutable snapshots. Rerun an audit to generate the new address-review warnings under the updated backend logic.
 

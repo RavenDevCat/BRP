@@ -38,10 +38,18 @@ if (-not $env:BRP_CLIENT_CACHE_DIR) {
 if (-not $env:BRP_BACKEND_CACHE_DIR) {
     $env:BRP_BACKEND_CACHE_DIR = Join-Path $RootDir "apps\backend\cache"
 }
+if (-not $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR) {
+    $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR = Join-Path $RootDir "state\traffic_samples"
+}
+if (-not $env:BRP_LIVE_TRAFFIC_BASELINE_DIR) {
+    $env:BRP_LIVE_TRAFFIC_BASELINE_DIR = Join-Path $RootDir "state\traffic_baselines"
+}
 New-Item -ItemType Directory -Force $env:BRP_BACKEND_JOBS_DIR | Out-Null
 New-Item -ItemType Directory -Force $env:BRP_SIDE_TOOLS_DIR | Out-Null
 New-Item -ItemType Directory -Force $env:BRP_CLIENT_CACHE_DIR | Out-Null
 New-Item -ItemType Directory -Force $env:BRP_BACKEND_CACHE_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR | Out-Null
+New-Item -ItemType Directory -Force $env:BRP_LIVE_TRAFFIC_BASELINE_DIR | Out-Null
 
 Set-Location (Join-Path $RootDir "apps\backend")
 Write-Host "Starting BRP backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT)"

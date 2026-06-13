@@ -16,6 +16,8 @@ import requests
 import BusingProblem as planner
 
 
+BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent.parent
 AMAP_DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving"
 GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 GOOGLE_ROUTES_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration,routes.legs.distanceMeters"
@@ -26,13 +28,20 @@ KAKAO_NAVI_FUTURE_DIRECTIONS_URL = os.environ.get(
 ).strip()
 KAKAO_NAVI_PROVIDER = "kakao_navi"
 
-DEFAULT_JOB_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", "/opt/brp/shared/runtime/jobs"))
-DEFAULT_OUTPUT_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "/opt/brp/shared/runtime/traffic_samples"))
+
+def _default_runtime_path(*parts: str) -> str:
+    if os.name == "nt":
+        return str(ROOT_DIR / "state" / Path(*parts))
+    return str(Path("/opt/brp/shared/runtime", *parts))
+
+
+DEFAULT_JOB_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", _default_runtime_path("jobs")))
+DEFAULT_OUTPUT_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", _default_runtime_path("traffic_samples")))
 DEFAULT_SLEEP_SECONDS = float(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_SLEEP_SECONDS", "0.45") or 0.45)
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_TIMEOUT_SECONDS", "20") or 20)
 DEFAULT_STRATEGY = os.environ.get("BRP_LIVE_TRAFFIC_AMAP_STRATEGY", "4").strip() or "4"
-DEFAULT_SIDE_TOOLS_DIR = Path(os.environ.get("BRP_SIDE_TOOLS_DIR", "/opt/brp/shared/runtime/side_tools"))
-DEFAULT_BASELINE_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_BASELINE_DIR", "/opt/brp/shared/runtime/traffic_baselines"))
+DEFAULT_SIDE_TOOLS_DIR = Path(os.environ.get("BRP_SIDE_TOOLS_DIR", _default_runtime_path("side_tools")))
+DEFAULT_BASELINE_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_BASELINE_DIR", _default_runtime_path("traffic_baselines")))
 DEFAULT_TZ = ZoneInfo(os.environ.get("BRP_LIVE_TRAFFIC_TIMEZONE", "Asia/Shanghai") or "Asia/Shanghai")
 DEFAULT_DEPARTURE_MULTIPLIER = float(os.environ.get("BRP_LIVE_TRAFFIC_DEPARTURE_MULTIPLIER", "1.84") or 1.84)
 DEFAULT_DUE_WINDOW_MINUTES = int(os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_DUE_WINDOW_MINUTES", "5") or 5)

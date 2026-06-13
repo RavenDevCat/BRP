@@ -29,6 +29,7 @@ import requests
 
 
 BASE_DIR = Path(__file__).resolve().parent
+ROOT_DIR = BASE_DIR.parent.parent
 LEGACY_PLANNER_PATH = BASE_DIR / "BusingProblem.py"
 OUTPUT_DIR = BASE_DIR / "outputs"
 CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
@@ -36,8 +37,16 @@ PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"
 TRAFFIC_CALIBRATION_CACHE_PATH = CACHE_DIR / "traffic_calibration_cache.json"
+
+
+def _default_runtime_path(*parts: str) -> str:
+    if os.name == "nt":
+        return str(ROOT_DIR / "state" / Path(*parts))
+    return str(Path("/opt/brp/shared/runtime", *parts))
+
+
 LIVE_TRAFFIC_SAMPLE_DIR = Path(
-    os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "/opt/brp/shared/runtime/traffic_samples")
+    os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", _default_runtime_path("traffic_samples"))
 ).expanduser()
 LIVE_TRAFFIC_ROLLING_WORKDAYS = max(
     1,

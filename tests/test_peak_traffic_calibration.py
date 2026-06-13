@@ -174,6 +174,94 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.9)
         self.assertEqual(result["route_sample_count"], 21)
 
+    def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "seoul_mon.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-15T06:00:00+09:00",
+                        "local_date": "2026-06-15",
+                        "sample_date": "2026-06-15",
+                        "sample_weekday": "mon",
+                        "period": "am_peak",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "provider": "google_routes",
+                        "dry_run": False,
+                        "route_count": 23,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_api_duration_s": 1600.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (sample_dir / "seoul_tue.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-15T06:05:00+09:00",
+                        "local_date": "2026-06-16",
+                        "sample_date": "2026-06-16",
+                        "sample_weekday": "tue",
+                        "period": "am_peak",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "provider": "google_routes",
+                        "dry_run": False,
+                        "route_count": 23,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_api_duration_s": 3000.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = planner_core.summarize_live_traffic_samples(
+                service_direction="To School",
+                input_records=[{"country": "South Korea", "city": "Seoul", "address": "School"}],
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 15, 8, 30, tzinfo=ZoneInfo("Asia/Seoul")),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["period"], "am_peak")
+        self.assertEqual(result["providers"], ["google_routes"])
+        self.assertEqual(result["sample_weekday"], "mon")
+        self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.6)
+
+    def test_live_traffic_sample_keeps_korea_weekday_profile_available_on_weekends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "seoul_next_mon.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-13T08:00:00+09:00",
+                        "local_date": "2026-06-15",
+                        "sample_date": "2026-06-15",
+                        "sample_weekday": "mon",
+                        "period": "pm_peak",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "provider": "google_routes",
+                        "dry_run": False,
+                        "route_count": 23,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_api_duration_s": 1700.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = planner_core.summarize_live_traffic_samples(
+                service_direction="From School",
+                input_records=[{"country": "South Korea", "city": "Seoul", "address": "School"}],
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 13, 10, 0, tzinfo=ZoneInfo("Asia/Seoul")),
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["period"], "pm_peak")
+        self.assertEqual(result["sample_weekday"], "mon")
+        self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.7)
+
 
 if __name__ == "__main__":
     unittest.main()

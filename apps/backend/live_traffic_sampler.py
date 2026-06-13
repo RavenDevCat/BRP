@@ -6,7 +6,7 @@ import os
 import statistics
 import sys
 import time
-from datetime import datetime, time as dt_time, timedelta
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -17,6 +17,10 @@ import BusingProblem as planner
 
 
 AMAP_DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving"
+GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
+GOOGLE_ROUTES_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration,routes.legs.distanceMeters"
+GOOGLE_ROUTES_PROVIDER = "google_routes"
+
 DEFAULT_JOB_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", "/opt/brp/shared/runtime/jobs"))
 DEFAULT_OUTPUT_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "/opt/brp/shared/runtime/traffic_samples"))
 DEFAULT_SLEEP_SECONDS = float(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_SLEEP_SECONDS", "0.45") or 0.45)
@@ -29,10 +33,190 @@ DEFAULT_DEPARTURE_MULTIPLIER = float(os.environ.get("BRP_LIVE_TRAFFIC_DEPARTURE_
 DEFAULT_DUE_WINDOW_MINUTES = int(os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_DUE_WINDOW_MINUTES", "5") or 5)
 DEFAULT_ROUTE_START_TIMES_PATH = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_PATH", "").strip()
 DEFAULT_ROUTE_START_TIMES_JSON = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_JSON", "").strip()
+DEFAULT_PROVIDER = os.environ.get("BRP_LIVE_TRAFFIC_PROVIDER", "auto").strip().lower() or "auto"
+DEFAULT_GOOGLE_ROUTES_USAGE_PATH = Path(
+    os.environ.get("BRP_GOOGLE_ROUTES_USAGE_PATH", str(DEFAULT_OUTPUT_DIR.parent / "google_routes_usage.json"))
+).expanduser()
+GOOGLE_ROUTES_API_KEY = (
+    os.environ.get("GOOGLE_ROUTES_API_KEY", "").strip()
+    or os.environ.get("GOOGLE_GEOCODE_API_KEY", "").strip()
+)
+GOOGLE_ROUTES_MONTHLY_SAFETY_CAP = max(
+    0,
+    int(os.environ.get("BRP_GOOGLE_ROUTES_MONTHLY_SAFETY_CAP", "4000") or 0),
+)
+GOOGLE_ROUTES_DAILY_CAP = max(
+    0,
+    int(os.environ.get("BRP_GOOGLE_ROUTES_DAILY_CAP", "250") or 0),
+)
+GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH = max(
+    0,
+    int(os.environ.get("BRP_GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH", "250") or 0),
+)
+GOOGLE_ROUTES_MAX_INTERMEDIATES = max(
+    0,
+    int(os.environ.get("BRP_GOOGLE_ROUTES_MAX_INTERMEDIATES", "25") or 25),
+)
+GOOGLE_ROUTES_ROUTING_PREFERENCE = (
+    os.environ.get("BRP_GOOGLE_ROUTES_ROUTING_PREFERENCE", "TRAFFIC_AWARE").strip().upper()
+    or "TRAFFIC_AWARE"
+)
+GOOGLE_ROUTES_EXTRA_COMPUTATIONS = [
+    item.strip().upper()
+    for item in os.environ.get("BRP_GOOGLE_ROUTES_EXTRA_COMPUTATIONS", "").split(",")
+    if item.strip()
+]
+WEEKDAY_LABELS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
 
 
 def _coord(point: dict[str, Any]) -> str:
     return f"{float(point['lng']):.6f},{float(point['lat']):.6f}"
+
+
+def _provider_for_args(args: argparse.Namespace) -> str:
+    provider = str(getattr(args, "provider", "auto") or "auto").strip().lower()
+    if provider != "auto":
+        return provider
+    market = str(getattr(args, "market", "") or "").strip().upper()
+    city = str(getattr(args, "city", "") or "").strip().upper()
+    if market in {"KR", "KOREA", "SOUTH_KOREA", "SOUTH KOREA"} or city in {"SEOUL", "SEONGNAM", "INCHEON"}:
+        return GOOGLE_ROUTES_PROVIDER
+    return "amap"
+
+
+def _parse_sample_date(value: str | None, *, now: datetime) -> date:
+    raw = str(value or "").strip()
+    if not raw:
+        return now.date()
+    return datetime.strptime(raw, "%Y-%m-%d").date()
+
+
+def _combine_sample_date(clock: dt_time, *, sample_date: date, tz: ZoneInfo) -> datetime:
+    return datetime.combine(sample_date, clock, tzinfo=tz)
+
+
+def _weekday_label(value: date | datetime) -> str:
+    return WEEKDAY_LABELS[value.weekday()]
+
+
+def _parse_google_duration_seconds(value: Any) -> float:
+    raw = str(value or "").strip()
+    if not raw:
+        return 0.0
+    if raw.endswith("s"):
+        raw = raw[:-1]
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.0
+
+
+def _google_routes_lat_lng(point: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "location": {
+            "latLng": {
+                "latitude": float(point["lat"]),
+                "longitude": float(point["lng"]),
+            }
+        }
+    }
+
+
+def _google_routes_departure_time(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        if path.exists():
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                return payload
+    except Exception:
+        return {}
+    return {}
+
+
+def _save_json_object(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _google_routes_usage_keys(now: datetime) -> tuple[str, str]:
+    local_now = now.astimezone(DEFAULT_TZ)
+    return local_now.strftime("%Y-%m"), local_now.date().isoformat()
+
+
+def _usage_bucket(payload: dict[str, Any], key: str) -> dict[str, Any]:
+    bucket = payload.setdefault(key, {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        payload[key] = bucket
+    return bucket
+
+
+def _usage_count(bucket: dict[str, Any]) -> int:
+    return int(bucket.get("attempted", bucket.get("used", 0)) or 0)
+
+
+def _reserve_google_routes_usage(args: argparse.Namespace, count: int, *, now: datetime) -> None:
+    if count <= 0 or bool(getattr(args, "dry_run", False)):
+        return
+    monthly_cap = int(getattr(args, "google_routes_monthly_safety_cap", GOOGLE_ROUTES_MONTHLY_SAFETY_CAP) or 0)
+    daily_cap = int(getattr(args, "google_routes_daily_cap", GOOGLE_ROUTES_DAILY_CAP) or 0)
+    if monthly_cap <= 0 or daily_cap <= 0:
+        raise RuntimeError("Google Routes usage cap is disabled; refusing live API call")
+    path = Path(getattr(args, "google_routes_usage_path", DEFAULT_GOOGLE_ROUTES_USAGE_PATH)).expanduser()
+    payload = _load_json_object(path)
+    month_key, day_key = _google_routes_usage_keys(now)
+    month_bucket = _usage_bucket(payload, month_key)
+    day_bucket = _usage_bucket(payload, day_key)
+    month_used = _usage_count(month_bucket)
+    day_used = _usage_count(day_bucket)
+    if month_used + count > monthly_cap:
+        raise RuntimeError(
+            f"Google Routes monthly safety cap would be exceeded: {month_used}+{count}>{monthly_cap}"
+        )
+    if day_used + count > daily_cap:
+        raise RuntimeError(
+            f"Google Routes daily cap would be exceeded: {day_used}+{count}>{daily_cap}"
+        )
+    for bucket in (month_bucket, day_bucket):
+        bucket["attempted"] = _usage_count(bucket) + count
+        bucket["provider"] = GOOGLE_ROUTES_PROVIDER
+        bucket["sku_estimate"] = "routes_compute_routes_pro"
+        bucket["updated_at"] = now.isoformat(timespec="seconds")
+    _save_json_object(path, payload)
+
+
+def _mark_google_routes_usage_result(args: argparse.Namespace, *, now: datetime, succeeded: bool) -> None:
+    if bool(getattr(args, "dry_run", False)):
+        return
+    path = Path(getattr(args, "google_routes_usage_path", DEFAULT_GOOGLE_ROUTES_USAGE_PATH)).expanduser()
+    payload = _load_json_object(path)
+    month_key, day_key = _google_routes_usage_keys(now)
+    for key in (month_key, day_key):
+        bucket = _usage_bucket(payload, key)
+        result_key = "succeeded" if succeeded else "failed"
+        bucket[result_key] = int(bucket.get(result_key, 0) or 0) + 1
+        bucket["updated_at"] = now.isoformat(timespec="seconds")
+    _save_json_object(path, payload)
+
+
+def _google_routes_chunk_points(route_points: list[dict[str, Any]], max_intermediates: int) -> list[list[dict[str, Any]]]:
+    max_points = max(2, int(max_intermediates) + 2)
+    if len(route_points) <= max_points:
+        return [route_points]
+    chunks: list[list[dict[str, Any]]] = []
+    start = 0
+    while start < len(route_points) - 1:
+        end = min(len(route_points), start + max_points)
+        chunks.append(route_points[start:end])
+        start = end - 1
+    return chunks
 
 
 def _raw_osrm_seconds(route: dict[str, Any]) -> float:
@@ -302,7 +486,7 @@ def _call_amap_route(
     *,
     strategy: str,
     timeout_seconds: int,
-) -> tuple[float, float]:
+) -> dict[str, Any]:
     params = {
         "key": planner.AMAP_KEY,
         "origin": _coord(route_points[0]),
@@ -325,23 +509,149 @@ def _call_amap_route(
     if not paths:
         raise RuntimeError("AMap returned no paths")
     path = paths[0]
-    return float(path.get("duration", 0.0) or 0.0), float(path.get("distance", 0.0) or 0.0)
+    duration_s = float(path.get("duration", 0.0) or 0.0)
+    distance_m = float(path.get("distance", 0.0) or 0.0)
+    return {
+        "provider": "amap",
+        "api": AMAP_DIRECTION_URL,
+        "api_duration_s": duration_s,
+        "api_distance_m": distance_m,
+        "amap_duration_s": duration_s,
+        "amap_distance_m": distance_m,
+        "api_call_count": 1,
+        "chunk_count": 1,
+    }
+
+
+def _call_google_routes_chunk(
+    chunk_points: list[dict[str, Any]],
+    *,
+    departure_time: datetime | None,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    if not GOOGLE_ROUTES_API_KEY:
+        raise RuntimeError("GOOGLE_ROUTES_API_KEY or GOOGLE_GEOCODE_API_KEY is required for Google Routes traffic sampling")
+    body: dict[str, Any] = {
+        "origin": _google_routes_lat_lng(chunk_points[0]),
+        "destination": _google_routes_lat_lng(chunk_points[-1]),
+        "travelMode": "DRIVE",
+        "routingPreference": GOOGLE_ROUTES_ROUTING_PREFERENCE,
+        "computeAlternativeRoutes": False,
+        "languageCode": "en-US",
+        "units": "METRIC",
+    }
+    if len(chunk_points) > 2:
+        body["intermediates"] = [_google_routes_lat_lng(point) for point in chunk_points[1:-1]]
+    departure = _google_routes_departure_time(departure_time)
+    if departure:
+        body["departureTime"] = departure
+    if GOOGLE_ROUTES_EXTRA_COMPUTATIONS:
+        body["extraComputations"] = GOOGLE_ROUTES_EXTRA_COMPUTATIONS
+    response = requests.post(
+        GOOGLE_ROUTES_URL,
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": GOOGLE_ROUTES_API_KEY,
+            "X-Goog-FieldMask": GOOGLE_ROUTES_FIELD_MASK,
+        },
+        json=body,
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    routes = list(payload.get("routes") or [])
+    if not routes:
+        raise RuntimeError("Google Routes returned no routes")
+    route = routes[0]
+    duration_s = _parse_google_duration_seconds(route.get("duration"))
+    distance_m = float(route.get("distanceMeters", 0.0) or 0.0)
+    if duration_s <= 0:
+        raise RuntimeError("Google Routes returned no usable duration")
+    return {"duration_s": duration_s, "distance_m": distance_m}
+
+
+def _call_google_routes(
+    args: argparse.Namespace,
+    route_points: list[dict[str, Any]],
+    *,
+    departure_time: datetime | None,
+    now: datetime,
+) -> dict[str, Any]:
+    chunks = _google_routes_chunk_points(route_points, int(args.google_routes_max_intermediates))
+    if len(chunks) > int(args.google_routes_max_calls_per_refresh):
+        raise RuntimeError(
+            f"Google Routes chunk count {len(chunks)} exceeds max calls per refresh {args.google_routes_max_calls_per_refresh}"
+        )
+    total_duration_s = 0.0
+    total_distance_m = 0.0
+    for chunk in chunks:
+        _reserve_google_routes_usage(args, 1, now=now)
+        try:
+            result = _call_google_routes_chunk(
+                chunk,
+                departure_time=departure_time,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except Exception:
+            _mark_google_routes_usage_result(args, now=now, succeeded=False)
+            raise
+        _mark_google_routes_usage_result(args, now=now, succeeded=True)
+        total_duration_s += float(result["duration_s"])
+        total_distance_m += float(result["distance_m"])
+        time.sleep(args.sleep_seconds)
+    return {
+        "provider": GOOGLE_ROUTES_PROVIDER,
+        "api": GOOGLE_ROUTES_URL,
+        "api_duration_s": total_duration_s,
+        "api_distance_m": total_distance_m,
+        "google_routes_duration_s": total_duration_s,
+        "google_routes_distance_m": total_distance_m,
+        "api_call_count": len(chunks),
+        "chunk_count": len(chunks),
+        "routing_preference": GOOGLE_ROUTES_ROUTING_PREFERENCE,
+        "sku_estimate": "routes_compute_routes_pro",
+    }
+
+
+def _traffic_duration_fields(row: dict[str, Any]) -> tuple[float, float]:
+    osrm = float(row.get("osrm_duration_s", 0.0) or 0.0)
+    api_duration = row.get("api_duration_s")
+    if api_duration is None:
+        api_duration = row.get("amap_duration_s")
+    return osrm, float(api_duration or 0.0)
 
 
 def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    total_osrm = sum(float(row["osrm_duration_s"]) for row in rows)
-    total_amap = sum(float(row["amap_duration_s"]) for row in rows)
+    total_osrm = 0.0
+    total_api = 0.0
     factors = [float(row["factor"]) for row in rows]
-    return {
+    api_calls = 0
+    providers: set[str] = set()
+    for row in rows:
+        osrm, api_duration = _traffic_duration_fields(row)
+        total_osrm += osrm
+        total_api += api_duration
+        api_calls += int(row.get("api_call_count", 1) or 0)
+        provider = str(row.get("provider", "") or "").strip()
+        if provider:
+            providers.add(provider)
+    summary = {
         "route_count": len(rows),
+        "api_call_count": api_calls,
+        "providers": sorted(providers),
         "total_osrm_duration_s": total_osrm,
-        "total_amap_duration_s": total_amap,
-        "weighted_factor": (total_amap / total_osrm) if total_osrm else None,
+        "total_api_duration_s": total_api,
+        "weighted_factor": (total_api / total_osrm) if total_osrm else None,
         "median_factor": statistics.median(factors) if factors else None,
         "mean_factor": statistics.mean(factors) if factors else None,
         "min_factor": min(factors) if factors else None,
         "max_factor": max(factors) if factors else None,
     }
+    if any("amap_duration_s" in row for row in rows):
+        summary["total_amap_duration_s"] = sum(float(row.get("amap_duration_s", 0.0) or 0.0) for row in rows)
+    if any("google_routes_duration_s" in row for row in rows):
+        summary["total_google_routes_duration_s"] = sum(float(row.get("google_routes_duration_s", 0.0) or 0.0) for row in rows)
+    return summary
 
 
 def _route_sampling_schedule(
@@ -384,68 +694,155 @@ def _route_sampling_schedule(
     }
 
 
+def _country_for_market(market: str) -> str:
+    normalized = str(market or "").strip().upper().replace("_", " ")
+    if normalized in {"KR", "KOREA", "SOUTH KOREA"}:
+        return "South Korea"
+    if normalized in {"CN", "CHINA"}:
+        return "China"
+    return normalized.title() if normalized else ""
+
+
+def _planned_departure_from_schedule(schedule: dict[str, Any]) -> datetime | None:
+    raw = str(schedule.get("planned_departure_local_time") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def _dry_run_provider_result(
+    provider: str,
+    route: dict[str, Any],
+    route_points: list[dict[str, Any]],
+    osrm_s: float,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    distance_m = float(route.get("distance_m", 0.0) or 0.0)
+    if provider == GOOGLE_ROUTES_PROVIDER:
+        chunks = _google_routes_chunk_points(route_points, int(args.google_routes_max_intermediates))
+        return {
+            "provider": GOOGLE_ROUTES_PROVIDER,
+            "api": GOOGLE_ROUTES_URL,
+            "api_duration_s": osrm_s,
+            "api_distance_m": distance_m,
+            "google_routes_duration_s": osrm_s,
+            "google_routes_distance_m": distance_m,
+            "api_call_count": len(chunks),
+            "chunk_count": len(chunks),
+            "routing_preference": GOOGLE_ROUTES_ROUTING_PREFERENCE,
+            "sku_estimate": "routes_compute_routes_pro",
+        }
+    return {
+        "provider": "amap",
+        "api": AMAP_DIRECTION_URL,
+        "api_duration_s": osrm_s,
+        "api_distance_m": distance_m,
+        "amap_duration_s": osrm_s,
+        "amap_distance_m": distance_m,
+        "api_call_count": 1,
+        "chunk_count": 1,
+    }
+
+
 def run_sample(args: argparse.Namespace) -> dict[str, Any]:
     _source_payload, source_metadata, points, routes = _load_source(args)
     if not points or not routes:
         raise ValueError(f"Source {source_metadata.get('source_id')} does not have points/routes")
 
+    provider = _provider_for_args(args)
     route_rows: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
-    now = datetime.now(DEFAULT_TZ)
+    measured_at = datetime.now(DEFAULT_TZ)
+    sample_date = _parse_sample_date(getattr(args, "sample_date", ""), now=measured_at)
+    schedule_now = _combine_sample_date(measured_at.time().replace(microsecond=0), sample_date=sample_date, tz=DEFAULT_TZ)
     route_start_times = _load_route_start_times(args)
     if args.now_local_time:
-        now = _combine_today(_parse_clock(args.now_local_time), now=now)
+        schedule_now = _combine_sample_date(_parse_clock(args.now_local_time), sample_date=sample_date, tz=DEFAULT_TZ)
+
+    candidates: list[tuple[dict[str, Any], str, int, float, dict[str, Any], list[dict[str, Any]]]] = []
     for route in routes:
         route_id = str(route.get("route_id") or route.get("vehicle_id") or "").strip()
         stop_count = len(route.get("nodes") or [])
         osrm_s = _raw_osrm_seconds(route)
         if stop_count < 2 or osrm_s <= 0:
             continue
-        schedule = _route_sampling_schedule(args, route, osrm_s, now, route_start_times)
+        schedule = _route_sampling_schedule(args, route, osrm_s, schedule_now, route_start_times)
         if not schedule["due_for_sample"]:
             continue
         route_points = _route_points(points, route)
+        candidates.append((route, route_id, stop_count, osrm_s, schedule, route_points))
+
+    if provider == GOOGLE_ROUTES_PROVIDER:
+        estimated_calls = sum(
+            len(_google_routes_chunk_points(route_points, int(args.google_routes_max_intermediates)))
+            for *_prefix, route_points in candidates
+        )
+        if estimated_calls > int(args.google_routes_max_calls_per_refresh):
+            raise RuntimeError(
+                f"Google Routes refresh would use {estimated_calls} call(s), above cap {args.google_routes_max_calls_per_refresh}"
+            )
+
+    for route, route_id, stop_count, osrm_s, schedule, route_points in candidates:
         if args.dry_run:
-            amap_s = osrm_s
-            amap_distance_m = float(route.get("distance_m", 0.0) or 0.0)
+            provider_result = _dry_run_provider_result(provider, route, route_points, osrm_s, args)
         else:
             try:
-                amap_s, amap_distance_m = _call_amap_route(
-                    route_points,
-                    strategy=args.strategy,
-                    timeout_seconds=args.timeout_seconds,
-                )
+                if provider == GOOGLE_ROUTES_PROVIDER:
+                    provider_result = _call_google_routes(
+                        args,
+                        route_points,
+                        departure_time=_planned_departure_from_schedule(schedule),
+                        now=measured_at,
+                    )
+                elif provider == "amap":
+                    provider_result = _call_amap_route(
+                        route_points,
+                        strategy=args.strategy,
+                        timeout_seconds=args.timeout_seconds,
+                    )
+                    time.sleep(args.sleep_seconds)
+                else:
+                    raise RuntimeError(f"Unsupported live traffic provider: {provider}")
             except Exception as exc:
-                errors.append({"route_id": route_id, "error": str(exc)})
+                errors.append({"route_id": route_id, "provider": provider, "error": str(exc)})
                 print(f"ERROR {route_id}: {exc}", file=sys.stderr)
                 time.sleep(args.sleep_seconds)
                 continue
-            time.sleep(args.sleep_seconds)
-        factor = amap_s / osrm_s
-        route_rows.append(
-            {
-                "job_id": args.job_id,
-                "source": source_metadata.get("source"),
-                "source_id": source_metadata.get("source_id"),
-                "period": args.period,
-                "market": args.market,
-                "city": args.city,
-                "service_direction": source_metadata.get("service_direction"),
-                "route_id": route_id,
-                "vehicle_id": route.get("vehicle_id"),
-                "stop_count": stop_count,
-                "osrm_duration_s": osrm_s,
-                "amap_duration_s": amap_s,
-                "amap_distance_m": amap_distance_m,
-                "factor": factor,
-                **schedule,
-            }
+        api_s = float(provider_result.get("api_duration_s", 0.0) or 0.0)
+        factor = api_s / osrm_s if osrm_s else 0.0
+        row = {
+            "job_id": args.job_id,
+            "source": source_metadata.get("source"),
+            "source_id": source_metadata.get("source_id"),
+            "period": args.period,
+            "market": args.market,
+            "country": _country_for_market(args.market),
+            "city": args.city,
+            "service_direction": source_metadata.get("service_direction"),
+            "sample_date": sample_date.isoformat(),
+            "sample_weekday": _weekday_label(sample_date),
+            "route_id": route_id,
+            "vehicle_id": route.get("vehicle_id"),
+            "stop_count": stop_count,
+            "osrm_duration_s": osrm_s,
+            "factor": factor,
+            **provider_result,
+            **schedule,
+        }
+        route_rows.append(row)
+        print(
+            f"{route_id}: provider={provider_result.get('provider')} stops={stop_count} "
+            f"osrm={osrm_s:.0f}s api={api_s:.0f}s factor={factor:.3f}"
         )
-        print(f"{route_id}: stops={stop_count} osrm={osrm_s:.0f}s amap={amap_s:.0f}s factor={factor:.3f}")
 
     summary = {
-        "measured_at": now.isoformat(timespec="seconds"),
-        "local_date": now.date().isoformat(),
+        "measured_at": measured_at.isoformat(timespec="seconds"),
+        "local_date": sample_date.isoformat(),
+        "sample_date": sample_date.isoformat(),
+        "sample_weekday": _weekday_label(sample_date),
         "job_id": args.job_id,
         "run_id": args.run_id,
         "source": source_metadata.get("source"),
@@ -453,8 +850,10 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         "source_title": source_metadata.get("title"),
         "period": args.period,
         "market": args.market,
+        "country": _country_for_market(args.market),
         "city": args.city,
         "service_direction": source_metadata.get("service_direction"),
+        "provider": provider,
         "target_arrival_local_time": args.target_arrival_local_time,
         "departure_local_time": args.departure_local_time,
         "departure_multiplier": args.departure_multiplier,
@@ -462,8 +861,9 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         "route_start_time_count": len(route_start_times),
         "sample_due_routes_only": bool(args.sample_due_routes_only),
         "route_due_window_minutes": args.route_due_window_minutes,
-        "api": AMAP_DIRECTION_URL,
-        "strategy": args.strategy,
+        "api": GOOGLE_ROUTES_URL if provider == GOOGLE_ROUTES_PROVIDER else AMAP_DIRECTION_URL,
+        "strategy": args.strategy if provider == "amap" else None,
+        "routing_preference": GOOGLE_ROUTES_ROUTING_PREFERENCE if provider == GOOGLE_ROUTES_PROVIDER else None,
         "dry_run": bool(args.dry_run),
         "error_count": len(errors),
         **_summarize(route_rows),
@@ -474,12 +874,14 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Sample live AMap driving durations for a current-plan job.")
+    parser = argparse.ArgumentParser(description="Sample live traffic route durations for a current-plan job.")
     parser.add_argument("--source", choices=("route_audit_job", "fleet_planner", "baseline_json"), default="route_audit_job")
     parser.add_argument("--job-id", default="")
     parser.add_argument("--run-id", default="")
     parser.add_argument("--baseline-path", default="")
     parser.add_argument("--period", required=True, choices=("am_peak", "pm_peak", "off_peak"))
+    parser.add_argument("--provider", choices=("auto", "amap", GOOGLE_ROUTES_PROVIDER), default=DEFAULT_PROVIDER)
+    parser.add_argument("--sample-date", default=os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DATE", ""))
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--side-tools-dir", type=Path, default=DEFAULT_SIDE_TOOLS_DIR)
     parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR)
@@ -495,6 +897,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--route-due-window-minutes", type=int, default=DEFAULT_DUE_WINDOW_MINUTES)
     parser.add_argument("--now-local-time", default="")
     parser.add_argument("--strategy", default=DEFAULT_STRATEGY)
+    parser.add_argument("--google-routes-usage-path", type=Path, default=DEFAULT_GOOGLE_ROUTES_USAGE_PATH)
+    parser.add_argument("--google-routes-monthly-safety-cap", type=int, default=GOOGLE_ROUTES_MONTHLY_SAFETY_CAP)
+    parser.add_argument("--google-routes-daily-cap", type=int, default=GOOGLE_ROUTES_DAILY_CAP)
+    parser.add_argument("--google-routes-max-calls-per-refresh", type=int, default=GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH)
+    parser.add_argument("--google-routes-max-intermediates", type=int, default=GOOGLE_ROUTES_MAX_INTERMEDIATES)
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--dry-run", action="store_true")
@@ -517,8 +924,11 @@ def main() -> None:
         return
     args.output_dir.mkdir(parents=True, exist_ok=True)
     source_id = summary.get("source_id") or args.job_id or args.run_id
+    provider = str(summary.get("provider") or "traffic")
+    weekday = str(summary.get("sample_weekday") or "")
+    weekday_part = f"_{weekday}" if weekday else ""
     filename = (
-        f"{summary['city']}_{summary['period']}_{summary['service_direction']}_"
+        f"{summary['city']}_{summary['period']}{weekday_part}_{summary['service_direction']}_{provider}_"
         f"{source_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
     output_path = args.output_dir / filename.replace(" ", "_").lower()
@@ -538,7 +948,11 @@ def main() -> None:
                     "market",
                     "city",
                     "service_direction",
+                    "provider",
+                    "sample_date",
+                    "sample_weekday",
                     "route_count",
+                    "api_call_count",
                     "error_count",
                     "weighted_factor",
                     "median_factor",

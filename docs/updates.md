@@ -22,6 +22,21 @@ It is not a code changelog. Record changes here when users or operators should k
 - These warnings are informational quality checks: they do not block solving, delete cache entries, auto-correct coordinates, or treat normal cross-district travel inside a large city as an error.
 - Existing completed jobs are immutable snapshots. Rerun an audit to generate the new address-review warnings under the updated backend logic.
 
+### KR Weekday Traffic Profile Refresh
+
+- Live traffic sampling now supports `google_routes` in addition to the existing
+  AMap route API, with generic `total_api_duration_s` sample summaries so the
+  planner can consume either provider.
+- South Korea/KR traffic profiles are designed as Google Routes predicted
+  Monday-Friday profiles from stable baseline JSON exports, not daily realtime
+  live timers.
+- Google Routes calls are guarded by independent monthly, daily, and per-refresh
+  caps plus a persistent usage counter separate from the Google geocode counter.
+- Added Linux/staging and Windows/KR wrappers for refreshing KR weekday profiles.
+- KR weekday samples are matched by weekday during the workweek; weekend opens
+  keep the latest weekday profile available for review instead of filtering all
+  profiles out.
+
 ## 2026-06-12
 
 ### Route Audit Result Workspace Consolidated

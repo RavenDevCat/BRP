@@ -46,6 +46,7 @@ tmp/            Ignored scratch area
   - `AMAP_API_KEY`
   - `KAKAO_REST_API_KEY`
   - `GOOGLE_GEOCODE_API_KEY`
+  - `GOOGLE_ROUTES_API_KEY`
   - `DEEPSEEK_API_KEY`
 
 For local or server-specific values, copy `ops/env/example.env` to
@@ -145,6 +146,7 @@ Important runtime files to preserve during server moves:
 - generated map/report outputs
 - server-local env files
 - Google geocode usage counter
+- Google Routes traffic-profile usage counter
 - provider rate-limit state
 
 ## OSRM Data
@@ -168,6 +170,37 @@ south-korea/
 Only deploy the regions that a server actually serves. See
 `docs/deployment-overview.md` for the multi-region and South Korea-only startup
 patterns.
+
+## Traffic Profile Sampling
+
+BRP supports two traffic-profile sampling modes:
+
+- CN traffic sampling uses AMap driving routes against saved current-plan jobs
+  or baseline JSON. The existing AM/PM timers are intended for workday peak
+  windows.
+- KR traffic sampling uses Google Routes predicted traffic against stable
+  baseline JSON exports. It refreshes Monday-Friday profiles as a batch rather
+  than running a daily realtime timer.
+
+Useful checked-in wrappers:
+
+```bash
+# CN/general sampler
+ops/scripts/run_live_traffic_sampler.sh am_peak
+
+# KR profile refresh on Linux/staging
+ops/scripts/run_live_traffic_kr_weekday_profile.sh both --dry-run
+```
+
+KR production uses the Windows PowerShell wrapper:
+
+```powershell
+.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period both -DryRun
+```
+
+Google Routes profile calls are guarded by `BRP_GOOGLE_ROUTES_*` caps and a
+persistent `BRP_GOOGLE_ROUTES_USAGE_PATH` counter. Do not reset that counter
+during deployment.
 
 ## Documentation
 

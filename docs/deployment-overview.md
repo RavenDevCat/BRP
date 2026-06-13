@@ -132,6 +132,7 @@ Set these before starting the backend/frontend services:
 export AMAP_API_KEY="..."
 export KAKAO_REST_API_KEY="..."
 export GOOGLE_GEOCODE_API_KEY="..."
+export GOOGLE_ROUTES_API_KEY="..."
 export DEEPSEEK_API_KEY="..."
 ```
 
@@ -167,6 +168,47 @@ AI Audit calls use the same limiter family:
 ```bash
 export BRP_DEEPSEEK_MAX_QPS="1.0"
 ```
+
+### KR Google Routes traffic profile
+
+The South Korea deployment can refresh weekday traffic profiles with Google
+Routes predicted traffic. This is separate from the Google geocode usage
+counter and should use its own persistent usage file.
+
+Recommended defaults:
+
+```bash
+export BRP_LIVE_TRAFFIC_KR_SOURCE="baseline_json"
+export BRP_LIVE_TRAFFIC_KR_PROVIDER="google_routes"
+export BRP_LIVE_TRAFFIC_KR_MARKET="KR"
+export BRP_LIVE_TRAFFIC_KR_CITY="Seoul"
+export BRP_LIVE_TRAFFIC_KR_TIMEZONE="Asia/Seoul"
+export BRP_LIVE_TRAFFIC_KR_BASELINE_DIR="/srv/brp/runtime/traffic_baselines"
+export BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH="..."
+export BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH="..."
+export BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME="08:00"
+export BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME="15:40"
+export BRP_GOOGLE_ROUTES_USAGE_PATH="/srv/brp/runtime/google_routes_usage.json"
+export BRP_GOOGLE_ROUTES_MONTHLY_SAFETY_CAP="4000"
+export BRP_GOOGLE_ROUTES_DAILY_CAP="250"
+export BRP_GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH="250"
+```
+
+Linux/staging validation:
+
+```bash
+ops/scripts/run_live_traffic_kr_weekday_profile.sh both --dry-run
+```
+
+KR production Windows wrapper:
+
+```powershell
+.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period both -DryRun
+```
+
+Do not schedule the KR profile refresh until both To School and From School
+baseline JSON paths are configured and a dry-run confirms the expected call
+count.
 
 ### OSRM data and bind settings
 

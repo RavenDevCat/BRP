@@ -35,6 +35,10 @@ Codex session, then ask the operator for the current handoff.
   artifact for production targets.
 - Preserve runtime data and server-local env files unless the user explicitly
   asks for a cleanup.
+- KR traffic profile refresh is not the CN AMap live timer. It uses Google
+  Routes predicted weekday samples through the checked-in KR traffic profile
+  wrappers, and it keeps a separate Google Routes usage counter that must be
+  preserved with runtime state.
 
 ## Repository Hygiene
 

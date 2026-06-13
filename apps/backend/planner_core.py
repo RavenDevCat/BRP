@@ -389,6 +389,16 @@ def live_traffic_period_for_service_direction(service_direction: str | None) -> 
     return None
 
 
+def _traffic_timezone(country: str) -> ZoneInfo:
+    if country == "SOUTH KOREA":
+        return ZoneInfo("Asia/Seoul")
+    return AMAP_TRAFFIC_CALIBRATION_TZ
+
+
+def _traffic_weekday_label(value: datetime) -> str:
+    return ["mon", "tue", "wed", "thu", "fri", "sat", "sun"][value.weekday()]
+
+
 def _parse_live_sample_datetime(value: Any) -> datetime | None:
     raw = str(value or "").strip()
     if not raw:
@@ -418,13 +428,15 @@ def _matching_live_traffic_samples(
     sample_dir: Path | None = None,
     now: datetime | None = None,
 ) -> list[dict[str, Any]]:
-    if country != "CHINA" or not city:
+    if country not in {"CHINA", "SOUTH KOREA"} or not city:
         return []
     directory = sample_dir or LIVE_TRAFFIC_SAMPLE_DIR
     if not directory.exists():
         return []
-    now = now or datetime.now(AMAP_TRAFFIC_CALIBRATION_TZ)
+    tz = _traffic_timezone(country)
+    now = (now or datetime.now(tz)).astimezone(tz)
     cutoff = now - timedelta(days=LIVE_TRAFFIC_MAX_AGE_DAYS)
+    expected_weekday = _traffic_weekday_label(now)
     matches: list[dict[str, Any]] = []
     for path in sorted(directory.glob("*.json")):
         payload = _load_live_traffic_sample(path)
@@ -436,18 +448,35 @@ def _matching_live_traffic_samples(
             continue
         if str(payload.get("city", "")).strip().upper() != city:
             continue
+        payload_country = _normalize_location_value(str(payload.get("country") or ""))
+        if payload_country and payload_country != country:
+            continue
+        sample_weekday = str(payload.get("sample_weekday") or "").strip().lower()
+        if (
+            country == "SOUTH KOREA"
+            and expected_weekday in {"mon", "tue", "wed", "thu", "fri"}
+            and sample_weekday
+            and sample_weekday != expected_weekday
+        ):
+            continue
         measured_at = _parse_live_sample_datetime(payload.get("measured_at"))
+        if measured_at is not None:
+            measured_at = measured_at.astimezone(tz)
         if measured_at is None or measured_at < cutoff:
             continue
         route_count = int(payload.get("route_count", 0) or 0)
         total_osrm = float(payload.get("total_osrm_duration_s", 0.0) or 0.0)
-        total_amap = float(payload.get("total_amap_duration_s", 0.0) or 0.0)
-        if route_count <= 0 or total_osrm <= 0 or total_amap <= 0:
+        total_api = payload.get("total_api_duration_s")
+        if total_api is None:
+            total_api = payload.get("total_amap_duration_s")
+        total_api_duration = float(total_api or 0.0)
+        if route_count <= 0 or total_osrm <= 0 or total_api_duration <= 0:
             continue
         item = dict(payload)
         item["_path"] = str(path)
         item["_measured_at"] = measured_at
-        item["_local_date"] = str(payload.get("local_date") or measured_at.date().isoformat())
+        item["_local_date"] = str(payload.get("local_date") or payload.get("sample_date") or measured_at.date().isoformat())
+        item["_total_api_duration_s"] = total_api_duration
         matches.append(item)
     matches.sort(key=lambda item: item["_measured_at"], reverse=True)
     return matches
@@ -486,13 +515,14 @@ def summarize_live_traffic_samples(
             selected.append(item)
 
     total_osrm = sum(float(item.get("total_osrm_duration_s", 0.0) or 0.0) for item in selected)
-    total_amap = sum(float(item.get("total_amap_duration_s", 0.0) or 0.0) for item in selected)
+    total_api = sum(float(item.get("_total_api_duration_s", item.get("total_api_duration_s", 0.0)) or 0.0) for item in selected)
     route_count = sum(int(item.get("route_count", 0) or 0) for item in selected)
-    if total_osrm <= 0 or total_amap <= 0 or route_count < LIVE_TRAFFIC_MIN_ROUTE_SAMPLES:
+    if total_osrm <= 0 or total_api <= 0 or route_count < LIVE_TRAFFIC_MIN_ROUTE_SAMPLES:
         return None
-    factor = total_amap / total_osrm
+    factor = total_api / total_osrm
     latest = selected[0]
     label = "AM Peak" if period == "am_peak" else "PM Peak"
+    providers = sorted({str(item.get("provider") or "").strip() for item in selected if str(item.get("provider") or "").strip()})
     return {
         "enabled": True,
         "succeeded": True,
@@ -506,6 +536,7 @@ def summarize_live_traffic_samples(
         "traffic_profile_context": (
             f"{city.title()} {label} live traffic sample; "
             f"{route_count} route sample(s), {len(selected_dates)} workday(s), "
+            f"provider {', '.join(providers) if providers else 'traffic API'}, "
             f"latest {latest['_measured_at'].strftime('%Y-%m-%d %H:%M')}"
         ),
         "route_sample_count": route_count,
@@ -514,7 +545,9 @@ def summarize_live_traffic_samples(
         "local_dates": selected_dates,
         "latest_measured_at": latest["_measured_at"].isoformat(timespec="seconds"),
         "total_osrm_duration_s": total_osrm,
-        "total_amap_duration_s": total_amap,
+        "total_api_duration_s": total_api,
+        "providers": providers,
+        "sample_weekday": str(latest.get("sample_weekday") or ""),
         "sample_paths": [str(item.get("_path", "")) for item in selected],
     }
 

@@ -25,19 +25,20 @@ try {
         Write-Host "week_start=next Monday from server local date"
     }
 
-    $profileArgs = @("-Period", "all")
+    $profileParams = @{
+        Period = "all"
+    }
     if ($WeekStart) {
-        $profileArgs += @("-WeekStart", $WeekStart)
+        $profileParams["WeekStart"] = $WeekStart
     }
     if ($DryRun) {
-        $profileArgs += "-DryRun"
+        $profileParams["DryRun"] = $true
     }
     if ($ExtraArgs) {
-        $profileArgs += @("-ExtraArgs")
-        $profileArgs += $ExtraArgs
+        $profileParams["ExtraArgs"] = $ExtraArgs
     }
 
-    & (Join-Path $PSScriptRoot "run_live_traffic_kr_profile.ps1") @profileArgs
+    & (Join-Path $PSScriptRoot "run_live_traffic_kr_profile.ps1") @profileParams
     if ($LASTEXITCODE -ne 0) {
         throw "KR weekly traffic profile refresh failed with exit code $LASTEXITCODE"
     }

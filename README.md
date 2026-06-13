@@ -190,19 +190,29 @@ Useful checked-in wrappers:
 # CN/general sampler
 ops/scripts/run_live_traffic_sampler.sh am_peak
 
-# KR profile refresh on Linux/staging
-ops/scripts/run_live_traffic_kr_weekday_profile.sh both --dry-run
+# KR profile refresh on Linux/staging: AM, PM, and off-peak for Mon-Fri
+ops/scripts/run_live_traffic_kr_weekday_profile.sh all --dry-run
 ```
 
 KR production uses the Windows PowerShell wrapper:
 
 ```powershell
-.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period both -DryRun
+.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
 ```
 
 Kakao Navi profile calls are guarded by `BRP_KAKAO_NAVI_*` caps and a
 persistent `BRP_KAKAO_NAVI_USAGE_PATH` counter. Do not reset that counter
 during deployment.
+
+KR production can install the weekly Windows task with:
+
+```powershell
+.\ops\scripts\install_live_traffic_kr_timer.ps1
+```
+
+The task runs `run_live_traffic_kr_weekly_profile.ps1` every Sunday at 08:00
+server local time and refreshes the upcoming Monday-Friday AM, PM, and
+off-peak profiles.
 
 ## Documentation
 

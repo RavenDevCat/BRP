@@ -14,10 +14,10 @@ export TZ="${BRP_LIVE_TRAFFIC_KR_TIMEZONE:-Asia/Seoul}"
 
 period="${1:-both}"
 case "$period" in
-  am_peak|pm_peak|off_peak|both)
+  am_peak|pm_peak|off_peak|both|all)
     ;;
   *)
-    echo "Usage: $0 {am_peak|pm_peak|off_peak|both} [extra sampler args...]" >&2
+    echo "Usage: $0 {am_peak|pm_peak|off_peak|both|all} [extra sampler args...]" >&2
     exit 2
     ;;
 esac
@@ -42,6 +42,11 @@ for offset in 0 1 2 3 4; do
     both)
       run_sample am_peak "$sample_date" "$@"
       run_sample pm_peak "$sample_date" "$@"
+      ;;
+    all)
+      run_sample am_peak "$sample_date" "$@"
+      run_sample pm_peak "$sample_date" "$@"
+      run_sample off_peak "$sample_date" "$@"
       ;;
     *)
       run_sample "$period" "$sample_date" "$@"

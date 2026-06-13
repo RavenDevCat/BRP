@@ -53,7 +53,7 @@ case "$period" in
     job_id="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_JOB_ID:-${BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_JOB_ID:-}}"
     run_id="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_RUN_ID:-}"
     baseline_path="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_BASELINE_PATH:-${BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH:-}}"
-    timing_args=(--departure-local-time "${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME:-11:30}")
+    timing_args=(--departure-local-time "${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME:-11:00}")
     ;;
 esac
 

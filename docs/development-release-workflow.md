@@ -195,7 +195,9 @@ Provider safety checks:
 - Kakao Navi traffic profile sampling has its own reservation file and caps:
   keep `BRP_KAKAO_NAVI_USAGE_PATH`, `BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP`,
   `BRP_KAKAO_NAVI_DAILY_CAP`, and
-  `BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH` configured on KR.
+  `BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH` configured on KR. Full weekly KR
+  AM/PM/off-peak refreshes currently need the Kakao daily and per-refresh caps
+  set to at least 500 calls.
 - Provider QPS limiting should gate only outbound requests, not whole jobs.
 - Keep `BRP_MAX_CONCURRENT_JOBS` and `BRP_JOB_CONCURRENCY_DIR` configured on
   shared servers so planner workers queue instead of exhausting memory.

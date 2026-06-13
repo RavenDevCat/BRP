@@ -37,6 +37,12 @@ It is not a code changelog. Record changes here when users or operators should k
 - Added Linux/staging and Windows/KR wrappers for refreshing KR weekday profiles
   with To School anchored to 08:00 arrival and From School anchored to 15:40
   departure.
+- The KR wrappers now support an `all` period that refreshes AM peak, PM peak,
+  and the 11:00 off-peak profile in one Monday-Friday weekly batch.
+- KR production is intended to run this full batch every Sunday at 08:00 server
+  local time. The expected current scale is about 405 Kakao Navi future-route
+  calls per weekly refresh, so the Kakao-specific daily and per-refresh safety
+  caps default to 500 while the monthly safety cap remains 4000.
 - KR weekday samples are matched by weekday during the workweek; weekend opens
   keep the latest weekday profile available for review instead of filtering all
   profiles out.

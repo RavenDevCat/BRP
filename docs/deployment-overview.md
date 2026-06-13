@@ -189,29 +189,31 @@ export BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH="..."
 export BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH="..."
 export BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME="08:00"
 export BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME="15:40"
-export BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME="11:30"
+export BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME="11:00"
 export BRP_KAKAO_NAVI_USAGE_PATH="/srv/brp/runtime/kakao_navi_usage.json"
 export BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP="4000"
-export BRP_KAKAO_NAVI_DAILY_CAP="250"
-export BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH="250"
+export BRP_KAKAO_NAVI_DAILY_CAP="500"
+export BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH="500"
 export BRP_KAKAO_NAVI_MAX_WAYPOINTS="5"
 ```
 
 Linux/staging validation:
 
 ```bash
-ops/scripts/run_live_traffic_kr_weekday_profile.sh both --dry-run
+ops/scripts/run_live_traffic_kr_weekday_profile.sh all --dry-run
 ```
 
 KR production Windows wrapper:
 
 ```powershell
-.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period both -DryRun
+.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
+.\ops\scripts\install_live_traffic_kr_timer.ps1
 ```
 
-Do not schedule the KR profile refresh until both To School and From School
-baseline JSON paths are configured and a dry-run confirms the expected call
-count.
+Do not schedule the KR profile refresh until the source-specific inputs are
+configured and a dry-run confirms the expected call count. `baseline_json`
+requires To School and From School baseline JSON paths; `route_audit_job`
+requires the corresponding To School, From School, and off-peak job ids.
 
 ### OSRM data and bind settings
 

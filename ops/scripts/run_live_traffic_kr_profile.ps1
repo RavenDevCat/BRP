@@ -1,5 +1,5 @@
 param(
-    [ValidateSet("am_peak", "pm_peak", "off_peak", "both")]
+    [ValidateSet("am_peak", "pm_peak", "off_peak", "both", "all")]
     [string]$Period = "both",
     [string]$WeekStart = "",
     [switch]$DryRun,
@@ -40,13 +40,13 @@ Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_MARKET" "KR"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_CITY" "Seoul"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME" "08:00"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME" "15:40"
-Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME" "11:30"
+Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME" "11:00"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_MONTHLY_SAFETY_CAP" "4000"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_DAILY_CAP" "250"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH" "250"
 Set-DefaultEnv "BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP" "4000"
-Set-DefaultEnv "BRP_KAKAO_NAVI_DAILY_CAP" "250"
-Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH" "250"
+Set-DefaultEnv "BRP_KAKAO_NAVI_DAILY_CAP" "500"
+Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH" "500"
 Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_WAYPOINTS" "5"
 
 foreach ($dir in @($env:BRP_BACKEND_JOBS_DIR, $env:BRP_SIDE_TOOLS_DIR, $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR, $env:BRP_LIVE_TRAFFIC_BASELINE_DIR)) {
@@ -135,7 +135,13 @@ function Build-SamplerArgs {
 }
 
 $weekStartDate = Resolve-WeekStart -Value $WeekStart
-$periods = if ($Period -eq "both") { @("am_peak", "pm_peak") } else { @($Period) }
+$periods = if ($Period -eq "both") {
+    @("am_peak", "pm_peak")
+} elseif ($Period -eq "all") {
+    @("am_peak", "pm_peak", "off_peak")
+} else {
+    @($Period)
+}
 Set-Location (Join-Path $RootDir "apps\backend")
 
 for ($offset = 0; $offset -lt 5; $offset++) {

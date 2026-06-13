@@ -85,11 +85,11 @@ KAKAO_NAVI_MONTHLY_SAFETY_CAP = max(
 )
 KAKAO_NAVI_DAILY_CAP = max(
     0,
-    int(os.environ.get("BRP_KAKAO_NAVI_DAILY_CAP", "250") or 0),
+    int(os.environ.get("BRP_KAKAO_NAVI_DAILY_CAP", "500") or 0),
 )
 KAKAO_NAVI_MAX_CALLS_PER_REFRESH = max(
     0,
-    int(os.environ.get("BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH", "250") or 0),
+    int(os.environ.get("BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH", "500") or 0),
 )
 KAKAO_NAVI_MAX_WAYPOINTS = max(
     0,

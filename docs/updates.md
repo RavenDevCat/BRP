@@ -6,6 +6,13 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-13
 
+### Time Impact Decision Review Completed
+
+- The Time Impact tab now starts with an operations-facing decision card for each optimized scenario: Acceptable, Review needed, High risk, or Incomplete.
+- The decision card explains why the scenario needs attention using acceptance rate, over-threshold riders/stops, high-risk stops, route changes, and unmatched timing coverage.
+- Operators can jump directly from the decision card to over-threshold stops, high-risk stops, or the route that contains a top impacted stop.
+- This is a review workflow only. Time-impact warnings and recommendations do not alter solver capacity, route assignment, geocoding, or cache behavior.
+
 ### Input Address Review Warnings
 
 - Route Audit now surfaces accepted input addresses that may still need human review.

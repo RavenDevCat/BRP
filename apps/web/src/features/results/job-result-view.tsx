@@ -5,6 +5,7 @@ import {
   ArrowRight,
   BarChart3,
   Bot,
+  CheckCircle2,
   Download,
   FileSpreadsheet,
   FileWarning,
@@ -15,6 +16,7 @@ import {
   Maximize2,
   RefreshCw,
   Route,
+  TriangleAlert,
   X,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -32,6 +34,7 @@ import {
   type JobMapRoute,
   type JobMapStop,
   type JobMapTimeImpactSummary,
+  type JobMapTimeImpactTopStop,
   type JobRecord,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -897,6 +900,7 @@ function TimeImpactPanel({
 
   const data = impactQuery.data;
   const summary = data?.summary.time_impact;
+  const recommendation = summary?.available ? buildTimeImpactRecommendation(summary, selected.name) : null;
   const acceptanceThresholdLabel = formatImpactMinutes(summary?.acceptance_threshold_minutes ?? 15);
   const routeRows = data ? buildTimeImpactRouteRows(data) : [];
   const stopRows = data ? buildTimeImpactStopRows(data, { filter, search, selectedRouteId }) : [];
@@ -957,6 +961,28 @@ function TimeImpactPanel({
 
       {data && summary?.available ? (
         <>
+          {recommendation ? (
+            <TimeImpactDecisionCard
+              recommendation={recommendation}
+              summary={summary}
+              scenarioName={selected.name}
+              serviceDirection={data.service_direction || ""}
+              topStops={summary.top_impacted_stops || []}
+              onReviewOverAcceptance={() => {
+                setFilter("over_acceptance");
+                setSelectedRouteId("");
+              }}
+              onReviewHighRisk={() => {
+                setFilter("high_risk");
+                setSelectedRouteId("");
+              }}
+              onFocusRoute={(routeId) => {
+                setSelectedRouteId(routeId);
+                setFilter("all");
+              }}
+            />
+          ) : null}
+
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ImpactSummaryCard
               label="Within acceptance"
@@ -1077,6 +1103,207 @@ function TimeImpactPanel({
       ) : null}
     </div>
   );
+}
+
+type TimeImpactRecommendationLevel = "acceptable" | "review" | "high_risk" | "incomplete";
+
+type TimeImpactRecommendation = {
+  level: TimeImpactRecommendationLevel;
+  title: string;
+  detail: string;
+  tone: "success" | "warning" | "danger" | "info";
+  evidence: string[];
+};
+
+function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenarioName: string): TimeImpactRecommendation {
+  const comparedRiders = Number(summary.compared_rider_count || 0);
+  const comparedStops = Number(summary.compared_stop_count || 0);
+  const overRiders = Number(summary.over_acceptance_rider_count || 0);
+  const overStops = Number(summary.over_acceptance_stop_count || 0);
+  const highRiskStops = Number(summary.high_risk_stop_count || 0);
+  const highRiskRiders = Number(summary.high_risk_rider_count || 0);
+  const unavailableStops = Number(summary.unavailable_stop_count || 0);
+  const routeChangedRiders = Number(summary.route_changed_rider_count || 0);
+  const maxOverMinutes = Number(summary.max_over_acceptance_delta_minutes || 0);
+  const overRiderRatio = comparedRiders ? overRiders / comparedRiders : 0;
+  const acceptanceRatio = Number(summary.acceptance_rider_ratio || 0);
+  const evidence = [
+    `${formatPercent(acceptanceRatio, 100)} of compared riders are within the acceptance window`,
+    `${formatNumber(overRiders)} rider(s) across ${formatNumber(overStops)} stop(s) are over threshold`,
+    `${formatNumber(highRiskRiders)} rider(s) at ${formatNumber(highRiskStops)} high-risk stop(s)`,
+    `${formatNumber(routeChangedRiders)} rider(s) change route`,
+  ];
+  if (unavailableStops) {
+    evidence.push(`${formatNumber(unavailableStops)} stop(s) could not be matched to current-plan timing`);
+  }
+
+  if (!comparedRiders || !comparedStops) {
+    return {
+      level: "incomplete",
+      tone: "info",
+      title: `${scenarioName} needs more timing data`,
+      detail: "No comparable pickup/dropoff timing was found, so this scenario should not be accepted from time impact alone.",
+      evidence,
+    };
+  }
+
+  if (highRiskStops > 0 || overRiderRatio >= 0.1 || maxOverMinutes >= 10) {
+    return {
+      level: "high_risk",
+      tone: "danger",
+      title: `${scenarioName} needs operations review before adoption`,
+      detail: "The optimized plan creates material pickup/dropoff disruption for some families. Review the highlighted stops and routes before sharing this plan.",
+      evidence,
+    };
+  }
+
+  if (overRiders > 0 || unavailableStops > 0 || routeChangedRiders > comparedRiders * 0.35) {
+    return {
+      level: "review",
+      tone: "warning",
+      title: `${scenarioName} is plausible but needs targeted review`,
+      detail: "Most riders are within the acceptance window, but a small set of stops or route changes should be checked by operations first.",
+      evidence,
+    };
+  }
+
+  return {
+    level: "acceptable",
+    tone: "success",
+    title: `${scenarioName} looks operationally acceptable`,
+    detail: `All compared riders are within the ${formatImpactMinutes(summary.acceptance_threshold_minutes ?? 15)} acceptance window. Review route changes and cost tradeoffs before final approval.`,
+    evidence,
+  };
+}
+
+function TimeImpactDecisionCard({
+  recommendation,
+  summary,
+  scenarioName,
+  serviceDirection,
+  topStops,
+  onReviewOverAcceptance,
+  onReviewHighRisk,
+  onFocusRoute,
+}: {
+  recommendation: TimeImpactRecommendation;
+  summary: JobMapTimeImpactSummary;
+  scenarioName: string;
+  serviceDirection: string;
+  topStops: JobMapTimeImpactTopStop[];
+  onReviewOverAcceptance: () => void;
+  onReviewHighRisk: () => void;
+  onFocusRoute: (routeId: string) => void;
+}) {
+  const overRiders = Number(summary.over_acceptance_rider_count || 0);
+  const highRiskStops = Number(summary.high_risk_stop_count || 0);
+  const visibleTopStops = topStops.slice(0, 5);
+  const iconClassName = cn(
+    "h-5 w-5",
+    recommendation.level === "acceptable" ? "text-emerald-700" : recommendation.level === "high_risk" ? "text-rose-700" : "text-amber-700",
+  );
+  const Icon = recommendation.level === "acceptable" ? CheckCircle2 : recommendation.level === "high_risk" ? TriangleAlert : AlertCircle;
+
+  return (
+    <Card className={cn(
+      "border-l-4",
+      recommendation.level === "acceptable" && "border-l-emerald-500",
+      recommendation.level === "review" && "border-l-amber-500",
+      recommendation.level === "high_risk" && "border-l-rose-500",
+      recommendation.level === "incomplete" && "border-l-sky-500",
+    )}>
+      <CardHeader>
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex min-w-0 gap-3">
+            <div className="mt-0.5 flex h-9 w-9 flex-none items-center justify-center rounded-md bg-muted">
+              <Icon className={iconClassName} aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-base font-semibold">{recommendation.title}</h2>
+                <Badge tone={recommendation.tone}>{timeImpactRecommendationLabel(recommendation.level)}</Badge>
+              </div>
+              <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">{recommendation.detail}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {overRiders ? (
+              <Button type="button" variant="secondary" onClick={onReviewOverAcceptance}>Review over-threshold</Button>
+            ) : null}
+            {highRiskStops ? (
+              <Button type="button" variant="secondary" onClick={onReviewHighRisk}>Review high-risk</Button>
+            ) : null}
+          </div>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {recommendation.evidence.map((item) => (
+            <div key={item} className="rounded-md border border-border bg-muted/35 px-3 py-2 text-xs text-muted-foreground">
+              {item}
+            </div>
+          ))}
+        </div>
+
+        {visibleTopStops.length ? (
+          <div className="rounded-md border border-border bg-surface">
+            <div className="border-b border-border px-3 py-2 text-xs font-semibold uppercase text-muted-foreground">
+              Review first · {scenarioName}
+            </div>
+            <div className="divide-y divide-border">
+              {visibleTopStops.map((stop) => (
+                <div key={stop.stop_id} className="grid gap-2 px-3 py-3 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate font-semibold">{stop.address || "Unknown stop"}</span>
+                      <Badge tone={timeImpactBadgeTone(stop.level, stop.impact_direction)}>{timeImpactLabel(stop.level, stop.impact_direction)}</Badge>
+                      {stop.within_acceptance === false ? <Badge tone="warning">Over threshold</Badge> : null}
+                    </div>
+                    <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {timeImpactTopStopReason(stop, serviceDirection)}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(buttonClassName("secondary"), "h-8 text-xs")}
+                    onClick={() => onFocusRoute(stop.route_id)}
+                  >
+                    Focus route
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function timeImpactRecommendationLabel(level: TimeImpactRecommendationLevel) {
+  if (level === "acceptable") {
+    return "Acceptable";
+  }
+  if (level === "high_risk") {
+    return "High risk";
+  }
+  if (level === "incomplete") {
+    return "Incomplete";
+  }
+  return "Review needed";
+}
+
+function timeImpactTopStopReason(stop: JobMapTimeImpactTopStop, serviceDirection: string) {
+  const adverseMinutes = Number(stop.adverse_delta_minutes || 0);
+  const threshold = Number(stop.acceptance_threshold_minutes ?? 15);
+  const overMinutes = Number(stop.over_acceptance_minutes || 0);
+  const riders = Number(stop.affected_rider_count || 0);
+  const familyEffect = timeImpactAdversePhrase(serviceDirection, adverseMinutes);
+  const routeChange = stop.route_changed ? ` Route changes from ${stop.current_route_id || "current plan"} to ${stop.new_route_id || stop.route_id}.` : "";
+  const thresholdText = stop.within_acceptance === false
+    ? ` It is ${formatImpactMinutes(overMinutes)} over the ${formatImpactMinutes(threshold)} window.`
+    : ` It remains within the ${formatImpactMinutes(threshold)} window.`;
+  return `${formatNumber(riders)} rider(s); ${familyEffect}.${thresholdText}${routeChange}`;
 }
 
 type TimeImpactRouteRow = JobMapRoute & {

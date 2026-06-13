@@ -24,15 +24,19 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ### KR Weekday Traffic Profile Refresh
 
-- Live traffic sampling now supports `google_routes` in addition to the existing
-  AMap route API, with generic `total_api_duration_s` sample summaries so the
-  planner can consume either provider.
-- South Korea/KR traffic profiles are designed as Google Routes predicted
+- Live traffic sampling now supports Kakao Navi future directions for KR in
+  addition to the existing CN AMap route API, with generic
+  `total_api_duration_s` sample summaries so the planner can consume either
+  provider.
+- South Korea/KR traffic profiles are designed as Kakao predicted
   Monday-Friday profiles from stable baseline JSON exports, not daily realtime
-  live timers.
-- Google Routes calls are guarded by independent monthly, daily, and per-refresh
+  live timers. Google Routes was removed from the KR plan after production
+  probes returned empty Seoul driving routes.
+- Kakao Navi calls are guarded by independent monthly, daily, and per-refresh
   caps plus a persistent usage counter separate from the Google geocode counter.
-- Added Linux/staging and Windows/KR wrappers for refreshing KR weekday profiles.
+- Added Linux/staging and Windows/KR wrappers for refreshing KR weekday profiles
+  with To School anchored to 08:00 arrival and From School anchored to 15:40
+  departure.
 - KR weekday samples are matched by weekday during the workweek; weekend opens
   keep the latest weekday profile available for review instead of filtering all
   profiles out.

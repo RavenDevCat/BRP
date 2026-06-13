@@ -31,17 +31,23 @@ Set-DefaultEnv "BRP_SIDE_TOOLS_DIR" (Join-Path $RootDir "state\side_tools")
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_SAMPLE_DIR" (Join-Path $RootDir "state\traffic_samples")
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_BASELINE_DIR" (Join-Path $RootDir "state\traffic_baselines")
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_USAGE_PATH" (Join-Path $RootDir "state\google_routes_usage.json")
-Set-DefaultEnv "BRP_LIVE_TRAFFIC_TIMEZONE" "Asia/Seoul"
-Set-DefaultEnv "BRP_LIVE_TRAFFIC_PROVIDER" "google_routes"
+Set-DefaultEnv "BRP_KAKAO_NAVI_USAGE_PATH" (Join-Path $RootDir "state\kakao_navi_usage.json")
+$env:BRP_LIVE_TRAFFIC_TIMEZONE = if ($env:BRP_LIVE_TRAFFIC_KR_TIMEZONE) { $env:BRP_LIVE_TRAFFIC_KR_TIMEZONE } else { "Asia/Seoul" }
+Set-DefaultEnv "BRP_LIVE_TRAFFIC_PROVIDER" "kakao_navi"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_SOURCE" "baseline_json"
-Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_PROVIDER" "google_routes"
+Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_PROVIDER" "kakao_navi"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_MARKET" "KR"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_CITY" "Seoul"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME" "08:00"
 Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME" "15:40"
+Set-DefaultEnv "BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME" "11:30"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_MONTHLY_SAFETY_CAP" "4000"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_DAILY_CAP" "250"
 Set-DefaultEnv "BRP_GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH" "250"
+Set-DefaultEnv "BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP" "4000"
+Set-DefaultEnv "BRP_KAKAO_NAVI_DAILY_CAP" "250"
+Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH" "250"
+Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_WAYPOINTS" "5"
 
 foreach ($dir in @($env:BRP_BACKEND_JOBS_DIR, $env:BRP_SIDE_TOOLS_DIR, $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR, $env:BRP_LIVE_TRAFFIC_BASELINE_DIR)) {
     if ($dir) {
@@ -72,7 +78,7 @@ function Build-SamplerArgs {
     $source = if ($env:BRP_LIVE_TRAFFIC_KR_SOURCE) { $env:BRP_LIVE_TRAFFIC_KR_SOURCE } else { "baseline_json" }
     $market = if ($env:BRP_LIVE_TRAFFIC_KR_MARKET) { $env:BRP_LIVE_TRAFFIC_KR_MARKET } else { "KR" }
     $city = if ($env:BRP_LIVE_TRAFFIC_KR_CITY) { $env:BRP_LIVE_TRAFFIC_KR_CITY } else { "Seoul" }
-    $provider = if ($env:BRP_LIVE_TRAFFIC_KR_PROVIDER) { $env:BRP_LIVE_TRAFFIC_KR_PROVIDER } else { "google_routes" }
+    $provider = if ($env:BRP_LIVE_TRAFFIC_KR_PROVIDER) { $env:BRP_LIVE_TRAFFIC_KR_PROVIDER } else { "kakao_navi" }
     $baselineDir = if ($env:BRP_LIVE_TRAFFIC_KR_BASELINE_DIR) { $env:BRP_LIVE_TRAFFIC_KR_BASELINE_DIR } else { $env:BRP_LIVE_TRAFFIC_BASELINE_DIR }
     $jobId = ""
     $runId = ""
@@ -96,6 +102,7 @@ function Build-SamplerArgs {
             $jobId = $env:BRP_LIVE_TRAFFIC_KR_OFF_PEAK_JOB_ID
             $runId = $env:BRP_LIVE_TRAFFIC_KR_OFF_PEAK_RUN_ID
             $baselinePath = if ($env:BRP_LIVE_TRAFFIC_KR_OFF_PEAK_BASELINE_PATH) { $env:BRP_LIVE_TRAFFIC_KR_OFF_PEAK_BASELINE_PATH } else { $env:BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH }
+            $timingArgs = @("--departure-local-time", $env:BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME)
         }
     }
 

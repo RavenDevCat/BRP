@@ -28,8 +28,8 @@ case "$period" in
 esac
 shift || true
 
-export BRP_LIVE_TRAFFIC_TIMEZONE="${BRP_LIVE_TRAFFIC_KR_TIMEZONE:-${BRP_LIVE_TRAFFIC_TIMEZONE:-Asia/Seoul}}"
-export BRP_LIVE_TRAFFIC_PROVIDER="${BRP_LIVE_TRAFFIC_KR_PROVIDER:-google_routes}"
+export BRP_LIVE_TRAFFIC_TIMEZONE="${BRP_LIVE_TRAFFIC_KR_TIMEZONE:-Asia/Seoul}"
+export BRP_LIVE_TRAFFIC_PROVIDER="${BRP_LIVE_TRAFFIC_KR_PROVIDER:-kakao_navi}"
 
 source="${BRP_LIVE_TRAFFIC_KR_SOURCE:-baseline_json}"
 market="${BRP_LIVE_TRAFFIC_KR_MARKET:-KR}"
@@ -53,7 +53,7 @@ case "$period" in
     job_id="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_JOB_ID:-${BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_JOB_ID:-}}"
     run_id="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_RUN_ID:-}"
     baseline_path="${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_BASELINE_PATH:-${BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH:-}}"
-    timing_args=()
+    timing_args=(--departure-local-time "${BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME:-11:30}")
     ;;
 esac
 

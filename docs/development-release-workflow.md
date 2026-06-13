@@ -80,11 +80,12 @@ The React Google geocode usage counter is shown only when
 deployment only. That counter is persistent runtime state. Preserve the current
 `apps/client/cache/google_geocode_usage.json` file during deploys; do not reset
 it to an old verified value.
-KR traffic profile refresh uses Google Routes predicted weekday samples and a
-separate persistent usage counter controlled by `BRP_GOOGLE_ROUTES_USAGE_PATH`.
+KR traffic profile refresh uses Kakao Navi future weekday samples and a
+separate persistent usage counter controlled by `BRP_KAKAO_NAVI_USAGE_PATH`.
 This is not the same as the Google geocode counter. Preserve it during KR
 deploys and use the checked-in KR traffic profile wrappers instead of adapting
-the CN AMap live-timer scripts.
+the CN AMap live-timer scripts. Do not use Google Routes for Seoul driving
+profiles unless a future verified probe proves coverage has changed.
 
 External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, and DeepSeek calls use cross-process limiter files under
@@ -191,10 +192,10 @@ Provider safety checks:
 - Do not bypass `CrossProcessRateLimiter` for Kakao, Google, AMap, or DeepSeek calls.
 - Do not write `apps/client/cache/google_geocode_usage.json` directly; use the atomic reservation helpers.
 - Keep `state/api_rate_limits` as runtime coordination state, or set `BRP_API_RATE_LIMIT_DIR` to an equivalent server-local runtime path.
-- Google Routes traffic profile sampling has its own reservation file and caps:
-  keep `BRP_GOOGLE_ROUTES_USAGE_PATH`, `BRP_GOOGLE_ROUTES_MONTHLY_SAFETY_CAP`,
-  `BRP_GOOGLE_ROUTES_DAILY_CAP`, and
-  `BRP_GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH` configured on KR.
+- Kakao Navi traffic profile sampling has its own reservation file and caps:
+  keep `BRP_KAKAO_NAVI_USAGE_PATH`, `BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP`,
+  `BRP_KAKAO_NAVI_DAILY_CAP`, and
+  `BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH` configured on KR.
 - Provider QPS limiting should gate only outbound requests, not whole jobs.
 - Keep `BRP_MAX_CONCURRENT_JOBS` and `BRP_JOB_CONCURRENCY_DIR` configured on
   shared servers so planner workers queue instead of exhausting memory.

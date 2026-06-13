@@ -46,7 +46,7 @@ tmp/            Ignored scratch area
   - `AMAP_API_KEY`
   - `KAKAO_REST_API_KEY`
   - `GOOGLE_GEOCODE_API_KEY`
-  - `GOOGLE_ROUTES_API_KEY`
+  - `GOOGLE_ROUTES_API_KEY` only for non-KR experimental route-provider checks
   - `DEEPSEEK_API_KEY`
 
 For local or server-specific values, copy `ops/env/example.env` to
@@ -146,7 +146,7 @@ Important runtime files to preserve during server moves:
 - generated map/report outputs
 - server-local env files
 - Google geocode usage counter
-- Google Routes traffic-profile usage counter
+- Kakao Navi traffic-profile usage counter
 - provider rate-limit state
 
 ## OSRM Data
@@ -178,9 +178,11 @@ BRP supports two traffic-profile sampling modes:
 - CN traffic sampling uses AMap driving routes against saved current-plan jobs
   or baseline JSON. The existing AM/PM timers are intended for workday peak
   windows.
-- KR traffic sampling uses Google Routes predicted traffic against stable
-  baseline JSON exports. It refreshes Monday-Friday profiles as a batch rather
-  than running a daily realtime timer.
+- KR traffic sampling uses Kakao Navi future directions against stable baseline
+  JSON exports. It refreshes Monday-Friday profiles as a batch rather than
+  running a daily realtime timer. Google Routes is not used for KR traffic
+  profiles because Seoul driving probes returned empty routes in production
+  diagnostics.
 
 Useful checked-in wrappers:
 
@@ -198,8 +200,8 @@ KR production uses the Windows PowerShell wrapper:
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period both -DryRun
 ```
 
-Google Routes profile calls are guarded by `BRP_GOOGLE_ROUTES_*` caps and a
-persistent `BRP_GOOGLE_ROUTES_USAGE_PATH` counter. Do not reset that counter
+Kakao Navi profile calls are guarded by `BRP_KAKAO_NAVI_*` caps and a
+persistent `BRP_KAKAO_NAVI_USAGE_PATH` counter. Do not reset that counter
 during deployment.
 
 ## Documentation

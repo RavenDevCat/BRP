@@ -20,6 +20,11 @@ AMAP_DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving"
 GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 GOOGLE_ROUTES_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration,routes.legs.distanceMeters"
 GOOGLE_ROUTES_PROVIDER = "google_routes"
+KAKAO_NAVI_FUTURE_DIRECTIONS_URL = os.environ.get(
+    "BRP_KAKAO_NAVI_FUTURE_DIRECTIONS_URL",
+    "https://apis-navi.kakaomobility.com/v1/future/directions",
+).strip()
+KAKAO_NAVI_PROVIDER = "kakao_navi"
 
 DEFAULT_JOB_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", "/opt/brp/shared/runtime/jobs"))
 DEFAULT_OUTPUT_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "/opt/brp/shared/runtime/traffic_samples"))
@@ -37,9 +42,17 @@ DEFAULT_PROVIDER = os.environ.get("BRP_LIVE_TRAFFIC_PROVIDER", "auto").strip().l
 DEFAULT_GOOGLE_ROUTES_USAGE_PATH = Path(
     os.environ.get("BRP_GOOGLE_ROUTES_USAGE_PATH", str(DEFAULT_OUTPUT_DIR.parent / "google_routes_usage.json"))
 ).expanduser()
+DEFAULT_KAKAO_NAVI_USAGE_PATH = Path(
+    os.environ.get("BRP_KAKAO_NAVI_USAGE_PATH", str(DEFAULT_OUTPUT_DIR.parent / "kakao_navi_usage.json"))
+).expanduser()
 GOOGLE_ROUTES_API_KEY = (
     os.environ.get("GOOGLE_ROUTES_API_KEY", "").strip()
     or os.environ.get("GOOGLE_GEOCODE_API_KEY", "").strip()
+)
+KAKAO_NAVI_API_KEY = (
+    os.environ.get("KAKAO_MOBILITY_API_KEY", "").strip()
+    or os.environ.get("KAKAO_REST_API_KEY", "").strip()
+    or os.environ.get("KAKAO_API_KEY", "").strip()
 )
 GOOGLE_ROUTES_MONTHLY_SAFETY_CAP = max(
     0,
@@ -66,6 +79,27 @@ GOOGLE_ROUTES_EXTRA_COMPUTATIONS = [
     for item in os.environ.get("BRP_GOOGLE_ROUTES_EXTRA_COMPUTATIONS", "").split(",")
     if item.strip()
 ]
+KAKAO_NAVI_MONTHLY_SAFETY_CAP = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP", "4000") or 0),
+)
+KAKAO_NAVI_DAILY_CAP = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_DAILY_CAP", "250") or 0),
+)
+KAKAO_NAVI_MAX_CALLS_PER_REFRESH = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH", "250") or 0),
+)
+KAKAO_NAVI_MAX_WAYPOINTS = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_MAX_WAYPOINTS", "5") or 5),
+)
+KAKAO_NAVI_PRIORITY = os.environ.get("BRP_KAKAO_NAVI_PRIORITY", "RECOMMEND").strip() or "RECOMMEND"
+KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS", "0") or 0),
+)
 WEEKDAY_LABELS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -81,7 +115,7 @@ def _provider_for_args(args: argparse.Namespace) -> str:
     market = str(getattr(args, "market", "") or "").strip().upper()
     city = str(getattr(args, "city", "") or "").strip().upper()
     if market in {"KR", "KOREA", "SOUTH_KOREA", "SOUTH KOREA"} or city in {"SEOUL", "SEONGNAM", "INCHEON"}:
-        return GOOGLE_ROUTES_PROVIDER
+        return KAKAO_NAVI_PROVIDER
     return "amap"
 
 
@@ -129,6 +163,15 @@ def _google_routes_departure_time(value: datetime | None) -> str | None:
     return value.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _kakao_navi_coord(point: dict[str, Any]) -> str:
+    return f"{float(point['lng']):.7f},{float(point['lat']):.7f}"
+
+
+def _kakao_navi_departure_time(value: datetime | None) -> str:
+    departure = value or datetime.now(DEFAULT_TZ)
+    return departure.astimezone(DEFAULT_TZ).strftime("%Y%m%d%H%M")
+
+
 def _load_json_object(path: Path) -> dict[str, Any]:
     try:
         if path.exists():
@@ -146,6 +189,11 @@ def _save_json_object(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _google_routes_usage_keys(now: datetime) -> tuple[str, str]:
+    local_now = now.astimezone(DEFAULT_TZ)
+    return local_now.strftime("%Y-%m"), local_now.date().isoformat()
+
+
+def _kakao_navi_usage_keys(now: datetime) -> tuple[str, str]:
     local_now = now.astimezone(DEFAULT_TZ)
     return local_now.strftime("%Y-%m"), local_now.date().isoformat()
 
@@ -206,6 +254,50 @@ def _mark_google_routes_usage_result(args: argparse.Namespace, *, now: datetime,
     _save_json_object(path, payload)
 
 
+def _reserve_kakao_navi_usage(args: argparse.Namespace, count: int, *, now: datetime) -> None:
+    if count <= 0 or bool(getattr(args, "dry_run", False)):
+        return
+    monthly_cap = int(getattr(args, "kakao_navi_monthly_safety_cap", KAKAO_NAVI_MONTHLY_SAFETY_CAP) or 0)
+    daily_cap = int(getattr(args, "kakao_navi_daily_cap", KAKAO_NAVI_DAILY_CAP) or 0)
+    if monthly_cap <= 0 or daily_cap <= 0:
+        raise RuntimeError("Kakao Navi usage cap is disabled; refusing live API call")
+    path = Path(getattr(args, "kakao_navi_usage_path", DEFAULT_KAKAO_NAVI_USAGE_PATH)).expanduser()
+    payload = _load_json_object(path)
+    month_key, day_key = _kakao_navi_usage_keys(now)
+    month_bucket = _usage_bucket(payload, month_key)
+    day_bucket = _usage_bucket(payload, day_key)
+    month_used = _usage_count(month_bucket)
+    day_used = _usage_count(day_bucket)
+    if month_used + count > monthly_cap:
+        raise RuntimeError(
+            f"Kakao Navi monthly safety cap would be exceeded: {month_used}+{count}>{monthly_cap}"
+        )
+    if day_used + count > daily_cap:
+        raise RuntimeError(
+            f"Kakao Navi daily cap would be exceeded: {day_used}+{count}>{daily_cap}"
+        )
+    for bucket in (month_bucket, day_bucket):
+        bucket["attempted"] = _usage_count(bucket) + count
+        bucket["provider"] = KAKAO_NAVI_PROVIDER
+        bucket["sku_estimate"] = "kakao_navi_future_directions"
+        bucket["updated_at"] = now.isoformat(timespec="seconds")
+    _save_json_object(path, payload)
+
+
+def _mark_kakao_navi_usage_result(args: argparse.Namespace, *, now: datetime, succeeded: bool) -> None:
+    if bool(getattr(args, "dry_run", False)):
+        return
+    path = Path(getattr(args, "kakao_navi_usage_path", DEFAULT_KAKAO_NAVI_USAGE_PATH)).expanduser()
+    payload = _load_json_object(path)
+    month_key, day_key = _kakao_navi_usage_keys(now)
+    for key in (month_key, day_key):
+        bucket = _usage_bucket(payload, key)
+        result_key = "succeeded" if succeeded else "failed"
+        bucket[result_key] = int(bucket.get(result_key, 0) or 0) + 1
+        bucket["updated_at"] = now.isoformat(timespec="seconds")
+    _save_json_object(path, payload)
+
+
 def _google_routes_chunk_points(route_points: list[dict[str, Any]], max_intermediates: int) -> list[list[dict[str, Any]]]:
     max_points = max(2, int(max_intermediates) + 2)
     if len(route_points) <= max_points:
@@ -219,11 +311,38 @@ def _google_routes_chunk_points(route_points: list[dict[str, Any]], max_intermed
     return chunks
 
 
+def _balanced_route_point_chunks(route_points: list[dict[str, Any]], max_intermediates: int) -> list[list[dict[str, Any]]]:
+    total_legs = max(0, len(route_points) - 1)
+    if total_legs <= 0:
+        return []
+    max_legs_per_call = max(1, int(max_intermediates) + 1)
+    if total_legs <= max_legs_per_call:
+        return [route_points]
+    chunk_count = (total_legs + max_legs_per_call - 1) // max_legs_per_call
+    base_legs = total_legs // chunk_count
+    extra = total_legs % chunk_count
+    chunks: list[list[dict[str, Any]]] = []
+    start = 0
+    for index in range(chunk_count):
+        leg_count = base_legs + (1 if index < extra else 0)
+        end = start + leg_count
+        chunks.append(route_points[start : end + 1])
+        start = end
+    return chunks
+
+
 def _raw_osrm_seconds(route: dict[str, Any]) -> float:
     raw = route.get("raw_osrm_time_s")
+    if raw is None:
+        raw = route.get("time_s")
+    if raw is None:
+        raw = route.get("duration_s")
     if raw is not None:
         return float(raw)
-    return sum(float(leg.get("raw_osrm_duration_s", 0.0) or 0.0) for leg in route.get("leg_details") or [])
+    return sum(
+        float(leg.get("raw_osrm_duration_s", leg.get("duration_s", 0.0)) or 0.0)
+        for leg in route.get("leg_details") or []
+    )
 
 
 def _parse_clock(value: str | None) -> dt_time | None:
@@ -613,6 +732,118 @@ def _call_google_routes(
     }
 
 
+def _call_kakao_navi_chunk(
+    chunk_points: list[dict[str, Any]],
+    *,
+    departure_time: datetime | None,
+    timeout_seconds: int,
+) -> dict[str, Any]:
+    if not KAKAO_NAVI_API_KEY:
+        raise RuntimeError("KAKAO_MOBILITY_API_KEY or KAKAO_REST_API_KEY is required for Kakao Navi traffic sampling")
+    params: dict[str, Any] = {
+        "origin": _kakao_navi_coord(chunk_points[0]),
+        "destination": _kakao_navi_coord(chunk_points[-1]),
+        "priority": KAKAO_NAVI_PRIORITY,
+        "car_fuel": "GASOLINE",
+        "car_hipass": "false",
+        "alternatives": "false",
+        "road_details": "false",
+        "departure_time": _kakao_navi_departure_time(departure_time),
+    }
+    waypoints = chunk_points[1:-1]
+    if waypoints:
+        params["waypoints"] = "|".join(_kakao_navi_coord(point) for point in waypoints)
+    response = requests.get(
+        KAKAO_NAVI_FUTURE_DIRECTIONS_URL,
+        headers={
+            "Authorization": f"KakaoAK {KAKAO_NAVI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        params=params,
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    routes = list(payload.get("routes") or [])
+    if not routes:
+        code = payload.get("code") or payload.get("result_code") or payload.get("msg")
+        raise RuntimeError(f"Kakao Navi returned no routes: {code or 'empty response'}")
+    route = routes[0]
+    summary = dict(route.get("summary") or {})
+    duration_s = float(summary.get("duration", 0.0) or 0.0)
+    distance_m = float(summary.get("distance", 0.0) or 0.0)
+    if duration_s <= 0:
+        duration_s = sum(float(section.get("duration", 0.0) or 0.0) for section in route.get("sections") or [])
+    if distance_m <= 0:
+        distance_m = sum(float(section.get("distance", 0.0) or 0.0) for section in route.get("sections") or [])
+    if duration_s <= 0:
+        raise RuntimeError("Kakao Navi returned no usable duration")
+    return {"duration_s": duration_s, "distance_m": distance_m}
+
+
+def _call_kakao_navi(
+    args: argparse.Namespace,
+    route_points: list[dict[str, Any]],
+    *,
+    departure_time: datetime | None,
+    now: datetime,
+) -> dict[str, Any]:
+    chunks = _balanced_route_point_chunks(route_points, int(args.kakao_navi_max_waypoints))
+    if len(chunks) > int(args.kakao_navi_max_calls_per_refresh):
+        raise RuntimeError(
+            f"Kakao Navi chunk count {len(chunks)} exceeds max calls per refresh {args.kakao_navi_max_calls_per_refresh}"
+        )
+    total_duration_s = 0.0
+    total_distance_m = 0.0
+    current_departure = departure_time or now
+    dwell_seconds = int(getattr(args, "kakao_navi_inter_segment_dwell_seconds", 0) or 0)
+    segment_rows: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks, start=1):
+        _reserve_kakao_navi_usage(args, 1, now=now)
+        segment_departure = current_departure
+        try:
+            result = _call_kakao_navi_chunk(
+                chunk,
+                departure_time=segment_departure,
+                timeout_seconds=args.timeout_seconds,
+            )
+        except Exception:
+            _mark_kakao_navi_usage_result(args, now=now, succeeded=False)
+            raise
+        _mark_kakao_navi_usage_result(args, now=now, succeeded=True)
+        duration_s = float(result["duration_s"])
+        distance_m = float(result["distance_m"])
+        total_duration_s += duration_s
+        total_distance_m += distance_m
+        segment_rows.append(
+            {
+                "segment_index": index,
+                "point_count": len(chunk),
+                "leg_count": max(0, len(chunk) - 1),
+                "departure_local_time": segment_departure.astimezone(DEFAULT_TZ).isoformat(timespec="seconds"),
+                "duration_s": duration_s,
+                "distance_m": distance_m,
+            }
+        )
+        current_departure = segment_departure + timedelta(seconds=duration_s + dwell_seconds)
+        time.sleep(args.sleep_seconds)
+    return {
+        "provider": KAKAO_NAVI_PROVIDER,
+        "api": KAKAO_NAVI_FUTURE_DIRECTIONS_URL,
+        "api_duration_s": total_duration_s,
+        "api_distance_m": total_distance_m,
+        "kakao_navi_duration_s": total_duration_s,
+        "kakao_navi_distance_m": total_distance_m,
+        "api_call_count": len(chunks),
+        "chunk_count": len(chunks),
+        "max_waypoints_per_call": int(args.kakao_navi_max_waypoints),
+        "inter_segment_dwell_seconds": dwell_seconds,
+        "priority": KAKAO_NAVI_PRIORITY,
+        "sku_estimate": "kakao_navi_future_directions",
+        "kakao_navi_segments": segment_rows,
+    }
+
+
 def _traffic_duration_fields(row: dict[str, Any]) -> tuple[float, float]:
     osrm = float(row.get("osrm_duration_s", 0.0) or 0.0)
     api_duration = row.get("api_duration_s")
@@ -651,6 +882,8 @@ def _summarize(rows: list[dict[str, Any]]) -> dict[str, Any]:
         summary["total_amap_duration_s"] = sum(float(row.get("amap_duration_s", 0.0) or 0.0) for row in rows)
     if any("google_routes_duration_s" in row for row in rows):
         summary["total_google_routes_duration_s"] = sum(float(row.get("google_routes_duration_s", 0.0) or 0.0) for row in rows)
+    if any("kakao_navi_duration_s" in row for row in rows):
+        summary["total_kakao_navi_duration_s"] = sum(float(row.get("kakao_navi_duration_s", 0.0) or 0.0) for row in rows)
     return summary
 
 
@@ -735,6 +968,22 @@ def _dry_run_provider_result(
             "routing_preference": GOOGLE_ROUTES_ROUTING_PREFERENCE,
             "sku_estimate": "routes_compute_routes_pro",
         }
+    if provider == KAKAO_NAVI_PROVIDER:
+        chunks = _balanced_route_point_chunks(route_points, int(args.kakao_navi_max_waypoints))
+        return {
+            "provider": KAKAO_NAVI_PROVIDER,
+            "api": KAKAO_NAVI_FUTURE_DIRECTIONS_URL,
+            "api_duration_s": osrm_s,
+            "api_distance_m": distance_m,
+            "kakao_navi_duration_s": osrm_s,
+            "kakao_navi_distance_m": distance_m,
+            "api_call_count": len(chunks),
+            "chunk_count": len(chunks),
+            "max_waypoints_per_call": int(args.kakao_navi_max_waypoints),
+            "inter_segment_dwell_seconds": int(args.kakao_navi_inter_segment_dwell_seconds),
+            "priority": KAKAO_NAVI_PRIORITY,
+            "sku_estimate": "kakao_navi_future_directions",
+        }
     return {
         "provider": "amap",
         "api": AMAP_DIRECTION_URL,
@@ -784,6 +1033,15 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
             raise RuntimeError(
                 f"Google Routes refresh would use {estimated_calls} call(s), above cap {args.google_routes_max_calls_per_refresh}"
             )
+    if provider == KAKAO_NAVI_PROVIDER:
+        estimated_calls = sum(
+            len(_balanced_route_point_chunks(route_points, int(args.kakao_navi_max_waypoints)))
+            for *_prefix, route_points in candidates
+        )
+        if estimated_calls > int(args.kakao_navi_max_calls_per_refresh):
+            raise RuntimeError(
+                f"Kakao Navi refresh would use {estimated_calls} call(s), above cap {args.kakao_navi_max_calls_per_refresh}"
+            )
 
     for route, route_id, stop_count, osrm_s, schedule, route_points in candidates:
         if args.dry_run:
@@ -792,6 +1050,13 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
             try:
                 if provider == GOOGLE_ROUTES_PROVIDER:
                     provider_result = _call_google_routes(
+                        args,
+                        route_points,
+                        departure_time=_planned_departure_from_schedule(schedule),
+                        now=measured_at,
+                    )
+                elif provider == KAKAO_NAVI_PROVIDER:
+                    provider_result = _call_kakao_navi(
                         args,
                         route_points,
                         departure_time=_planned_departure_from_schedule(schedule),
@@ -861,9 +1126,20 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         "route_start_time_count": len(route_start_times),
         "sample_due_routes_only": bool(args.sample_due_routes_only),
         "route_due_window_minutes": args.route_due_window_minutes,
-        "api": GOOGLE_ROUTES_URL if provider == GOOGLE_ROUTES_PROVIDER else AMAP_DIRECTION_URL,
+        "api": (
+            GOOGLE_ROUTES_URL
+            if provider == GOOGLE_ROUTES_PROVIDER
+            else KAKAO_NAVI_FUTURE_DIRECTIONS_URL
+            if provider == KAKAO_NAVI_PROVIDER
+            else AMAP_DIRECTION_URL
+        ),
         "strategy": args.strategy if provider == "amap" else None,
         "routing_preference": GOOGLE_ROUTES_ROUTING_PREFERENCE if provider == GOOGLE_ROUTES_PROVIDER else None,
+        "kakao_navi_priority": KAKAO_NAVI_PRIORITY if provider == KAKAO_NAVI_PROVIDER else None,
+        "kakao_navi_max_waypoints": args.kakao_navi_max_waypoints if provider == KAKAO_NAVI_PROVIDER else None,
+        "kakao_navi_inter_segment_dwell_seconds": (
+            args.kakao_navi_inter_segment_dwell_seconds if provider == KAKAO_NAVI_PROVIDER else None
+        ),
         "dry_run": bool(args.dry_run),
         "error_count": len(errors),
         **_summarize(route_rows),
@@ -880,7 +1156,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default="")
     parser.add_argument("--baseline-path", default="")
     parser.add_argument("--period", required=True, choices=("am_peak", "pm_peak", "off_peak"))
-    parser.add_argument("--provider", choices=("auto", "amap", GOOGLE_ROUTES_PROVIDER), default=DEFAULT_PROVIDER)
+    parser.add_argument("--provider", choices=("auto", "amap", GOOGLE_ROUTES_PROVIDER, KAKAO_NAVI_PROVIDER), default=DEFAULT_PROVIDER)
     parser.add_argument("--sample-date", default=os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DATE", ""))
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--side-tools-dir", type=Path, default=DEFAULT_SIDE_TOOLS_DIR)
@@ -902,6 +1178,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--google-routes-daily-cap", type=int, default=GOOGLE_ROUTES_DAILY_CAP)
     parser.add_argument("--google-routes-max-calls-per-refresh", type=int, default=GOOGLE_ROUTES_MAX_CALLS_PER_REFRESH)
     parser.add_argument("--google-routes-max-intermediates", type=int, default=GOOGLE_ROUTES_MAX_INTERMEDIATES)
+    parser.add_argument("--kakao-navi-usage-path", type=Path, default=DEFAULT_KAKAO_NAVI_USAGE_PATH)
+    parser.add_argument("--kakao-navi-monthly-safety-cap", type=int, default=KAKAO_NAVI_MONTHLY_SAFETY_CAP)
+    parser.add_argument("--kakao-navi-daily-cap", type=int, default=KAKAO_NAVI_DAILY_CAP)
+    parser.add_argument("--kakao-navi-max-calls-per-refresh", type=int, default=KAKAO_NAVI_MAX_CALLS_PER_REFRESH)
+    parser.add_argument("--kakao-navi-max-waypoints", type=int, default=KAKAO_NAVI_MAX_WAYPOINTS)
+    parser.add_argument("--kakao-navi-inter-segment-dwell-seconds", type=int, default=KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS)
     parser.add_argument("--sleep-seconds", type=float, default=DEFAULT_SLEEP_SECONDS)
     parser.add_argument("--timeout-seconds", type=int, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--dry-run", action="store_true")

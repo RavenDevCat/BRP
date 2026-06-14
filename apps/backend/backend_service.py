@@ -1686,6 +1686,112 @@ class JobConcurrencyGate:
         )
 
 
+def _normalize_ai_audit_language(language: Any) -> tuple[str, str]:
+    raw = str(language or "").strip()
+    normalized = raw.lower()
+    if (
+        normalized.startswith("ko")
+        or normalized.startswith("kr")
+        or "korean" in normalized
+        or "한국" in raw
+        or "한글" in raw
+    ):
+        return "ko", "Korean"
+    return "en", "English"
+
+
+def _ai_audit_language_key(language: Any) -> str:
+    return _normalize_ai_audit_language(language)[0]
+
+
+def _ai_audit_report_map(record: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(record, dict):
+        return {}
+    reports_by_language: dict[str, dict[str, Any]] = {}
+    reports = record.get("ai_audit_reports")
+    if isinstance(reports, dict):
+        for key, value in reports.items():
+            if isinstance(value, dict) and value:
+                reports_by_language[_ai_audit_language_key(key)] = dict(value)
+    legacy_report = record.get("ai_audit_report")
+    if isinstance(legacy_report, dict) and legacy_report:
+        legacy_key = _ai_audit_language_key(legacy_report.get("language") or "English")
+        reports_by_language.setdefault(legacy_key, dict(legacy_report))
+    return reports_by_language
+
+
+def _select_ai_audit_report(
+    reports_by_language: dict[str, dict[str, Any]], requested_key: str
+) -> dict[str, Any]:
+    return dict(
+        reports_by_language.get(requested_key)
+        or reports_by_language.get("en")
+        or reports_by_language.get("ko")
+        or {}
+    )
+
+
+def _flatten_location_marker_values(value: Any, depth: int = 0) -> list[str]:
+    if depth > 4:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (int, float, bool)):
+        return [str(value)]
+    if isinstance(value, list):
+        markers: list[str] = []
+        for item in value[:20]:
+            markers.extend(_flatten_location_marker_values(item, depth + 1))
+        return markers
+    if isinstance(value, dict):
+        markers: list[str] = []
+        for item in value.values():
+            markers.extend(_flatten_location_marker_values(item, depth + 1))
+        return markers
+    return []
+
+
+def _collect_location_markers(value: Any, depth: int = 0) -> list[str]:
+    if depth > 5:
+        return []
+    markers: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key).lower()
+            key_is_location = any(
+                fragment in key_text
+                for fragment in (
+                    "city",
+                    "country",
+                    "locale",
+                    "market",
+                    "region",
+                    "traffic_location",
+                )
+            )
+            if key_is_location:
+                markers.extend(_flatten_location_marker_values(item))
+            if isinstance(item, (dict, list)):
+                markers.extend(_collect_location_markers(item, depth + 1))
+    elif isinstance(value, list):
+        for item in value[:30]:
+            markers.extend(_collect_location_markers(item, depth + 1))
+    return markers
+
+
+def _is_korean_ai_audit_job(record: dict[str, Any]) -> bool:
+    markers: list[str] = []
+    for section_key in ("prepared_payload_summary", "metadata", "config", "result"):
+        markers.extend(_collect_location_markers(record.get(section_key)))
+    marker_text = " | ".join(markers).lower()
+    if not marker_text:
+        return False
+    return any(
+        token in marker_text
+        for token in ("south korea", "korea", "seoul", "kr", "대한민국", "한국")
+    )
+
+
 class JobStore:
     def __init__(self, jobs_dir: Path) -> None:
         self.jobs_dir = jobs_dir
@@ -1845,14 +1951,26 @@ class JobStore:
             return deepcopy(record)
 
     def begin_ai_audit(
-        self, job_id: str, *, force: bool = False
+        self,
+        job_id: str,
+        *,
+        force: bool = False,
+        required_languages: list[str] | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         with self.lock:
             record = self._load_job_unlocked(job_id)
             if not record:
                 return "missing", None
-            existing_report = record.get("ai_audit_report")
-            if isinstance(existing_report, dict) and existing_report and not force:
+            required_keys = {
+                _ai_audit_language_key(language)
+                for language in (required_languages or ["English"])
+            }
+            existing_reports = _ai_audit_report_map(record)
+            if (
+                required_keys
+                and all(key in existing_reports for key in required_keys)
+                and not force
+            ):
                 return "cached", deepcopy(record)
             if str(record.get("ai_audit_status", "")).strip().lower() == "running":
                 return "running", deepcopy(record)
@@ -4066,22 +4184,35 @@ class BackendHandler(BaseHTTPRequestHandler):
                         403, {"error": f"Job is not available for user: {user_email}"}
                     )
                     return
+                requested_key, requested_language = _normalize_ai_audit_language(
+                    str(payload.get("language") or "").strip() or None
+                )
                 force_ai_audit = bool(payload.get("force"))
+                required_languages = (
+                    ["English", "Korean"]
+                    if _is_korean_ai_audit_job(job_record)
+                    else [requested_language]
+                )
                 audit_state, audit_record = JOB_STORE.begin_ai_audit(
-                    job_id, force=force_ai_audit
+                    job_id,
+                    force=force_ai_audit,
+                    required_languages=required_languages,
                 )
                 if audit_state == "missing" or not audit_record:
                     self._send_json(404, {"error": f"Job not found: {job_id}"})
                     return
+                reports_by_language = _ai_audit_report_map(audit_record)
+                selected_report = _select_ai_audit_report(
+                    reports_by_language, requested_key
+                )
                 if audit_state == "cached":
                     self._send_json(
                         200,
                         {
                             "job_id": job_id,
                             "ai_audit_status": "succeeded",
-                            "ai_audit_report": dict(
-                                audit_record.get("ai_audit_report") or {}
-                            ),
+                            "ai_audit_report": selected_report,
+                            "ai_audit_reports": reports_by_language,
                             "cached": True,
                         },
                     )
@@ -4092,19 +4223,28 @@ class BackendHandler(BaseHTTPRequestHandler):
                         {
                             "job_id": job_id,
                             "ai_audit_status": "running",
-                            "ai_audit_report": dict(
-                                audit_record.get("ai_audit_report") or {}
-                            ),
+                            "ai_audit_report": selected_report,
+                            "ai_audit_reports": reports_by_language,
                             "message": "AI audit generation is already running for this job.",
                         },
                     )
                     return
                 try:
-                    ai_report = generate_ai_audit_report(
-                        audit_record,
-                        force=force_ai_audit,
-                        language=str(payload.get("language") or "").strip() or None,
-                    )
+                    for language in required_languages:
+                        language_key, language_label = _normalize_ai_audit_language(
+                            language
+                        )
+                        if not force_ai_audit and language_key in reports_by_language:
+                            continue
+                        report_source_record = deepcopy(audit_record)
+                        report_source_record["ai_audit_report"] = (
+                            reports_by_language.get(language_key)
+                        )
+                        reports_by_language[language_key] = generate_ai_audit_report(
+                            report_source_record,
+                            force=force_ai_audit,
+                            language=language_label,
+                        )
                 except Exception as exc:
                     JOB_STORE.update_job(
                         job_id,
@@ -4113,9 +4253,13 @@ class BackendHandler(BaseHTTPRequestHandler):
                         ai_audit_error=str(exc),
                     )
                     raise
+                selected_report = _select_ai_audit_report(
+                    reports_by_language, requested_key
+                )
                 updated = JOB_STORE.update_job(
                     job_id,
-                    ai_audit_report=ai_report,
+                    ai_audit_report=selected_report,
+                    ai_audit_reports=reports_by_language,
                     ai_audit_status="succeeded",
                     ai_audit_finished_at=utc_now_iso(),
                     ai_audit_error=None,
@@ -4128,7 +4272,8 @@ class BackendHandler(BaseHTTPRequestHandler):
                         {
                             "job_id": job_id,
                             "ai_audit_status": "succeeded",
-                            "ai_audit_report": ai_report,
+                            "ai_audit_report": selected_report,
+                            "ai_audit_reports": reports_by_language,
                         },
                     )
                     return

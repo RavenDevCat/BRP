@@ -401,6 +401,7 @@ function AiAuditPanel({
   const t = useT();
   const { lang } = useLanguage();
   const queryClient = useQueryClient();
+  const requestedReportKey = lang === "ko" ? "ko" : "en";
   const auditMutation = useMutation({
     mutationFn: ({ force }: { force: boolean }) => generateAiAudit(job.job_id, { force, language: lang === "ko" ? "Korean" : "English" }),
     onSuccess: async () => {
@@ -409,7 +410,19 @@ function AiAuditPanel({
     },
   });
 
-  const report = asRecord(auditMutation.data?.ai_audit_report || job.ai_audit_report);
+  const reportsByLanguage = useMemo(
+    () => ({
+      ...collectAiAuditReports(job.ai_audit_reports, job.ai_audit_report),
+      ...collectAiAuditReports(auditMutation.data?.ai_audit_reports, auditMutation.data?.ai_audit_report),
+    }),
+    [
+      job.ai_audit_reports,
+      job.ai_audit_report,
+      auditMutation.data?.ai_audit_reports,
+      auditMutation.data?.ai_audit_report,
+    ],
+  );
+  const report = asRecord(reportsByLanguage[requestedReportKey]);
   const reportMarkdown = stringValue(report.report_markdown);
   const aiStatus = stringValue(auditMutation.data?.ai_audit_status || job.ai_audit_status).toLowerCase();
   const aiRunning = aiStatus === "running" || auditMutation.isPending;
@@ -467,7 +480,7 @@ function AiAuditPanel({
                 <a
                   className={buttonClassName("secondary")}
                   href={`data:text/html;charset=utf-8,${encodeURIComponent(downloadHtml)}`}
-                  download={`ai_audit_report_${job.job_id}.html`}
+                  download={`ai_audit_report_${job.job_id}_${requestedReportKey}.html`}
                 >
                   <Download className="h-4 w-4" aria-hidden="true" />
                   {t("Download HTML")}
@@ -2242,6 +2255,40 @@ function translateCurrentPlanRecommendation(
   }
 
   return t(normalized, normalized);
+}
+
+function collectAiAuditReports(
+  reports: Record<string, Record<string, unknown>> | null | undefined,
+  legacyReport: Record<string, unknown> | null | undefined,
+): Record<string, Record<string, unknown>> {
+  const collected: Record<string, Record<string, unknown>> = {};
+  if (reports && typeof reports === "object") {
+    Object.entries(reports).forEach(([key, value]) => {
+      const report = asRecord(value);
+      if (Object.keys(report).length) {
+        collected[getAiAuditLanguageKey(key)] = report;
+      }
+    });
+  }
+  const legacy = asRecord(legacyReport);
+  if (Object.keys(legacy).length) {
+    collected[getAiAuditLanguageKey(legacy.language || "English")] ??= legacy;
+  }
+  return collected;
+}
+
+function getAiAuditLanguageKey(language: unknown): "en" | "ko" {
+  const normalized = stringValue(language).trim().toLowerCase();
+  if (
+    normalized.startsWith("ko")
+    || normalized.startsWith("kr")
+    || normalized.includes("korean")
+    || normalized.includes("한국")
+    || normalized.includes("한글")
+  ) {
+    return "ko";
+  }
+  return "en";
 }
 
 type ScenarioRow = {

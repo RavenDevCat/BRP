@@ -49,6 +49,7 @@ export type JobRecord = JobSummary & {
     traceback?: string | null;
     ai_audit_status?: string | null;
     ai_audit_report?: Record<string, unknown> | null;
+    ai_audit_reports?: Record<string, Record<string, unknown>> | null;
     ai_audit_error?: string | null;
 };
 
@@ -56,6 +57,7 @@ export type AiAuditResponse = {
     job_id: string;
     ai_audit_status: string;
     ai_audit_report?: Record<string, unknown> | null;
+    ai_audit_reports?: Record<string, Record<string, unknown>> | null;
     cached?: boolean;
     message?: string;
 };

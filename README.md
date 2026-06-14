@@ -13,12 +13,12 @@ geocode, and demand routing flows.
 
 - Route Audit: upload a current bus plan workbook, validate it, run planning
   baselines, and review AI Audit, Audit Detail, Actions, Baselines, Maps, and
-  Diagnostics. The Maps tab includes a React MapLibre interactive route map
-  with legacy HTML map artifacts retained as fallback.
+  Diagnostics. The Maps tab includes a React MapLibre interactive route map.
 - Distance & Cost: check reference-stop distance and estimate route-level cost
   from uploaded workbook data.
 - Fleet Planner: preview demand, geocode/cluster stops, generate route plans,
-  download generated workbooks, and submit generated plans as audit jobs.
+  inspect them in the shared interactive route map, download generated
+  workbooks/maps, and submit generated plans as audit jobs.
 - Provider coordination: share Kakao, Google, AMap, and DeepSeek rate-limit
   state across worker processes.
 - Runtime continuity: preserve job history, caches, generated outputs, usage
@@ -165,6 +165,7 @@ beijing/
 suzhou/
 xian/
 south-korea/
+bangkok/
 ```
 
 Only deploy the regions that a server actually serves. See
@@ -183,6 +184,8 @@ BRP supports two traffic-profile sampling modes:
   running a daily realtime timer. Google Routes is not used for KR traffic
   profiles because Seoul driving probes returned empty routes in production
   diagnostics.
+- Bangkok currently uses a conservative static traffic multiplier until a richer
+  Bangkok traffic-profile sampling strategy is added.
 
 Useful checked-in wrappers:
 

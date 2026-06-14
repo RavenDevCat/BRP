@@ -102,6 +102,15 @@ route label ordering, selected-route focus, selected-route direction arrows,
 stop hover/click inspection, stop sequence drill-in, route status badges, and a
 route context toggle.
 
+### Fleet Planner Maps
+
+Fleet Planner uses the same React MapLibre route-map component when a generated
+plan includes structured `map_data`. The Fleet Planner results workspace keeps
+the generated plan, map, and review data in separate `Plan`, `Map`, and
+`Review` tabs. Compatible legacy history records can be hydrated into
+structured map data from saved route details; records without enough route data
+must be rebuilt to use the interactive map.
+
 ## Backend
 
 Location: `apps/backend`
@@ -176,6 +185,15 @@ Current provider gates:
 - `google-geocode`
 - `deepseek-chat-completions`
 
+Current market geocoding roles:
+
+- China route-audit deployments use AMap with city/adcode/bounding-box
+  plausibility checks for supported OSRM cities.
+- South Korea uses Korea-wide plausibility checks so Seoul workbooks can
+  resolve valid metro-area addresses through the configured provider chain.
+- Bangkok/BK uses Google geocoding as the primary provider and a Bangkok market
+  bounding box for plausibility checks.
+
 DeepSeek has a separate default setting:
 
 ```text
@@ -216,6 +234,7 @@ Current live OSRM coverage:
 - Suzhou: `127.0.0.1:5004`
 - Xi'an: `127.0.0.1:5005`
 - South Korea: `127.0.0.1:5006`
+- Bangkok/BK: `127.0.0.1:5007`
 
 Production and staging share OSRM because it is read-only routing infrastructure. Mutable runtime data such as jobs, outputs, and caches remains separate between staging and production.
 

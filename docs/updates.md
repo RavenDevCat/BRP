@@ -4,6 +4,47 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-14
+
+### Fleet Planner Map Workspace Completed
+
+- Fleet Planner history results now use the shared React MapLibre route map
+  instead of the old embedded HTML map panel.
+- The Fleet Planner results workspace is consolidated into `Plan`, `Map`, and
+  `Review` tabs so generated plans, route maps, and supporting input checks are
+  easier to find.
+- Fleet Planner maps now include the same map actions users expect elsewhere:
+  Open fullscreen map, Download interactive map, and Download workbook.
+- The fullscreen Fleet Planner map opens in-page with a close control instead
+  of navigating users to a separate raw HTML page.
+- Fleet Planner route maps now refit to the available route geometry and stops
+  when the map loads, reducing cases where users had to click a route before
+  seeing the route area.
+- Legacy Fleet Planner history records that have route data but no structured
+  map data are hydrated by the backend so compatible old runs can still render
+  in the interactive map. Very old records without enough route detail may need
+  to be rebuilt.
+
+### Bangkok Market Routing Foundation
+
+- Added Bangkok/BK routing support as the current Thailand-market focus.
+- Bangkok workbooks use Google geocoding by default and route through the
+  Bangkok OSRM endpoint when available.
+- Bangkok route timing currently uses a conservative all-day static traffic
+  multiplier until richer Bangkok traffic-profile sampling is implemented.
+- The OSRM scripts and environment examples now include Bangkok/BK names while
+  keeping Thailand aliases for backward compatibility with older workbooks or
+  local env files.
+
+### Production Sync
+
+- CN production and KR production were promoted to the same runtime release as
+  staging after validation.
+- Production frontend assets were built once on staging and then synced to
+  production targets; production servers did not run ad-hoc frontend builds.
+- Existing completed jobs remain immutable snapshots. Rerun jobs when users
+  need route plans rebuilt under the new Fleet Planner/Bangkok behavior.
+
 ## 2026-06-13
 
 ### Time Impact Decision Review Completed

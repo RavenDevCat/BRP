@@ -41,6 +41,10 @@ GOOGLE_GEOCODE_BASE_URL = os.environ.get(
     "https://maps.googleapis.com/maps/api/geocode/json",
 ).strip()
 GOOGLE_GEOCODE_TIMEOUT_SECONDS = float(os.environ.get("GOOGLE_GEOCODE_TIMEOUT_SECONDS", "8") or 8)
+BK_GEOCODE_MODE = os.environ.get("BRP_BK_GEOCODE_MODE", "").strip().lower()
+GOOGLE_GEOCODE_RELAY_URL = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_URL", "").strip()
+GOOGLE_GEOCODE_RELAY_TOKEN = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TOKEN", "").strip()
+GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS = float(os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS", "8") or 8)
 REQUEST_TIMEOUT = 20
 KAKAO_REQUEST_MAX_RETRIES = 3
 
@@ -150,6 +154,10 @@ def require_api_key(env_name: str, value: str, provider_label: str) -> str:
         f"{provider_label} API key is not configured. "
         f"Set environment variable `{env_name}` before running this workflow."
     )
+
+
+def use_google_geocode_relay(country: str) -> bool:
+    return is_bangkok_market_country(country) and BK_GEOCODE_MODE in {"google_relay", "relay"}
 
 
 def current_google_usage_month_key() -> str:
@@ -706,17 +714,48 @@ def kakao_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimit
     raise RuntimeError(f"Kakao request failed: {endpoint}")
 
 
-def google_geocode_request_json(params: dict[str, Any]) -> dict[str, Any]:
-    api_key = require_api_key("GOOGLE_GEOCODE_API_KEY", GOOGLE_GEOCODE_API_KEY, "Google Geocoding")
+def google_geocode_relay_request_json(country: str, params: dict[str, Any]) -> dict[str, Any]:
+    if not GOOGLE_GEOCODE_RELAY_URL:
+        raise RuntimeError("Google geocode relay URL is not configured. Set BRP_GOOGLE_GEOCODE_RELAY_URL.")
+    if not GOOGLE_GEOCODE_RELAY_TOKEN:
+        raise RuntimeError("Google geocode relay token is not configured. Set BRP_GOOGLE_GEOCODE_RELAY_TOKEN.")
     GOOGLE_GEOCODE_LIMITER.wait()
-    reserve_google_geocode_monthly_usage()
-    response = requests.get(
-        GOOGLE_GEOCODE_BASE_URL,
-        params={**params, "key": api_key},
-        timeout=GOOGLE_GEOCODE_TIMEOUT_SECONDS,
+    response = requests.post(
+        GOOGLE_GEOCODE_RELAY_URL,
+        json={"country": country, "params": params},
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {GOOGLE_GEOCODE_RELAY_TOKEN}",
+        },
+        timeout=GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS,
     )
-    response.raise_for_status()
-    payload = response.json()
+    try:
+        payload = response.json()
+    except Exception:
+        payload = {"error": response.text[:200]}
+    if response.status_code >= 400:
+        error_message = payload.get("error") if isinstance(payload, dict) else ""
+        details = f": {error_message}" if error_message else ""
+        raise RuntimeError(f"Google geocode relay request failed: HTTP {response.status_code}{details}")
+    if not isinstance(payload, dict):
+        raise RuntimeError("Google geocode relay returned a non-object payload.")
+    return payload
+
+
+def google_geocode_request_json(params: dict[str, Any], country: str = "") -> dict[str, Any]:
+    if use_google_geocode_relay(country):
+        payload = google_geocode_relay_request_json(country, params)
+    else:
+        api_key = require_api_key("GOOGLE_GEOCODE_API_KEY", GOOGLE_GEOCODE_API_KEY, "Google Geocoding")
+        GOOGLE_GEOCODE_LIMITER.wait()
+        reserve_google_geocode_monthly_usage()
+        response = requests.get(
+            GOOGLE_GEOCODE_BASE_URL,
+            params={**params, "key": api_key},
+            timeout=GOOGLE_GEOCODE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        payload = response.json()
     status = str(payload.get("status", "")).strip().upper()
     if status in {"OK", "ZERO_RESULTS"}:
         return payload
@@ -733,9 +772,6 @@ def google_country_code(country: str) -> str:
         "republic of korea": "KR",
         "대한민국": "KR",
         "한국": "KR",
-        "bangkok": "TH",
-        "bk": "TH",
-        "bangkok market": "TH",
         "bangkok": "TH",
         "bk": "TH",
         "bangkok market": "TH",
@@ -1186,7 +1222,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
 
     for query in queries:
         try:
-            payload = google_geocode_request_json(google_geocode_params(country, query))
+            payload = google_geocode_request_json(google_geocode_params(country, query), country=country)
             results = payload.get("results") or []
             if not results:
                 continue

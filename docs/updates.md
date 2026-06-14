@@ -36,6 +36,16 @@ It is not a code changelog. Record changes here when users or operators should k
   keeping Thailand aliases for backward compatibility with older workbooks or
   local env files.
 
+### Bangkok Google Geocode Relay
+
+- Added a narrow Google geocode relay adapter for Bangkok/BK only, intended for
+  environments that cannot call Google directly while Thailand-market testing is
+  still hosted from existing servers.
+- The relay requires a bearer token, keeps its own usage counter, enforces
+  daily/monthly caps, and rejects non-Bangkok requests by default.
+- Route Audit and shared client geocoding only use the relay when
+  `BRP_BK_GEOCODE_MODE=google_relay` is explicitly enabled.
+
 ### Production Sync
 
 - CN production and KR production were promoted to the same runtime release as

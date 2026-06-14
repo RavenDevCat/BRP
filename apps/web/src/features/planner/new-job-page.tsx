@@ -16,6 +16,7 @@ import {
   type WorkbookPreview,
 } from "@/lib/api";
 import { formatNumber } from "@/lib/format";
+import { useT } from "@/lib/i18n/context";
 
 type PlannerConfigKey = keyof PlannerConfigPayload;
 
@@ -33,6 +34,7 @@ const COMFORT_LOAD_FACTOR = 0.85;
 const FULL_CAPACITY_LOAD_FACTOR = 1.0;
 
 export function NewJobPage() {
+  const t = useT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
@@ -91,7 +93,7 @@ export function NewJobPage() {
   const previewMutation = useMutation({
     mutationFn: async () => {
       if (!file || !fileBase64) {
-        throw new Error("Select a workbook first.");
+        throw new Error(t("Select a workbook first."));
       }
       return previewWorkbook({ file_name: file.name, file_base64: fileBase64, config });
     },
@@ -104,7 +106,7 @@ export function NewJobPage() {
   const submitMutation = useMutation({
     mutationFn: async () => {
       if (!file || !fileBase64) {
-        throw new Error("Select a workbook first.");
+        throw new Error(t("Select a workbook first."));
       }
       let submitConfig = config;
       if (!preview) {
@@ -127,11 +129,11 @@ export function NewJobPage() {
   });
 
   const jobNamePreview = useMemo(() => {
-    const fallback = file?.name ? file.name.replace(/\.[^.]+$/, "") : "Untitled job";
+    const fallback = file?.name ? file.name.replace(/\.[^.]+$/, "") : t("Untitled job");
     const baseName = preview?.job_default_name || fallback;
     const suffix = jobCustomName.trim().replace(/\s+/g, " ");
     return suffix ? `${baseName} - ${suffix}` : baseName;
-  }, [file?.name, jobCustomName, preview?.job_default_name]);
+  }, [file?.name, jobCustomName, preview?.job_default_name, t]);
 
   async function handleFileChange(nextFile: File | null) {
     setFile(nextFile);
@@ -144,13 +146,13 @@ export function NewJobPage() {
     }
     const suffix = nextFile.name.split(".").pop()?.toLowerCase();
     if (!suffix || !["xlsx", "xlsm"].includes(suffix)) {
-      setFileError("Use an .xlsx or .xlsm workbook.");
+      setFileError(t("Use an .xlsx or .xlsm workbook."));
       return;
     }
     try {
       setFileBase64(await fileToBase64(nextFile));
     } catch (error) {
-      setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
+      setFileError(error instanceof Error ? error.message : t("Workbook could not be read."));
     }
   }
 
@@ -161,11 +163,11 @@ export function NewJobPage() {
     <div className="space-y-6 pb-16 lg:pb-0">
       <section className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
         <div>
-          <p className="text-sm font-medium text-primary">Current plan audit</p>
-          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">New audit</h1>
+          <p className="text-sm font-medium text-primary">{t("Current plan audit")}</p>
+          <h1 className="mt-2 text-2xl font-semibold tracking-normal text-foreground">{t("New audit")}</h1>
         </div>
         <Link to="/jobs" className={buttonClassName("secondary")}>
-          Audit history
+          {t("Audit history")}
         </Link>
       </section>
 
@@ -175,21 +177,21 @@ export function NewJobPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
-                <h2 className="text-sm font-semibold">Workbook</h2>
+                <h2 className="text-sm font-semibold">{t("Workbook")}</h2>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
-                <div className="text-sm text-muted-foreground">Upload a completed current-plan workbook.</div>
+                <div className="text-sm text-muted-foreground">{t("Upload a completed current-plan workbook.")}</div>
                 <a className={buttonClassName("secondary")} href={getWorkbookTemplateUrl()}>
                   <Download className="h-4 w-4" aria-hidden="true" />
-                  Template
+                  {t("Template")}
                 </a>
               </div>
 
               <label className="flex min-h-32 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
                 <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
-                <span className="text-sm font-medium">{file?.name || "Select workbook"}</span>
+                <span className="text-sm font-medium">{file?.name || t("Select workbook")}</span>
                 <span className="mt-1 text-xs text-muted-foreground">current_plan_assignments + current_plan_fleet</span>
                 <input
                   className="sr-only"
@@ -207,7 +209,7 @@ export function NewJobPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
-                <h2 className="text-sm font-semibold">Run settings</h2>
+                <h2 className="text-sm font-semibold">{t("Run settings")}</h2>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -223,7 +225,7 @@ export function NewJobPage() {
                   >
                     {SERVICE_DIRECTION_OPTIONS.map((option) => (
                       <option key={option} value={option}>
-                        {option}
+                        {t(option)}
                       </option>
                     ))}
                   </select>
@@ -255,7 +257,7 @@ export function NewJobPage() {
                   >
                     {TRAFFIC_PROFILE_OPTIONS.map((option) => (
                       <option key={option} value={option}>
-                        {option}
+                        {t(option)}
                       </option>
                     ))}
                   </select>
@@ -278,7 +280,7 @@ export function NewJobPage() {
                   className={fieldClassName}
                   value={jobCustomName}
                   onChange={(event) => setJobCustomName(event.target.value)}
-                  placeholder="May audit before parent review"
+                  placeholder={t("May audit before parent review")}
                 />
               </Field>
 
@@ -293,7 +295,7 @@ export function NewJobPage() {
                       })
                     }
                   />
-                  <span>Improve comfort</span>
+                  <span>{t("Improve comfort")}</span>
                 </ToggleOption>
                 <ToggleOption tooltip="Adds a comparison scenario that groups eligible stops near subway stations before optimizing.">
                   <input
@@ -302,7 +304,7 @@ export function NewJobPage() {
                     disabled={Boolean(preview?.subway_aggregation_block_reason)}
                     onChange={(event) => updateUserConfig({ include_subway_aggregation_scenario: event.target.checked })}
                   />
-                  <span>Subway baseline</span>
+                  <span>{t("Subway baseline")}</span>
                 </ToggleOption>
                 <ToggleOption tooltip="Adds a comparison scenario that clusters nearby stops before optimizing.">
                   <input
@@ -310,7 +312,7 @@ export function NewJobPage() {
                     checked={config.include_nearby_aggregation_scenario}
                     onChange={(event) => updateUserConfig({ include_nearby_aggregation_scenario: event.target.checked })}
                   />
-                  <span>Nearby baseline</span>
+                  <span>{t("Nearby baseline")}</span>
                 </ToggleOption>
               </div>
 
@@ -379,16 +381,16 @@ export function NewJobPage() {
                   icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
                   onClick={() => previewMutation.mutate()}
                 >
-                  Validate workbook
+                  {t("Validate workbook")}
                 </Button>
                 <Button
                   type="button"
                   disabled={!canSubmit}
-                  title={preview ? undefined : "Workbook will be validated before the audit starts."}
+                  title={preview ? undefined : t("Workbook will be validated before the audit starts.")}
                   icon={submitMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   onClick={() => submitMutation.mutate()}
                 >
-                  Run audit
+                  {t("Run audit")}
                 </Button>
               </div>
             </CardContent>
@@ -398,11 +400,11 @@ export function NewJobPage() {
         <aside className="space-y-4">
           <Card>
             <CardHeader>
-              <h2 className="text-sm font-semibold">Job</h2>
+              <h2 className="text-sm font-semibold">{t("Job")}</h2>
             </CardHeader>
             <CardContent className="space-y-4 text-sm">
               <div>
-                <div className="text-xs uppercase text-muted-foreground">Name</div>
+                <div className="text-xs uppercase text-muted-foreground">{t("Name")}</div>
                 <div className="mt-1 break-words font-medium">{jobNamePreview}</div>
               </div>
               {preview ? <PreviewSummary preview={preview} /> : <EmptyPreview />}
@@ -411,7 +413,7 @@ export function NewJobPage() {
 
           <Card>
             <CardHeader>
-              <h2 className="text-sm font-semibold">Fleet slots</h2>
+              <h2 className="text-sm font-semibold">{t("Fleet slots")}</h2>
             </CardHeader>
             <CardContent className="space-y-3">
               <FleetSlot label={config.large_bus_name} seats={config.large_bus_capacity} count={config.large_bus_max_count} />
@@ -432,20 +434,22 @@ const toggleClassName =
   "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
 
 function ToggleOption({ tooltip, children }: { tooltip: string; children: ReactNode }) {
+  const t = useT();
   return (
     <label className={`${toggleClassName} group relative cursor-pointer`}>
       {children}
       <span className="pointer-events-none absolute left-3 top-[calc(100%+6px)] z-20 w-72 translate-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs font-normal leading-relaxed text-muted-foreground opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-        {tooltip}
+        {t(tooltip)}
       </span>
     </label>
   );
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
+  const t = useT();
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium uppercase text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium uppercase text-muted-foreground">{t(label)}</span>
       {children}
     </label>
   );
@@ -464,6 +468,7 @@ function SettingsSection({
   onReset?: () => void;
   children: ReactNode;
 }) {
+  const t = useT();
   return (
     <details className="group rounded-md border border-border bg-muted/40">
       <summary className="cursor-pointer list-none px-3 py-3 marker:hidden">
@@ -471,13 +476,13 @@ function SettingsSection({
           <span className="inline-flex min-w-0 items-start gap-2">
             <span className="mt-0.5 text-muted-foreground transition group-open:rotate-90">&gt;</span>
             <span className="min-w-0">
-              <span className="block text-sm font-semibold text-foreground">{title}</span>
-              <span className="mt-1 block text-xs font-normal text-muted-foreground">{description}</span>
+              <span className="block text-sm font-semibold text-foreground">{t(title)}</span>
+              <span className="mt-1 block text-xs font-normal text-muted-foreground">{t(description)}</span>
             </span>
           </span>
           <span className="flex w-fit shrink-0 items-center gap-2">
-            <Badge tone="info">Optional</Badge>
-            {customized ? <Badge tone="warning">Custom</Badge> : null}
+            <Badge tone="info">{t("Optional")}</Badge>
+            {customized ? <Badge tone="warning">{t("Custom")}</Badge> : null}
             {customized && onReset ? (
               <button
                 type="button"
@@ -488,7 +493,7 @@ function SettingsSection({
                   onReset();
                 }}
               >
-                Reset
+                {t("Reset")}
               </button>
             ) : null}
           </span>
@@ -530,6 +535,7 @@ function NumberField({
 }
 
 function PreviewSummary({ preview }: { preview: WorkbookPreview }) {
+  const t = useT();
   const summary = preview.summary;
   return (
     <div className="grid grid-cols-2 gap-3">
@@ -538,7 +544,7 @@ function PreviewSummary({ preview }: { preview: WorkbookPreview }) {
       <SummaryMetric label="Planning stops" value={summary.planning_stop_count} />
       <SummaryMetric label="Fleet types" value={summary.fleet_count} />
       <div className="col-span-2">
-        <div className="mb-2 text-xs uppercase text-muted-foreground">Bus types</div>
+        <div className="mb-2 text-xs uppercase text-muted-foreground">{t("Bus types")}</div>
         <div className="flex flex-wrap gap-2">
           {toStringArray(summary.bus_types).map((item) => (
             <Badge key={item} tone="info">
@@ -552,28 +558,31 @@ function PreviewSummary({ preview }: { preview: WorkbookPreview }) {
 }
 
 function EmptyPreview() {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-muted px-3 py-4 text-sm text-muted-foreground">
-      No workbook validated
+      {t("No workbook validated")}
     </div>
   );
 }
 
 function SummaryMetric({ label, value }: { label: string; value: unknown }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-muted px-3 py-2">
-      <div className="text-xs uppercase text-muted-foreground">{label}</div>
+      <div className="text-xs uppercase text-muted-foreground">{t(label)}</div>
       <div className="mt-1 text-lg font-semibold">{formatNumber(value)}</div>
     </div>
   );
 }
 
 function FleetSlot({ label, seats, count }: { label: string; seats: number; count: number }) {
+  const t = useT();
   return (
     <div className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
       <div className="min-w-0">
         <div className="truncate font-medium">{label}</div>
-        <div className="text-xs text-muted-foreground">{formatNumber(seats)} seats</div>
+        <div className="text-xs text-muted-foreground">{formatNumber(seats)} {t("seats")}</div>
       </div>
       <Badge tone={count > 0 ? "success" : "neutral"}>{formatNumber(count)}</Badge>
     </div>

@@ -259,11 +259,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
     user_prompt = (
         f"Write the report in {report_language}. Maximum 3,200 characters.\n"
         "Format as a readable Markdown briefing with these section headings only:\n"
-        "## Executive Verdict\n"
-        "## Current Scheme Facts\n"
-        "## Baseline Comparison\n"
-        "## Priority Actions\n"
-        "## Validation Notes\n\n"
+        f"{_ai_audit_section_headings(report_language)}\n\n"
         "Style rules:\n"
         "- Start directly with the first heading; do not add a title line.\n"
         "- Do not use horizontal rules, quote blocks, tables, code fences, or decorative separators.\n"
@@ -309,3 +305,26 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "report_markdown": report_markdown[:6000],
         "input_policy": "Aggregated route metrics only; full address list excluded.",
     }
+
+
+def _ai_audit_section_headings(language: str) -> str:
+    normalized = language.strip().lower()
+    if "korean" in normalized or "한국" in normalized or "한글" in normalized:
+        return "\n".join(
+            [
+                "## 종합 판단",
+                "## 현행 계획 사실",
+                "## 기준선 비교",
+                "## 우선 조치",
+                "## 검증 메모",
+            ],
+        )
+    return "\n".join(
+        [
+            "## Executive Verdict",
+            "## Current Scheme Facts",
+            "## Baseline Comparison",
+            "## Priority Actions",
+            "## Validation Notes",
+        ],
+    )

@@ -339,7 +339,7 @@ function JobHistoryMobilePanel({
                         <button
                             type="button"
                             className={buttonClassName("ghost")}
-                            aria-label="Refresh Route Audit history"
+                            aria-label={t("Refresh Route Audit history")}
                             onClick={onRefresh}
                         >
                             <RefreshCw
@@ -597,8 +597,8 @@ function JobHistorySubList({
                                         ? "neutral"
                                         : getJobStatusTone(job.status)
                                 }
-                            >
-                                {job.status}
+                                >
+                                {t(job.status)}
                             </Badge>
                         </div>
                         <div
@@ -686,7 +686,7 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                         </span>
                     </div>
                 </div>
-                <Badge tone={getJobStatusTone(job.status)}>{job.status}</Badge>
+                <Badge tone={getJobStatusTone(job.status)}>{t(job.status)}</Badge>
             </div>
 
             <JobMetrics job={job} />

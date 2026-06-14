@@ -2,8 +2,10 @@ import type { JobRecord } from "@/lib/api";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatDistanceKmFromMeters, formatNumber } from "@/lib/format";
 import { currentPlanAssignmentCount, jobInputStopCount } from "@/features/jobs/summary-metrics";
+import { useT } from "@/lib/i18n/context";
 
 export function JobMetrics({ job }: { job: JobRecord }) {
+  const t = useT();
   const summary = job.prepared_payload_summary || {};
   const result = asRecord(job.result);
   const structured = asRecord(result.structured_results);
@@ -38,13 +40,13 @@ export function JobMetrics({ job }: { job: JobRecord }) {
       {metrics.map((metric) => (
         <Card key={metric.label}>
           <CardHeader>
-            <div className="text-xs font-medium uppercase text-muted-foreground" title={metric.detail}>
-              {metric.label}
+            <div className="text-xs font-medium uppercase text-muted-foreground" title={t(metric.detail)}>
+              {t(metric.label)}
             </div>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-semibold text-foreground">{metric.value}</div>
-            <div className="mt-1 min-h-8 text-xs leading-4 text-muted-foreground">{metric.detail}</div>
+            <div className="mt-1 min-h-8 text-xs leading-4 text-muted-foreground">{t(metric.detail)}</div>
           </CardContent>
         </Card>
       ))}

@@ -71,7 +71,7 @@ export function JobTable({ jobs }: { jobs: JobSummary[] }) {
                                         <Badge
                                             tone={getJobStatusTone(job.status)}
                                         >
-                                            {job.status}
+                                            {t(job.status)}
                                         </Badge>
                                     </td>
                                     <td className="px-4 py-3 text-muted-foreground">

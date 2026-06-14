@@ -45,6 +45,7 @@ import {
   formatPercent,
   toTitle,
 } from "@/lib/format";
+import { useLanguage, useT } from "@/lib/i18n/context";
 
 type ResultTab = "summary" | "plans" | "impact" | "review";
 
@@ -56,6 +57,7 @@ const resultTabs: Array<{ key: ResultTab; label: string }> = [
 ];
 
 export function JobResultView({ job }: { job: JobRecord }) {
+  const t = useT();
   const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const result = asRecord(job.result);
   const currentPlan = asRecord(result.current_plan_assessment);
@@ -74,7 +76,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
     return (
       <Card className="min-w-0">
         <CardHeader>
-          <h2 className="text-sm font-semibold">Run error</h2>
+          <h2 className="text-sm font-semibold">{t("Run error")}</h2>
         </CardHeader>
         <CardContent>
           <pre className="max-h-[420px] overflow-auto rounded-md bg-red-50 p-4 text-xs leading-5 text-red-800">
@@ -89,8 +91,8 @@ export function JobResultView({ job }: { job: JobRecord }) {
   if (!job.result) {
     return (
       <EmptyState
-        title="No result payload yet"
-        detail="Queued and running jobs update automatically. Completed jobs will expose audit results here."
+        title={t("No result payload yet")}
+        detail={t("Queued and running jobs update automatically. Completed jobs will expose audit results here.")}
       />
     );
   }
@@ -110,7 +112,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
             type="button"
             onClick={() => setActiveTab(tab.key)}
           >
-            {tab.label}
+            {t(tab.label)}
           </button>
         ))}
       </div>
@@ -175,6 +177,7 @@ function SummaryPanel({
   scenarios: ScenarioRow[];
   onOpenReview: () => void;
 }) {
+  const t = useT();
   const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.name === "15-Minute Constrained" && scenario.enabled);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
@@ -189,17 +192,17 @@ function SummaryPanel({
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
         <MetricCard
           label="Free optimization"
-          value={freeOptimization ? formatNumber(freeOptimization.routeCount) : "Skipped"}
+          value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
           tone={freeOptimization ? "success" : "warning"}
         />
         <MetricCard
           label="15-min constrained"
-          value={timeConstrained ? formatNumber(timeConstrained.routeCount) : "Skipped"}
+          value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? "info" : "warning"}
         />
         <MetricCard
           label="Data review"
-          value={reviewCount ? `${formatNumber(reviewCount)} item(s)` : "Clear"}
+          value={reviewCount ? `${formatNumber(reviewCount)} ${t("item(s)")}` : t("Clear")}
           tone={reviewCount ? "warning" : "success"}
         />
       </div>
@@ -230,6 +233,7 @@ function InputAddressWarningBanner({
   count: number;
   onOpenReview: () => void;
 }) {
+  const t = useT();
   return (
     <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-4 shadow-panel">
       <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
@@ -238,15 +242,14 @@ function InputAddressWarningBanner({
             <FileWarning className="h-5 w-5" aria-hidden="true" />
           </div>
           <div className="min-w-0">
-            <h2 className="text-base font-semibold text-amber-950">Input addresses need review</h2>
+            <h2 className="text-base font-semibold text-amber-950">{t("Input addresses need review")}</h2>
             <p className="mt-1 max-w-3xl text-sm leading-6 text-amber-900">
-              {formatNumber(count)} accepted address{count === 1 ? "" : "es"} may be outside the expected service area, far
-              from school, or unusual in the route sequence. The plan still ran, but review these workbook rows before sharing or operating it.
+              {formatNumber(count)} {t("accepted address(es) may be outside the expected service area, far from school, or unusual in the route sequence. The plan still ran, but review these workbook rows before sharing or operating it.")}
             </p>
           </div>
         </div>
         <Button type="button" variant="secondary" icon={<ListChecks className="h-4 w-4" />} onClick={onOpenReview}>
-          Review details
+          {t("Review details")}
         </Button>
       </div>
     </div>
@@ -319,6 +322,7 @@ function AuditPanel({
   routeSummaries: Array<Record<string, unknown>>;
   result: Record<string, unknown>;
 }) {
+  const t = useT();
   const recommendations = asStringArray(currentComparison.recommendations);
   const plannerConfig = asRecord(result.planner_config);
 
@@ -342,7 +346,7 @@ function AuditPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <BarChart3 className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Audit detail readout</h2>
+            <h2 className="text-sm font-semibold">{t("Audit detail readout")}</h2>
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -361,7 +365,7 @@ function AuditPanel({
               ))}
             </ul>
           ) : (
-            <div className="text-sm text-muted-foreground">No comparison recommendations were generated.</div>
+            <div className="text-sm text-muted-foreground">{t("No comparison recommendations were generated.")}</div>
           )}
         </CardContent>
       </Card>
@@ -370,7 +374,7 @@ function AuditPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Route diagnostics</h2>
+            <h2 className="text-sm font-semibold">{t("Route diagnostics")}</h2>
           </div>
         </CardHeader>
         <CardContent>
@@ -394,9 +398,11 @@ function AiAuditPanel({
   reallocationSummary: Record<string, unknown>;
   scenarios: ScenarioRow[];
 }) {
+  const t = useT();
+  const { lang } = useLanguage();
   const queryClient = useQueryClient();
   const auditMutation = useMutation({
-    mutationFn: ({ force }: { force: boolean }) => generateAiAudit(job.job_id, { force, language: "English" }),
+    mutationFn: ({ force }: { force: boolean }) => generateAiAudit(job.job_id, { force, language: lang === "ko" ? "Korean" : "English" }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["jobs", job.job_id] });
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -426,6 +432,7 @@ function AiAuditPanel({
         reallocationSummary,
         scenarios: scenarioRows,
         priorityActions,
+        translate: t,
       })
     : "";
 
@@ -436,7 +443,7 @@ function AiAuditPanel({
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="flex items-center gap-2">
               <Bot className="h-4 w-4 text-primary" aria-hidden="true" />
-              <h2 className="text-sm font-semibold">AI audit briefing board</h2>
+              <h2 className="text-sm font-semibold">{t("AI audit briefing board")}</h2>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
@@ -445,7 +452,7 @@ function AiAuditPanel({
                 icon={generateReportIcon}
                 onClick={generateReport}
               >
-                Generate report
+                {t("Generate report")}
               </Button>
               <Button
                 type="button"
@@ -454,7 +461,7 @@ function AiAuditPanel({
                 icon={auditMutation.isPending && auditMutation.variables?.force ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 onClick={() => auditMutation.mutate({ force: true })}
               >
-                Regenerate
+                {t("Regenerate")}
               </Button>
               {reportMarkdown ? (
                 <a
@@ -463,7 +470,7 @@ function AiAuditPanel({
                   download={`ai_audit_report_${job.job_id}.html`}
                 >
                   <Download className="h-4 w-4" aria-hidden="true" />
-                  Download HTML
+                  {t("Download HTML")}
                 </a>
               ) : null}
             </div>
@@ -478,13 +485,12 @@ function AiAuditPanel({
           </div>
 
           <div className="rounded-md border border-border bg-muted/50 px-3 py-3 text-sm leading-6 text-muted-foreground">
-            AI uses only deterministic route metrics, baseline comparisons, and recommendation summaries. Full address
-            lists are excluded from the prompt.
+            {t("AI uses only deterministic route metrics, baseline comparisons, and recommendation summaries. Full address lists are excluded from the prompt.")}
           </div>
 
           {aiRunning ? (
             <div className="rounded-md border border-cyan-200 bg-cyan-50 px-3 py-2 text-sm text-cyan-800">
-              AI audit generation is running. The backend may take up to about a minute depending on the model response.
+              {t("AI audit generation is running. The backend may take up to about a minute depending on the model response.")}
             </div>
           ) : null}
           {auditMutation.error ? <InlineError message={(auditMutation.error as Error).message} /> : null}
@@ -495,20 +501,20 @@ function AiAuditPanel({
       <div className="grid gap-4 xl:grid-cols-2">
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-semibold">Routes to review first</h2>
+            <h2 className="text-sm font-semibold">{t("Routes to review first")}</h2>
           </CardHeader>
           <CardContent>
             {routeSummaries.length ? (
               <RouteRiskTable routes={routeSummaries} />
             ) : (
-              <div className="text-sm text-muted-foreground">No route diagnostics were available for AI briefing.</div>
+              <div className="text-sm text-muted-foreground">{t("No route diagnostics were available for AI briefing.")}</div>
             )}
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-semibold">Top suggested actions</h2>
+            <h2 className="text-sm font-semibold">{t("Top suggested actions")}</h2>
           </CardHeader>
           <CardContent>
             {priorityActions.length ? (
@@ -516,18 +522,18 @@ function AiAuditPanel({
                 {priorityActions.map((action, index) => (
                   <div key={`${stringValue(action.from_route_id)}-${stringValue(action.to_route_id)}-${index}`} className="rounded-md border border-border px-3 py-2 text-sm">
                     <div className="font-medium">
-                      Move {formatNumber(action.stop_count)} stop(s) from {stringValue(action.from_route_id) || "N/A"} to{" "}
-                      {stringValue(action.to_route_id) || "N/A"}
+                      {t("Move")} {formatNumber(action.stop_count)} {t("stop(s) from")} {stringValue(action.from_route_id) || t("N/A")} {t("to")}{" "}
+                      {stringValue(action.to_route_id) || t("N/A")}
                     </div>
                     <div className="mt-1 text-muted-foreground">
-                      Save about {formatDurationMinFromSeconds(action.network_total_duration_saving_s)} and{" "}
+                      {t("Save about")} {formatDurationMinFromSeconds(action.network_total_duration_saving_s)} {t("and")}{" "}
                       {formatDistanceKmFromMeters(action.network_total_distance_saving_m)}.
                     </div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="text-sm text-muted-foreground">No high-priority action signals were generated.</div>
+              <div className="text-sm text-muted-foreground">{t("No high-priority action signals were generated.")}</div>
             )}
           </CardContent>
         </Card>
@@ -536,25 +542,25 @@ function AiAuditPanel({
       {scenarioRows.length ? (
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-semibold">Scenario evidence</h2>
+            <h2 className="text-sm font-semibold">{t("Scenario evidence")}</h2>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[760px] border-collapse text-sm">
                 <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2">Scenario</th>
-                    <th className="px-3 py-2">Routes</th>
-                    <th className="px-3 py-2">Service stops</th>
-                    <th className="px-3 py-2">Avg time</th>
-                    <th className="px-3 py-2">Avg distance</th>
-                    <th className="px-3 py-2">Bus mix</th>
+                    <th className="px-3 py-2">{t("Scenario")}</th>
+                    <th className="px-3 py-2">{t("Routes")}</th>
+                    <th className="px-3 py-2">{t("Service stops")}</th>
+                    <th className="px-3 py-2">{t("Avg time")}</th>
+                    <th className="px-3 py-2">{t("Avg distance")}</th>
+                    <th className="px-3 py-2">{t("Bus mix")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {scenarioRows.map((scenario) => (
                     <tr key={scenario.name} className="border-t border-border">
-                      <td className="px-3 py-2 font-medium">{scenario.name}</td>
+                      <td className="px-3 py-2 font-medium">{t(scenario.name)}</td>
                       <td className="px-3 py-2">{formatNumber(scenario.routeCount)}</td>
                       <td className="px-3 py-2">{formatNumber(scenario.stopCount)}</td>
                       <td className="px-3 py-2">{formatDurationMinFromSeconds(scenario.avgDurationS)}</td>
@@ -572,11 +578,11 @@ function AiAuditPanel({
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-sm font-semibold">AI audit report</h2>
+            <h2 className="text-sm font-semibold">{t("AI audit report")}</h2>
             {reportMarkdown ? (
-              <Badge tone="success">{stringValue(report.model) || "generated"}</Badge>
+              <Badge tone="success">{stringValue(report.model) || t("generated")}</Badge>
             ) : (
-              <Badge tone="neutral">not generated</Badge>
+              <Badge tone="neutral">{t("not generated")}</Badge>
             )}
           </div>
         </CardHeader>
@@ -585,14 +591,14 @@ function AiAuditPanel({
             <div className="space-y-4">
               <MarkdownReport markdown={reportMarkdown} />
               <div className="text-xs text-muted-foreground">
-                Generated {stringValue(report.generated_at) || "unknown"} | Input policy:{" "}
-                {stringValue(report.input_policy) || "aggregated facts only"}
+                {t("Generated")} {stringValue(report.generated_at) || t("unknown")} | {t("Input policy")}:{" "}
+                {stringValue(report.input_policy) || t("aggregated facts only")}
               </div>
             </div>
           ) : (
             <EmptyState
-              title="No AI report yet"
-              detail="History runs do not create this automatically. Click Generate report to create a bounded management-facing narrative from the deterministic audit outputs."
+              title={t("No AI report yet")}
+              detail={t("History runs do not create this automatically. Click Generate report to create a bounded management-facing narrative from the deterministic audit outputs.")}
               action={
                 <Button
                   type="button"
@@ -600,7 +606,7 @@ function AiAuditPanel({
                   icon={generateReportIcon}
                   onClick={generateReport}
                 >
-                  Generate report
+                  {t("Generate report")}
                 </Button>
               }
             />
@@ -618,13 +624,14 @@ function BaselinePanel({
   scenarios: ScenarioRow[];
   currentComparison: Record<string, unknown>;
 }) {
+  const t = useT();
   return (
     <div className="space-y-4">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
         <div>
-          <h2 className="text-sm font-semibold">Baseline scenarios</h2>
+          <h2 className="text-sm font-semibold">{t("Baseline scenarios")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Compare the imported supplier plan against free optimization and the 15-minute time-impact constrained plan.
+            {t("Compare the imported supplier plan against free optimization and the 15-minute time-impact constrained plan.")}
           </p>
         </div>
       </div>
@@ -635,10 +642,10 @@ function BaselinePanel({
             <CardContent className="space-y-3">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <div className="text-sm font-semibold">{scenario.name}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{scenario.detail}</div>
+                  <div className="text-sm font-semibold">{t(scenario.name)}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{t(scenario.detail)}</div>
                 </div>
-                <Badge tone={scenario.enabled ? "success" : "neutral"}>{scenario.enabled ? "ready" : "skipped"}</Badge>
+                <Badge tone={scenario.enabled ? "success" : "neutral"}>{scenario.enabled ? t("ready") : t("skipped")}</Badge>
               </div>
               {scenario.enabled ? (
                 <div className="grid grid-cols-2 gap-2 text-sm">
@@ -651,7 +658,7 @@ function BaselinePanel({
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">{scenario.skippedReason || "Scenario was not enabled for this run."}</div>
+                <div className="text-sm text-muted-foreground">{scenario.skippedReason || t("Scenario was not enabled for this run.")}</div>
               )}
             </CardContent>
           </Card>
@@ -665,8 +672,8 @@ function BaselinePanel({
             <Card key={`${scenario.name}-routes`} className="min-w-0">
               <CardHeader>
                 <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-sm font-semibold">{scenario.name} route table</h2>
-                  <Badge tone="info">{formatNumber(scenario.routes.length)} routes</Badge>
+                  <h2 className="text-sm font-semibold">{t(scenario.name)} {t("route table")}</h2>
+                  <Badge tone="info">{formatNumber(scenario.routes.length)} {t("routes")}</Badge>
                 </div>
               </CardHeader>
               <CardContent>
@@ -680,7 +687,7 @@ function BaselinePanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <GitCompareArrows className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Current plan vs free optimization</h2>
+            <h2 className="text-sm font-semibold">{t("Current plan vs free optimization")}</h2>
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-4">
@@ -703,6 +710,7 @@ function ActionPanel({
   reallocationSummary: Record<string, unknown>;
   reallocation: Record<string, unknown>;
 }) {
+  const t = useT();
   const routeProfiles = asRecordArray(reallocationSummary.priority_route_profiles || reallocation.route_opportunity_profiles);
 
   return (
@@ -718,7 +726,7 @@ function ActionPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <ListChecks className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Priority route-to-route actions</h2>
+            <h2 className="text-sm font-semibold">{t("Priority route-to-route actions")}</h2>
           </div>
         </CardHeader>
         <CardContent>
@@ -727,7 +735,7 @@ function ActionPanel({
               {priorityActions.map((action, index) => (
                 <div key={`${stringValue(action.from_route_id)}-${stringValue(action.to_route_id)}-${index}`} className="rounded-md border border-border p-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge tone="info">{stringValue(action.route_action_label) || "Local improvement"}</Badge>
+                    <Badge tone="info">{stringValue(action.route_action_label) || t("Local improvement")}</Badge>
                     <span className="text-sm font-semibold">{stringValue(action.from_route_id)}</span>
                     <ArrowRight className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     <span className="text-sm font-semibold">{stringValue(action.to_route_id)}</span>
@@ -743,7 +751,7 @@ function ActionPanel({
               ))}
             </div>
           ) : (
-            <EmptyState title="No priority actions" detail="No route-to-route adjustment met the current filters." />
+            <EmptyState title={t("No priority actions")} detail={t("No route-to-route adjustment met the current filters.")} />
           )}
         </CardContent>
       </Card>
@@ -751,18 +759,18 @@ function ActionPanel({
       {routeProfiles.length ? (
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-semibold">Route-level action signals</h2>
+            <h2 className="text-sm font-semibold">{t("Route-level action signals")}</h2>
           </CardHeader>
           <CardContent>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] border-collapse text-sm">
                 <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
                   <tr>
-                    <th className="px-3 py-2">Route</th>
-                    <th className="px-3 py-2">Signal</th>
-                    <th className="px-3 py-2">Best target</th>
-                    <th className="px-3 py-2">Move support</th>
-                    <th className="px-3 py-2">Best saving</th>
+                    <th className="px-3 py-2">{t("Route")}</th>
+                    <th className="px-3 py-2">{t("Signal")}</th>
+                    <th className="px-3 py-2">{t("Best target")}</th>
+                    <th className="px-3 py-2">{t("Move support")}</th>
+                    <th className="px-3 py-2">{t("Best saving")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -794,6 +802,7 @@ function DiagnosticsPanel({
   mapOutputs: MapOutput[];
   result: Record<string, unknown>;
 }) {
+  const t = useT();
   return (
     <div className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
@@ -808,14 +817,14 @@ function DiagnosticsPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <FileWarning className="h-4 w-4 text-amber-700" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Input address review</h2>
+            <h2 className="text-sm font-semibold">{t("Input address review")}</h2>
           </div>
         </CardHeader>
         <CardContent>
           {diagnostics.inputAddressWarnings.length ? (
             <SimpleObjectTable rows={diagnostics.inputAddressWarnings} />
           ) : (
-            <div className="text-sm text-muted-foreground">No accepted input addresses were flagged for review.</div>
+            <div className="text-sm text-muted-foreground">{t("No accepted input addresses were flagged for review.")}</div>
           )}
         </CardContent>
       </Card>
@@ -824,14 +833,14 @@ function DiagnosticsPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <FileWarning className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Coordinate warnings</h2>
+            <h2 className="text-sm font-semibold">{t("Coordinate warnings")}</h2>
           </div>
         </CardHeader>
         <CardContent>
           {diagnostics.geocodeWarnings.length ? (
             <SimpleObjectTable rows={diagnostics.geocodeWarnings} />
           ) : (
-            <div className="text-sm text-muted-foreground">No geocode warnings were recorded.</div>
+            <div className="text-sm text-muted-foreground">{t("No geocode warnings were recorded.")}</div>
           )}
         </CardContent>
       </Card>
@@ -840,7 +849,7 @@ function DiagnosticsPanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Map outputs</h2>
+            <h2 className="text-sm font-semibold">{t("Map outputs")}</h2>
           </div>
         </CardHeader>
         <CardContent>
@@ -849,12 +858,12 @@ function DiagnosticsPanel({
               {mapOutputs.map((item) => (
                 <div key={item.key} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
                   <span className="font-medium">{item.name}</span>
-                  <Badge tone="success">available</Badge>
+                  <Badge tone="success">{t("available")}</Badge>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">No map outputs were included in this payload.</div>
+            <div className="text-sm text-muted-foreground">{t("No map outputs were included in this payload.")}</div>
           )}
         </CardContent>
       </Card>
@@ -871,6 +880,7 @@ function TimeImpactPanel({
   jobId: string;
   mapOutputs: MapOutput[];
 }) {
+  const t = useT();
   const scenarioOptions = useMemo(
     () => mapOutputs.filter((output) => output.key !== "current_plan"),
     [mapOutputs],
@@ -892,15 +902,15 @@ function TimeImpactPanel({
   if (!scenarioOptions.length || !selected) {
     return (
       <EmptyState
-        title="No optimized scenarios available"
-        detail="Time impact review needs an optimized scenario to compare against the current plan."
+        title={t("No optimized scenarios available")}
+        detail={t("Time impact review needs an optimized scenario to compare against the current plan.")}
       />
     );
   }
 
   const data = impactQuery.data;
   const summary = data?.summary.time_impact;
-  const recommendation = summary?.available ? buildTimeImpactRecommendation(summary, selected.name) : null;
+  const recommendation = summary?.available ? buildTimeImpactRecommendation(summary, selected.name, t) : null;
   const acceptanceThresholdLabel = formatImpactMinutes(summary?.acceptance_threshold_minutes ?? 15);
   const routeRows = data ? buildTimeImpactRouteRows(data) : [];
   const stopRows = data ? buildTimeImpactStopRows(data, { filter, search, selectedRouteId }) : [];
@@ -916,7 +926,7 @@ function TimeImpactPanel({
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex items-center gap-2">
               <GitCompareArrows className="h-4 w-4 text-primary" aria-hidden="true" />
-              <h2 className="text-sm font-semibold">Time impact review</h2>
+              <h2 className="text-sm font-semibold">{t("Time impact review")}</h2>
             </div>
             <div className="flex flex-wrap gap-2">
               {scenarioOptions.map((option) => (
@@ -934,7 +944,7 @@ function TimeImpactPanel({
                     setSelectedRouteId("");
                   }}
                 >
-                  {option.name}
+                  {t(option.name)}
                 </button>
               ))}
             </div>
@@ -944,16 +954,16 @@ function TimeImpactPanel({
           {impactQuery.isLoading ? (
             <div className="flex h-32 items-center justify-center rounded-md border border-border bg-muted text-sm text-muted-foreground">
               <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-              Loading time impact model
+              {t("Loading time impact model")}
             </div>
           ) : null}
           {impactQuery.isError ? (
-            <InlineError message="Time impact data is not available for this scenario yet." />
+            <InlineError message={t("Time impact data is not available for this scenario yet.")} />
           ) : null}
           {data && !summary?.available ? (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               <AlertCircle className="mr-2 inline h-4 w-4 align-text-bottom" aria-hidden="true" />
-              No comparable stop timing was found for this scenario.
+              {t("No comparable stop timing was found for this scenario.")}
             </div>
           ) : null}
         </CardContent>
@@ -987,25 +997,25 @@ function TimeImpactPanel({
             <ImpactSummaryCard
               label="Within acceptance"
               value={formatPercent(summary.acceptance_rider_ratio, 100)}
-              detail={`${formatNumber(summary.compared_rider_count)} riders / ${formatNumber(summary.compared_stop_count)} stops compared`}
+              detail={`${formatNumber(summary.compared_rider_count)} ${t("riders")} / ${formatNumber(summary.compared_stop_count)} ${t("stops compared")}`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
             <ImpactSummaryCard
               label={`Over ${acceptanceThresholdLabel}`}
-              value={`${formatNumber(summary.over_acceptance_rider_count)} riders`}
-              detail={`${formatNumber(summary.over_acceptance_stop_count)} stops; max over by ${formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}`}
+              value={`${formatNumber(summary.over_acceptance_rider_count)} ${t("riders")}`}
+              detail={`${formatNumber(summary.over_acceptance_stop_count)} ${t("stops")}; ${t("max over by")} ${formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
             <ImpactSummaryCard
               label="Typical adverse"
               value={formatImpactMinutes(summary.weighted_avg_adverse_delta_minutes)}
-              detail={`${formatNumber(summary.worse_rider_count)} riders worse; P90 ${formatImpactMinutes(summary.p90_adverse_delta_minutes)}`}
+              detail={`${formatNumber(summary.worse_rider_count)} ${t("riders worse")}; P90 ${formatImpactMinutes(summary.p90_adverse_delta_minutes)}`}
               tone="info"
             />
             <ImpactSummaryCard
               label="Worst adverse"
               value={formatImpactMinutes(summary.max_adverse_delta_minutes)}
-              detail={`${formatNumber(summary.high_risk_stop_count)} high-risk stops`}
+              detail={`${formatNumber(summary.high_risk_stop_count)} ${t("high-risk stops")}`}
               tone={Number(summary.high_risk_stop_count || 0) ? "warning" : "success"}
             />
           </div>
@@ -1015,7 +1025,7 @@ function TimeImpactPanel({
               <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex items-center gap-2">
                   <Route className="h-4 w-4 text-primary" aria-hidden="true" />
-                  <h2 className="text-sm font-semibold">Route impact</h2>
+                  <h2 className="text-sm font-semibold">{t("Route impact")}</h2>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {selectedRouteId ? (
@@ -1024,7 +1034,7 @@ function TimeImpactPanel({
                       className={cn(buttonClassName("secondary"), "h-8")}
                       onClick={() => setSelectedRouteId("")}
                     >
-                      All routes
+                      {t("All routes")}
                     </button>
                   ) : null}
                   <a
@@ -1032,7 +1042,7 @@ function TimeImpactPanel({
                     className={cn(buttonClassName("secondary"), "h-8")}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
-                    Export Excel
+                    {t("Export Excel")}
                   </a>
                 </div>
               </div>
@@ -1051,8 +1061,8 @@ function TimeImpactPanel({
               <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
                 <div className="flex items-center gap-2">
                   <ListChecks className="h-4 w-4 text-primary" aria-hidden="true" />
-                  <h2 className="text-sm font-semibold">Stop impact</h2>
-                  <Badge tone="neutral">{formatNumber(stopRows.length)} shown</Badge>
+                  <h2 className="text-sm font-semibold">{t("Stop impact")}</h2>
+                  <Badge tone="neutral">{formatNumber(stopRows.length)} {t("shown")}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {(["all", "worse", "over_acceptance", "high_risk", "route_changed", "unavailable"] as const).map((key) => (
@@ -1067,12 +1077,12 @@ function TimeImpactPanel({
                       )}
                       onClick={() => setFilter(key)}
                     >
-                      {timeImpactFilterLabel(key)}
+                      {t(timeImpactFilterLabel(key))}
                     </button>
                   ))}
                   <input
                     className="h-8 min-w-[220px] rounded-md border border-border bg-surface px-3 text-sm outline-none transition placeholder:text-muted-foreground focus:border-primary"
-                    placeholder="Search stop or route"
+                    placeholder={t("Search stop or route")}
                     value={search}
                     onChange={(event) => setSearch(event.target.value)}
                   />
@@ -1083,7 +1093,7 @@ function TimeImpactPanel({
               <TimeImpactStopTable stops={stopRows} serviceDirection={data.service_direction || ""} />
               {unavailableStops.length ? (
                 <div className="mt-3 text-xs text-muted-foreground">
-                  {formatNumber(unavailableStops.length)} stop(s) could not be matched to the current plan timing model.
+                  {formatNumber(unavailableStops.length)} {t("stop(s) could not be matched to the current plan timing model.")}
                 </div>
               ) : null}
             </CardContent>
@@ -1094,7 +1104,7 @@ function TimeImpactPanel({
       {data && !comparedStops.length && unavailableStops.length ? (
         <Card>
           <CardHeader>
-            <h2 className="text-sm font-semibold">Unmatched stops</h2>
+            <h2 className="text-sm font-semibold">{t("Unmatched stops")}</h2>
           </CardHeader>
           <CardContent>
             <TimeImpactStopTable stops={unavailableStops} serviceDirection={data.service_direction || ""} />
@@ -1115,7 +1125,11 @@ type TimeImpactRecommendation = {
   evidence: string[];
 };
 
-function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenarioName: string): TimeImpactRecommendation {
+function buildTimeImpactRecommendation(
+  summary: JobMapTimeImpactSummary,
+  scenarioName: string,
+  t: (key: string, fallback?: string) => string,
+): TimeImpactRecommendation {
   const comparedRiders = Number(summary.compared_rider_count || 0);
   const comparedStops = Number(summary.compared_stop_count || 0);
   const overRiders = Number(summary.over_acceptance_rider_count || 0);
@@ -1128,21 +1142,21 @@ function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenari
   const overRiderRatio = comparedRiders ? overRiders / comparedRiders : 0;
   const acceptanceRatio = Number(summary.acceptance_rider_ratio || 0);
   const evidence = [
-    `${formatPercent(acceptanceRatio, 100)} of compared riders are within the acceptance window`,
-    `${formatNumber(overRiders)} rider(s) across ${formatNumber(overStops)} stop(s) are over threshold`,
-    `${formatNumber(highRiskRiders)} rider(s) at ${formatNumber(highRiskStops)} high-risk stop(s)`,
-    `${formatNumber(routeChangedRiders)} rider(s) change route`,
+    `${formatPercent(acceptanceRatio, 100)} ${t("of compared riders are within the acceptance window")}`,
+    `${formatNumber(overRiders)} ${t("rider(s) across")} ${formatNumber(overStops)} ${t("stop(s) are over threshold")}`,
+    `${formatNumber(highRiskRiders)} ${t("rider(s) at")} ${formatNumber(highRiskStops)} ${t("high-risk stop(s)")}`,
+    `${formatNumber(routeChangedRiders)} ${t("rider(s) change route")}`,
   ];
   if (unavailableStops) {
-    evidence.push(`${formatNumber(unavailableStops)} stop(s) could not be matched to current-plan timing`);
+    evidence.push(`${formatNumber(unavailableStops)} ${t("stop(s) could not be matched to current-plan timing")}`);
   }
 
   if (!comparedRiders || !comparedStops) {
     return {
       level: "incomplete",
       tone: "info",
-      title: `${scenarioName} needs more timing data`,
-      detail: "No comparable pickup/dropoff timing was found, so this scenario should not be accepted from time impact alone.",
+      title: `${t(scenarioName)} ${t("needs more timing data")}`,
+      detail: t("No comparable pickup/dropoff timing was found, so this scenario should not be accepted from time impact alone."),
       evidence,
     };
   }
@@ -1151,8 +1165,8 @@ function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenari
     return {
       level: "high_risk",
       tone: "danger",
-      title: `${scenarioName} needs operations review before adoption`,
-      detail: "The optimized plan creates material pickup/dropoff disruption for some families. Review the highlighted stops and routes before sharing this plan.",
+      title: `${t(scenarioName)} ${t("needs operations review before adoption")}`,
+      detail: t("The optimized plan creates material pickup/dropoff disruption for some families. Review the highlighted stops and routes before sharing this plan."),
       evidence,
     };
   }
@@ -1161,8 +1175,8 @@ function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenari
     return {
       level: "review",
       tone: "warning",
-      title: `${scenarioName} is plausible but needs targeted review`,
-      detail: "Most riders are within the acceptance window, but a small set of stops or route changes should be checked by operations first.",
+      title: `${t(scenarioName)} ${t("is plausible but needs targeted review")}`,
+      detail: t("Most riders are within the acceptance window, but a small set of stops or route changes should be checked by operations first."),
       evidence,
     };
   }
@@ -1170,8 +1184,8 @@ function buildTimeImpactRecommendation(summary: JobMapTimeImpactSummary, scenari
   return {
     level: "acceptable",
     tone: "success",
-    title: `${scenarioName} looks operationally acceptable`,
-    detail: `All compared riders are within the ${formatImpactMinutes(summary.acceptance_threshold_minutes ?? 15)} acceptance window. Review route changes and cost tradeoffs before final approval.`,
+    title: `${t(scenarioName)} ${t("looks operationally acceptable")}`,
+    detail: `${t("All compared riders are within the")} ${formatImpactMinutes(summary.acceptance_threshold_minutes ?? 15)} ${t("acceptance window. Review route changes and cost tradeoffs before final approval.")}`,
     evidence,
   };
 }
@@ -1195,6 +1209,7 @@ function TimeImpactDecisionCard({
   onReviewHighRisk: () => void;
   onFocusRoute: (routeId: string) => void;
 }) {
+  const t = useT();
   const overRiders = Number(summary.over_acceptance_rider_count || 0);
   const highRiskStops = Number(summary.high_risk_stop_count || 0);
   const visibleTopStops = topStops.slice(0, 5);
@@ -1221,17 +1236,17 @@ function TimeImpactDecisionCard({
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-semibold">{recommendation.title}</h2>
-                <Badge tone={recommendation.tone}>{timeImpactRecommendationLabel(recommendation.level)}</Badge>
+                <Badge tone={recommendation.tone}>{t(timeImpactRecommendationLabel(recommendation.level))}</Badge>
               </div>
               <p className="mt-1 max-w-4xl text-sm leading-6 text-muted-foreground">{recommendation.detail}</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
             {overRiders ? (
-              <Button type="button" variant="secondary" onClick={onReviewOverAcceptance}>Review over-threshold</Button>
+              <Button type="button" variant="secondary" onClick={onReviewOverAcceptance}>{t("Review over-threshold")}</Button>
             ) : null}
             {highRiskStops ? (
-              <Button type="button" variant="secondary" onClick={onReviewHighRisk}>Review high-risk</Button>
+              <Button type="button" variant="secondary" onClick={onReviewHighRisk}>{t("Review high-risk")}</Button>
             ) : null}
           </div>
         </div>
@@ -1248,19 +1263,19 @@ function TimeImpactDecisionCard({
         {visibleTopStops.length ? (
           <div className="rounded-md border border-border bg-surface">
             <div className="border-b border-border px-3 py-2 text-xs font-semibold uppercase text-muted-foreground">
-              Review first · {scenarioName}
+              {t("Review first")} · {t(scenarioName)}
             </div>
             <div className="divide-y divide-border">
               {visibleTopStops.map((stop) => (
                 <div key={stop.stop_id} className="grid gap-2 px-3 py-3 text-sm md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate font-semibold">{stop.address || "Unknown stop"}</span>
-                      <Badge tone={timeImpactBadgeTone(stop.level, stop.impact_direction)}>{timeImpactLabel(stop.level, stop.impact_direction)}</Badge>
-                      {stop.within_acceptance === false ? <Badge tone="warning">Over threshold</Badge> : null}
+                      <span className="truncate font-semibold">{stop.address || t("Unknown stop")}</span>
+                      <Badge tone={timeImpactBadgeTone(stop.level, stop.impact_direction)}>{t(timeImpactLabel(stop.level, stop.impact_direction))}</Badge>
+                      {stop.within_acceptance === false ? <Badge tone="warning">{t("Over threshold")}</Badge> : null}
                     </div>
                     <div className="mt-1 text-xs leading-5 text-muted-foreground">
-                      {timeImpactTopStopReason(stop, serviceDirection)}
+                      {timeImpactTopStopReason(stop, serviceDirection, t)}
                     </div>
                   </div>
                   <button
@@ -1268,7 +1283,7 @@ function TimeImpactDecisionCard({
                     className={cn(buttonClassName("secondary"), "h-8 text-xs")}
                     onClick={() => onFocusRoute(stop.route_id)}
                   >
-                    Focus route
+                    {t("Focus route")}
                   </button>
                 </div>
               ))}
@@ -1293,17 +1308,21 @@ function timeImpactRecommendationLabel(level: TimeImpactRecommendationLevel) {
   return "Review needed";
 }
 
-function timeImpactTopStopReason(stop: JobMapTimeImpactTopStop, serviceDirection: string) {
+function timeImpactTopStopReason(
+  stop: JobMapTimeImpactTopStop,
+  serviceDirection: string,
+  t: (key: string, fallback?: string) => string,
+) {
   const adverseMinutes = Number(stop.adverse_delta_minutes || 0);
   const threshold = Number(stop.acceptance_threshold_minutes ?? 15);
   const overMinutes = Number(stop.over_acceptance_minutes || 0);
   const riders = Number(stop.affected_rider_count || 0);
-  const familyEffect = timeImpactAdversePhrase(serviceDirection, adverseMinutes);
-  const routeChange = stop.route_changed ? ` Route changes from ${stop.current_route_id || "current plan"} to ${stop.new_route_id || stop.route_id}.` : "";
+  const familyEffect = timeImpactAdversePhrase(serviceDirection, adverseMinutes, t);
+  const routeChange = stop.route_changed ? ` ${t("Route changes from")} ${stop.current_route_id || t("current plan")} ${t("to")} ${stop.new_route_id || stop.route_id}.` : "";
   const thresholdText = stop.within_acceptance === false
-    ? ` It is ${formatImpactMinutes(overMinutes)} over the ${formatImpactMinutes(threshold)} window.`
-    : ` It remains within the ${formatImpactMinutes(threshold)} window.`;
-  return `${formatNumber(riders)} rider(s); ${familyEffect}.${thresholdText}${routeChange}`;
+    ? ` ${t("It is")} ${formatImpactMinutes(overMinutes)} ${t("over the")} ${formatImpactMinutes(threshold)} ${t("window.")}`
+    : ` ${t("It remains within the")} ${formatImpactMinutes(threshold)} ${t("window.")}`;
+  return `${formatNumber(riders)} ${t("rider(s)")}; ${familyEffect}.${thresholdText}${routeChange}`;
 }
 
 type TimeImpactRouteRow = JobMapRoute & {
@@ -1398,8 +1417,9 @@ function TimeImpactRouteTable({
   selectedRouteId: string;
   onSelectRoute: (routeId: string) => void;
 }) {
+  const t = useT();
   if (!routes.length) {
-    return <div className="text-sm text-muted-foreground">No route-level impact rows were generated.</div>;
+    return <div className="text-sm text-muted-foreground">{t("No route-level impact rows were generated.")}</div>;
   }
 
   return (
@@ -1407,15 +1427,15 @@ function TimeImpactRouteTable({
       <table className="w-full min-w-[940px] border-collapse text-sm">
         <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Route</th>
-            <th className="px-3 py-2">Bus</th>
-            <th className="px-3 py-2">Riders</th>
-            <th className="px-3 py-2">Over threshold</th>
-            <th className="px-3 py-2">Worse riders</th>
-            <th className="px-3 py-2">High risk</th>
-            <th className="px-3 py-2">Weighted adverse</th>
-            <th className="px-3 py-2">Max adverse</th>
-            <th className="px-3 py-2">Changed riders</th>
+            <th className="px-3 py-2">{t("Route")}</th>
+            <th className="px-3 py-2">{t("Bus")}</th>
+            <th className="px-3 py-2">{t("Riders")}</th>
+            <th className="px-3 py-2">{t("Over threshold")}</th>
+            <th className="px-3 py-2">{t("Worse riders")}</th>
+            <th className="px-3 py-2">{t("High risk")}</th>
+            <th className="px-3 py-2">{t("Weighted adverse")}</th>
+            <th className="px-3 py-2">{t("Max adverse")}</th>
+            <th className="px-3 py-2">{t("Changed riders")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1433,7 +1453,7 @@ function TimeImpactRouteTable({
                     {route.id}
                   </button>
                 </td>
-                <td className="px-3 py-2">{route.bus_type_name || "N/A"}</td>
+                <td className="px-3 py-2">{route.bus_type_name || t("N/A")}</td>
                 <td className="px-3 py-2">{formatNumber(route.load)}</td>
                 <td className="px-3 py-2">{formatNumber(impact.over_acceptance_rider_count)}</td>
                 <td className="px-3 py-2">{formatNumber(impact.worse_rider_count)}</td>
@@ -1461,8 +1481,9 @@ function TimeImpactStopTable({
   stops: JobMapStop[];
   serviceDirection: string;
 }) {
+  const t = useT();
   if (!stops.length) {
-    return <div className="text-sm text-muted-foreground">No stops match the current filter.</div>;
+    return <div className="text-sm text-muted-foreground">{t("No stops match the current filter.")}</div>;
   }
 
   return (
@@ -1470,14 +1491,14 @@ function TimeImpactStopTable({
       <table className="w-full min-w-[980px] border-collapse text-sm">
         <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Impact</th>
-            <th className="px-3 py-2">Stop</th>
-            <th className="px-3 py-2">Riders</th>
-            <th className="px-3 py-2">Current</th>
-            <th className="px-3 py-2">Optimized</th>
-            <th className="px-3 py-2">Delta</th>
-            <th className="px-3 py-2">Route</th>
-            <th className="px-3 py-2">Match</th>
+            <th className="px-3 py-2">{t("Impact")}</th>
+            <th className="px-3 py-2">{t("Stop")}</th>
+            <th className="px-3 py-2">{t("Riders")}</th>
+            <th className="px-3 py-2">{t("Current")}</th>
+            <th className="px-3 py-2">{t("Optimized")}</th>
+            <th className="px-3 py-2">{t("Delta")}</th>
+            <th className="px-3 py-2">{t("Route")}</th>
+            <th className="px-3 py-2">{t("Match")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1491,26 +1512,26 @@ function TimeImpactStopTable({
                   {comparisonAvailable ? (
                     <Badge tone={overAcceptance ? "warning" : timeImpactBadgeTone(impact.level, impact.impact_direction)}>
                       {overAcceptance
-                        ? `Over ${formatImpactMinutes(impact.acceptance_threshold_minutes ?? 15)}`
-                        : timeImpactLabel(impact.level, impact.impact_direction)}
+                        ? `${t("Over")} ${formatImpactMinutes(impact.acceptance_threshold_minutes ?? 15)}`
+                        : t(timeImpactLabel(impact.level, impact.impact_direction))}
                     </Badge>
                   ) : (
-                    <Badge tone="warning">Unmatched</Badge>
+                    <Badge tone="warning">{t("Unmatched")}</Badge>
                   )}
                 </td>
                 <td className="max-w-[320px] px-3 py-2">
-                  <div className="truncate font-medium">{stop.address || stop.requested_address || "Unknown address"}</div>
+                  <div className="truncate font-medium">{stop.address || stop.requested_address || t("Unknown address")}</div>
                   <div className="mt-1 text-xs text-muted-foreground">
-                    {stop.route_id} · Stop {formatNumber(stop.order)}
+                    {stop.route_id} · {t("Stop")} {formatNumber(stop.order)}
                   </div>
                 </td>
                 <td className="px-3 py-2">{formatNumber(impact.affected_rider_count ?? stop.passenger_count)}</td>
                 <td className="px-3 py-2">
-                  <div className="font-medium">{impact.current_time_label || "N/A"}</div>
-                  <div className="mt-1 text-xs text-muted-foreground">{impact.current_route_id || "Current plan"}</div>
+                  <div className="font-medium">{impact.current_time_label || t("N/A")}</div>
+                  <div className="mt-1 text-xs text-muted-foreground">{impact.current_route_id || t("Current plan")}</div>
                 </td>
                 <td className="px-3 py-2">
-                  <div className="font-medium">{impact.new_time_label || stop.scheduled_time_label || "N/A"}</div>
+                  <div className="font-medium">{impact.new_time_label || stop.scheduled_time_label || t("N/A")}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{impact.new_route_id || stop.route_id}</div>
                 </td>
                 <td className="px-3 py-2">
@@ -1520,22 +1541,22 @@ function TimeImpactStopTable({
                         {formatImpactMinutes(impact.delta_minutes, { signed: true })}
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {timeImpactAdversePhrase(serviceDirection, Number(impact.adverse_delta_minutes || 0))}
+                        {timeImpactAdversePhrase(serviceDirection, Number(impact.adverse_delta_minutes || 0), t)}
                       </div>
                     </>
                   ) : (
-                    <span className="text-muted-foreground">N/A</span>
+                    <span className="text-muted-foreground">{t("N/A")}</span>
                   )}
                 </td>
                 <td className="px-3 py-2">
                   {impact.route_changed ? (
-                    <Badge tone="info">Changed</Badge>
+                    <Badge tone="info">{t("Changed")}</Badge>
                   ) : (
-                    <Badge tone="neutral">Same</Badge>
+                    <Badge tone="neutral">{t("Same")}</Badge>
                   )}
                 </td>
                 <td className="px-3 py-2 text-xs text-muted-foreground">
-                  {impact.comparison_status || "matched"}
+                  {impact.comparison_status || t("matched")}
                   {impact.matched_key ? <div>{impact.matched_key}</div> : null}
                 </td>
               </tr>
@@ -1608,11 +1629,15 @@ function timeImpactDeltaClassName(direction: unknown) {
   return "text-foreground";
 }
 
-function timeImpactAdversePhrase(serviceDirection: string, adverseMinutes: number) {
+function timeImpactAdversePhrase(
+  serviceDirection: string,
+  adverseMinutes: number,
+  t: (key: string, fallback?: string) => string = (key) => key,
+) {
   if (!Number.isFinite(adverseMinutes) || adverseMinutes <= 0.5) {
-    return "No adverse shift";
+    return t("No adverse shift");
   }
-  const label = serviceDirection === "To School" ? "earlier pickup" : "later dropoff";
+  const label = serviceDirection === "To School" ? t("earlier pickup") : t("later dropoff");
   return `${formatImpactMinutes(adverseMinutes)} ${label}`;
 }
 
@@ -1651,6 +1676,7 @@ function MapsPanel({
   result: Record<string, unknown>;
   diagnostics: Diagnostics;
 }) {
+  const t = useT();
   const [selectedKey, setSelectedKey] = useState("");
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
@@ -1667,7 +1693,7 @@ function MapsPanel({
   });
 
   if (!mapOutputs.length || !selected) {
-    return <EmptyState title="No maps available" detail="This job did not include rendered route map artifacts." />;
+    return <EmptyState title={t("No maps available")} detail={t("This job did not include rendered route map artifacts.")} />;
   }
 
   const downloadInteractiveMap = () => {
@@ -1687,14 +1713,14 @@ function MapsPanel({
           )}
         >
           <Loader2 className="mr-2 h-4 w-4 animate-spin" aria-hidden="true" />
-          Loading interactive map
+          {t("Loading interactive map")}
         </div>
       );
     }
     if (interactiveQuery.isError) {
       return (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Interactive map data is not available for this scenario yet. Download the map artifact if you need the original generated HTML.
+          {t("Interactive map data is not available for this scenario yet. Download the map artifact if you need the original generated HTML.")}
         </div>
       );
     }
@@ -1707,7 +1733,7 @@ function MapsPanel({
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Route maps</h2>
+            <h2 className="text-sm font-semibold">{t("Route maps")}</h2>
           </div>
         </div>
       </CardHeader>
@@ -1715,10 +1741,10 @@ function MapsPanel({
         {excludedStopCount || geocodeWarningCount ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <FileWarning className="h-4 w-4 flex-none" aria-hidden="true" />
-            <span className="font-medium">Input geocode review:</span>
-            {excludedStopCount ? <span>{formatNumber(excludedStopCount)} excluded stop(s)</span> : null}
+            <span className="font-medium">{t("Input geocode review")}:</span>
+            {excludedStopCount ? <span>{formatNumber(excludedStopCount)} {t("excluded stop(s)")}</span> : null}
             {excludedStopCount && geocodeWarningCount ? <span aria-hidden="true">·</span> : null}
-            {geocodeWarningCount ? <span>{formatNumber(geocodeWarningCount)} warning(s)</span> : null}
+            {geocodeWarningCount ? <span>{formatNumber(geocodeWarningCount)} {t("warning(s)")}</span> : null}
           </div>
         ) : null}
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
@@ -1735,15 +1761,15 @@ function MapsPanel({
               onClick={() => setSelectedKey(summary.key)}
             >
               <div className="flex items-center justify-between gap-3">
-                <div className="truncate text-sm font-semibold">{summary.name}</div>
-                <Badge tone={selected.key === summary.key ? "info" : "neutral"}>{formatNumber(summary.routeCount)} routes</Badge>
+                <div className="truncate text-sm font-semibold">{t(summary.name)}</div>
+                <Badge tone={selected.key === summary.key ? "info" : "neutral"}>{formatNumber(summary.routeCount)} {t("routes")}</Badge>
               </div>
               <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                <div>Stops: {formatNumber(summary.stopCount)}</div>
-                <div>Riders: {formatNumber(summary.passengerCount)}</div>
-                <div>Total: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
-                <div>Longest: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
-                {excludedStopCount ? <div className="col-span-2 text-amber-700">Excluded: {formatNumber(excludedStopCount)} stop(s)</div> : null}
+                <div>{t("Stops")}: {formatNumber(summary.stopCount)}</div>
+                <div>{t("Riders")}: {formatNumber(summary.passengerCount)}</div>
+                <div>{t("Total")}: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
+                <div>{t("Longest")}: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
+                {excludedStopCount ? <div className="col-span-2 text-amber-700">{t("Excluded")}: {formatNumber(excludedStopCount)} {t("stop(s)")}</div> : null}
               </div>
             </button>
           ))}
@@ -1754,33 +1780,33 @@ function MapsPanel({
             <button
               type="button"
               className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")}
-              title="Open map"
-              aria-label="Open map"
+              title={t("Open map")}
+              aria-label={t("Open map")}
               onClick={() => setIsMapFullscreenOpen(true)}
             >
               <Maximize2 className="h-4 w-4" aria-hidden="true" />
-              Open
+              {t("Open")}
             </button>
             <button
               type="button"
               className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60")}
               disabled={!interactiveQuery.data}
-              title="Download map"
-              aria-label="Download map"
+              title={t("Download map")}
+              aria-label={t("Download map")}
               onClick={downloadInteractiveMap}
             >
               <Download className="h-4 w-4" aria-hidden="true" />
-              Map
+              {t("Map")}
             </button>
             {workbookExportUrl ? (
               <a
                 className={cn(buttonClassName("secondary"), "border-slate-300 bg-white shadow-lg hover:bg-slate-50")}
                 href={workbookExportUrl}
-                title="Download workbook"
-                aria-label="Download workbook"
+                title={t("Download workbook")}
+                aria-label={t("Download workbook")}
               >
                 <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                Workbook
+                {t("Workbook")}
               </a>
             ) : null}
           </div>
@@ -1790,7 +1816,7 @@ function MapsPanel({
             className="fixed inset-0 z-50 bg-slate-950/42 p-2 backdrop-blur-sm sm:p-4 lg:p-6"
             role="dialog"
             aria-modal="true"
-            aria-label="Fullscreen route map"
+            aria-label={t("Fullscreen route map")}
             onClick={() => setIsMapFullscreenOpen(false)}
           >
             <div
@@ -1799,9 +1825,9 @@ function MapsPanel({
             >
               <div className="flex min-h-14 flex-col gap-3 border-b border-white/45 bg-surface/82 px-4 py-3 shadow-sm backdrop-blur-xl sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-semibold">{selected.name}</div>
+                  <div className="truncate text-sm font-semibold">{t(selected.name)}</div>
                   <div className="mt-0.5 text-xs text-muted-foreground">
-                    Interactive route map · {formatNumber(dataRouteCountForSummary(scenarioSummaries, selected.key))} routes
+                    {t("Interactive route map")} · {formatNumber(dataRouteCountForSummary(scenarioSummaries, selected.key))} {t("routes")}
                   </div>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
@@ -1810,21 +1836,21 @@ function MapsPanel({
                     className={cn(buttonClassName("secondary"), "bg-white/70 backdrop-blur hover:bg-white disabled:cursor-not-allowed disabled:opacity-60")}
                     disabled={!interactiveQuery.data}
                     onClick={downloadInteractiveMap}
-                    title="Download map"
-                    aria-label="Download map"
+                    title={t("Download map")}
+                    aria-label={t("Download map")}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
-                    Map
+                    {t("Map")}
                   </button>
                   {workbookExportUrl ? (
                     <a
                       className={cn(buttonClassName("secondary"), "bg-white/70 backdrop-blur hover:bg-white")}
                       href={workbookExportUrl}
-                      title="Download workbook"
-                      aria-label="Download workbook"
+                    title={t("Download workbook")}
+                    aria-label={t("Download workbook")}
                     >
                       <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                      Workbook
+                      {t("Workbook")}
                     </a>
                   ) : null}
                   <button
@@ -1833,7 +1859,7 @@ function MapsPanel({
                     onClick={() => setIsMapFullscreenOpen(false)}
                   >
                     <X className="h-4 w-4" aria-hidden="true" />
-                    Close
+                    {t("Close")}
                   </button>
                 </div>
               </div>
@@ -1847,8 +1873,9 @@ function MapsPanel({
 }
 
 function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknown>> }) {
+  const t = useT();
   if (!routes.length) {
-    return <div className="text-sm text-muted-foreground">No route-level diagnostics were included.</div>;
+    return <div className="text-sm text-muted-foreground">{t("No route-level diagnostics were included.")}</div>;
   }
 
   return (
@@ -1856,13 +1883,13 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
       <table className="w-full min-w-[780px] border-collapse text-sm">
         <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Route</th>
-            <th className="px-3 py-2">Bus</th>
-            <th className="px-3 py-2">Service stops</th>
-            <th className="px-3 py-2">Passengers</th>
-            <th className="px-3 py-2">Load</th>
-            <th className="px-3 py-2">Distance</th>
-            <th className="px-3 py-2">Duration</th>
+            <th className="px-3 py-2">{t("Route")}</th>
+            <th className="px-3 py-2">{t("Bus")}</th>
+            <th className="px-3 py-2">{t("Service stops")}</th>
+            <th className="px-3 py-2">{t("Passengers")}</th>
+            <th className="px-3 py-2">{t("Load")}</th>
+            <th className="px-3 py-2">{t("Distance")}</th>
+            <th className="px-3 py-2">{t("Duration")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1884,19 +1911,20 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
 }
 
 function BaselineRouteTable({ routes }: { routes: Array<Record<string, unknown>> }) {
+  const t = useT();
   return (
     <div className="max-h-[420px] overflow-auto">
       <table className="w-full min-w-[760px] border-collapse text-sm">
         <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Route</th>
-            <th className="px-3 py-2">Bus</th>
-            <th className="px-3 py-2">Service stops</th>
-            <th className="px-3 py-2">Passengers</th>
-            <th className="px-3 py-2">Capacity</th>
-            <th className="px-3 py-2">Load</th>
-            <th className="px-3 py-2">Distance</th>
-            <th className="px-3 py-2">Duration</th>
+            <th className="px-3 py-2">{t("Route")}</th>
+            <th className="px-3 py-2">{t("Bus")}</th>
+            <th className="px-3 py-2">{t("Service stops")}</th>
+            <th className="px-3 py-2">{t("Passengers")}</th>
+            <th className="px-3 py-2">{t("Capacity")}</th>
+            <th className="px-3 py-2">{t("Load")}</th>
+            <th className="px-3 py-2">{t("Distance")}</th>
+            <th className="px-3 py-2">{t("Duration")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1919,6 +1947,7 @@ function BaselineRouteTable({ routes }: { routes: Array<Record<string, unknown>>
 }
 
 function SimpleObjectTable({ rows }: { rows: Array<Record<string, unknown>> }) {
+  const t = useT();
   const columns = Array.from(new Set(rows.flatMap((row) => Object.keys(row)))).slice(0, 6);
   return (
     <div className="overflow-x-auto">
@@ -1926,7 +1955,7 @@ function SimpleObjectTable({ rows }: { rows: Array<Record<string, unknown>> }) {
         <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
             {columns.map((column) => (
-              <th key={column} className="px-3 py-2">{toTitle(column)}</th>
+              <th key={column} className="px-3 py-2">{t(toTitle(column))}</th>
             ))}
           </tr>
         </thead>
@@ -1945,13 +1974,14 @@ function SimpleObjectTable({ rows }: { rows: Array<Record<string, unknown>> }) {
 }
 
 function RouteRiskTable({ routes }: { routes: Array<Record<string, unknown>> }) {
+  const t = useT();
   const rows = routes
     .map((route) => {
       const durationMin = Number(route.duration_s) / 60;
       const loadPct = Number(route.load_factor) * 100;
       const reasons = [];
       if (durationMin >= 70) {
-        reasons.push("long ride");
+            reasons.push("long ride");
       } else if (durationMin >= 60) {
         reasons.push("near limit");
       }
@@ -1977,11 +2007,11 @@ function RouteRiskTable({ routes }: { routes: Array<Record<string, unknown>> }) 
       <table className="w-full min-w-[620px] border-collapse text-sm">
         <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
           <tr>
-            <th className="px-3 py-2">Route</th>
-            <th className="px-3 py-2">Duration</th>
-            <th className="px-3 py-2">Load</th>
-            <th className="px-3 py-2">Passengers</th>
-            <th className="px-3 py-2">What to notice</th>
+            <th className="px-3 py-2">{t("Route")}</th>
+            <th className="px-3 py-2">{t("Duration")}</th>
+            <th className="px-3 py-2">{t("Load")}</th>
+            <th className="px-3 py-2">{t("Passengers")}</th>
+            <th className="px-3 py-2">{t("What to notice")}</th>
           </tr>
         </thead>
         <tbody>
@@ -1991,7 +2021,7 @@ function RouteRiskTable({ routes }: { routes: Array<Record<string, unknown>> }) 
               <td className="px-3 py-2">{formatDurationMinFromSeconds(route.duration_s)}</td>
               <td className="px-3 py-2">{formatPercent(route.load_factor, 100)}</td>
               <td className="px-3 py-2">{formatNumber(route.passenger_count)}</td>
-              <td className="px-3 py-2">{reasons.join(", ")}</td>
+              <td className="px-3 py-2">{reasons.map((reason) => t(reason)).join(", ")}</td>
             </tr>
           ))}
         </tbody>
@@ -2039,10 +2069,11 @@ function InlineError({ message }: { message: string }) {
 }
 
 function CollapsibleSection({ title, children }: { title: string; children: ReactNode }) {
+  const t = useT();
   return (
     <details className="rounded-lg border border-border bg-surface shadow-panel">
       <summary className="cursor-pointer px-4 py-3 text-sm font-semibold text-foreground transition hover:bg-muted">
-        {title}
+        {t(title)}
       </summary>
       <div className="border-t border-border p-4">{children}</div>
     </details>
@@ -2060,9 +2091,10 @@ function ImpactSummaryCard({
   detail: string;
   tone?: "neutral" | "success" | "warning" | "info";
 }) {
+  const t = useT();
   return (
     <div className={cn("min-w-0 rounded-lg border bg-surface p-4 shadow-panel", metricToneClassName(tone))}>
-      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+      <div className="text-xs font-medium uppercase text-muted-foreground">{t(label)}</div>
       <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
       <div className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</div>
     </div>
@@ -2078,10 +2110,11 @@ function MetricCard({
   value: string;
   tone?: "neutral" | "success" | "warning" | "info";
 }) {
+  const t = useT();
   return (
     <div className={cn("min-w-0 rounded-lg border bg-surface p-4 shadow-panel", metricToneClassName(tone))}>
       <div className="flex min-w-0 flex-wrap items-start justify-between gap-2">
-        <div className="min-w-0 text-xs font-medium uppercase text-muted-foreground">{label}</div>
+        <div className="min-w-0 text-xs font-medium uppercase text-muted-foreground">{t(label)}</div>
       </div>
       <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
     </div>
@@ -2115,10 +2148,11 @@ function metricValueClassName(tone: "neutral" | "success" | "warning" | "info") 
 }
 
 function ReadoutItem({ label, value }: { label: string; value: string }) {
+  const t = useT();
   return (
     <div>
-      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
-      <div className="mt-1 break-words font-medium">{value || "Not available"}</div>
+      <div className="text-xs font-medium uppercase text-muted-foreground">{t(label)}</div>
+      <div className="mt-1 break-words font-medium">{value || t("Not available")}</div>
     </div>
   );
 }
@@ -2485,6 +2519,7 @@ function buildAiReportHtml({
   reallocationSummary,
   scenarios,
   priorityActions,
+  translate,
 }: {
   job: JobRecord;
   report: Record<string, unknown>;
@@ -2493,7 +2528,9 @@ function buildAiReportHtml({
   reallocationSummary: Record<string, unknown>;
   scenarios: ScenarioRow[];
   priorityActions: Array<Record<string, unknown>>;
+  translate?: (key: string, fallback?: string) => string;
 }) {
+  const t = translate ?? ((key: string) => key);
   const metadata = asRecord(job.metadata);
   const title = stringValue(metadata.job_name) || job.job_id;
   const generatedAt = stringValue(report.generated_at) || new Date().toISOString();
@@ -2501,7 +2538,7 @@ function buildAiReportHtml({
     .map(
       (scenario) => `
         <tr>
-          <td>${htmlEscape(scenario.name)}</td>
+          <td>${htmlEscape(t(scenario.name))}</td>
           <td>${htmlEscape(formatNumber(scenario.routeCount))}</td>
           <td>${htmlEscape(formatDurationMinFromSeconds(scenario.avgDurationS))}</td>
           <td>${htmlEscape(formatDistanceKmFromMeters(scenario.avgDistanceM))}</td>
@@ -2513,10 +2550,10 @@ function buildAiReportHtml({
     .map(
       (action) => `
         <li>
-          Move ${htmlEscape(formatNumber(action.stop_count))} stop(s) from ${htmlEscape(stringValue(action.from_route_id) || "N/A")}
-          to ${htmlEscape(stringValue(action.to_route_id) || "N/A")};
-          estimated saving ${htmlEscape(formatDurationMinFromSeconds(action.network_total_duration_saving_s))}
-          and ${htmlEscape(formatDistanceKmFromMeters(action.network_total_distance_saving_m))}.
+          ${htmlEscape(t("Move"))} ${htmlEscape(formatNumber(action.stop_count))} ${htmlEscape(t("stop(s) from"))} ${htmlEscape(stringValue(action.from_route_id) || t("N/A"))}
+          ${htmlEscape(t("to"))} ${htmlEscape(stringValue(action.to_route_id) || t("N/A"))};
+          ${htmlEscape(t("estimated saving"))} ${htmlEscape(formatDurationMinFromSeconds(action.network_total_duration_saving_s))}
+          ${htmlEscape(t("and"))} ${htmlEscape(formatDistanceKmFromMeters(action.network_total_distance_saving_m))}.
         </li>`,
     )
     .join("");
@@ -2525,7 +2562,7 @@ function buildAiReportHtml({
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>AI Audit Report - ${htmlEscape(title)}</title>
+  <title>${htmlEscape(t("AI Audit Report"))} - ${htmlEscape(title)}</title>
   <style>
     body { font-family: Inter, Arial, sans-serif; color: #18212f; margin: 40px; line-height: 1.55; }
     .eyebrow { color: #0f766e; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -2543,25 +2580,25 @@ function buildAiReportHtml({
   </style>
 </head>
 <body>
-  <div class="eyebrow">BRP AI Audit Report</div>
+  <div class="eyebrow">${htmlEscape(t("BRP AI Audit Report"))}</div>
   <h1>${htmlEscape(title)}</h1>
-  <div class="meta">Job ${htmlEscape(job.job_id)} | Generated ${htmlEscape(generatedAt)} | Model ${htmlEscape(stringValue(report.model) || "N/A")}</div>
+  <div class="meta">${htmlEscape(t("Job"))} ${htmlEscape(job.job_id)} | ${htmlEscape(t("Generated"))} ${htmlEscape(generatedAt)} | ${htmlEscape(t("Model"))} ${htmlEscape(stringValue(report.model) || t("N/A"))}</div>
   <div class="grid">
-    <div class="metric"><span>Current Routes</span><strong>${htmlEscape(formatNumber(currentPlan.route_count))}</strong></div>
-    <div class="metric"><span>Average Load</span><strong>${htmlEscape(formatPercent(currentPlan.avg_load_factor, 100))}</strong></div>
-    <div class="metric"><span>Average Time</span><strong>${htmlEscape(formatDurationMinFromSeconds(currentPlan.avg_route_duration_s))}</strong></div>
-    <div class="metric"><span>Route Gap</span><strong>${htmlEscape(formatSignedNumber(currentComparison.route_gap))}</strong></div>
+    <div class="metric"><span>${htmlEscape(t("Current Routes"))}</span><strong>${htmlEscape(formatNumber(currentPlan.route_count))}</strong></div>
+    <div class="metric"><span>${htmlEscape(t("Average Load"))}</span><strong>${htmlEscape(formatPercent(currentPlan.avg_load_factor, 100))}</strong></div>
+    <div class="metric"><span>${htmlEscape(t("Average Time"))}</span><strong>${htmlEscape(formatDurationMinFromSeconds(currentPlan.avg_route_duration_s))}</strong></div>
+    <div class="metric"><span>${htmlEscape(t("Route Gap"))}</span><strong>${htmlEscape(formatSignedNumber(currentComparison.route_gap))}</strong></div>
   </div>
   ${markdownToHtml(stringValue(report.report_markdown))}
-  <h2>Scenario Evidence</h2>
+  <h2>${htmlEscape(t("Scenario Evidence"))}</h2>
   <table>
-    <thead><tr><th>Scenario</th><th>Routes</th><th>Avg Time</th><th>Avg Distance</th><th>Bus Mix</th></tr></thead>
+    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
     <tbody>${scenarioRows}</tbody>
   </table>
-  <h2>Top Suggested Actions</h2>
-  ${actionRows ? `<ul>${actionRows}</ul>` : `<p>No high-priority action signals were generated.</p>`}
-  <p class="policy">Input policy: ${htmlEscape(stringValue(report.input_policy) || "Aggregated facts only; full address list excluded.")}</p>
-  <p class="policy">Action signals: ${htmlEscape(formatNumber(reallocationSummary.actionable_weak_route_count))}</p>
+  <h2>${htmlEscape(t("Top Suggested Actions"))}</h2>
+  ${actionRows ? `<ul>${actionRows}</ul>` : `<p>${htmlEscape(t("No high-priority action signals were generated."))}</p>`}
+  <p class="policy">${htmlEscape(t("Input policy"))}: ${htmlEscape(stringValue(report.input_policy) || t("Aggregated facts only; full address list excluded."))}</p>
+  <p class="policy">${htmlEscape(t("Action signals"))}: ${htmlEscape(formatNumber(reallocationSummary.actionable_weak_route_count))}</p>
 </body>
 </html>`;
 }

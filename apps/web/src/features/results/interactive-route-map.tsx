@@ -137,9 +137,11 @@ const INTERACTIVE_LAYER_IDS = [
 export function InteractiveRouteMap({
     data,
     fullscreen = false,
+    focusKey = "",
 }: {
     data: JobMapData;
     fullscreen?: boolean;
+    focusKey?: string;
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapRef | null>(null);
@@ -381,7 +383,7 @@ export function InteractiveRouteMap({
     );
 
     const initialViewState = useMemo(() => {
-        const bounds = data.bounds;
+        const bounds = getDataBounds(data);
         if (!bounds) {
             return { longitude: 121.4737, latitude: 31.2304, zoom: 11 };
         }
@@ -390,11 +392,14 @@ export function InteractiveRouteMap({
             latitude: (bounds.min_lat + bounds.max_lat) / 2,
             zoom: 11,
         };
-    }, [data.bounds]);
+    }, [data]);
 
     useEffect(() => {
-        window.setTimeout(() => fitAll(mapRef.current, data), 100);
-    }, [data]);
+        const timers = [80, 220, 480, 900, 1400].map((delay) =>
+            window.setTimeout(() => fitMapToData(mapRef.current, data), delay),
+        );
+        return () => timers.forEach((timer) => window.clearTimeout(timer));
+    }, [data, focusKey, fullscreen]);
 
     const focusRoute = (route: JobMapRoute) => {
         if (selectedRouteId === route.id) {
@@ -885,6 +890,7 @@ export function InteractiveRouteMap({
                     initialViewState={initialViewState}
                     mapStyle={MAP_STYLE}
                     interactiveLayerIds={INTERACTIVE_LAYER_IDS}
+                    onLoad={() => fitMapToData(mapRef.current, data)}
                     onClick={handleMapClick}
                     onMouseMove={handleMouseMove}
                     onMouseLeave={() => setHoverInfo(null)}
@@ -1682,17 +1688,88 @@ function percentile(values: number[], ratio: number) {
     return sorted[index];
 }
 
+function fitMapToData(map: MapRef | null, data: JobMapData) {
+    map?.resize();
+    fitAll(map, data);
+}
+
 function fitAll(map: MapRef | null, data: JobMapData) {
-    if (!map || !data.bounds) {
+    const bounds = getDataBounds(data);
+    if (!map || !bounds) {
         return;
     }
     map.fitBounds(
         [
-            [data.bounds.min_lng, data.bounds.min_lat],
-            [data.bounds.max_lng, data.bounds.max_lat],
+            [bounds.min_lng, bounds.min_lat],
+            [bounds.max_lng, bounds.max_lat],
         ],
         { padding: 64, duration: 500 },
     );
+}
+
+function getDataBounds(data: JobMapData) {
+    let minLng = Number.POSITIVE_INFINITY;
+    let maxLng = Number.NEGATIVE_INFINITY;
+    let minLat = Number.POSITIVE_INFINITY;
+    let maxLat = Number.NEGATIVE_INFINITY;
+
+    function addCoordinate(coordinate: number[]) {
+        const [lng, lat] = coordinate;
+        if (
+            Number.isFinite(lng) &&
+            Number.isFinite(lat) &&
+            Math.abs(lng) <= 180 &&
+            Math.abs(lat) <= 90
+        ) {
+            minLng = Math.min(minLng, lng);
+            maxLng = Math.max(maxLng, lng);
+            minLat = Math.min(minLat, lat);
+            maxLat = Math.max(maxLat, lat);
+        }
+    }
+
+    for (const route of data.routes) {
+        for (const coordinate of route.geometry) {
+            addCoordinate(coordinate);
+        }
+    }
+    for (const stop of data.stops) {
+        addCoordinate([stop.lng, stop.lat]);
+    }
+    for (const link of data.private_links) {
+        for (const coordinate of link.geometry) {
+            addCoordinate(coordinate);
+        }
+    }
+
+    if (
+        Number.isFinite(minLng) &&
+        Number.isFinite(maxLng) &&
+        Number.isFinite(minLat) &&
+        Number.isFinite(maxLat)
+    ) {
+        return {
+            min_lng: minLng,
+            max_lng: maxLng,
+            min_lat: minLat,
+            max_lat: maxLat,
+        };
+    }
+
+    const bounds = data.bounds;
+    if (
+        bounds &&
+        Number.isFinite(bounds.min_lng) &&
+        Number.isFinite(bounds.max_lng) &&
+        Number.isFinite(bounds.min_lat) &&
+        Number.isFinite(bounds.max_lat) &&
+        bounds.min_lng <= bounds.max_lng &&
+        bounds.min_lat <= bounds.max_lat
+    ) {
+        return bounds;
+    }
+
+    return null;
 }
 
 function fitRoute(map: MapRef | null, route: JobMapRoute) {

@@ -482,12 +482,17 @@ export type FleetPlannerRoutePreviewResponse = {
         max_route_duration_minutes?: number | null;
         candidate_vehicle_count?: number;
         solver?: string;
+        traffic_profile_name?: string;
+        traffic_time_multiplier?: number;
+        traffic_profile_context?: string;
+        live_traffic_sample?: Record<string, unknown> | null;
     };
     school: Record<string, unknown>;
     routes: Array<Record<string, unknown>>;
     rows: Array<Record<string, unknown>>;
     stop_rows: Array<Record<string, unknown>>;
     map_html: string;
+    map_data?: JobMapData;
     refinement_note: string;
     workbook_file_name?: string;
     workbook_base64?: string;

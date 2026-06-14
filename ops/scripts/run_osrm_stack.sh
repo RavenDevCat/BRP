@@ -26,7 +26,7 @@ fi
 OSRM_DIR="$LOCAL_OSRM_DIR"
 STARTED_CONTAINERS=()
 
-docker rm -f osrm-shanghai osrm-beijing osrm-suzhou osrm-xian osrm-south-korea 2>/dev/null || true
+docker rm -f osrm-shanghai osrm-beijing osrm-suzhou osrm-xian osrm-south-korea osrm-bangkok 2>/dev/null || true
 
 region_enabled() {
   local region="$1"
@@ -69,6 +69,7 @@ start_region "beijing" "osrm-beijing" "${OSRM_BEIJING_PORT:-5003}" "${OSRM_BEIJI
 start_region "suzhou" "osrm-suzhou" "${OSRM_SUZHOU_PORT:-5004}" "${OSRM_SUZHOU_DATASET_DIR:-$OSRM_DIR/suzhou}" "${OSRM_SUZHOU_DATASET_FILE:-jiangsu-latest.osrm}"
 start_region "xian" "osrm-xian" "${OSRM_XIAN_PORT:-5005}" "${OSRM_XIAN_DATASET_DIR:-$OSRM_DIR/xian}" "${OSRM_XIAN_DATASET_FILE:-shaanxi-latest.osrm}"
 start_region "south-korea" "osrm-south-korea" "${OSRM_SOUTH_KOREA_PORT:-5006}" "${OSRM_SOUTH_KOREA_DATASET_DIR:-$OSRM_DIR/south-korea}" "${OSRM_SOUTH_KOREA_DATASET_FILE:-south-korea-latest.osrm}"
+start_region "bangkok" "osrm-bangkok" "${OSRM_BANGKOK_PORT:-${OSRM_THAILAND_PORT:-5007}}" "${OSRM_BANGKOK_DATASET_DIR:-${OSRM_THAILAND_DATASET_DIR:-$OSRM_DIR/bangkok}}" "${OSRM_BANGKOK_DATASET_FILE:-${OSRM_THAILAND_DATASET_FILE:-thailand-bangkok.osrm}}"
 
 if [[ ${#STARTED_CONTAINERS[@]} -eq 0 ]]; then
   echo "No OSRM regions were started. Check OSRM_ENABLED_REGIONS and dataset paths." >&2

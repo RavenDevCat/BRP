@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Maximize2, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -26,7 +26,10 @@ import {
   type FleetPlannerRoutePreviewResponse,
   type FleetPlannerHistoryCreateResponse,
   type FleetPlannerVehicleConfig,
+  type JobMapData,
 } from "@/lib/api";
+import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { downloadInteractiveMapHtml } from "@/features/results/job-result-view";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
 
@@ -36,7 +39,7 @@ const ROUTE_TIME_TARGET_PRESETS = [30, 45, 60, 75] as const;
 const VEHICLE_CATEGORIES = ["van", "mini_bus", "mid_bus", "large_bus"] as const;
 const VEHICLE_PROPULSIONS = ["diesel", "electric"] as const;
 
-type FleetResultView = "fleet" | "demand" | "geocode" | "optimized" | "maps" | "diagnostics";
+type FleetResultView = "plan" | "map" | "review";
 type FleetMarket = "KR" | "CN";
 type FleetMode = "balanced" | "cost_saver" | "comfort_saver";
 type FleetServiceDirection = "to_school" | "from_school";
@@ -47,7 +50,7 @@ type FleetVehicleCatalogInput = Partial<FleetPlannerVehicleConfig> & { vehicle?:
 type ToolMapOutput = {
   key: string;
   name: string;
-  html: string;
+  mapData?: JobMapData;
 };
 type PreviewVariables = {
   file?: File | null;
@@ -76,7 +79,7 @@ export function FleetPlannerPage() {
   const [howToUseOpen, setHowToUseOpen] = useState(false);
   const [fleetSettingHelpOpen, setFleetSettingHelpOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
-  const [activeResultView, setActiveResultView] = useState<FleetResultView>("fleet");
+  const [activeResultView, setActiveResultView] = useState<FleetResultView>("review");
   const historyPanelRef = useRef<HTMLDivElement | null>(null);
 
   const historyQuery = useQuery({
@@ -163,7 +166,7 @@ export function FleetPlannerPage() {
         return;
       }
       setLoadedHistoryRecord(null);
-      setActiveResultView("fleet");
+      setActiveResultView("review");
     },
   });
 
@@ -179,7 +182,7 @@ export function FleetPlannerPage() {
     },
     onSuccess: () => {
       setLoadedHistoryRecord(null);
-      setActiveResultView("geocode");
+      setActiveResultView("review");
     },
   });
 
@@ -205,7 +208,7 @@ export function FleetPlannerPage() {
     },
     onSuccess: () => {
       setLoadedHistoryRecord(null);
-      setActiveResultView("diagnostics");
+      setActiveResultView("review");
     },
   });
 
@@ -232,7 +235,7 @@ export function FleetPlannerPage() {
     },
     onSuccess: () => {
       setLoadedHistoryRecord(null);
-      setActiveResultView("diagnostics");
+      setActiveResultView("review");
     },
   });
 
@@ -258,7 +261,7 @@ export function FleetPlannerPage() {
     },
     onSuccess: (globalPlan) => {
       setLoadedHistoryRecord(null);
-      setActiveResultView("optimized");
+      setActiveResultView("map");
       saveHistoryMutation.reset();
       saveHistoryMutation.mutate(globalPlan);
     },
@@ -318,7 +321,7 @@ export function FleetPlannerPage() {
         setRouteDirection,
         setGlobalDirection,
       });
-      setActiveResultView("optimized");
+      setActiveResultView("map");
     },
   });
 
@@ -329,7 +332,7 @@ export function FleetPlannerPage() {
         setLoadedHistoryRecord(null);
         saveHistoryMutation.reset();
         setHistoryTitle(defaultFleetHistoryTitle());
-        setActiveResultView("fleet");
+        setActiveResultView("review");
       }
       await queryClient.invalidateQueries({ queryKey: ["fleet-planner-history"] });
     },
@@ -343,7 +346,7 @@ export function FleetPlannerPage() {
     globalPlanMutation.reset();
     saveHistoryMutation.reset();
     setLoadedHistoryRecord(null);
-    setActiveResultView("fleet");
+    setActiveResultView("review");
   }
 
   function resetClusterResults() {
@@ -352,7 +355,7 @@ export function FleetPlannerPage() {
     globalPlanMutation.reset();
     saveHistoryMutation.reset();
     setLoadedHistoryRecord(null);
-    setActiveResultView("geocode");
+    setActiveResultView("review");
   }
 
   function resetRoutePreviewResults() {
@@ -363,7 +366,7 @@ export function FleetPlannerPage() {
     globalPlanMutation.reset();
     saveHistoryMutation.reset();
     setLoadedHistoryRecord(null);
-    setActiveResultView("fleet");
+    setActiveResultView("review");
   }
 
   async function handleFileChange(nextFile: File | null) {
@@ -923,41 +926,27 @@ function FleetPreviewResult({
   const assumptions = result.assumptions || {};
   const previewSummary = result.summary || {};
   const demandWorkbookSummary = result.demand_workbook?.summary || {};
-  const clusterSummary = clusterResult?.summary || {};
-  const geocodeSummary = geocodeResult?.summary || {};
   const globalPlanSummary = globalPlanResult?.summary || {};
   const submittedBy = historyRecord?.owner_email || saveHistoryResult?.job.owner_email || "";
   const savedAt = historyRecord?.created_at || saveHistoryResult?.job.created_at || "";
+  const mapJobName = historyRecord?.title || saveHistoryResult?.job.title || defaultFleetHistoryTitle();
   const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
-    { key: "fleet", label: "Fleet preview", badge: `${formatNumber(previewSummary.total_riders)} riders`, available: true },
     {
-      key: "demand",
-      label: "Demand input",
-      badge: result.demand_workbook ? `${formatNumber(demandWorkbookSummary.student_count)} students` : undefined,
-      available: Boolean(result.demand_workbook),
-    },
-    {
-      key: "geocode",
-      label: "Address validation",
-      badge: geocodeResult ? `${formatNumber(geocodeSummary.resolved_student_rows)} resolved` : undefined,
-      available: Boolean(geocodeResult),
-    },
-    {
-      key: "optimized",
-      label: "Optimized plan",
+      key: "plan",
+      label: "Plan",
       badge: globalPlanResult ? `${formatNumber(globalPlanSummary.route_count)} routes` : undefined,
       available: Boolean(globalPlanResult),
     },
     {
-      key: "maps",
-      label: "Maps",
-      badge: mapOutputs.length ? `${formatNumber(mapOutputs.length)} maps` : undefined,
+      key: "map",
+      label: "Map",
+      badge: mapOutputs.length ? `${formatNumber(globalPlanSummary.route_count || mapOutputs[0]?.mapData?.summary.route_count || 0)} routes` : undefined,
       available: mapOutputs.length > 0,
     },
     {
-      key: "diagnostics",
-      label: "Diagnostics",
-      badge: clusterResult ? `${formatNumber(clusterSummary.cluster_count)} groups` : undefined,
+      key: "review",
+      label: "Review",
+      badge: result.demand_workbook ? `${formatNumber(previewSummary.total_riders)} riders` : undefined,
       available: true,
     },
   ];
@@ -968,7 +957,7 @@ function FleetPreviewResult({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-sm font-semibold">Results workspace</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Each tab shows one stage of output so previews and final plans stay separate.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Review the optimized plan, route map, and supporting input checks in one workspace.</p>
             {historyRecord || saveHistoryResult?.job ? (
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <span>Submitted by {submittedBy || "Unknown"}</span>
@@ -993,55 +982,7 @@ function FleetPreviewResult({
           ))}
         </div>
 
-        {activeView === "fleet" ? (
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-4">
-              <Metric label="Max Route Time" value={`${formatNumber(assumptions.max_route_duration_minutes)} min`} />
-              <Metric label="Max Stops" value={formatNumber(assumptions.max_stops_per_route)} />
-              <Metric label="Target Load" value={formatPercent(assumptions.target_load_factor, 100)} />
-              <Metric label="Min Load" value={formatPercent(assumptions.min_reasonable_load_factor, 100)} />
-            </div>
-            <ResultTable
-              rows={result.recommendations}
-              columns={["riders", "recommended_vehicle", "student_capacity", "load_factor", "empty_seats", "feasible_options", "rejected_options"]}
-            />
-            {mixRows.length ? (
-              <div>
-                <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
-                <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-
-        {activeView === "demand" ? (
-          result.demand_workbook ? (
-            <div className="space-y-4">
-              <div className="grid gap-3 md:grid-cols-4">
-                <Metric label="Rows" value={formatNumber(demandWorkbookSummary.row_count)} />
-                <Metric label="Students" value={formatNumber(demandWorkbookSummary.student_count)} />
-                <Metric label="Unique Addresses" value={formatNumber(demandWorkbookSummary.unique_address_count)} />
-                <Metric label="City" value={String(demandWorkbookSummary.city || "N/A")} />
-              </div>
-              {(result.demand_workbook.warnings || []).map((warning) => (
-                <InlineError key={warning} message={warning} />
-              ))}
-              <ResultTable rows={result.demand_workbook.riders || []} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
-            </div>
-          ) : (
-            <EmptyResultState title="No workbook preview" detail="Upload a demand workbook and run Preview fleet to review parsed rows here." />
-          )
-        ) : null}
-
-        {activeView === "geocode" ? (
-          geocodeResult ? (
-            <DemandGeocodePreview result={geocodeResult} framed={false} />
-          ) : (
-            <EmptyResultState title="Address validation not run" detail="Use Validate & geocode after uploading a demand workbook." />
-          )
-        ) : null}
-
-        {activeView === "optimized" ? (
+        {activeView === "plan" ? (
           globalPlanResult ? (
             <div className="space-y-4">
               <RoutePreviewResult result={globalPlanResult} title="Optimized Plan" framed={false} />
@@ -1056,25 +997,70 @@ function FleetPreviewResult({
           )
         ) : null}
 
-        {activeView === "maps" ? (
+        {activeView === "map" ? (
           mapOutputs.length ? (
-            <ToolMapsPanel mapOutputs={mapOutputs} />
+            <ToolMapsPanel mapOutputs={mapOutputs} workbookResult={globalPlanResult} jobName={mapJobName} />
           ) : (
             <EmptyResultState title="No maps available" detail="Run address validation or build an optimized plan to render maps here." />
           )
         ) : null}
 
-        {activeView === "diagnostics" ? (
+        {activeView === "review" ? (
           <div className="space-y-4">
-            {clusterResult ? <DemandClusterPreview result={clusterResult} framed={false} /> : null}
-            {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Grouped Route Preview" framed={false} /> : null}
-            {!clusterResult && !routePreviewResult ? (
-              <EmptyResultState title="No diagnostic preview yet" detail="Open Advanced diagnostics and run Preview groups if you need spatial grouping diagnostics." />
-            ) : null}
-            <div>
-              <h3 className="mb-2 text-sm font-semibold">Vehicle Catalog</h3>
-              <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "available_count", "notes"]} />
-            </div>
+            <section className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-4">
+                <Metric label="Max Route Time" value={`${formatNumber(assumptions.max_route_duration_minutes)} min`} />
+                <Metric label="Max Stops" value={formatNumber(assumptions.max_stops_per_route)} />
+                <Metric label="Target Load" value={formatPercent(assumptions.target_load_factor, 100)} />
+                <Metric label="Min Load" value={formatPercent(assumptions.min_reasonable_load_factor, 100)} />
+              </div>
+              <ResultTable
+                rows={result.recommendations}
+                columns={["riders", "recommended_vehicle", "student_capacity", "load_factor", "empty_seats", "feasible_options", "rejected_options"]}
+              />
+              {mixRows.length ? (
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
+                  <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
+                </div>
+              ) : null}
+            </section>
+            <details className="group rounded-md border border-border bg-muted/30" open={Boolean(geocodeResult || clusterResult)}>
+              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">Input and address review</summary>
+              <div className="space-y-4 border-t border-border px-3 py-3">
+                {result.demand_workbook ? (
+                  <div className="space-y-4">
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <Metric label="Rows" value={formatNumber(demandWorkbookSummary.row_count)} />
+                      <Metric label="Students" value={formatNumber(demandWorkbookSummary.student_count)} />
+                      <Metric label="Unique Addresses" value={formatNumber(demandWorkbookSummary.unique_address_count)} />
+                      <Metric label="City" value={String(demandWorkbookSummary.city || "N/A")} />
+                    </div>
+                    {(result.demand_workbook.warnings || []).map((warning) => (
+                      <InlineError key={warning} message={warning} />
+                    ))}
+                    <ResultTable rows={result.demand_workbook.riders || []} columns={["Country", "City", "School", "Student Address", "Students", "Notes"]} />
+                  </div>
+                ) : (
+                  <EmptyResultState title="No workbook preview" detail="Upload a demand workbook and run Preview fleet to review parsed rows here." />
+                )}
+                {geocodeResult ? <DemandGeocodePreview result={geocodeResult} framed={false} /> : null}
+              </div>
+            </details>
+            <details className="group rounded-md border border-border bg-muted/30">
+              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">Diagnostics and vehicle catalog</summary>
+              <div className="space-y-4 border-t border-border px-3 py-3">
+                {clusterResult ? <DemandClusterPreview result={clusterResult} framed={false} /> : null}
+                {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Grouped Route Preview" framed={false} /> : null}
+                {!clusterResult && !routePreviewResult ? (
+                  <EmptyResultState title="No diagnostic preview yet" detail="Open Advanced diagnostics and run Preview groups if you need spatial grouping diagnostics." />
+                ) : null}
+                <div>
+                  <h3 className="mb-2 text-sm font-semibold">Vehicle Catalog</h3>
+                  <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "available_count", "notes"]} />
+                </div>
+              </div>
+            </details>
           </div>
         ) : null}
       </CardContent>
@@ -1467,38 +1453,74 @@ function FleetPlannerHistoryPanel({
   );
 }
 
-function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
+function ToolMapsPanel({
+  mapOutputs,
+  workbookResult,
+  jobName,
+}: {
+  mapOutputs: ToolMapOutput[];
+  workbookResult?: FleetPlannerRoutePreviewResponse;
+  jobName: string;
+}) {
   const [selectedKey, setSelectedKey] = useState("");
+  const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
+  const canDownloadWorkbook = Boolean(workbookResult?.workbook_base64);
 
   if (!selected) {
     return <EmptyResultState title="No maps available" detail="This Fleet Planner run has no rendered maps." />;
   }
 
+  const mapToolbar = (
+    <div className="flex flex-wrap items-center justify-end gap-2">
+      <Button
+        type="button"
+        variant="secondary"
+        className="bg-surface shadow-sm"
+        icon={<Maximize2 className="h-4 w-4" />}
+        disabled={!selected.mapData}
+        onClick={() => setIsMapFullscreenOpen(true)}
+      >
+        Open
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        className="bg-surface shadow-sm"
+        icon={<Download className="h-4 w-4" />}
+        disabled={!selected.mapData}
+        onClick={() => selected.mapData && downloadInteractiveMapHtml(selected.mapData, jobName, selected.name)}
+      >
+        Map
+      </Button>
+      <Button
+        type="button"
+        variant="secondary"
+        className="bg-surface shadow-sm"
+        icon={<FileSpreadsheet className="h-4 w-4" />}
+        disabled={!canDownloadWorkbook}
+        onClick={() =>
+          workbookResult?.workbook_base64 &&
+          downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
+        }
+      >
+        Workbook
+      </Button>
+    </div>
+  );
+
   return (
-    <Card>
-      <CardHeader>
+    <section className="space-y-4">
+      <div className="rounded-md border border-border bg-surface px-3 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{selected.name}</h2>
-          </div>
-          <div className="flex items-center gap-2">
             {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} maps</Badge> : null}
-            <Button
-              type="button"
-              variant="secondary"
-              icon={<Download className="h-4 w-4" />}
-              onClick={() => downloadTextFile(selected.html, `${slugifyFileName(selected.name || selected.key)}.html`, "text/html;charset=utf-8")}
-            >
-              Download HTML
-            </Button>
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
         {mapOutputs.length > 1 ? (
-          <div className="flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             {mapOutputs.map((item) => (
               <button
                 key={item.key}
@@ -1516,17 +1538,68 @@ function ToolMapsPanel({ mapOutputs }: { mapOutputs: ToolMapOutput[] }) {
             ))}
           </div>
         ) : null}
-        <div className="overflow-hidden rounded-md border border-border bg-muted">
-          <iframe
-            key={selected.key}
-            title={selected.name}
-            srcDoc={selected.html}
-            sandbox="allow-scripts allow-same-origin"
-            className="h-[720px] min-h-[560px] max-h-[75vh] w-full border-0"
+      </div>
+      <div className="relative overflow-hidden rounded-md border border-border bg-muted/30">
+        {selected.mapData ? (
+          <InteractiveRouteMap data={selected.mapData} focusKey={`${selected.key}:inline`} />
+        ) : (
+          <EmptyResultState
+            title="Interactive map not available"
+            detail="Build the optimized plan again to render this Fleet Planner result with the interactive map."
           />
+        )}
+        <div className="absolute right-3 top-3 z-10">{mapToolbar}</div>
+      </div>
+      {isMapFullscreenOpen && selected.mapData ? (
+        <div className="fixed inset-0 z-50 p-3">
+          <div className="absolute inset-0 bg-slate-950/30 backdrop-blur-sm" />
+          <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-xl border border-white/50 bg-white/75 shadow-2xl backdrop-blur-xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/50 bg-white/70 px-4 py-3 backdrop-blur-xl">
+              <div className="min-w-0">
+                <h2 className="truncate text-base font-semibold text-foreground">{selected.name}</h2>
+                <p className="text-xs text-muted-foreground">Interactive Fleet Planner map</p>
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="bg-surface shadow-sm"
+                  icon={<Download className="h-4 w-4" />}
+                  onClick={() => downloadInteractiveMapHtml(selected.mapData as JobMapData, jobName, selected.name)}
+                >
+                  Map
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="bg-surface shadow-sm"
+                  icon={<FileSpreadsheet className="h-4 w-4" />}
+                  disabled={!canDownloadWorkbook}
+                  onClick={() =>
+                    workbookResult?.workbook_base64 &&
+                    downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
+                  }
+                >
+                  Workbook
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="border-red-200 bg-red-50 text-red-700 shadow-sm hover:bg-red-100 hover:text-red-800"
+                  icon={<X className="h-4 w-4" />}
+                  onClick={() => setIsMapFullscreenOpen(false)}
+                >
+                  Close
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <InteractiveRouteMap data={selected.mapData} fullscreen focusKey={`${selected.key}:fullscreen`} />
+            </div>
+          </div>
         </div>
-      </CardContent>
-    </Card>
+      ) : null}
+    </section>
   );
 }
 
@@ -2072,8 +2145,12 @@ function collectFleetMapOutputs({
   globalPlanResult?: FleetPlannerRoutePreviewResponse;
 }) {
   return [
-    { key: "optimized-plan", name: "Optimized Plan", html: globalPlanResult?.map_html || "" },
-  ].filter((item) => item.html.trim()) as ToolMapOutput[];
+    {
+      key: "optimized-plan",
+      name: "Optimized Plan",
+      mapData: globalPlanResult?.map_data,
+    },
+  ].filter((item) => item.mapData) as ToolMapOutput[];
 }
 
 function inferMarketFromDemandWorkbook(workbook?: FleetPlannerPreviewResponse["demand_workbook"] | null): "KR" | "CN" | null {
@@ -2295,23 +2372,4 @@ function downloadBase64Workbook(base64Value: string, fileName: string) {
   link.download = fileName;
   link.click();
   URL.revokeObjectURL(url);
-}
-
-function downloadTextFile(content: string, fileName: string, contentType: string) {
-  const blob = new Blob([content], { type: contentType });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function slugifyFileName(value: string) {
-  const slug = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return slug || "fleet-planner-map";
 }

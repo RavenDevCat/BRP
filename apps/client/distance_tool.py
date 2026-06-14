@@ -30,6 +30,9 @@ OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("CHINA", "XIAN"): "http://127.0.0.1:5005",
     ("SOUTH KOREA", "SEOUL"): "http://127.0.0.1:5006",
     ("SOUTH KOREA", ""): "http://127.0.0.1:5006",
+    ("THAILAND", "BANGKOK"): "http://127.0.0.1:5007",
+    ("BANGKOK", ""): "http://127.0.0.1:5007",
+    ("BK", ""): "http://127.0.0.1:5007",
 }
 OSRM_REQUEST_TIMEOUT = 30
 OSRM_TABLE_DESTINATION_CHUNK_SIZE = 80
@@ -50,6 +53,10 @@ def _canonical_country(country: str) -> str:
         return "SOUTH KOREA"
     if normalized in {"china", "中国", "中华人民共和国"}:
         return "CHINA"
+    if normalized in {"bangkok", "bk", "bangkok market"}:
+        return "BANGKOK"
+    if normalized in {"thailand", "thai", "th", "ประเทศไทย", "ไทย"}:
+        return "THAILAND"
     return country.strip().upper()
 
 
@@ -73,6 +80,13 @@ def _canonical_city(city: str) -> str:
         "seongnam si": "SEOUL",
         "성남": "SEOUL",
         "성남시": "SEOUL",
+        "bangkok": "BANGKOK",
+        "bangkok metropolis": "BANGKOK",
+        "krung thep": "BANGKOK",
+        "krung thep maha nakhon": "BANGKOK",
+        "กรุงเทพ": "BANGKOK",
+        "กรุงเทพฯ": "BANGKOK",
+        "กรุงเทพมหานคร": "BANGKOK",
     }
     return aliases.get(normalized, city.strip().upper())
 
@@ -91,6 +105,8 @@ def _country_aliases(country: str) -> list[str]:
         aliases.extend(["South Korea", "Korea"])
     if normalized in {"china", "中国", "中华人民共和国"}:
         aliases.extend(["China"])
+    if normalized in {"bangkok", "bk", "bangkok market", "thailand", "thai", "th", "ประเทศไทย", "ไทย"}:
+        aliases.extend(["Bangkok", "BK", "Thailand", "TH"])
     deduped: list[str] = []
     for item in aliases:
         if item and item not in deduped:

@@ -36,6 +36,11 @@ KAKAO_GEOCODE_MAX_QPS = 2.8
 KAKAO_PLACES_MAX_QPS = 2.8
 GOOGLE_GEOCODE_MAX_QPS = 2.8
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
+GOOGLE_GEOCODE_BASE_URL = os.environ.get(
+    "GOOGLE_GEOCODE_BASE_URL",
+    "https://maps.googleapis.com/maps/api/geocode/json",
+).strip()
+GOOGLE_GEOCODE_TIMEOUT_SECONDS = float(os.environ.get("GOOGLE_GEOCODE_TIMEOUT_SECONDS", "8") or 8)
 REQUEST_TIMEOUT = 20
 KAKAO_REQUEST_MAX_RETRIES = 3
 
@@ -197,6 +202,8 @@ def determine_currency_code(input_records: list[dict[str, Any]]) -> str:
     countries = " ".join(str(item.get("country", "")).strip().lower() for item in input_records)
     if any(token in countries for token in ("korea", "south korea", "대한민국", "한국")):
         return "KRW"
+    if any(token in countries for token in ("bangkok", "bk", "thailand", "thai", "ประเทศไทย", "ไทย")):
+        return "THB"
     if any(token in countries for token in ("china", "中国", "中华人民共和国")):
         return "CNY"
     return "USD"
@@ -216,6 +223,10 @@ def is_korea_country(country: str) -> bool:
 
 def is_china_country(country: str) -> bool:
     return country.strip().lower() in {"china", "中国", "中华人民共和国"}
+
+
+def is_bangkok_market_country(country: str) -> bool:
+    return country.strip().lower() in {"bangkok", "bk", "bangkok market", "thailand", "thai", "th", "ประเทศไทย", "ไทย"}
 
 
 CHINA_CITY_CONFIGS: dict[str, dict[str, Any]] = {
@@ -257,6 +268,29 @@ CHINA_CITY_ALIAS_TO_KEY = {
 }
 
 
+BANGKOK_MARKET_CITY_CONFIGS: dict[str, dict[str, Any]] = {
+    "bangkok": {
+        "canonical": "Bangkok",
+        "aliases": [
+            "bangkok",
+            "bangkok metropolis",
+            "krung thep",
+            "krung thep maha nakhon",
+            "กรุงเทพ",
+            "กรุงเทพฯ",
+            "กรุงเทพมหานคร",
+        ],
+    },
+}
+
+
+BANGKOK_MARKET_CITY_ALIAS_TO_KEY = {
+    alias.lower(): city_key
+    for city_key, config in BANGKOK_MARKET_CITY_CONFIGS.items()
+    for alias in config["aliases"]
+}
+
+
 def _normalize_china_city_key(city: str) -> str:
     normalized = " ".join(city.strip().lower().replace("’", "'").split())
     return CHINA_CITY_ALIAS_TO_KEY.get(normalized, normalized)
@@ -264,6 +298,15 @@ def _normalize_china_city_key(city: str) -> str:
 
 def _china_city_config(city: str) -> dict[str, Any] | None:
     return CHINA_CITY_CONFIGS.get(_normalize_china_city_key(city))
+
+
+def _normalize_bangkok_market_city_key(city: str) -> str:
+    normalized = " ".join(city.strip().lower().split())
+    return BANGKOK_MARKET_CITY_ALIAS_TO_KEY.get(normalized, normalized)
+
+
+def _bangkok_market_city_config(city: str) -> dict[str, Any] | None:
+    return BANGKOK_MARKET_CITY_CONFIGS.get(_normalize_bangkok_market_city_key(city))
 
 
 def _amap_city_param(country: str, city: str) -> str:
@@ -290,6 +333,10 @@ def _metro_query_cities(country: str, city: str) -> list[str]:
         "성남시",
     }:
         for candidate in ("Seoul", "서울", "Seongnam", "Seongnam-si", "성남시"):
+            if candidate not in cities:
+                cities.append(candidate)
+    if is_bangkok_market_country(country) and _normalize_bangkok_market_city_key(raw_city) == "bangkok":
+        for candidate in ("Bangkok", "Bangkok Metropolis", "Krung Thep", "กรุงเทพมหานคร", "กรุงเทพ"):
             if candidate not in cities:
                 cities.append(candidate)
     return cities
@@ -396,6 +443,25 @@ def is_plausible_korea_geocode_result(
     return _is_within_south_korea_bbox(lat, lng)
 
 
+def _is_within_bangkok_market_bbox(lat: float, lng: float) -> bool:
+    # Keep validation aligned with the Bangkok/metro OSRM coverage used for the BK market.
+    north, east, south, west = (14.8, 101.6, 12.4, 99.0)
+    return south <= lat <= north and west <= lng <= east
+
+
+def is_plausible_bangkok_market_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+    requested_address: str = "",
+) -> bool:
+    if not is_bangkok_market_country(country):
+        return True
+    return _is_within_bangkok_market_bbox(lat, lng)
+
+
 def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
     config = _china_city_config(city)
     if config is None:
@@ -447,6 +513,8 @@ def is_plausible_geocode_result(
 ) -> bool:
     if is_korea_country(country):
         return is_plausible_korea_geocode_result(country, city, lat, lng, formatted_address, requested_address)
+    if is_bangkok_market_country(country):
+        return is_plausible_bangkok_market_geocode_result(country, city, lat, lng, formatted_address, requested_address)
     if is_china_country(country):
         return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
     return True
@@ -643,9 +711,9 @@ def google_geocode_request_json(params: dict[str, Any]) -> dict[str, Any]:
     GOOGLE_GEOCODE_LIMITER.wait()
     reserve_google_geocode_monthly_usage()
     response = requests.get(
-        "https://maps.googleapis.com/maps/api/geocode/json",
+        GOOGLE_GEOCODE_BASE_URL,
         params={**params, "key": api_key},
-        timeout=REQUEST_TIMEOUT,
+        timeout=GOOGLE_GEOCODE_TIMEOUT_SECONDS,
     )
     response.raise_for_status()
     payload = response.json()
@@ -665,9 +733,17 @@ def google_country_code(country: str) -> str:
         "republic of korea": "KR",
         "대한민국": "KR",
         "한국": "KR",
+        "bangkok": "TH",
+        "bk": "TH",
+        "bangkok market": "TH",
+        "bangkok": "TH",
+        "bk": "TH",
+        "bangkok market": "TH",
         "thailand": "TH",
         "thai": "TH",
+        "th": "TH",
         "ประเทศไทย": "TH",
+        "ไทย": "TH",
         "united states": "US",
         "usa": "US",
         "us": "US",
@@ -710,6 +786,8 @@ def canonical_cache_country(country: str) -> str:
         return ""
     if is_korea_country(normalized):
         return "South Korea"
+    if is_bangkok_market_country(normalized):
+        return "Bangkok"
     if normalized.strip().lower() in {"china", "中国", "中华人民共和国"}:
         return "China"
     return normalized
@@ -729,6 +807,10 @@ def canonical_cache_city(country: str, city: str) -> str:
             return "Daejeon"
     if is_china_country(country):
         config = _china_city_config(normalized)
+        if config:
+            return str(config["canonical"])
+    if is_bangkok_market_country(country):
+        config = _bangkok_market_city_config(normalized)
         if config:
             return str(config["canonical"])
     return normalized
@@ -758,6 +840,12 @@ def geocode_cache_lookup_keys(country: str, city: str, address: str) -> list[str
     if is_korea_country(raw_country):
         korea_city_variants = [raw_city, normalized_city, ""]
         for city_variant in korea_city_variants:
+            candidates.append(f"{normalized_country}|{city_variant.strip()}|{normalized_address}")
+            candidates.append(f"{raw_country}|{city_variant.strip()}|{raw_address}")
+
+    if is_bangkok_market_country(raw_country):
+        bangkok_city_variants = [raw_city, normalized_city, ""]
+        for city_variant in bangkok_city_variants:
             candidates.append(f"{normalized_country}|{city_variant.strip()}|{normalized_address}")
             candidates.append(f"{raw_country}|{city_variant.strip()}|{raw_address}")
 

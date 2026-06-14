@@ -34,8 +34,11 @@ try:
         PlannerConfig,
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
+        infer_traffic_location,
         rerender_html_from_structured_results,
+        resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
+        summarize_live_traffic_samples,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from ai_audit import generate_ai_audit_report
@@ -43,8 +46,11 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         PlannerConfig,
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
+        infer_traffic_location,
         rerender_html_from_structured_results,
+        resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
+        summarize_live_traffic_samples,
     )
 
 
@@ -829,6 +835,75 @@ def _handle_fleet_planner_clusters(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _fleet_service_direction_label(service_direction: str) -> str:
+    normalized = str(service_direction or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return "To School" if normalized == "to_school" else "From School"
+
+
+def _fleet_default_traffic_profile(service_direction: str) -> str:
+    return "AM Peak" if _fleet_service_direction_label(service_direction) == "To School" else "PM Peak"
+
+
+def _fleet_traffic_input_records(route_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    candidate_items: list[dict[str, Any]] = []
+    school = route_payload.get("school") or {}
+    if isinstance(school, dict):
+        candidate_items.append(dict(school))
+    for point in list(route_payload.get("demand_points") or []):
+        if isinstance(point, dict):
+            candidate_items.append(dict(point))
+    for cluster in list(route_payload.get("clusters") or []):
+        if not isinstance(cluster, dict):
+            continue
+        for point in list(cluster.get("points") or []):
+            if isinstance(point, dict):
+                candidate_items.append(dict(point))
+
+    for item in candidate_items:
+        records.append(
+            {
+                "country": str(item.get("country") or "").strip(),
+                "city": str(item.get("city") or "").strip(),
+                "address": str(item.get("address") or item.get("formatted_address") or "").strip(),
+            }
+        )
+    return records
+
+
+def _fleet_traffic_context(
+    geocode_result: dict[str, Any],
+    *,
+    service_direction: str,
+    market: str | None = None,
+    profile_name: str | None = None,
+) -> dict[str, Any]:
+    records = _fleet_traffic_input_records(geocode_result)
+    selected_profile = str(profile_name or "").strip() or _fleet_default_traffic_profile(service_direction)
+    traffic_profile_name, traffic_time_multiplier, traffic_profile_context = resolve_traffic_profile(
+        selected_profile,
+        records,
+    )
+    inferred_country, _inferred_city = infer_traffic_location(records)
+    normalized_market = str(market or "").strip().upper()
+    live_traffic_sample = None
+    if normalized_market == "KR" or inferred_country == "SOUTH KOREA":
+        live_traffic_sample = summarize_live_traffic_samples(
+            service_direction=_fleet_service_direction_label(service_direction),
+            input_records=records,
+        )
+    if live_traffic_sample:
+        traffic_profile_name = str(live_traffic_sample["traffic_profile_name"])
+        traffic_time_multiplier = float(live_traffic_sample["traffic_time_multiplier"])
+        traffic_profile_context = str(live_traffic_sample["traffic_profile_context"])
+    return {
+        "traffic_profile_name": traffic_profile_name,
+        "traffic_time_multiplier": float(traffic_time_multiplier),
+        "traffic_profile_context": traffic_profile_context,
+        "live_traffic_sample": live_traffic_sample,
+    }
+
+
 def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, Any]:
     demand_clustering = _client_module("demand_clustering")
     demand_routing = _client_module("demand_routing")
@@ -844,10 +919,20 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
     if not cluster_result:
         raise ValueError("Build demand clusters before route preview.")
 
+    traffic_context = _fleet_traffic_context(
+        dict(cluster_result),
+        service_direction=service_direction,
+        profile_name=payload.get("traffic_profile_name"),
+        market=market,
+    )
     route_preview = demand_routing.build_osrm_route_preview(
         cluster_result,
         service_direction=service_direction,
         max_route_duration_minutes=max_route_duration_minutes,
+        traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
+        traffic_profile_name=str(traffic_context["traffic_profile_name"]),
+        traffic_profile_context=str(traffic_context["traffic_profile_context"]),
+        live_traffic_sample=traffic_context.get("live_traffic_sample"),
     )
     overlong_route_ids = {
         str(row.get("cluster_id", "")).strip()
@@ -870,6 +955,10 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
             refined_cluster_result,
             service_direction=service_direction,
             max_route_duration_minutes=max_route_duration_minutes,
+            traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
+            traffic_profile_name=str(traffic_context["traffic_profile_name"]),
+            traffic_profile_context=str(traffic_context["traffic_profile_context"]),
+            live_traffic_sample=traffic_context.get("live_traffic_sample"),
         )
         route_preview["refinement_note"] = (
             "One or more clusters exceeded the route-duration target and were split once by distance from school."
@@ -893,6 +982,11 @@ def _route_plan_response(
 ) -> dict[str, Any]:
     demand_routing = _client_module("demand_routing")
     workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
+    map_data = demand_routing.build_route_preview_map_data(
+        route_preview,
+        scenario_key="optimized_plan",
+        scenario_name="Optimized Plan",
+    )
     return {
         "summary": dict(route_preview.get("summary") or {}),
         "school": dict(route_preview.get("school") or {}),
@@ -904,10 +998,39 @@ def _route_plan_response(
             demand_routing.route_preview_stop_detail_to_dataframe(route_preview)
         ),
         "map_html": demand_routing.build_route_preview_map_html(route_preview),
+        "map_data": map_data,
         "refinement_note": str(route_preview.get("refinement_note") or ""),
         "workbook_file_name": workbook_file_name,
         "workbook_base64": base64.b64encode(workbook_bytes).decode("ascii"),
     }
+
+
+def _ensure_fleet_planner_map_data(
+    route_preview_result: dict[str, Any],
+) -> dict[str, Any]:
+    result = deepcopy(route_preview_result or {})
+    if result.get("map_data") or not result.get("routes"):
+        return result
+    try:
+        demand_routing = _client_module("demand_routing")
+        result["map_data"] = demand_routing.build_route_preview_map_data(
+            result,
+            scenario_key="optimized_plan",
+            scenario_name="Optimized Plan",
+        )
+    except Exception as exc:
+        result["map_data_error"] = str(exc)
+    return result
+
+
+def _hydrate_fleet_planner_history_record(record: dict[str, Any]) -> dict[str, Any]:
+    hydrated = deepcopy(record or {})
+    global_plan_result = hydrated.get("global_plan_result")
+    if isinstance(global_plan_result, dict):
+        hydrated["global_plan_result"] = _ensure_fleet_planner_map_data(
+            global_plan_result
+        )
+    return hydrated
 
 
 def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]:
@@ -923,6 +1046,12 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
     geocode_result = dict(payload.get("geocode_result") or {})
     if not geocode_result:
         raise ValueError("Run demand geocode before building a global plan.")
+    traffic_context = _fleet_traffic_context(
+        geocode_result,
+        service_direction=service_direction,
+        profile_name=payload.get("traffic_profile_name"),
+        market=market,
+    )
     global_plan = demand_global_optimizer.build_global_ortools_plan(
         geocode_result,
         market=market,
@@ -931,6 +1060,10 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         max_route_duration_minutes=max_route_duration_minutes,
         custom_catalog=custom_catalog,
         service_direction=service_direction,
+        traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
+        traffic_profile_name=str(traffic_context["traffic_profile_name"]),
+        traffic_profile_context=str(traffic_context["traffic_profile_context"]),
+        live_traffic_sample=traffic_context.get("live_traffic_sample"),
     )
     return _route_plan_response(
         global_plan, workbook_file_name="fleet_planner_global_plan.xlsx"
@@ -941,7 +1074,9 @@ def _handle_fleet_planner_history_create(
     payload: dict[str, Any], user_email: str
 ) -> dict[str, Any]:
     preview_result = dict(payload.get("preview_result") or {})
-    global_plan_result = dict(payload.get("global_plan_result") or {})
+    global_plan_result = _ensure_fleet_planner_map_data(
+        dict(payload.get("global_plan_result") or {})
+    )
     if not preview_result:
         raise ValueError("Run Fleet preview before saving history.")
     if not global_plan_result:
@@ -3677,7 +3812,7 @@ class BackendHandler(BaseHTTPRequestHandler):
                     },
                 )
                 return
-            self._send_json(200, record)
+            self._send_json(200, _hydrate_fleet_planner_history_record(record))
             return
         if path == "/jobs":
             self._send_json(

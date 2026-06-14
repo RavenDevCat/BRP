@@ -4,10 +4,12 @@ import math
 from typing import Any
 
 from demand_routing import (
+    _annotate_ordered_points_with_schedule,
     _build_osrm_matrix,
     _point_payload,
     _route_leg_details_for_order,
     _route_metrics_for_order,
+    _traffic_multiplier,
 )
 from planning_assumptions import PlanningAssumptions, get_planning_assumptions
 from vehicle_catalog import get_vehicle_catalog
@@ -214,6 +216,10 @@ def build_global_ortools_plan(
     max_route_duration_minutes: int | None = None,
     custom_catalog: list[dict[str, Any]] | None = None,
     service_direction: str = "to_school",
+    traffic_time_multiplier: float | None = 1.0,
+    traffic_profile_name: str = "Off-Peak",
+    traffic_profile_context: str = "Global default",
+    live_traffic_sample: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
         from ortools.constraint_solver import pywrapcp, routing_enums_pb2
@@ -257,7 +263,7 @@ def build_global_ortools_plan(
         raise ValueError("No candidate vehicles are available for global planning.")
 
     points = [_point_payload(school), *[_point_payload(point) for point in demand_points]]
-    duration_matrix, distance_matrix = _build_osrm_matrix(points)
+    duration_matrix, distance_matrix = _build_osrm_matrix(points, traffic_time_multiplier=traffic_time_multiplier)
     extended_duration, extended_distance, dummy_index = _build_extended_matrices(
         duration_matrix,
         distance_matrix,
@@ -355,7 +361,17 @@ def build_global_ortools_plan(
             continue
 
         total_duration_s, total_distance_m = _route_metrics_for_order(order, duration_matrix, distance_matrix)
-        ordered_points = [points[node] for node in order]
+        leg_details = _route_leg_details_for_order(
+            points,
+            order,
+            traffic_time_multiplier=traffic_time_multiplier,
+        )
+        ordered_points = _annotate_ordered_points_with_schedule(
+            [points[node] for node in order],
+            leg_details,
+            route_duration_s=total_duration_s,
+            service_direction=service_direction,
+        )
         student_count = sum(int(points[node].get("student_count", 0) or 0) for node in customer_order)
         load_factor = student_count / max(1, int(vehicle["capacity"]))
         route_id = f"G{len(route_rows) + 1:02d}"
@@ -383,7 +399,7 @@ def build_global_ortools_plan(
                 "service_direction": service_direction,
                 "order": order,
                 "ordered_points": ordered_points,
-                "leg_details": _route_leg_details_for_order(points, order),
+                "leg_details": leg_details,
                 "duration_s": total_duration_s,
                 "distance_m": total_distance_m,
                 "selected_vehicle": {
@@ -409,6 +425,10 @@ def build_global_ortools_plan(
             "max_route_duration_minutes": assumptions.max_route_duration_minutes,
             "candidate_vehicle_count": len(vehicle_pool),
             "solver": "global_ortools",
+            "traffic_profile_name": traffic_profile_name,
+            "traffic_time_multiplier": _traffic_multiplier(traffic_time_multiplier),
+            "traffic_profile_context": traffic_profile_context,
+            "live_traffic_sample": live_traffic_sample,
         },
         "route_rows": route_rows,
     }

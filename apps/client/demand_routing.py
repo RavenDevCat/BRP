@@ -12,6 +12,75 @@ from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_l
 
 
 HUGE_COST = 10**9
+DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
+DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
+DEFAULT_STOP_DWELL_SECONDS = 60.0
+
+
+def _format_clock_minutes(minutes: float | int | None) -> str:
+    if minutes is None:
+        return ""
+    total_minutes = int(round(float(minutes))) % (24 * 60)
+    return f"{total_minutes // 60:02d}:{total_minutes % 60:02d}"
+
+
+def _service_direction_label(service_direction: str) -> str:
+    normalized = str(service_direction or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return "To School" if normalized == "to_school" else "From School"
+
+
+def _schedule_anchor(service_direction: str) -> tuple[int, str, str]:
+    if _service_direction_label(service_direction) == "To School":
+        return DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES, "08:00", "School arrival"
+    return DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES, "15:40", "School departure"
+
+
+def _annotate_ordered_points_with_schedule(
+    ordered_points: list[dict[str, Any]],
+    leg_details: list[dict[str, Any]],
+    *,
+    route_duration_s: float,
+    service_direction: str,
+    dwell_seconds: float = DEFAULT_STOP_DWELL_SECONDS,
+) -> list[dict[str, Any]]:
+    anchor_minutes, anchor_label, anchor_kind = _schedule_anchor(service_direction)
+    service_label = _service_direction_label(service_direction)
+    cumulative_duration_s = 0.0
+    cumulative_by_order: list[float] = []
+    for index, _point in enumerate(ordered_points):
+        if index > 0 and index - 1 < len(leg_details):
+            cumulative_duration_s += float(dict(leg_details[index - 1]).get("duration_s", 0.0) or 0.0)
+        cumulative_by_order.append(cumulative_duration_s)
+
+    service_orders = [
+        index
+        for index, point in enumerate(ordered_points)
+        if int(point.get("student_count", 0) or 0) > 0
+    ]
+    annotated: list[dict[str, Any]] = []
+    for order, point in enumerate(ordered_points):
+        item = dict(point)
+        drive_elapsed_s = cumulative_by_order[order] if order < len(cumulative_by_order) else 0.0
+        if service_label == "To School":
+            if order not in service_orders:
+                offset_s = 0.0
+            else:
+                downstream_dwell_count = len([item_order for item_order in service_orders if item_order >= order])
+                remaining_drive_s = max(0.0, float(route_duration_s) - drive_elapsed_s)
+                offset_s = -(remaining_drive_s + downstream_dwell_count * dwell_seconds)
+        else:
+            prior_dwell_count = len([item_order for item_order in service_orders if item_order < order])
+            if order not in service_orders:
+                prior_dwell_count = 0
+            offset_s = drive_elapsed_s + prior_dwell_count * dwell_seconds
+        scheduled_minutes = anchor_minutes + offset_s / 60.0
+        item["schedule_anchor_label"] = anchor_label
+        item["schedule_anchor_kind"] = anchor_kind
+        item["scheduled_offset_s"] = offset_s
+        item["scheduled_time_minutes"] = scheduled_minutes
+        item["scheduled_time_label"] = _format_clock_minutes(scheduled_minutes)
+        annotated.append(item)
+    return annotated
 
 
 def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
@@ -26,7 +95,19 @@ def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_osrm_matrix(points: list[dict[str, Any]]) -> tuple[list[list[float]], list[list[float]]]:
+def _traffic_multiplier(value: float | None) -> float:
+    try:
+        return max(0.01, float(value if value is not None else 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+
+
+def _build_osrm_matrix(
+    points: list[dict[str, Any]],
+    *,
+    traffic_time_multiplier: float | None = 1.0,
+) -> tuple[list[list[float]], list[list[float]]]:
+    multiplier = _traffic_multiplier(traffic_time_multiplier)
     duration_matrix: list[list[float]] = []
     distance_matrix: list[list[float]] = []
     for origin_index, origin in enumerate(points):
@@ -44,7 +125,7 @@ def _build_osrm_matrix(points: list[dict[str, Any]]) -> tuple[list[list[float]],
             metric_index += 1
             duration_s = metric.get("duration_s")
             distance_m = metric.get("distance_m")
-            duration_row.append(float(duration_s) if duration_s is not None else float(HUGE_COST))
+            duration_row.append(float(duration_s) * multiplier if duration_s is not None else float(HUGE_COST))
             distance_row.append(float(distance_m) if distance_m is not None else float(HUGE_COST))
         duration_matrix.append(duration_row)
         distance_matrix.append(distance_row)
@@ -165,9 +246,28 @@ def _route_metrics_for_order(
     return total_duration_s, total_distance_m
 
 
-def _route_leg_details_for_order(points: list[dict[str, Any]], order: list[int]) -> list[dict[str, Any]]:
+def _scale_leg_details(details: list[dict[str, Any]], traffic_time_multiplier: float | None) -> list[dict[str, Any]]:
+    multiplier = _traffic_multiplier(traffic_time_multiplier)
+    if abs(multiplier - 1.0) < 0.000001:
+        return details
+    scaled: list[dict[str, Any]] = []
+    for detail in details:
+        item = dict(detail)
+        duration_s = item.get("duration_s")
+        if duration_s is not None:
+            item["duration_s"] = float(duration_s) * multiplier
+        scaled.append(item)
+    return scaled
+
+
+def _route_leg_details_for_order(
+    points: list[dict[str, Any]],
+    order: list[int],
+    *,
+    traffic_time_multiplier: float | None = 1.0,
+) -> list[dict[str, Any]]:
     ordered_points = [points[index] for index in order]
-    return compute_osrm_route_leg_details(ordered_points)
+    return _scale_leg_details(compute_osrm_route_leg_details(ordered_points), traffic_time_multiplier)
 
 
 def build_osrm_route_preview(
@@ -175,6 +275,10 @@ def build_osrm_route_preview(
     *,
     service_direction: str = "to_school",
     max_route_duration_minutes: int | None = None,
+    traffic_time_multiplier: float | None = 1.0,
+    traffic_profile_name: str = "Off-Peak",
+    traffic_profile_context: str = "Global default",
+    live_traffic_sample: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     school = dict(cluster_result.get("school") or {})
     if school.get("status") != "ok" or school.get("lat") is None or school.get("lng") is None:
@@ -187,7 +291,7 @@ def build_osrm_route_preview(
         if not cluster_points:
             continue
         points = [_point_payload(school), *[_point_payload(point) for point in cluster_points]]
-        duration_matrix, distance_matrix = _build_osrm_matrix(points)
+        duration_matrix, distance_matrix = _build_osrm_matrix(points, traffic_time_multiplier=traffic_time_multiplier)
         order, solver = _ortools_open_route_order(duration_matrix, service_direction)
         total_duration_s, total_distance_m = _route_metrics_for_order(order, duration_matrix, distance_matrix)
         selected_vehicle = dict(cluster.get("selected_vehicle") or {})
@@ -211,7 +315,17 @@ def build_osrm_route_preview(
                 "warnings": "; ".join(warnings),
             }
         )
-        ordered_points = [points[index] for index in order]
+        leg_details = _route_leg_details_for_order(
+            points,
+            order,
+            traffic_time_multiplier=traffic_time_multiplier,
+        )
+        ordered_points = _annotate_ordered_points_with_schedule(
+            [points[index] for index in order],
+            leg_details,
+            route_duration_s=total_duration_s,
+            service_direction=service_direction,
+        )
         route_details.append(
             {
                 "cluster_id": cluster.get("cluster_id"),
@@ -219,7 +333,7 @@ def build_osrm_route_preview(
                 "service_direction": service_direction,
                 "order": order,
                 "ordered_points": ordered_points,
-                "leg_details": _route_leg_details_for_order(points, order),
+                "leg_details": leg_details,
                 "duration_s": total_duration_s,
                 "distance_m": total_distance_m,
                 "selected_vehicle": selected_vehicle,
@@ -236,6 +350,10 @@ def build_osrm_route_preview(
             "total_duration_min": round(sum(float(row["duration_min"]) for row in route_rows), 1),
             "service_direction": service_direction,
             "max_route_duration_minutes": max_route_duration_minutes,
+            "traffic_profile_name": traffic_profile_name,
+            "traffic_time_multiplier": _traffic_multiplier(traffic_time_multiplier),
+            "traffic_profile_context": traffic_profile_context,
+            "live_traffic_sample": live_traffic_sample,
         },
         "route_rows": route_rows,
     }
@@ -260,6 +378,7 @@ def route_preview_stop_detail_to_dataframe(route_preview: dict[str, Any]) -> pd.
                     "address": point.get("address"),
                     "formatted_address": point.get("formatted_address"),
                     "passenger_count": int(point.get("student_count", 0) or 0),
+                    "estimated_pickup_dropoff_time": point.get("scheduled_time_label"),
                     "lat": point.get("lat"),
                     "lng": point.get("lng"),
                 }
@@ -292,6 +411,7 @@ def _build_route_preview_workbook_bytes(
                     "city": point.get("city"),
                     "address": point.get("address"),
                     "passenger_count": int(point.get("student_count", 0) or 0),
+                    "estimated_pickup_dropoff_time": point.get("scheduled_time_label"),
                 }
             )
 
@@ -337,6 +457,135 @@ def build_legacy_route_plan_workbook_bytes(route_preview: dict[str, Any]) -> byt
         assignments_sheet_name="current_plan_assignments",
         fleet_sheet_name="current_plan_fleet",
     )
+
+
+def _map_bounds_from_coordinates(coordinates: list[tuple[float, float]]) -> dict[str, float] | None:
+    if not coordinates:
+        return None
+    lats = [float(item[0]) for item in coordinates]
+    lngs = [float(item[1]) for item in coordinates]
+    return {
+        "south": min(lats),
+        "west": min(lngs),
+        "north": max(lats),
+        "east": max(lngs),
+    }
+
+
+def _route_geometry_from_leg_details(leg_details: list[dict[str, Any]]) -> list[list[float]]:
+    geometry: list[list[float]] = []
+    for detail in leg_details:
+        for raw_pair in list(dict(detail).get("geometry") or []):
+            if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) < 2:
+                continue
+            lat = float(raw_pair[0])
+            lng = float(raw_pair[1])
+            point = [lng, lat]
+            if not geometry or geometry[-1] != point:
+                geometry.append(point)
+    return geometry
+
+
+def build_route_preview_map_data(
+    route_preview: dict[str, Any],
+    *,
+    scenario_key: str = "optimized_plan",
+    scenario_name: str = "Optimized Plan",
+) -> dict[str, Any]:
+    routes = list(route_preview.get("routes") or [])
+    summary = dict(route_preview.get("summary") or {})
+    service_direction = str(summary.get("service_direction") or "to_school")
+    service_direction_label = _service_direction_label(service_direction)
+    route_payloads: list[dict[str, Any]] = []
+    stop_payloads: list[dict[str, Any]] = []
+    all_coordinates: list[tuple[float, float]] = []
+
+    for route_index, route in enumerate(routes):
+        route_id = str(route.get("cluster_id") or f"Route {route_index + 1}")
+        ordered_points = list(route.get("ordered_points") or [])
+        leg_details = list(route.get("leg_details") or [])
+        geometry = _route_geometry_from_leg_details(leg_details)
+        for lng, lat in geometry:
+            all_coordinates.append((lat, lng))
+        cumulative_duration_s = 0.0
+        cumulative_distance_m = 0.0
+        stop_ids: list[str] = []
+        load = 0
+        for order, point in enumerate(ordered_points):
+            if point.get("lat") is None or point.get("lng") is None:
+                continue
+            if order > 0 and order - 1 < len(leg_details):
+                leg = dict(leg_details[order - 1] or {})
+                cumulative_duration_s += float(leg.get("duration_s", 0.0) or 0.0)
+                cumulative_distance_m += float(leg.get("distance_m", 0.0) or 0.0)
+            lat = float(point["lat"])
+            lng = float(point["lng"])
+            passenger_count = int(point.get("student_count", 0) or 0)
+            load += passenger_count
+            stop_id = f"{route_id}:{order}"
+            stop_ids.append(stop_id)
+            all_coordinates.append((lat, lng))
+            stop_payloads.append(
+                {
+                    "id": stop_id,
+                    "route_id": route_id,
+                    "route_index": route_index,
+                    "order": order,
+                    "node_index": order,
+                    "address": str(point.get("formatted_address") or point.get("address") or "").strip(),
+                    "requested_address": str(point.get("address") or "").strip(),
+                    "passenger_count": passenger_count,
+                    "is_depot": passenger_count == 0,
+                    "lat": lat,
+                    "lng": lng,
+                    "cumulative_duration_s": cumulative_duration_s,
+                    "cumulative_distance_m": cumulative_distance_m,
+                    "schedule_anchor_label": point.get("schedule_anchor_label"),
+                    "schedule_anchor_kind": point.get("schedule_anchor_kind"),
+                    "scheduled_offset_s": point.get("scheduled_offset_s"),
+                    "scheduled_time_minutes": point.get("scheduled_time_minutes"),
+                    "scheduled_time_label": point.get("scheduled_time_label"),
+                }
+            )
+        vehicle = dict(route.get("selected_vehicle") or {})
+        route_payloads.append(
+            {
+                "id": route_id,
+                "route_index": route_index,
+                "vehicle_id": route_index + 1,
+                "bus_type_name": str(vehicle.get("display_name") or "Selected vehicle"),
+                "load": load,
+                "bus_capacity": int(vehicle.get("student_capacity", vehicle.get("capacity", 0)) or 0),
+                "comfort_capacity": None,
+                "stop_count": len([point for point in ordered_points if int(point.get("student_count", 0) or 0) > 0]),
+                "max_stops": None,
+                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "duration_s": float(route.get("duration_s", 0.0) or 0.0),
+                "raw_duration_s": float(route.get("duration_s", 0.0) or 0.0),
+                "traffic_time_source": str(summary.get("traffic_profile_context") or ""),
+                "geometry": geometry,
+                "stop_ids": stop_ids,
+            }
+        )
+
+    return {
+        "job_id": "",
+        "scenario_key": scenario_key,
+        "scenario_name": scenario_name,
+        "service_direction": service_direction_label,
+        "traffic_profile_name": str(summary.get("traffic_profile_name") or ""),
+        "bounds": _map_bounds_from_coordinates(all_coordinates),
+        "routes": route_payloads,
+        "stops": stop_payloads,
+        "private_links": [],
+        "summary": {
+            "route_count": len(route_payloads),
+            "stop_count": len([stop for stop in stop_payloads if not stop.get("is_depot")]),
+            "passenger_count": sum(int(route.get("load", 0) or 0) for route in route_payloads),
+            "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in route_payloads),
+            "duration_s": max([float(route.get("duration_s", 0.0) or 0.0) for route in route_payloads] or [0.0]),
+        },
+    }
 
 
 def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:

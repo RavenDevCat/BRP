@@ -157,6 +157,31 @@ TRAFFIC_PROFILE_LOCATION_MULTIPLIERS: dict[tuple[str, str], dict[str, float]] = 
         "AM Peak": 1.2,
         "PM Peak": 1.32,
     },
+    ("BANGKOK", ""): {
+        "Off-Peak": 1.75,
+        "AM Peak": 1.75,
+        "PM Peak": 1.75,
+    },
+    ("BANGKOK", "BANGKOK"): {
+        "Off-Peak": 1.75,
+        "AM Peak": 1.75,
+        "PM Peak": 1.75,
+    },
+    ("BK", ""): {
+        "Off-Peak": 1.75,
+        "AM Peak": 1.75,
+        "PM Peak": 1.75,
+    },
+    ("BK", "BANGKOK"): {
+        "Off-Peak": 1.75,
+        "AM Peak": 1.75,
+        "PM Peak": 1.75,
+    },
+    ("THAILAND", "BANGKOK"): {
+        "Off-Peak": 1.75,
+        "AM Peak": 1.75,
+        "PM Peak": 1.75,
+    },
 }
 ROUTE_DURATION_GRACE_MINUTES = 10
 
@@ -220,6 +245,16 @@ def _normalize_traffic_city(country: str | None, city: str | None) -> str:
         "성남시",
     }:
         return "SEOUL"
+    if normalized_country in {"BANGKOK", "BK", "THAILAND"} and normalized_city in {
+        "BANGKOK",
+        "BANGKOK METROPOLIS",
+        "KRUNG THEP",
+        "KRUNG THEP MAHA NAKHON",
+        "กรุงเทพ",
+        "กรุงเทพฯ",
+        "กรุงเทพมหานคร",
+    }:
+        return "BANGKOK"
     return normalized_city
 
 

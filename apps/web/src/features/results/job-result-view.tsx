@@ -2188,7 +2188,7 @@ function getJobDisplayName(job: JobRecord) {
   );
 }
 
-function downloadInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
+export function downloadInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
   const filename = `${sanitizeDownloadFilename(jobName)} - ${sanitizeDownloadFilename(mapName)}.html`;
   const blob = new Blob([buildStandaloneInteractiveMapHtml(data, jobName, mapName)], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);

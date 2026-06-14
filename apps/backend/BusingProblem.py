@@ -24,13 +24,23 @@ CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache")
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
 SUBWAY_CACHE_PATH = CACHE_DIR / "subway_search_cache.json"
 
-AMAP_KEY = "67552867e1fe0125b04b7437cf0c392d"
-GOOGLE_KEY = ""
+AMAP_KEY = os.environ.get("AMAP_API_KEY", "67552867e1fe0125b04b7437cf0c392d").strip()
+GOOGLE_KEY = (
+    os.environ.get("GOOGLE_GEOCODE_API_KEY")
+    or os.environ.get("GOOGLE_API_KEY")
+    or ""
+).strip()
 
 AMAP_GEOCODE_MAX_QPS = 2.8
 AMAP_PLACES_MAX_QPS = 2.8
 AMAP_ROUTING_MAX_QPS = 2.8
 AMAP_MATRIX_MAX_QPS = 2.8
+GOOGLE_GEOCODE_MAX_QPS = 2.8
+GOOGLE_GEOCODE_BASE_URL = os.environ.get(
+    "GOOGLE_GEOCODE_BASE_URL",
+    "https://maps.googleapis.com/maps/api/geocode/json",
+).strip()
+GOOGLE_GEOCODE_TIMEOUT_SECONDS = float(os.environ.get("GOOGLE_GEOCODE_TIMEOUT_SECONDS", "8") or 8)
 REQUEST_TIMEOUT = 20
 OSRM_USE_BUILTIN_DEFAULTS = os.environ.get("OSRM_USE_BUILTIN_DEFAULTS", "true").strip().lower() not in {
     "0",
@@ -49,6 +59,9 @@ OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("CHINA", "XIAN"): "http://127.0.0.1:5005",
     ("SOUTH KOREA", "SEOUL"): "http://127.0.0.1:5006",
     ("SOUTH KOREA", ""): "http://127.0.0.1:5006",
+    ("THAILAND", "BANGKOK"): "http://127.0.0.1:5007",
+    ("BANGKOK", ""): "http://127.0.0.1:5007",
+    ("BK", ""): "http://127.0.0.1:5007",
 }
 OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM", "3.0") or 3.0)
 OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO", "6.0") or 6.0)
@@ -120,6 +133,7 @@ AMAP_GEOCODE_LIMITER = RateLimiter("amap-geocode", AMAP_GEOCODE_MAX_QPS)
 AMAP_PLACES_LIMITER = RateLimiter("amap-places", AMAP_PLACES_MAX_QPS)
 AMAP_ROUTING_LIMITER = RateLimiter("amap-routing", AMAP_ROUTING_MAX_QPS)
 AMAP_MATRIX_LIMITER = RateLimiter("amap-matrix", AMAP_MATRIX_MAX_QPS)
+GOOGLE_GEOCODE_LIMITER = RateLimiter("google-geocode", GOOGLE_GEOCODE_MAX_QPS)
 CACHE_FILE_LOCKS: dict[Path, threading.Lock] = {}
 
 
@@ -187,6 +201,8 @@ def determine_currency_code(input_records: list[dict[str, Any]]) -> str:
     countries = " ".join(str(item.get("country", "")).strip().lower() for item in input_records)
     if any(token in countries for token in ("korea", "south korea", "대한민국", "한국")):
         return "KRW"
+    if any(token in countries for token in ("bangkok", "bk", "thailand", "thai", "ประเทศไทย", "ไทย")):
+        return "THB"
     if any(token in countries for token in ("china", "中国", "中华人民共和国")):
         return "CNY"
     return "USD"
@@ -206,6 +222,8 @@ def _country_aliases(country: str) -> list[str]:
         aliases.extend(["South Korea", "Korea"])
     if normalized in {"china", "中国", "中华人民共和国"}:
         aliases.extend(["China"])
+    if normalized in {"bangkok", "bk", "bangkok market", "thailand", "thai", "th", "ประเทศไทย", "ไทย"}:
+        aliases.extend(["Bangkok", "BK", "Thailand", "TH"])
     deduped: list[str] = []
     for item in aliases:
         if item and item not in deduped:
@@ -219,11 +237,19 @@ def _canonical_country(country: str) -> str:
         return "SOUTH KOREA"
     if normalized in {"china", "中国", "中华人民共和国"}:
         return "CHINA"
+    if normalized in {"bangkok", "bk", "bangkok market"}:
+        return "BANGKOK"
+    if normalized in {"thailand", "thai", "th", "ประเทศไทย", "ไทย"}:
+        return "THAILAND"
     return country.strip().upper()
 
 
 def is_china_country(country: str) -> bool:
     return country.strip().lower() in {"china", "中国", "中华人民共和国"}
+
+
+def is_bangkok_market_country(country: str) -> bool:
+    return country.strip().lower() in {"bangkok", "bk", "bangkok market", "thailand", "thai", "th", "ประเทศไทย", "ไทย"}
 
 
 CHINA_CITY_CONFIGS: dict[str, dict[str, Any]] = {
@@ -265,6 +291,29 @@ CHINA_CITY_ALIAS_TO_KEY = {
 }
 
 
+BANGKOK_MARKET_CITY_CONFIGS: dict[str, dict[str, Any]] = {
+    "bangkok": {
+        "canonical": "BANGKOK",
+        "aliases": [
+            "bangkok",
+            "bangkok metropolis",
+            "krung thep",
+            "krung thep maha nakhon",
+            "กรุงเทพ",
+            "กรุงเทพฯ",
+            "กรุงเทพมหานคร",
+        ],
+    },
+}
+
+
+BANGKOK_MARKET_CITY_ALIAS_TO_KEY = {
+    alias.lower(): city_key
+    for city_key, config in BANGKOK_MARKET_CITY_CONFIGS.items()
+    for alias in config["aliases"]
+}
+
+
 def _normalize_china_city_key(city: str) -> str:
     normalized = " ".join(city.strip().lower().replace("’", "'").split())
     return CHINA_CITY_ALIAS_TO_KEY.get(normalized, normalized)
@@ -272,6 +321,15 @@ def _normalize_china_city_key(city: str) -> str:
 
 def _china_city_config(city: str) -> dict[str, Any] | None:
     return CHINA_CITY_CONFIGS.get(_normalize_china_city_key(city))
+
+
+def _normalize_bangkok_market_city_key(city: str) -> str:
+    normalized = " ".join(city.strip().lower().split())
+    return BANGKOK_MARKET_CITY_ALIAS_TO_KEY.get(normalized, normalized)
+
+
+def _bangkok_market_city_config(city: str) -> dict[str, Any] | None:
+    return BANGKOK_MARKET_CITY_CONFIGS.get(_normalize_bangkok_market_city_key(city))
 
 
 def _amap_city_param(country: str, city: str) -> str:
@@ -288,6 +346,9 @@ def _canonical_city(city: str) -> str:
     china_config = _china_city_config(city)
     if china_config:
         return str(china_config["canonical"])
+    bangkok_config = _bangkok_market_city_config(city)
+    if bangkok_config:
+        return str(bangkok_config["canonical"])
     aliases = {
         "seoul": "SEOUL",
         "서울": "SEOUL",
@@ -309,6 +370,7 @@ def _infer_location_from_address(address: str) -> tuple[str, str] | None:
         (tuple(CHINA_CITY_CONFIGS["xian"]["aliases"]), ("CHINA", "XIAN")),
         (("서울", "seoul"), ("SOUTH KOREA", "SEOUL")),
         (("성남", "seongnam"), ("SOUTH KOREA", "SEOUL")),
+        (("bangkok", "กรุงเทพ", "กรุงเทพมหานคร", "krung thep"), ("THAILAND", "BANGKOK")),
     ]
     for tokens, location in patterns:
         if any(token in normalized for token in tokens):
@@ -369,6 +431,9 @@ def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
 
     if country and city and OSRM_USE_BUILTIN_DEFAULTS:
         builtin_url = OSRM_LOCATION_DEFAULTS.get((_canonical_country(country), _canonical_city(city)))
+        if builtin_url:
+            return builtin_url
+        builtin_url = OSRM_LOCATION_DEFAULTS.get((_canonical_country(country), ""))
         if builtin_url:
             return builtin_url
     if OSRM_BASE_URL:
@@ -538,6 +603,23 @@ def is_plausible_china_geocode_result(
     return _is_within_china_city_bbox(city, lat, lng)
 
 
+def _is_within_bangkok_market_bbox(lat: float, lng: float) -> bool:
+    north, east, south, west = (14.8, 101.6, 12.4, 99.0)
+    return south <= lat <= north and west <= lng <= east
+
+
+def is_plausible_bangkok_market_geocode_result(
+    country: str,
+    city: str,
+    lat: float,
+    lng: float,
+    formatted_address: str,
+) -> bool:
+    if not is_bangkok_market_country(country):
+        return True
+    return _is_within_bangkok_market_bbox(lat, lng)
+
+
 def is_plausible_geocode_result(
     country: str,
     city: str,
@@ -548,7 +630,137 @@ def is_plausible_geocode_result(
 ) -> bool:
     if is_china_country(country):
         return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
+    if is_bangkok_market_country(country):
+        return is_plausible_bangkok_market_geocode_result(country, city, lat, lng, formatted_address)
     return True
+
+
+def google_country_code(country: str) -> str:
+    normalized = " ".join(country.strip().lower().split())
+    values = {
+        "bangkok": "TH",
+        "bk": "TH",
+        "bangkok market": "TH",
+        "thailand": "TH",
+        "thai": "TH",
+        "th": "TH",
+        "ประเทศไทย": "TH",
+        "ไทย": "TH",
+        "south korea": "KR",
+        "korea": "KR",
+        "republic of korea": "KR",
+        "china": "CN",
+        "中国": "CN",
+        "中华人民共和国": "CN",
+    }
+    return values.get(normalized, "")
+
+
+def google_geocode_params(country: str, query: str) -> dict[str, Any]:
+    params: dict[str, Any] = {"address": query, "language": "en"}
+    country_code = google_country_code(country)
+    if country_code:
+        params["components"] = f"country:{country_code}"
+        params["region"] = country_code.lower()
+    return params
+
+
+def google_geocode_request_json(params: dict[str, Any]) -> dict[str, Any]:
+    if not GOOGLE_KEY:
+        raise RuntimeError("Google Geocoding API key is not configured. Set GOOGLE_GEOCODE_API_KEY.")
+    GOOGLE_GEOCODE_LIMITER.wait()
+    response = requests.get(
+        GOOGLE_GEOCODE_BASE_URL,
+        params={**params, "key": GOOGLE_KEY},
+        timeout=GOOGLE_GEOCODE_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    status = str(payload.get("status", "")).strip().upper()
+    if status in {"OK", "ZERO_RESULTS"}:
+        return payload
+    error_message = str(payload.get("error_message", "")).strip()
+    details = f": {error_message}" if error_message else ""
+    raise RuntimeError(f"Google geocode request failed: {status}{details}")
+
+
+def _metro_query_cities(country: str, city: str) -> list[str]:
+    raw_city = city.strip()
+    if not raw_city:
+        return []
+    cities = [raw_city]
+    if is_bangkok_market_country(country) and _normalize_bangkok_market_city_key(raw_city) == "bangkok":
+        for candidate in ("Bangkok", "Bangkok Metropolis", "Krung Thep", "กรุงเทพมหานคร", "กรุงเทพ"):
+            if candidate not in cities:
+                cities.append(candidate)
+    return cities
+
+
+def build_geocode_queries(country: str, city: str, address: str) -> list[str]:
+    base_address = address.strip()
+    queries: list[str] = []
+    query_candidates = [base_address]
+    for metro_city in _metro_query_cities(country, city):
+        query_candidates.append(f"{metro_city} {base_address}")
+        if country.strip():
+            query_candidates.append(f"{country.strip()} {metro_city} {base_address}")
+    if country.strip():
+        query_candidates.append(f"{country.strip()} {base_address}")
+    for query in query_candidates:
+        query = query.strip()
+        if query and query not in queries:
+            queries.append(query)
+    return queries
+
+
+def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for query in build_geocode_queries(country, city, address):
+        try:
+            payload = google_geocode_request_json(google_geocode_params(country, query))
+            for candidate in payload.get("results") or []:
+                location = (candidate.get("geometry") or {}).get("location") or {}
+                lat = float(location["lat"])
+                lng = float(location["lng"])
+                formatted_address = str(candidate.get("formatted_address") or address.strip()).strip()
+                if not is_plausible_geocode_result(country, city, lat, lng, formatted_address):
+                    last_error = RuntimeError(f"Google geocode returned result outside {country.strip()}: {formatted_address}")
+                    continue
+                return {
+                    "provider": "google",
+                    "address": address.strip(),
+                    "city": city.strip(),
+                    "country": country.strip(),
+                    "lat": lat,
+                    "lng": lng,
+                    "plot_lat": lat,
+                    "plot_lng": lng,
+                    "formatted_address": formatted_address,
+                }
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Google geocode failed for {address.strip()}")
+
+
+def geocode_provider_order(country: str) -> list[str]:
+    if is_bangkok_market_country(country):
+        return ["google"]
+    return ["amap"]
+
+
+def geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
+    errors: list[str] = []
+    for provider in geocode_provider_order(country):
+        try:
+            if provider == "google":
+                return google_geocode_query(country, city, address)
+            if provider == "amap":
+                return amap_geocode_query(country, city, address)
+        except Exception as exc:
+            errors.append(f"{provider}: {exc}")
+    raise RuntimeError("; ".join(errors) or f"Geocode failed for {address.strip()}")
 
 
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
@@ -676,7 +888,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
                 point = None
         if point is None:
             try:
-                point = amap_geocode_query(country, city, address)
+                point = geocode_query(country, city, address)
                 GEOCODE_CACHE[cache_key] = point
                 changed = True
             except Exception as exc:
@@ -2257,7 +2469,7 @@ def main() -> dict[str, Any]:
 
     input_records = normalized_input_stops()
     CURRENT_CURRENCY_CODE = determine_currency_code(input_records)
-    log(f"Geocoding addresses with AMap, then routing against OSRM at {OSRM_BASE_URL} ...")
+    log(f"Geocoding addresses with configured providers, then routing against OSRM at {OSRM_BASE_URL} ...")
     points, geocode_warnings = geocode_records(input_records)
     if geocode_warnings:
         log("[WARN] The following addresses were not accepted as valid stops:")

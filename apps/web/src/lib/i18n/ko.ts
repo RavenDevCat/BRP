@@ -358,6 +358,50 @@ const ko: Translations = {
     "Map outputs": "지도 출력",
     available: "사용 가능",
     "No map outputs were included in this payload.": "이 결과에는 지도 출력이 포함되지 않았습니다.",
+    "Low-load routes": "저탑승 노선",
+    "Overlong routes": "장시간 노선",
+    "Route gap": "노선 차이",
+    "PM Peak (Live)": "오후 피크 (실시간)",
+    "AM Peak (Live)": "오전 피크 (실시간)",
+    "Off-Peak (Live)": "비피크 (실시간)",
+    "Free Optimization Baseline": "자유 최적화 기준선",
+    "15-Minute Constrained": "15분 제약 최적화",
+    "Further Most": "최원거리 기준",
+    "Further Most + Nearby Aggregate": "최원거리 + 근거리 집계",
+    "Subway Aggregated": "지하철 집계",
+    "Nearby Aggregated": "근거리 집계",
+    "The current plan uses": "현행 계획은",
+    "more routes than the free-optimization baseline.": "개의 노선을 자유 최적화 기준선보다 더 사용합니다.",
+    "The current plan average route distance is": "현행 계획의 평균 노선 거리는 자유 최적화 기준선보다",
+    "The current plan average route duration is": "현행 계획의 평균 노선 시간은 자유 최적화 기준선보다",
+    "above the free-optimization baseline.": "높습니다.",
+    more: "대의",
+    "vehicles than the free-optimization baseline.": "차량을 자유 최적화 기준선보다 더 사용합니다.",
+    "The current plan average load factor is low. Review whether some routes can be merged or downsized.":
+        "현행 계획의 평균 탑승률이 낮습니다. 일부 노선을 병합하거나 더 작은 차량으로 바꿀 수 있는지 검토하세요.",
+    "The current plan route count differs from the": "현행 계획의 노선 수는",
+    by: "대비 차이",
+    "Compared with the": "다음 기준선과 비교하면",
+    "can reduce average route distance by about": "평균 노선 거리를 약",
+    "can reduce average route time by about": "평균 노선 시간을 약",
+    "Load factor remains unchanged in the": "탑승률은 다음 기준선에서 변하지 않았습니다:",
+    ", which confirms that this comparison isolates network design quality rather than vehicle capacity.":
+        ". 이는 이 비교가 차량 정원이 아니라 네트워크 설계 품질을 분리해 보여준다는 뜻입니다.",
+    "The constrained-improvement baseline includes": "제약 개선 기준선에는",
+    "package(s) that fully empty a route, creating immediate route-removal candidates.":
+        "개의 패키지가 포함되어 있으며, 한 노선을 완전히 비워 즉시 제거 후보를 만듭니다.",
+    "package(s) that leave a route with very limited residual demand, creating a strong removal path.":
+        "개의 패키지가 포함되어 있으며, 한 노선에 매우 적은 잔여 수요만 남겨 강한 제거 경로를 만듭니다.",
+    "package(s) that move a route materially closer to consolidation.":
+        "개의 패키지가 포함되어 있으며, 한 노선을 실질적으로 통합에 더 가깝게 만듭니다.",
+    "The leading constrained package is a practical merge candidate because the receiving route still lands near":
+        "상위 제약 패키지는 수용 노선이 여전히 약",
+    "The leading constrained package is feasible but tight because the receiving route rises to about":
+        "상위 제약 패키지는 가능하지만 타이트합니다. 수용 노선이 약",
+    "The leading constrained package is not yet a clean merge because the receiving route would be pushed to about":
+        "상위 제약 패키지는 아직 깔끔한 병합은 아닙니다. 수용 노선이 약",
+    "minutes and": "분 및",
+    "load.": "탑승률이 되기 때문입니다.",
 
     // KR localization expansion - time impact
     "No optimized scenarios available": "사용 가능한 최적화 시나리오 없음",

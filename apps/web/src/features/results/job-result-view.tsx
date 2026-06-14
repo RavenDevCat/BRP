@@ -351,8 +351,8 @@ function AuditPanel({
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="grid gap-3 text-sm md:grid-cols-3">
-            <ReadoutItem label="Service direction" value={stringValue(result.service_direction || plannerConfig.service_direction)} />
-            <ReadoutItem label="Traffic profile" value={stringValue(result.traffic_profile_name || plannerConfig.traffic_profile_name)} />
+            <ReadoutItem label="Service direction" value={stringValue(result.service_direction || plannerConfig.service_direction)} translateValue />
+            <ReadoutItem label="Traffic profile" value={stringValue(result.traffic_profile_name || plannerConfig.traffic_profile_name)} translateValue />
             <ReadoutItem label="Current bus mix" value={formatBusMix(asRecord(currentPlan.bus_mix))} />
           </div>
           {recommendations.length ? (
@@ -360,7 +360,7 @@ function AuditPanel({
               {recommendations.map((item) => (
                 <li key={item} className="flex gap-2">
                   <AlertCircle className="mt-0.5 h-4 w-4 flex-none text-accent" aria-hidden="true" />
-                  <span>{item}</span>
+                  <span>{translateCurrentPlanRecommendation(item, t)}</span>
                 </li>
               ))}
             </ul>
@@ -857,7 +857,7 @@ function DiagnosticsPanel({
             <div className="space-y-2">
               {mapOutputs.map((item) => (
                 <div key={item.key} className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm">
-                  <span className="font-medium">{item.name}</span>
+                  <span className="font-medium">{t(item.name)}</span>
                   <Badge tone="success">{t("available")}</Badge>
                 </div>
               ))}
@@ -2147,14 +2147,101 @@ function metricValueClassName(tone: "neutral" | "success" | "warning" | "info") 
   return "text-foreground";
 }
 
-function ReadoutItem({ label, value }: { label: string; value: string }) {
+function ReadoutItem({
+  label,
+  value,
+  translateValue = false,
+}: {
+  label: string;
+  value: string;
+  translateValue?: boolean;
+}) {
   const t = useT();
+  const displayValue = value ? (translateValue ? t(value) : value) : t("Not available");
   return (
     <div>
       <div className="text-xs font-medium uppercase text-muted-foreground">{t(label)}</div>
-      <div className="mt-1 break-words font-medium">{value || t("Not available")}</div>
+      <div className="mt-1 break-words font-medium">{displayValue}</div>
     </div>
   );
+}
+
+function translateCurrentPlanRecommendation(
+  text: string,
+  t: (key: string, fallback?: string) => string,
+) {
+  const normalized = text.trim();
+  const moreRoutes = normalized.match(/^The current plan uses ([\d,.]+) more routes than the free-optimization baseline\.$/);
+  if (moreRoutes) {
+    return `${t("The current plan uses")} ${moreRoutes[1]} ${t("more routes than the free-optimization baseline.")}`;
+  }
+
+  const routeDistanceGap = normalized.match(/^The current plan average route distance is ([\d,.]+)% above the free-optimization baseline\.$/);
+  if (routeDistanceGap) {
+    return `${t("The current plan average route distance is")} ${routeDistanceGap[1]}% ${t("above the free-optimization baseline.")}`;
+  }
+
+  const routeDurationGap = normalized.match(/^The current plan average route duration is ([\d,.]+)% above the free-optimization baseline\.$/);
+  if (routeDurationGap) {
+    return `${t("The current plan average route duration is")} ${routeDurationGap[1]}% ${t("above the free-optimization baseline.")}`;
+  }
+
+  const moreVehicles = normalized.match(/^The current plan uses ([\d,.]+) more (.+) vehicles than the free-optimization baseline\.$/);
+  if (moreVehicles) {
+    return `${t("The current plan uses")} ${moreVehicles[1]} ${t("more")} ${moreVehicles[2]} ${t("vehicles than the free-optimization baseline.")}`;
+  }
+
+  const routeCountDiff = normalized.match(/^The current plan route count differs from the (.+) by ([+-]?[\d,.]+)\.$/);
+  if (routeCountDiff) {
+    return `${t("The current plan route count differs from the")} ${t(routeCountDiff[1])} ${t("by")} ${routeCountDiff[2]}.`;
+  }
+
+  const comparedDistance = normalized.match(/^Compared with the (.+), (.+) can reduce average route distance by about ([\d,.]+)%\.$/);
+  if (comparedDistance) {
+    return `${t("Compared with the")} ${t(comparedDistance[1])}, ${t(comparedDistance[2])} ${t("can reduce average route distance by about")} ${comparedDistance[3]}%.`;
+  }
+
+  const comparedTime = normalized.match(/^Compared with the (.+), (.+) can reduce average route time by about ([\d,.]+)%\.$/);
+  if (comparedTime) {
+    return `${t("Compared with the")} ${t(comparedTime[1])}, ${t(comparedTime[2])} ${t("can reduce average route time by about")} ${comparedTime[3]}%.`;
+  }
+
+  const unchangedLoad = normalized.match(/^Load factor remains unchanged in the (.+), which confirms that this comparison isolates network design quality rather than vehicle capacity\.$/);
+  if (unchangedLoad) {
+    return `${t("Load factor remains unchanged in the")} ${t(unchangedLoad[1])}${t(", which confirms that this comparison isolates network design quality rather than vehicle capacity.")}`;
+  }
+
+  const removablePackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that fully empty a route, creating immediate route-removal candidates\.$/);
+  if (removablePackages) {
+    return `${t("The constrained-improvement baseline includes")} ${removablePackages[1]} ${t("package(s) that fully empty a route, creating immediate route-removal candidates.")}`;
+  }
+
+  const limitedDemandPackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that leave a route with very limited residual demand, creating a strong removal path\.$/);
+  if (limitedDemandPackages) {
+    return `${t("The constrained-improvement baseline includes")} ${limitedDemandPackages[1]} ${t("package(s) that leave a route with very limited residual demand, creating a strong removal path.")}`;
+  }
+
+  const consolidationPackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that move a route materially closer to consolidation\.$/);
+  if (consolidationPackages) {
+    return `${t("The constrained-improvement baseline includes")} ${consolidationPackages[1]} ${t("package(s) that move a route materially closer to consolidation.")}`;
+  }
+
+  const practicalMerge = normalized.match(/^The leading constrained package is a practical merge candidate because the receiving route still lands near ([\d,.]+) minutes and ([\d,.]+)% load\.$/);
+  if (practicalMerge) {
+    return `${t("The leading constrained package is a practical merge candidate because the receiving route still lands near")} ${practicalMerge[1]} ${t("minutes and")} ${practicalMerge[2]}% ${t("load.")}`;
+  }
+
+  const tightMerge = normalized.match(/^The leading constrained package is feasible but tight because the receiving route rises to about ([\d,.]+) minutes and ([\d,.]+)% load\.$/);
+  if (tightMerge) {
+    return `${t("The leading constrained package is feasible but tight because the receiving route rises to about")} ${tightMerge[1]} ${t("minutes and")} ${tightMerge[2]}% ${t("load.")}`;
+  }
+
+  const notCleanMerge = normalized.match(/^The leading constrained package is not yet a clean merge because the receiving route would be pushed to about ([\d,.]+) minutes and ([\d,.]+)% load\.$/);
+  if (notCleanMerge) {
+    return `${t("The leading constrained package is not yet a clean merge because the receiving route would be pushed to about")} ${notCleanMerge[1]} ${t("minutes and")} ${notCleanMerge[2]}% ${t("load.")}`;
+  }
+
+  return t(normalized, normalized);
 }
 
 type ScenarioRow = {

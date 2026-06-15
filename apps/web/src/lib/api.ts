@@ -506,6 +506,7 @@ export type FleetPlannerHistorySummary = {
     owner_email?: string;
     title: string;
     created_at?: string | null;
+    shared_with_all?: boolean;
     summary: Record<string, unknown>;
 };
 

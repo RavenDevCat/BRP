@@ -2128,6 +2128,7 @@ class SideToolHistoryStore:
             "owner_email": _normalize_email(record.get("owner_email")),
             "title": str(record.get("title") or ""),
             "created_at": record.get("created_at"),
+            "shared_with_all": bool(record.get("shared_with_all")),
             "summary": deepcopy(record.get("summary") or {}),
         }
 
@@ -2146,6 +2147,7 @@ class SideToolHistoryStore:
             "title": title,
             "created_at": created_at,
             "scenario": deepcopy(payload.get("scenario") or {}),
+            "shared_with_all": bool(payload.get("shared_with_all")),
             "preview_result": deepcopy(payload.get("preview_result") or {}),
             "geocode_result": deepcopy(payload.get("geocode_result") or {}),
             "cluster_result": deepcopy(payload.get("cluster_result") or {}),
@@ -2196,6 +2198,7 @@ class SideToolHistoryStore:
                 deepcopy(entry)
                 for entry in entries
                 if _normalize_email(entry.get("owner_email")) == normalized_user_email
+                or bool(entry.get("shared_with_all"))
             ]
 
     def delete(self, run_id: str) -> bool:
@@ -4393,6 +4396,12 @@ class BackendHandler(BaseHTTPRequestHandler):
                         {
                             "error": f"Fleet Planner history run is not available for user: {user_email}"
                         },
+                    )
+                    return
+                if bool(record.get("shared_with_all")) and not include_all:
+                    self._send_json(
+                        403,
+                        {"error": "Shared Fleet Planner seed runs can only be deleted by an admin."},
                     )
                     return
                 FLEET_PLANNER_HISTORY_STORE.delete(run_id)

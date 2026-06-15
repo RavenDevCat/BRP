@@ -1400,6 +1400,7 @@ function FleetPlannerHistoryPanel({
             const summary = job.summary || {};
             const isActive = activeRunId === job.run_id;
             const isDeleting = deletingRunId === job.run_id;
+            const isSharedSeed = Boolean(job.shared_with_all);
             return (
               <div
                 key={job.run_id}
@@ -1419,31 +1420,36 @@ function FleetPlannerHistoryPanel({
                         Submitted by {job.owner_email || "Unknown"}
                       </div>
                     </div>
-                    <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
+                    <div className="flex shrink-0 flex-col items-end gap-1">
+                      {isSharedSeed ? <Badge tone={isActive ? "neutral" : "info"}>Seed</Badge> : null}
+                      <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
+                    </div>
                   </div>
                   <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                     <span>{formatNumber(summary.students)} students</span>
                     <span>{formatNumber(summary.total_distance_km)} km</span>
                   </div>
                 </button>
-                <button
-                  type="button"
-                  className={cn(
-                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-                    isActive
-                      ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-                  )}
-                  aria-label={`Delete ${job.title || "Fleet Planner Run"}`}
-                  disabled={isDeleting}
-                  onClick={() => {
-                    if (window.confirm("Delete this Fleet Planner history run? This cannot be undone.")) {
-                      onDelete(job.run_id);
-                    }
-                  }}
-                >
-                  {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                </button>
+                {!isSharedSeed ? (
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                      isActive
+                        ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
+                        : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+                    )}
+                    aria-label={`Delete ${job.title || "Fleet Planner Run"}`}
+                    disabled={isDeleting}
+                    onClick={() => {
+                      if (window.confirm("Delete this Fleet Planner history run? This cannot be undone.")) {
+                        onDelete(job.run_id);
+                      }
+                    }}
+                  >
+                    {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                  </button>
+                ) : null}
               </div>
             );
           })}

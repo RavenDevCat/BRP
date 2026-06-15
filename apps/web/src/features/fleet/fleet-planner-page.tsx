@@ -929,6 +929,10 @@ function FleetPreviewResult({
   const globalPlanSummary = globalPlanResult?.summary || {};
   const submittedBy = historyRecord?.owner_email || saveHistoryResult?.job.owner_email || "";
   const savedAt = historyRecord?.created_at || saveHistoryResult?.job.created_at || "";
+  const seedLabel =
+    historyRecord?.seed_label ||
+    String((historyRecord?.summary || {}).seed_label || "").trim() ||
+    (historyRecord?.seed || historyRecord?.shared_with_all ? "Seed run" : "");
   const mapJobName = historyRecord?.title || saveHistoryResult?.job.title || defaultFleetHistoryTitle();
   const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
     {
@@ -960,6 +964,7 @@ function FleetPreviewResult({
             <p className="mt-1 text-xs text-muted-foreground">Review the optimized plan, route map, and supporting input checks in one workspace.</p>
             {historyRecord || saveHistoryResult?.job ? (
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                {seedLabel ? <span>Seed: {seedLabel}</span> : null}
                 <span>Submitted by {submittedBy || "Unknown"}</span>
                 <span>Saved {formatDateTime(savedAt)}</span>
               </div>
@@ -1421,7 +1426,6 @@ function FleetPlannerHistoryPanel({
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      {isSharedSeed ? <Badge tone={isActive ? "neutral" : "info"}>Seed</Badge> : null}
                       <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
                     </div>
                   </div>

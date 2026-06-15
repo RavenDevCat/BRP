@@ -507,6 +507,8 @@ export type FleetPlannerHistorySummary = {
     title: string;
     created_at?: string | null;
     shared_with_all?: boolean;
+    seed?: boolean;
+    seed_label?: string;
     summary: Record<string, unknown>;
 };
 

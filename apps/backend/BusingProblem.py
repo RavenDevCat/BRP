@@ -36,6 +36,17 @@ AMAP_PLACES_MAX_QPS = 2.8
 AMAP_ROUTING_MAX_QPS = 2.8
 AMAP_MATRIX_MAX_QPS = 2.8
 GOOGLE_GEOCODE_MAX_QPS = 2.8
+
+
+def maybe_ensure_osrm_base_url(base_url: str) -> None:
+    enabled = os.environ.get("BRP_OSRM_ON_DEMAND_ENABLED", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+    from osrm_manager import ensure_osrm_base_url
+
+    ensure_osrm_base_url(base_url)
+
+
 GOOGLE_GEOCODE_BASE_URL = os.environ.get(
     "GOOGLE_GEOCODE_BASE_URL",
     "https://maps.googleapis.com/maps/api/geocode/json",
@@ -555,6 +566,7 @@ def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimite
 
 
 def osrm_request_json(service: str, coordinates: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    maybe_ensure_osrm_base_url(OSRM_BASE_URL)
     response = requests.get(
         f"{OSRM_BASE_URL}/{service}/v1/driving/{coordinates}",
         params=params or {},

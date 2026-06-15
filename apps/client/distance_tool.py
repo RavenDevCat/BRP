@@ -12,6 +12,14 @@ import requests
 
 import client_runtime as runtime
 
+def maybe_ensure_osrm_base_url(base_url: str) -> None:
+    enabled = os.environ.get("BRP_OSRM_ON_DEMAND_ENABLED", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        return
+    from osrm_manager import ensure_osrm_base_url
+
+    ensure_osrm_base_url(base_url)
+
 
 OSRM_USE_BUILTIN_DEFAULTS = os.environ.get("OSRM_USE_BUILTIN_DEFAULTS", "true").strip().lower() not in {
     "0",
@@ -163,8 +171,10 @@ def _request_osrm_table(
     all_points = [origin_point, *destination_points]
     coordinates = _osrm_coordinates(all_points)
     destination_indexes = ";".join(str(index) for index in range(1, len(all_points)))
+    osrm_base_url = resolve_osrm_base_url(all_points)
+    maybe_ensure_osrm_base_url(osrm_base_url)
     response = requests.get(
-        f"{resolve_osrm_base_url(all_points)}/table/v1/driving/{coordinates}",
+        f"{osrm_base_url}/table/v1/driving/{coordinates}",
         params={
             "annotations": "duration,distance",
             "sources": "0",
@@ -229,8 +239,10 @@ def _request_osrm_route_leg_detail(
     destination_point: dict[str, Any],
 ) -> dict[str, Any]:
     points = [origin_point, destination_point]
+    osrm_base_url = resolve_osrm_base_url(points)
+    maybe_ensure_osrm_base_url(osrm_base_url)
     response = requests.get(
-        f"{resolve_osrm_base_url(points)}/route/v1/driving/{_osrm_coordinates(points)}",
+        f"{osrm_base_url}/route/v1/driving/{_osrm_coordinates(points)}",
         params={
             "overview": "full",
             "geometries": "geojson",

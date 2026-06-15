@@ -21,8 +21,6 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 DEFAULT_ENV_PATH = ROOT_DIR / "ops" / "env" / "local.env"
 DEFAULT_USAGE_PATH = ROOT_DIR / "state" / "google_geocode_relay_usage.json"
 GOOGLE_GEOCODE_BASE_URL = "https://maps.googleapis.com/maps/api/geocode/json"
-GOOGLE_ROUTES_BASE_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
-GOOGLE_ROUTES_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration,routes.legs.distanceMeters"
 ALLOWED_PARAM_KEYS = {"address", "language", "components", "region"}
 GOOGLE_SUCCESS_STATUSES = {"OK", "ZERO_RESULTS"}
 
@@ -194,15 +192,8 @@ class RelayConfig:
             or os.environ.get("GOOGLE_API_KEY")
             or ""
         ).strip()
-        self.routes_api_key = (
-            os.environ.get("GOOGLE_ROUTES_API_KEY")
-            or os.environ.get("GOOGLE_API_KEY")
-            or self.api_key
-            or ""
-        ).strip()
         self.token = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TOKEN", "").strip()
         self.base_url = os.environ.get("GOOGLE_GEOCODE_BASE_URL", GOOGLE_GEOCODE_BASE_URL).strip()
-        self.routes_base_url = os.environ.get("GOOGLE_ROUTES_BASE_URL", GOOGLE_ROUTES_BASE_URL).strip()
         self.timeout_seconds = float(os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_UPSTREAM_TIMEOUT_SECONDS", "8") or 8)
         self.allow_non_bangkok = parse_bool(os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_ALLOW_NON_BK", "false"))
         self.timezone_name = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul"
@@ -219,7 +210,6 @@ class RelayConfig:
             "ok": bool(self.api_key and self.token),
             "service": "google-geocode-relay",
             "api_key_configured": bool(self.api_key),
-            "routes_api_key_configured": bool(self.routes_api_key),
             "token_configured": bool(self.token),
             "allow_non_bangkok": self.allow_non_bangkok,
             "usage": self.usage.snapshot(),
@@ -246,104 +236,6 @@ def sanitize_params(raw_params: Any) -> dict[str, str]:
     if not params.get("address"):
         raise ValueError("params.address is required.")
     return params
-
-
-def parse_google_duration_seconds(value: Any) -> float:
-    if value is None:
-        return 0.0
-    text = str(value).strip()
-    if text.endswith("s"):
-        text = text[:-1]
-    try:
-        return max(0.0, float(text))
-    except Exception:
-        return 0.0
-
-
-def sanitize_route_points(raw_points: Any) -> list[dict[str, float]]:
-    if not isinstance(raw_points, list):
-        raise ValueError("points must be an array.")
-    if len(raw_points) < 2:
-        raise ValueError("at least two route points are required.")
-    if len(raw_points) > 27:
-        raise ValueError("at most 27 route points are allowed.")
-    points: list[dict[str, float]] = []
-    for index, point in enumerate(raw_points):
-        if not isinstance(point, dict):
-            raise ValueError(f"point {index} must be an object.")
-        lat = float(point.get("lat"))
-        lon = float(point.get("lon"))
-        if not (5.0 <= lat <= 22.5 and 95.0 <= lon <= 107.5):
-            raise ValueError(f"point {index} is outside the Thailand/Bangkok relay bounds.")
-        points.append({"lat": lat, "lon": lon})
-    return points
-
-
-def google_routes_waypoint(point: dict[str, float]) -> dict[str, Any]:
-    return {
-        "location": {
-            "latLng": {
-                "latitude": point["lat"],
-                "longitude": point["lon"],
-            }
-        }
-    }
-
-
-def call_google_routes(
-    config: RelayConfig,
-    points: list[dict[str, float]],
-    *,
-    departure_time: str = "",
-    routing_preference: str = "TRAFFIC_AWARE_OPTIMAL",
-) -> dict[str, Any]:
-    config.qps_gate.wait()
-    usage = config.usage.reserve()
-    body: dict[str, Any] = {
-        "origin": google_routes_waypoint(points[0]),
-        "destination": google_routes_waypoint(points[-1]),
-        "travelMode": "DRIVE",
-        "routingPreference": routing_preference or "TRAFFIC_AWARE_OPTIMAL",
-        "computeAlternativeRoutes": False,
-        "languageCode": "en-US",
-        "units": "METRIC",
-    }
-    if len(points) > 2:
-        body["intermediates"] = [google_routes_waypoint(point) for point in points[1:-1]]
-    if departure_time:
-        body["departureTime"] = departure_time
-    request = urllib.request.Request(
-        config.routes_base_url,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Content-Type": "application/json",
-            "X-Goog-Api-Key": config.routes_api_key,
-            "X-Goog-FieldMask": GOOGLE_ROUTES_FIELD_MASK,
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(request, timeout=config.timeout_seconds) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    routes = payload.get("routes") if isinstance(payload, dict) else None
-    if not routes:
-        raise RuntimeError("Google Routes returned no routes.")
-    route = routes[0]
-    legs = []
-    for leg in route.get("legs") or []:
-        legs.append(
-            {
-                "duration_s": parse_google_duration_seconds(leg.get("duration")),
-                "distance_m": float(leg.get("distanceMeters") or 0.0),
-            }
-        )
-    return {
-        "duration_s": parse_google_duration_seconds(route.get("duration")),
-        "distance_m": float(route.get("distanceMeters") or 0.0),
-        "legs": legs,
-        "relay_usage": usage,
-        "provider": "google_routes",
-        "routing_preference": routing_preference or "TRAFFIC_AWARE_OPTIMAL",
-    }
 
 
 def call_google(config: RelayConfig, params: dict[str, str]) -> dict[str, Any]:
@@ -385,14 +277,10 @@ class GoogleGeocodeRelayHandler(BaseHTTPRequestHandler):
         self.write_json(HTTPStatus.OK, self.config.health_payload())
 
     def do_POST(self) -> None:
-        request_path = urllib.parse.urlparse(self.path).path
-        if request_path not in {"/geocode", "/routes"}:
+        if urllib.parse.urlparse(self.path).path != "/geocode":
             self.write_json(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return
         try:
-            if request_path == "/routes":
-                self.handle_routes()
-                return
             self.handle_geocode()
         except ValueError as exc:
             self.write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -401,54 +289,25 @@ class GoogleGeocodeRelayHandler(BaseHTTPRequestHandler):
         except RuntimeError as exc:
             self.write_json(HTTPStatus.TOO_MANY_REQUESTS, {"error": str(exc)})
         except Exception as exc:
-            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream Google request failed: {exc}"})
+            self.write_json(HTTPStatus.BAD_GATEWAY, {"error": f"upstream Google geocode request failed: {exc}"})
 
-    def authenticate(self) -> None:
+    def handle_geocode(self) -> None:
         config = self.config
+        if not config.api_key:
+            raise ValueError("Google geocoding API key is not configured.")
         if not config.token:
             raise ValueError("Relay token is not configured.")
         auth_header = self.headers.get("Authorization", "")
         expected = f"Bearer {config.token}"
         if auth_header != expected:
             raise PermissionError("invalid bearer token")
-
-    def read_json_body(self, max_size: int = 32768) -> dict[str, Any]:
         content_length = int(self.headers.get("Content-Length") or "0")
-        if content_length <= 0 or content_length > max_size:
+        if content_length <= 0 or content_length > 32768:
             raise ValueError("invalid request body size")
-        payload = json.loads(self.rfile.read(content_length).decode("utf-8"))
+        body = self.rfile.read(content_length)
+        payload = json.loads(body.decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("request body must be an object.")
-        return payload
-
-    def handle_routes(self) -> None:
-        config = self.config
-        if not config.routes_api_key:
-            raise ValueError("Google Routes API key is not configured.")
-        self.authenticate()
-        payload = self.read_json_body(max_size=65536)
-        country = str(payload.get("country", "")).strip()
-        if not config.allow_non_bangkok and not is_bangkok_market_country(country):
-            raise ValueError("relay is restricted to Bangkok/Thailand route requests.")
-        points = sanitize_route_points(payload.get("points"))
-        routing_preference = str(payload.get("routing_preference") or "TRAFFIC_AWARE_OPTIMAL").strip()
-        if routing_preference not in {"TRAFFIC_AWARE", "TRAFFIC_AWARE_OPTIMAL"}:
-            routing_preference = "TRAFFIC_AWARE_OPTIMAL"
-        departure_time = str(payload.get("departure_time") or "").strip()
-        result = call_google_routes(
-            config,
-            points,
-            departure_time=departure_time,
-            routing_preference=routing_preference,
-        )
-        self.write_json(HTTPStatus.OK, result)
-
-    def handle_geocode(self) -> None:
-        config = self.config
-        if not config.api_key:
-            raise ValueError("Google geocoding API key is not configured.")
-        self.authenticate()
-        payload = self.read_json_body()
         country = str(payload.get("country", "")).strip()
         if not config.allow_non_bangkok and not is_bangkok_market_country(country):
             raise ValueError("relay is restricted to Bangkok/Thailand geocoding requests.")

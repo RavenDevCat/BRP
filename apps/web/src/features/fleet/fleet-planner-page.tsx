@@ -14,6 +14,7 @@ import {
   geocodeFleetPlannerDemand,
   getFleetPlannerHistory,
   getFleetPlannerVehicleCatalog,
+  getCurrentUser,
   getDemandTemplateUrl,
   listFleetPlannerHistory,
   previewFleetPlanner,
@@ -81,6 +82,8 @@ export function FleetPlannerPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("review");
   const historyPanelRef = useRef<HTMLDivElement | null>(null);
+
+  const currentUserQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser, staleTime: 60_000 });
 
   const historyQuery = useQuery({
     queryKey: ["fleet-planner-history"],
@@ -502,6 +505,7 @@ export function FleetPlannerPage() {
             }}
             onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
             deletingRunId={deleteHistoryMutation.variables}
+            canDeleteShared={Boolean(currentUserQuery.data?.is_admin)}
           />
         </div>
 
@@ -929,10 +933,7 @@ function FleetPreviewResult({
   const globalPlanSummary = globalPlanResult?.summary || {};
   const submittedBy = historyRecord?.owner_email || saveHistoryResult?.job.owner_email || "";
   const savedAt = historyRecord?.created_at || saveHistoryResult?.job.created_at || "";
-  const seedLabel =
-    historyRecord?.seed_label ||
-    String((historyRecord?.summary || {}).seed_label || "").trim() ||
-    (historyRecord?.seed || historyRecord?.shared_with_all ? "Seed run" : "");
+  const runId = historyRecord?.run_id || saveHistoryResult?.job.run_id || "";
   const mapJobName = historyRecord?.title || saveHistoryResult?.job.title || defaultFleetHistoryTitle();
   const tabs: Array<{ key: FleetResultView; label: string; badge?: string; available: boolean }> = [
     {
@@ -964,7 +965,7 @@ function FleetPreviewResult({
             <p className="mt-1 text-xs text-muted-foreground">Review the optimized plan, route map, and supporting input checks in one workspace.</p>
             {historyRecord || saveHistoryResult?.job ? (
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                {seedLabel ? <span>Seed: {seedLabel}</span> : null}
+                {runId ? <span className="font-mono">{runId}</span> : null}
                 <span>Submitted by {submittedBy || "Unknown"}</span>
                 <span>Saved {formatDateTime(savedAt)}</span>
               </div>
@@ -1321,6 +1322,7 @@ function FleetPlannerHistoryPanel({
   onRefresh,
   onOpen,
   onDelete,
+  canDeleteShared = false,
 }: {
   className?: string;
   jobs: FleetPlannerHistorySummary[];
@@ -1333,6 +1335,7 @@ function FleetPlannerHistoryPanel({
   onRefresh: () => void;
   onOpen: (runId: string) => void;
   onDelete: (runId: string) => void;
+  canDeleteShared?: boolean;
 }) {
   if (collapsed) {
     return (
@@ -1406,6 +1409,7 @@ function FleetPlannerHistoryPanel({
             const isActive = activeRunId === job.run_id;
             const isDeleting = deletingRunId === job.run_id;
             const isSharedSeed = Boolean(job.shared_with_all);
+            const canDeleteRun = !isSharedSeed || canDeleteShared;
             return (
               <div
                 key={job.run_id}
@@ -1434,7 +1438,7 @@ function FleetPlannerHistoryPanel({
                     <span>{formatNumber(summary.total_distance_km)} km</span>
                   </div>
                 </button>
-                {!isSharedSeed ? (
+                {canDeleteRun ? (
                   <button
                     type="button"
                     className={cn(

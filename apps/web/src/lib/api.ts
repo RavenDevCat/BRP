@@ -84,6 +84,9 @@ export type JobMapRoute = {
     raw_duration_s: number;
     traffic_time_source?: string;
     geometry: number[][];
+    display_geometry?: number[][] | null;
+    display_geometry_source?: string;
+    display_geometry_message?: string;
     stop_ids: string[];
     time_impact?: JobMapTimeImpactSummary;
 };

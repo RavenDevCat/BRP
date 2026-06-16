@@ -265,25 +265,30 @@ export function InteractiveRouteMap({
         () => ({
             type: "FeatureCollection",
             features: sortedRoutes
-                .filter((route) => route.geometry.length >= 2)
-                .map((route) => ({
-                    type: "Feature",
-                    id: route.id,
-                    properties: {
-                        route_id: route.id,
-                        route_index: route.route_index,
-                        label: routeLabel(route),
-                        color: routeColor(route.route_index),
-                        load: route.load,
-                        stop_count: route.stop_count,
-                        duration_s: route.duration_s,
-                        distance_m: route.distance_m,
-                    },
-                    geometry: {
-                        type: "LineString",
-                        coordinates: route.geometry,
-                    },
-                })),
+                .flatMap((route) => {
+                    const geometry = routeDisplayGeometry(route);
+                    if (geometry.length < 2) {
+                        return [];
+                    }
+                    return [{
+                        type: "Feature",
+                        id: route.id,
+                        properties: {
+                            route_id: route.id,
+                            route_index: route.route_index,
+                            label: routeLabel(route),
+                            color: routeColor(route.route_index),
+                            load: route.load,
+                            stop_count: route.stop_count,
+                            duration_s: route.duration_s,
+                            distance_m: route.distance_m,
+                        },
+                        geometry: {
+                            type: "LineString",
+                            coordinates: geometry,
+                        },
+                    }];
+                }),
         }),
         [sortedRoutes],
     );
@@ -1769,6 +1774,14 @@ function fitMapToData(map: MapRef | null, data: JobMapData) {
     fitAll(map, data);
 }
 
+function routeDisplayGeometry(route: JobMapRoute): number[][] {
+    const displayGeometry = route.display_geometry;
+    if (Array.isArray(displayGeometry) && displayGeometry.length >= 2) {
+        return displayGeometry;
+    }
+    return Array.isArray(route.geometry) ? route.geometry : [];
+}
+
 function fitAll(map: MapRef | null, data: JobMapData) {
     const bounds = getDataBounds(data);
     if (!map || !bounds) {
@@ -1805,7 +1818,7 @@ function getDataBounds(data: JobMapData) {
     }
 
     for (const route of data.routes) {
-        for (const coordinate of route.geometry) {
+        for (const coordinate of routeDisplayGeometry(route)) {
             addCoordinate(coordinate);
         }
     }
@@ -1854,13 +1867,14 @@ function getDataBounds(data: JobMapData) {
 }
 
 function fitRoute(map: MapRef | null, route: JobMapRoute) {
-    if (!map || route.geometry.length < 2) {
+    const geometry = routeDisplayGeometry(route);
+    if (!map || geometry.length < 2) {
         return;
     }
-    const lngs = route.geometry
+    const lngs = geometry
         .map((item) => item[0])
         .filter((item) => Number.isFinite(item));
-    const lats = route.geometry
+    const lats = geometry
         .map((item) => item[1])
         .filter((item) => Number.isFinite(item));
     if (!lngs.length || !lats.length) {

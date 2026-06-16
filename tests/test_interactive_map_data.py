@@ -1,5 +1,6 @@
 import importlib
 import io
+import os
 import unittest
 
 from openpyxl import load_workbook
@@ -69,6 +70,175 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(payload["routes"][0]["geometry"], [[121.4, 31.2], [121.41, 31.21]])
         self.assertEqual(payload["stops"][1]["address"], "Stop A")
         self.assertEqual(payload["bounds"]["min_lng"], 121.4)
+
+    def test_china_map_payload_adds_amap_display_geometry_without_changing_stats(self) -> None:
+        old_key = os.environ.get("AMAP_API_KEY")
+        old_enabled = self.service.AMAP_DISPLAY_GEOMETRY_ENABLED
+        old_func = self.service._amap_display_geometry_for_route
+
+        def restore() -> None:
+            if old_key is None:
+                os.environ.pop("AMAP_API_KEY", None)
+            else:
+                os.environ["AMAP_API_KEY"] = old_key
+            self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = old_enabled
+            self.service._amap_display_geometry_for_route = old_func
+
+        self.addCleanup(restore)
+        os.environ["AMAP_API_KEY"] = "unit-test-key"
+        self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = True
+        self.service._amap_display_geometry_for_route = (
+            lambda _points, _nodes: (
+                [[121.4001, 31.2001], [121.4101, 31.2101]],
+                "amap_cn",
+                "",
+            )
+        )
+        job_record = {
+            "job_id": "job-cn-display",
+            "config": {"country": "China", "city": "Shanghai"},
+            "result": {
+                "service_direction": "From School",
+                "structured_results": {
+                    "current_plan": {
+                        "points": [
+                            {
+                                "address": "School",
+                                "plot_lat": 31.2,
+                                "plot_lng": 121.4,
+                                "lat": 31.2019,
+                                "lng": 121.4044,
+                                "provider": "amap",
+                                "adcode": "310000",
+                                "passenger_count": 0,
+                                "is_depot": True,
+                            },
+                            {
+                                "address": "Stop A",
+                                "plot_lat": 31.21,
+                                "plot_lng": 121.41,
+                                "lat": 31.2119,
+                                "lng": 121.4144,
+                                "provider": "amap",
+                                "adcode": "310000",
+                                "passenger_count": 3,
+                                "is_depot": False,
+                            },
+                        ],
+                        "routes": [
+                            {
+                                "vehicle_id": 1,
+                                "bus_type_name": "Large Bus",
+                                "load": 3,
+                                "bus_capacity": 42,
+                                "nodes": [0, 1],
+                                "time_s": 600,
+                                "traffic_adjusted_drive_time_s": 900,
+                                "distance_m": 1200,
+                                "leg_details": [
+                                    {
+                                        "duration_s": 600,
+                                        "distance_m": 1200,
+                                        "geometry": [[31.2, 121.4], [31.21, 121.41]],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+        }
+
+        payload, error = self.service._build_job_map_data(job_record, "current_plan")
+
+        self.assertIsNone(error)
+        assert payload is not None
+        route = payload["routes"][0]
+        self.assertEqual(route["geometry"], [[121.4, 31.2], [121.41, 31.21]])
+        self.assertEqual(
+            route["display_geometry"], [[121.4001, 31.2001], [121.4101, 31.2101]]
+        )
+        self.assertEqual(route["display_geometry_source"], "amap_cn")
+        self.assertEqual(route["duration_s"], 900)
+        self.assertEqual(route["raw_duration_s"], 600)
+        self.assertEqual(route["distance_m"], 1200)
+        self.assertEqual(payload["bounds"]["max_lng"], 121.4101)
+
+    def test_non_china_map_payload_does_not_request_amap_display_geometry(self) -> None:
+        old_key = os.environ.get("AMAP_API_KEY")
+        old_enabled = self.service.AMAP_DISPLAY_GEOMETRY_ENABLED
+        old_func = self.service._amap_display_geometry_for_route
+
+        def fail_if_called(_points, _nodes):
+            raise AssertionError("AMap display geometry should not be requested")
+
+        def restore() -> None:
+            if old_key is None:
+                os.environ.pop("AMAP_API_KEY", None)
+            else:
+                os.environ["AMAP_API_KEY"] = old_key
+            self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = old_enabled
+            self.service._amap_display_geometry_for_route = old_func
+
+        self.addCleanup(restore)
+        os.environ["AMAP_API_KEY"] = "unit-test-key"
+        self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = True
+        self.service._amap_display_geometry_for_route = fail_if_called
+        job_record = {
+            "job_id": "job-kr-display",
+            "config": {"country": "South Korea", "city": "Seoul"},
+            "result": {
+                "service_direction": "From School",
+                "structured_results": {
+                    "current_plan": {
+                        "points": [
+                            {
+                                "address": "School",
+                                "plot_lat": 37.55,
+                                "plot_lng": 126.98,
+                                "provider": "google",
+                                "passenger_count": 0,
+                                "is_depot": True,
+                            },
+                            {
+                                "address": "Stop A",
+                                "plot_lat": 37.56,
+                                "plot_lng": 126.99,
+                                "provider": "google",
+                                "passenger_count": 3,
+                                "is_depot": False,
+                            },
+                        ],
+                        "routes": [
+                            {
+                                "vehicle_id": 1,
+                                "bus_type_name": "Large Bus",
+                                "load": 3,
+                                "nodes": [0, 1],
+                                "time_s": 600,
+                                "distance_m": 1200,
+                                "leg_details": [
+                                    {
+                                        "duration_s": 600,
+                                        "distance_m": 1200,
+                                        "geometry": [[37.55, 126.98], [37.56, 126.99]],
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                },
+            },
+        }
+
+        payload, error = self.service._build_job_map_data(job_record, "current_plan")
+
+        self.assertIsNone(error)
+        assert payload is not None
+        route = payload["routes"][0]
+        self.assertEqual(route["geometry"], [[126.98, 37.55], [126.99, 37.56]])
+        self.assertIsNone(route["display_geometry"])
+        self.assertEqual(route["display_geometry_source"], "osrm")
 
     def test_from_school_time_impact_model_includes_weighted_review_fields(self) -> None:
         job_record = {

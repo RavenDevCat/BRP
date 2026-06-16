@@ -21,7 +21,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qsl, quote, unquote, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -172,6 +172,48 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
 ENABLE_LANGUAGE_SWITCH = not _env_flag("BRP_DISABLE_LANGUAGE_SWITCH", False)
+AMAP_DISPLAY_GEOMETRY_ENABLED = _env_flag("BRP_AMAP_DISPLAY_GEOMETRY_ENABLED", True)
+AMAP_DISPLAY_GEOMETRY_CACHE_PATH = Path(
+    os.environ.get(
+        "BRP_AMAP_DISPLAY_GEOMETRY_CACHE_PATH",
+        str(BASE_DIR / "cache" / "amap_display_geometry.json"),
+    )
+).expanduser()
+try:
+    AMAP_DISPLAY_GEOMETRY_MAX_WAYPOINTS = max(
+        0, int(os.environ.get("BRP_AMAP_DISPLAY_GEOMETRY_MAX_WAYPOINTS", "16") or "16")
+    )
+except ValueError:
+    AMAP_DISPLAY_GEOMETRY_MAX_WAYPOINTS = 16
+try:
+    AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S = max(
+        0.0,
+        float(
+            os.environ.get("BRP_AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S", "0.36")
+            or "0.36"
+        ),
+    )
+except ValueError:
+    AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S = 0.36
+AMAP_DISPLAY_GEOMETRY_VERSION = "amap-cn-display-v1"
+_AMAP_DISPLAY_CACHE_LOCK = threading.Lock()
+_AMAP_DISPLAY_REQUEST_LOCK = threading.Lock()
+_AMAP_DISPLAY_LAST_REQUEST_AT = 0.0
+
+
+def _amap_display_api_key() -> str:
+    for env_key in ("AMAP_API_KEY", "BRP_AMAP_API_KEY"):
+        value = os.environ.get(env_key, "").strip()
+        if value:
+            return value
+    try:
+        try:
+            from .BusingProblem import AMAP_KEY as existing_amap_key
+        except ImportError:
+            from BusingProblem import AMAP_KEY as existing_amap_key
+    except Exception:
+        return ""
+    return str(existing_amap_key or "").strip()
 
 
 def utc_now_iso() -> str:
@@ -2576,6 +2618,342 @@ def _route_connector_coordinates(
     return connectors
 
 
+def _china_coordinate_out_of_bounds(lat: float, lng: float) -> bool:
+    return not (73.66 < lng < 135.05 and 3.86 < lat < 53.55)
+
+
+def _transform_lat(x: float, y: float) -> float:
+    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(y / 12.0 * math.pi) + 320 * math.sin(y * math.pi / 30.0)) * 2.0 / 3.0
+    return ret
+
+
+def _transform_lng(x: float, y: float) -> float:
+    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) * 2.0 / 3.0
+    return ret
+
+
+def _gcj02_to_wgs84(lat: float, lng: float) -> tuple[float, float]:
+    if _china_coordinate_out_of_bounds(lat, lng):
+        return lat, lng
+    a = 6378245.0
+    ee = 0.00669342162296594323
+    dlat = _transform_lat(lng - 105.0, lat - 35.0)
+    dlng = _transform_lng(lng - 105.0, lat - 35.0)
+    radlat = math.radians(lat)
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrt_magic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrt_magic) * math.pi)
+    dlng = (dlng * 180.0) / (a / sqrt_magic * math.cos(radlat) * math.pi)
+    mg_lat = lat + dlat
+    mg_lng = lng + dlng
+    return lat * 2 - mg_lat, lng * 2 - mg_lng
+
+
+def _wgs84_to_gcj02(lat: float, lng: float) -> tuple[float, float]:
+    if _china_coordinate_out_of_bounds(lat, lng):
+        return lat, lng
+    a = 6378245.0
+    ee = 0.00669342162296594323
+    dlat = _transform_lat(lng - 105.0, lat - 35.0)
+    dlng = _transform_lng(lng - 105.0, lat - 35.0)
+    radlat = math.radians(lat)
+    magic = math.sin(radlat)
+    magic = 1 - ee * magic * magic
+    sqrt_magic = math.sqrt(magic)
+    dlat = (dlat * 180.0) / ((a * (1 - ee)) / (magic * sqrt_magic) * math.pi)
+    dlng = (dlng * 180.0) / (a / sqrt_magic * math.cos(radlat) * math.pi)
+    return lat + dlat, lng + dlng
+
+
+def _compact_location_text(value: Any) -> str:
+    return "".join(str(value or "").strip().lower().split())
+
+
+def _mapping_text_for_keys(mapping: dict[str, Any], keys: tuple[str, ...]) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None and str(value).strip():
+            values.append(str(value).strip())
+    return values
+
+
+def _point_indicates_china(point: dict[str, Any]) -> bool:
+    provider = str(point.get("provider") or point.get("geocode_provider") or "").strip().lower()
+    if provider == "amap":
+        return True
+    adcode = str(point.get("adcode") or "").strip()
+    if adcode and adcode[:2].isdigit():
+        return True
+    marker_text = _compact_location_text(
+        " ".join(
+            str(point.get(key) or "")
+            for key in (
+                "country",
+                "city",
+                "district",
+                "address",
+                "display_address",
+                "requested_address",
+            )
+        )
+    )
+    return any(
+        marker in marker_text
+        for marker in ("china", "中国", "上海", "北京", "苏州", "西安", "shanghai", "beijing", "suzhou")
+    )
+
+
+def _should_use_amap_display_geometry(
+    job_record: dict[str, Any],
+    result: dict[str, Any],
+    structured: dict[str, Any],
+    points: list[Any],
+) -> bool:
+    if not AMAP_DISPLAY_GEOMETRY_ENABLED:
+        return False
+    if not _amap_display_api_key():
+        return False
+
+    config = _job_planner_config_payload(job_record)
+    country_keys = (
+        "country",
+        "market_country",
+        "school_country",
+        "traffic_country",
+        "default_country",
+    )
+    city_keys = (
+        "city",
+        "market_city",
+        "school_city",
+        "traffic_city",
+        "default_city",
+    )
+    country_texts: list[str] = []
+    city_texts: list[str] = []
+    for mapping in (config, result, structured):
+        country_texts.extend(_mapping_text_for_keys(dict(mapping or {}), country_keys))
+        city_texts.extend(_mapping_text_for_keys(dict(mapping or {}), city_keys))
+
+    country_blob = _compact_location_text(" ".join(country_texts))
+    if any(marker in country_blob for marker in ("southkorea", "korea", "kr", "대한민국", "한국", "thailand", "thai", "th", "태국")):
+        return False
+    if any(marker in country_blob for marker in ("china", "cn", "中国", "中华人民共和国")):
+        return True
+
+    city_blob = _compact_location_text(" ".join(city_texts))
+    if any(marker in city_blob for marker in ("shanghai", "上海", "beijing", "北京", "suzhou", "苏州", "xian", "西安")):
+        return True
+
+    return any(_point_indicates_china(dict(point or {})) for point in points)
+
+
+def _amap_request_coordinates_for_point(point: dict[str, Any]) -> tuple[float, float] | None:
+    provider = str(point.get("provider") or point.get("geocode_provider") or "").strip().lower()
+    raw_lat = _float_or_none(point.get("lat"))
+    raw_lng = _float_or_none(point.get("lng"))
+    if raw_lat is not None and raw_lng is not None:
+        if provider == "amap" or str(point.get("adcode") or "").strip():
+            return raw_lat, raw_lng
+    plot_coords = _map_point_coordinates(point)
+    if plot_coords:
+        return _wgs84_to_gcj02(plot_coords[0], plot_coords[1])
+    if raw_lat is not None and raw_lng is not None:
+        return _wgs84_to_gcj02(raw_lat, raw_lng)
+    return None
+
+
+def _load_amap_display_cache_unlocked() -> dict[str, Any]:
+    try:
+        payload = json.loads(AMAP_DISPLAY_GEOMETRY_CACHE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _save_amap_display_cache_unlocked(cache: dict[str, Any]) -> None:
+    AMAP_DISPLAY_GEOMETRY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = AMAP_DISPLAY_GEOMETRY_CACHE_PATH.with_suffix(
+        AMAP_DISPLAY_GEOMETRY_CACHE_PATH.suffix + ".tmp"
+    )
+    tmp_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
+    tmp_path.replace(AMAP_DISPLAY_GEOMETRY_CACHE_PATH)
+
+
+def _dedupe_line_coordinates(coordinates: list[list[float]]) -> list[list[float]]:
+    deduped: list[list[float]] = []
+    for coordinate in coordinates:
+        if len(coordinate) < 2:
+            continue
+        lng = _float_or_none(coordinate[0])
+        lat = _float_or_none(coordinate[1])
+        if lng is None or lat is None:
+            continue
+        candidate = [round(lng, 7), round(lat, 7)]
+        if not deduped or deduped[-1] != candidate:
+            deduped.append(candidate)
+    return deduped
+
+
+def _amap_display_cache_key(
+    request_points: list[tuple[float, float]]
+) -> str:
+    encoded = "|".join(
+        f"{lng:.6f},{lat:.6f}" for lat, lng in request_points
+    )
+    return f"{AMAP_DISPLAY_GEOMETRY_VERSION}|{encoded}"
+
+
+def _decode_amap_polyline(polyline: str) -> list[list[float]]:
+    coordinates: list[list[float]] = []
+    for chunk in str(polyline or "").split(";"):
+        text = chunk.strip()
+        if not text or "," not in text:
+            continue
+        lng_text, lat_text = text.split(",", 1)
+        lat = _float_or_none(lat_text)
+        lng = _float_or_none(lng_text)
+        if lat is None or lng is None:
+            continue
+        wgs_lat, wgs_lng = _gcj02_to_wgs84(lat, lng)
+        coordinates.append([wgs_lng, wgs_lat])
+    return _dedupe_line_coordinates(coordinates)
+
+
+def _throttle_amap_display_request() -> None:
+    global _AMAP_DISPLAY_LAST_REQUEST_AT
+    if AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S <= 0:
+        return
+    with _AMAP_DISPLAY_REQUEST_LOCK:
+        now = time.monotonic()
+        wait_s = AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S - (
+            now - _AMAP_DISPLAY_LAST_REQUEST_AT
+        )
+        if wait_s > 0:
+            time.sleep(wait_s)
+        _AMAP_DISPLAY_LAST_REQUEST_AT = time.monotonic()
+
+
+def _fetch_amap_display_segment(
+    request_points: list[tuple[float, float]]
+) -> list[list[float]]:
+    if len(request_points) < 2:
+        return []
+    amap_key = _amap_display_api_key()
+    if not amap_key:
+        return []
+    origin_lat, origin_lng = request_points[0]
+    dest_lat, dest_lng = request_points[-1]
+    params: dict[str, str] = {
+        "key": amap_key,
+        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
+        "destination": f"{dest_lng:.6f},{dest_lat:.6f}",
+        "extensions": "base",
+        "output": "json",
+    }
+    waypoint_values = [
+        f"{lng:.6f},{lat:.6f}" for lat, lng in request_points[1:-1]
+    ]
+    if waypoint_values:
+        params["waypoints"] = ";".join(waypoint_values)
+
+    _throttle_amap_display_request()
+    url = f"https://restapi.amap.com/v3/direction/driving?{urlencode(params)}"
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "BRP Bus Route Planner display-geometry",
+        },
+    )
+    with urlopen(request, timeout=12) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if str(payload.get("status") or "") != "1":
+        message = str(payload.get("info") or payload.get("infocode") or "unknown error")
+        raise RuntimeError(f"AMap display route failed: {message}")
+    paths = list(dict(payload.get("route") or {}).get("paths") or [])
+    if not paths:
+        return []
+    path = dict(paths[0] or {})
+    coordinates: list[list[float]] = []
+    for step in list(path.get("steps") or []):
+        coordinates.extend(_decode_amap_polyline(str(dict(step or {}).get("polyline") or "")))
+    if not coordinates:
+        coordinates = _decode_amap_polyline(str(path.get("polyline") or ""))
+    return _dedupe_line_coordinates(coordinates)
+
+
+def _fetch_amap_display_geometry(
+    request_points: list[tuple[float, float]]
+) -> list[list[float]]:
+    max_points_per_request = max(2, AMAP_DISPLAY_GEOMETRY_MAX_WAYPOINTS + 2)
+    if len(request_points) <= max_points_per_request:
+        return _fetch_amap_display_segment(request_points)
+
+    geometry: list[list[float]] = []
+    start_index = 0
+    while start_index < len(request_points) - 1:
+        end_index = min(len(request_points), start_index + max_points_per_request)
+        segment = _fetch_amap_display_segment(request_points[start_index:end_index])
+        geometry.extend(segment)
+        start_index = end_index - 1
+    return _dedupe_line_coordinates(geometry)
+
+
+def _amap_display_geometry_for_route(
+    points: list[Any],
+    nodes: list[Any],
+) -> tuple[list[list[float]] | None, str, str]:
+    route_points: list[dict[str, Any]] = []
+    for node in nodes:
+        node_index = _int_or_none(node)
+        if node_index is None or node_index < 0 or node_index >= len(points):
+            continue
+        point = dict(points[node_index] or {})
+        if _amap_request_coordinates_for_point(point):
+            route_points.append(point)
+    request_points = [
+        coords
+        for point in route_points
+        if (coords := _amap_request_coordinates_for_point(point)) is not None
+    ]
+    if len(request_points) < 2:
+        return None, "osrm", ""
+
+    cache_key = _amap_display_cache_key(request_points)
+    with _AMAP_DISPLAY_CACHE_LOCK:
+        cache = _load_amap_display_cache_unlocked()
+        cached = dict(cache.get(cache_key) or {})
+        cached_geometry = cached.get("geometry")
+        if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
+            return cached_geometry, "amap_cn_cache", ""
+
+    try:
+        geometry = _fetch_amap_display_geometry(request_points)
+    except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+        return None, "osrm", str(exc)
+    if len(geometry) < 2:
+        return None, "osrm", "AMap display route returned no geometry"
+
+    with _AMAP_DISPLAY_CACHE_LOCK:
+        cache = _load_amap_display_cache_unlocked()
+        cache[cache_key] = {
+            "created_at": utc_now_iso(),
+            "point_count": len(request_points),
+            "geometry": geometry,
+        }
+        _save_amap_display_cache_unlocked(cache)
+    return geometry, "amap_cn", ""
+
+
 DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
 DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
 
@@ -3154,20 +3532,36 @@ def _build_job_map_payload(
     stop_payloads: list[dict[str, Any]] = []
     route_connectors: list[dict[str, Any]] = []
     all_coordinates: list[tuple[float, float]] = []
+    use_amap_display_geometry = _should_use_amap_display_geometry(
+        job_record, result, structured, points
+    )
 
     for route_index, route in enumerate(routes):
         route_id = str(
             route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}"
         )
         geometry = _route_geometry_coordinates(dict(route))
-        for lng, lat in geometry:
-            all_coordinates.append((lat, lng))
-        connectors = _route_connector_coordinates(dict(route), route_id, route_index)
-        route_connectors.extend(connectors)
-        for connector in connectors:
-            for lng, lat in list(connector.get("geometry") or []):
-                all_coordinates.append((lat, lng))
         nodes = list(route.get("nodes") or [])
+        display_geometry: list[list[float]] | None = None
+        display_geometry_source = "osrm"
+        display_geometry_message = ""
+        if use_amap_display_geometry:
+            (
+                display_geometry,
+                display_geometry_source,
+                display_geometry_message,
+            ) = _amap_display_geometry_for_route(points, nodes)
+
+        visible_geometry = display_geometry if display_geometry else geometry
+        for lng, lat in visible_geometry:
+            all_coordinates.append((lat, lng))
+
+        if not display_geometry:
+            connectors = _route_connector_coordinates(dict(route), route_id, route_index)
+            route_connectors.extend(connectors)
+            for connector in connectors:
+                for lng, lat in list(connector.get("geometry") or []):
+                    all_coordinates.append((lat, lng))
         leg_details = list(route.get("leg_details") or [])
         cumulative_duration_s = 0.0
         cumulative_distance_m = 0.0
@@ -3235,6 +3629,9 @@ def _build_job_map_payload(
                     route.get("traffic_time_source") or ""
                 ).strip(),
                 "geometry": geometry,
+                "display_geometry": display_geometry,
+                "display_geometry_source": display_geometry_source,
+                "display_geometry_message": display_geometry_message,
                 "stop_ids": route_stop_ids,
             }
         )

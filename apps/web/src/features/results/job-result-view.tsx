@@ -2482,6 +2482,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
   <script>
     const data = window.BRP_MAP_DATA;
     const colors = ${JSON.stringify(routeColors)};
+    const bounds = normalizeBounds(data.bounds);
     let selectedRouteId = "";
     let selectedStopId = "";
     let hoverPopup = null;
@@ -2492,7 +2493,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     for (const stop of data.stops) { const list = stopsByRouteId.get(stop.route_id) || []; list.push(stop); stopsByRouteId.set(stop.route_id, list); }
     for (const list of stopsByRouteId.values()) list.sort((a,b) => a.order - b.order);
     const longThreshold = percentile(data.routes.map(route => route.duration_s), 0.75);
-    const map = new maplibregl.Map({ container: "map", style: { version: 8, sources: { osm: { type: "raster", tiles: ${JSON.stringify(standaloneTileUrls)}, tileSize: 256, attribution: "OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] }, center: data.bounds ? [(data.bounds.min_lng + data.bounds.max_lng) / 2, (data.bounds.min_lat + data.bounds.max_lat) / 2] : [121.4737,31.2304], zoom: 11 });
+    const map = new maplibregl.Map({ container: "map", style: { version: 8, sources: { osm: { type: "raster", tiles: ${JSON.stringify(standaloneTileUrls)}, tileSize: 256, attribution: "OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] }, center: bounds ? [(bounds.min_lng + bounds.max_lng) / 2, (bounds.min_lat + bounds.max_lat) / 2] : [121.4737,31.2304], zoom: 11 });
     map.addControl(new maplibregl.NavigationControl(), "bottom-right");
     map.on("load", () => { addLayers(); fitAll(); renderRoutes(); });
     document.getElementById("search").addEventListener("input", event => { search = event.target.value.toLowerCase().trim(); renderRoutes(); });
@@ -2532,7 +2533,17 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">Stop sequence</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || 'Unknown address') + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' riders · ' + duration(stop.cumulative_duration_s) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
     function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + duration(stop.cumulative_duration_s) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
-    function fitAll() { if (!data.bounds) return; map.fitBounds([[data.bounds.min_lng, data.bounds.min_lat], [data.bounds.max_lng, data.bounds.max_lat]], { padding: 72, duration: 500 }); }
+    function fitAll() { if (!bounds) return; map.fitBounds([[bounds.min_lng, bounds.min_lat], [bounds.max_lng, bounds.max_lat]], { padding: 72, duration: 500 }); }
+    function normalizeBounds(value) {
+      if (!value) return null;
+      const normalized = {
+        min_lng: Number(value.min_lng ?? value.west),
+        min_lat: Number(value.min_lat ?? value.south),
+        max_lng: Number(value.max_lng ?? value.east),
+        max_lat: Number(value.max_lat ?? value.north),
+      };
+      return [normalized.min_lng, normalized.min_lat, normalized.max_lng, normalized.max_lat].every(Number.isFinite) ? normalized : null;
+    }
     function fitRoute(route) { if (!route || !route.geometry || route.geometry.length < 2) return; const lngs = route.geometry.map(p => p[0]).filter(Number.isFinite); const lats = route.geometry.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
     function statusBadge(route) { const status = route.load / (route.bus_capacity || 0) >= 1 ? 'CAPACITY' : route.load / (route.bus_capacity || 1) >= .85 ? 'HIGH LOAD' : route.duration_s >= 3600 ? 'LONG' : ''; if (!status) return ''; return '<span class="badge ' + (status === 'CAPACITY' ? 'capacity' : status === 'HIGH LOAD' ? 'high' : '') + '">' + status + '</span>'; }
     function color(index) { return colors[index % colors.length]; }

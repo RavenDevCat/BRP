@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import socket
 import subprocess
@@ -31,6 +32,9 @@ OSRM_START_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_START_TIMEOUT_SECOND
 OSRM_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_HEALTH_TIMEOUT_SECONDS", "2.5") or 2.5)
 OSRM_READY_CACHE_SECONDS = float(os.environ.get("BRP_OSRM_READY_CACHE_SECONDS", "30") or 30)
 OSRM_LOCK_DIR = Path(os.environ.get("BRP_OSRM_LOCK_DIR", "/tmp/brp-osrm-locks")).expanduser()
+OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", "/tmp/brp-osrm-manager-state.json")).expanduser()
+OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
+OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
 
 
 @dataclass(frozen=True)
@@ -122,6 +126,10 @@ def _log(message: str) -> None:
     print(f"[osrm-manager] {message}", flush=True)
 
 
+class OsrmManagerError(RuntimeError):
+    """Operator-readable OSRM manager failure."""
+
+
 def region_for_base_url(base_url: str) -> str | None:
     try:
         parsed = urlparse(base_url)
@@ -152,24 +160,29 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
     if cached_until > now:
         return
     if _is_osrm_ready(config, url):
+        _record_region_status(config, "ready", base_url=url, managed=False)
         READY_CACHE[region] = now + OSRM_READY_CACHE_SECONDS
         return
 
     OSRM_LOCK_DIR.mkdir(parents=True, exist_ok=True)
     with _file_lock(OSRM_LOCK_DIR / f"{region}.lock"):
+        _cleanup_idle_regions(exclude_region=region)
         now = time.monotonic()
         cached_until = READY_CACHE.get(region, 0.0)
         if cached_until > now:
             return
         if _is_osrm_ready(config, url):
+            _record_region_status(config, "ready", base_url=url, managed=False)
             READY_CACHE[region] = now + OSRM_READY_CACHE_SECONDS
             return
         with _file_lock(OSRM_LOCK_DIR / "global-start.lock"):
             if _is_osrm_ready(config, url):
+                _record_region_status(config, "ready", base_url=url, managed=False)
                 READY_CACHE[region] = time.monotonic() + OSRM_READY_CACHE_SECONDS
                 return
             _start_region(config)
             _wait_until_ready(config, url)
+            _record_region_status(config, "ready", base_url=url, managed=True)
             READY_CACHE[region] = time.monotonic() + OSRM_READY_CACHE_SECONDS
 
 
@@ -211,10 +224,12 @@ def _wait_until_ready(config: RegionConfig, base_url: str) -> None:
         except Exception as exc:
             last_error = str(exc)
         time.sleep(1.0)
-    raise RuntimeError(
-        f"OSRM region {config.region} did not become ready within "
+    message = (
+        f"Routing engine unavailable for {config.region}: OSRM did not become ready within "
         f"{OSRM_START_TIMEOUT_SECONDS:.0f}s ({last_error or 'health check failed'})."
     )
+    _record_region_status(config, "error", base_url=base_url, error=message, managed=True)
+    raise OsrmManagerError(message)
 
 
 def _is_port_open(port: int) -> bool:
@@ -225,8 +240,12 @@ def _is_port_open(port: int) -> bool:
 def _start_region(config: RegionConfig) -> None:
     dataset_path = config.dataset_dir / config.dataset_file
     if not dataset_path.exists():
-        raise RuntimeError(f"OSRM dataset for {config.region} not found: {dataset_path}")
+        message = f"Routing engine unavailable for {config.region}: OSRM dataset not found at {dataset_path}"
+        _record_region_status(config, "error", error=message, managed=False)
+        raise OsrmManagerError(message)
+    _assert_memory_available(config)
     _log(f"starting {config.region} OSRM container {config.container} on {config.port}")
+    _record_region_status(config, "starting", managed=True)
     subprocess.run(
         ["docker", "rm", "-f", config.container],
         check=False,
@@ -260,4 +279,125 @@ def _start_region(config: RegionConfig) -> None:
         stderr = (result.stderr or "").strip()
         stdout = (result.stdout or "").strip()
         detail = stderr or stdout or f"exit {result.returncode}"
-        raise RuntimeError(f"Failed to start OSRM region {config.region}: {detail}")
+        message = f"Routing engine unavailable for {config.region}: failed to start OSRM container ({detail})"
+        _record_region_status(config, "error", error=message, managed=True)
+        raise OsrmManagerError(message)
+
+
+def _assert_memory_available(config: RegionConfig) -> None:
+    if OSRM_MIN_AVAILABLE_MB <= 0:
+        return
+    available_mb = _available_memory_mb()
+    if available_mb is None:
+        return
+    if available_mb < OSRM_MIN_AVAILABLE_MB:
+        message = (
+            f"Routing engine unavailable for {config.region}: host has {available_mb:.0f} MB available, "
+            f"below BRP_OSRM_MIN_AVAILABLE_MB={OSRM_MIN_AVAILABLE_MB}. Try again after freeing memory "
+            "or starting the region manually during a maintenance window."
+        )
+        _record_region_status(config, "error", error=message, managed=False)
+        raise OsrmManagerError(message)
+
+
+def _available_memory_mb() -> float | None:
+    meminfo = Path("/proc/meminfo")
+    if not meminfo.exists():
+        return None
+    try:
+        for line in meminfo.read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                parts = line.split()
+                if len(parts) >= 2:
+                    return float(parts[1]) / 1024.0
+    except Exception:
+        return None
+    return None
+
+
+def _load_state() -> dict[str, object]:
+    try:
+        if not OSRM_STATE_PATH.exists():
+            return {"regions": {}}
+        payload = json.loads(OSRM_STATE_PATH.read_text(encoding="utf-8"))
+        if isinstance(payload, dict) and isinstance(payload.get("regions"), dict):
+            return payload
+    except Exception:
+        pass
+    return {"regions": {}}
+
+
+def _save_state(state: dict[str, object]) -> None:
+    try:
+        OSRM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = OSRM_STATE_PATH.with_suffix(OSRM_STATE_PATH.suffix + ".tmp")
+        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+        tmp.replace(OSRM_STATE_PATH)
+    except Exception as exc:
+        _log(f"failed to write state: {exc}")
+
+
+def _record_region_status(
+    config: RegionConfig,
+    status: str,
+    *,
+    base_url: str | None = None,
+    error: str | None = None,
+    managed: bool,
+) -> None:
+    state = _load_state()
+    regions = state.setdefault("regions", {})
+    if not isinstance(regions, dict):
+        regions = {}
+        state["regions"] = regions
+    previous = regions.get(config.region)
+    previous_managed = bool(previous.get("managed")) if isinstance(previous, dict) else False
+    entry = {
+        "region": config.region,
+        "container": config.container,
+        "port": config.port,
+        "status": status,
+        "managed": bool(managed or previous_managed),
+        "base_url": base_url or f"http://127.0.0.1:{config.port}",
+        "last_seen_at": time.time(),
+    }
+    if error:
+        entry["last_error"] = error
+    elif status != "ready" and isinstance(previous, dict) and previous.get("last_error"):
+        entry["last_error"] = previous["last_error"]
+    regions[config.region] = entry
+    _save_state(state)
+
+
+def _cleanup_idle_regions(*, exclude_region: str | None = None) -> None:
+    if OSRM_IDLE_TTL_SECONDS <= 0:
+        return
+    state = _load_state()
+    regions = state.get("regions")
+    if not isinstance(regions, dict):
+        return
+    now = time.time()
+    changed = False
+    for region, raw in list(regions.items()):
+        if region == exclude_region or not isinstance(raw, dict):
+            continue
+        if not raw.get("managed"):
+            continue
+        last_seen = float(raw.get("last_seen_at") or 0)
+        if now - last_seen < OSRM_IDLE_TTL_SECONDS:
+            continue
+        config = REGIONS.get(region)
+        if config is None:
+            continue
+        _log(f"stopping idle {region} OSRM container after {OSRM_IDLE_TTL_SECONDS:.0f}s TTL")
+        subprocess.run(
+            ["docker", "rm", "-f", config.container],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        raw["status"] = "stopped_idle"
+        raw["last_seen_at"] = now
+        changed = True
+    if changed:
+        _save_state(state)

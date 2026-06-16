@@ -47,6 +47,7 @@ type FleetServiceDirection = "to_school" | "from_school";
 type FleetVehicleCategory = (typeof VEHICLE_CATEGORIES)[number];
 type FleetVehiclePropulsion = (typeof VEHICLE_PROPULSIONS)[number];
 type FleetVehicleConfigDraft = FleetPlannerVehicleConfig & { id: string };
+type VehicleProfileMode = "default" | "manual";
 type FleetVehicleCatalogInput = Partial<FleetPlannerVehicleConfig> & { vehicle?: unknown; [key: string]: unknown };
 type ToolMapOutput = {
   key: string;
@@ -73,8 +74,10 @@ export function FleetPlannerPage() {
   const [routeDirection, setRouteDirection] = useState<FleetServiceDirection>("to_school");
   const [globalDirection, setGlobalDirection] = useState<FleetServiceDirection>("to_school");
   const [historyTitle, setHistoryTitle] = useState("");
-  const [vehicleConfigs, setVehicleConfigs] = useState<FleetVehicleConfigDraft[]>([]);
-  const [vehicleCatalogEdited, setVehicleCatalogEdited] = useState(false);
+  const [defaultVehicleConfigsDraft, setDefaultVehicleConfigsDraft] = useState<FleetVehicleConfigDraft[]>([]);
+  const [defaultVehicleCatalogEdited, setDefaultVehicleCatalogEdited] = useState(false);
+  const [manualVehicleConfigs, setManualVehicleConfigs] = useState<FleetVehicleConfigDraft[]>([]);
+  const [vehicleProfileMode, setVehicleProfileMode] = useState<VehicleProfileMode>("default");
   const [vehicleConfigOpen, setVehicleConfigOpen] = useState(false);
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<FleetPlannerHistoryRecord | null>(null);
   const [howToUseOpen, setHowToUseOpen] = useState(false);
@@ -121,13 +124,15 @@ export function FleetPlannerPage() {
     () => normalizeVehicleConfigDrafts(vehicleCatalogQuery.data?.catalog || [], market),
     [market, vehicleCatalogQuery.data],
   );
-  const activeVehicleConfigs = vehicleCatalogEdited ? vehicleConfigs : defaultVehicleConfigs;
+  const defaultModeVehicleConfigs = defaultVehicleCatalogEdited ? defaultVehicleConfigsDraft : defaultVehicleConfigs;
+  const activeVehicleConfigs = vehicleProfileMode === "manual" ? manualVehicleConfigs : defaultModeVehicleConfigs;
   const activeVehicleCatalogPayload = useMemo(
     () => fleetVehiclePayloadFromDrafts(activeVehicleConfigs),
     [activeVehicleConfigs],
   );
   const enabledVehicleCatalogCount = activeVehicleCatalogPayload.filter((vehicle) => vehicle.enabled && vehicle.available_count > 0).length;
-  const customVehicleCatalogPayload = vehicleCatalogEdited ? activeVehicleCatalogPayload : undefined;
+  const isCustomVehicleCatalog = vehicleProfileMode === "manual" || defaultVehicleCatalogEdited;
+  const customVehicleCatalogPayload = isCustomVehicleCatalog ? activeVehicleCatalogPayload : undefined;
 
   const previewMutation = useMutation({
     mutationFn: async (variables?: PreviewVariables) => {
@@ -152,8 +157,10 @@ export function FleetPlannerPage() {
       const selectedMarket = variables?.market ?? market;
       if (inferredMarket && inferredMarket !== selectedMarket) {
         setMarket(inferredMarket);
-        setVehicleCatalogEdited(false);
-        setVehicleConfigs([]);
+        setVehicleProfileMode("default");
+        setDefaultVehicleCatalogEdited(false);
+        setDefaultVehicleConfigsDraft([]);
+        setManualVehicleConfigs([]);
         geocodeMutation.reset();
         clusterMutation.reset();
         routePreviewMutation.reset();
@@ -286,7 +293,7 @@ export function FleetPlannerPage() {
           mode,
           monitor_seats: monitorSeats,
           max_route_duration_minutes: routeTimeTargetMinutes,
-          vehicle_catalog_source: vehicleCatalogEdited ? "custom" : "default",
+          vehicle_catalog_source: isCustomVehicleCatalog ? "custom" : "default",
           vehicle_catalog_count: enabledVehicleCatalogCount,
           vehicle_catalog_snapshot: activeVehicleCatalogPayload,
           service_direction: globalDirection,
@@ -319,8 +326,10 @@ export function FleetPlannerPage() {
         setMode,
         setMonitorSeats,
         setRouteTimeTargetMinutes,
-        setVehicleCatalogEdited,
-        setVehicleConfigs,
+        setVehicleProfileMode,
+        setDefaultVehicleCatalogEdited,
+        setDefaultVehicleConfigsDraft,
+        setManualVehicleConfigs,
         setRouteDirection,
         setGlobalDirection,
       });
@@ -418,8 +427,10 @@ export function FleetPlannerPage() {
       return;
     }
     setMarket(nextMarket);
-    setVehicleCatalogEdited(false);
-    setVehicleConfigs([]);
+    setVehicleProfileMode("default");
+    setDefaultVehicleCatalogEdited(false);
+    setDefaultVehicleConfigsDraft([]);
+    setManualVehicleConfigs([]);
     resetScenarioResults();
   }
 
@@ -446,14 +457,30 @@ export function FleetPlannerPage() {
   }
 
   function handleVehicleConfigsChange(nextConfigs: FleetVehicleConfigDraft[]) {
-    setVehicleConfigs(nextConfigs);
-    setVehicleCatalogEdited(true);
+    if (vehicleProfileMode === "manual") {
+      setManualVehicleConfigs(nextConfigs);
+    } else {
+      setDefaultVehicleConfigsDraft(nextConfigs);
+      setDefaultVehicleCatalogEdited(true);
+    }
+    resetScenarioResults();
+  }
+
+  function handleVehicleProfileModeChange(nextMode: VehicleProfileMode) {
+    if (nextMode === vehicleProfileMode) {
+      return;
+    }
+    setVehicleProfileMode(nextMode);
     resetScenarioResults();
   }
 
   function handleVehicleCatalogReset() {
-    setVehicleCatalogEdited(false);
-    setVehicleConfigs([]);
+    if (vehicleProfileMode === "manual") {
+      setManualVehicleConfigs([]);
+    } else {
+      setDefaultVehicleCatalogEdited(false);
+      setDefaultVehicleConfigsDraft([]);
+    }
     resetScenarioResults();
   }
 
@@ -620,7 +647,8 @@ export function FleetPlannerPage() {
                   </div>
                   <VehicleProfileSummary
                     configs={activeVehicleConfigs}
-                    edited={vehicleCatalogEdited}
+                    mode={vehicleProfileMode}
+                    edited={isCustomVehicleCatalog}
                     isLoading={vehicleCatalogQuery.isLoading}
                     error={vehicleCatalogQuery.error as Error | null}
                     onManage={() => setVehicleConfigOpen(true)}
@@ -774,9 +802,10 @@ export function FleetPlannerPage() {
       <VehicleConfigModal
         open={vehicleConfigOpen}
         market={market}
-        defaultConfigs={defaultVehicleConfigs}
         configs={activeVehicleConfigs}
-        edited={vehicleCatalogEdited}
+        mode={vehicleProfileMode}
+        edited={isCustomVehicleCatalog}
+        onModeChange={handleVehicleProfileModeChange}
         onChange={handleVehicleConfigsChange}
         onReset={handleVehicleCatalogReset}
         onClose={() => setVehicleConfigOpen(false)}
@@ -851,6 +880,7 @@ function WorkbookSummaryItem({ label, value }: { label: string; value: ReactNode
 
 function VehicleProfileSummary({
   configs,
+  mode,
   edited,
   isLoading,
   error,
@@ -858,6 +888,7 @@ function VehicleProfileSummary({
   onReset,
 }: {
   configs: FleetVehicleConfigDraft[];
+  mode: VehicleProfileMode;
   edited: boolean;
   isLoading: boolean;
   error?: Error | null;
@@ -874,7 +905,7 @@ function VehicleProfileSummary({
           <div className="flex flex-wrap items-center gap-2">
             <Bus className="h-4 w-4 text-primary" aria-hidden="true" />
             <h3 className="text-sm font-semibold">Vehicle profile</h3>
-            <Badge tone={edited ? "warning" : "neutral"}>{edited ? "custom" : "default"}</Badge>
+            <Badge tone={edited ? "warning" : "neutral"}>{mode === "manual" ? "manual" : edited ? "custom default" : "default"}</Badge>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {isLoading
@@ -1620,18 +1651,20 @@ function ToolMapsPanel({
 function VehicleConfigModal({
   open,
   market,
-  defaultConfigs,
   configs,
+  mode,
   edited,
+  onModeChange,
   onChange,
   onReset,
   onClose,
 }: {
   open: boolean;
   market: FleetMarket;
-  defaultConfigs: FleetVehicleConfigDraft[];
   configs: FleetVehicleConfigDraft[];
+  mode: VehicleProfileMode;
   edited: boolean;
+  onModeChange: (mode: VehicleProfileMode) => void;
   onChange: (configs: FleetVehicleConfigDraft[]) => void;
   onReset: () => void;
   onClose: () => void;
@@ -1639,7 +1672,7 @@ function VehicleConfigModal({
   if (!open) {
     return null;
   }
-  const visibleConfigs = edited ? configs : defaultConfigs;
+  const visibleConfigs = configs;
 
   function updateConfig(id: string, updates: Partial<FleetVehicleConfigDraft>) {
     onChange(
@@ -1678,8 +1711,16 @@ function VehicleConfigModal({
           </button>
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
-          <div className="flex items-center gap-2 text-sm">
-            <Badge tone={edited ? "warning" : "neutral"}>{edited ? "custom profile" : "market defaults"}</Badge>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <div className="grid grid-cols-2 gap-2">
+              <ModeButton active={mode === "default"} onClick={() => onModeChange("default")}>
+                Default
+              </ModeButton>
+              <ModeButton active={mode === "manual"} onClick={() => onModeChange("manual")}>
+                Manual input
+              </ModeButton>
+            </div>
+            <Badge tone={edited ? "warning" : "neutral"}>{mode === "manual" ? "manual profile" : edited ? "custom defaults" : "market defaults"}</Badge>
             <span className="text-muted-foreground">{formatNumber(visibleConfigs.filter((config) => config.enabled).length)} enabled types</span>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1689,7 +1730,7 @@ function VehicleConfigModal({
             </button>
             <button type="button" className={buttonClassName("secondary")} onClick={onReset}>
               <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              Reset defaults
+              Reset profile
             </button>
           </div>
         </div>
@@ -2190,8 +2231,10 @@ function applyHistoryScenario(
     setMode: (value: FleetMode) => void;
     setMonitorSeats: (value: number) => void;
     setRouteTimeTargetMinutes: (value: number) => void;
-    setVehicleCatalogEdited: (value: boolean) => void;
-    setVehicleConfigs: (value: FleetVehicleConfigDraft[]) => void;
+    setVehicleProfileMode: (value: VehicleProfileMode) => void;
+    setDefaultVehicleCatalogEdited: (value: boolean) => void;
+    setDefaultVehicleConfigsDraft: (value: FleetVehicleConfigDraft[]) => void;
+    setManualVehicleConfigs: (value: FleetVehicleConfigDraft[]) => void;
     setRouteDirection: (value: FleetServiceDirection) => void;
     setGlobalDirection: (value: FleetServiceDirection) => void;
   },
@@ -2229,13 +2272,23 @@ function applyHistoryScenario(
       ? scenario.vehicle_catalog
       : [];
   if (vehicleCatalogSnapshot.length) {
-    setters.setVehicleConfigs(
-      normalizeVehicleConfigDrafts(vehicleCatalogSnapshot.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null), market || "KR"),
-    );
-    setters.setVehicleCatalogEdited(vehicleCatalogSource === "custom");
+    const normalizedSnapshot = normalizeVehicleConfigDrafts(vehicleCatalogSnapshot.filter((item): item is Record<string, unknown> => typeof item === "object" && item !== null), market || "KR");
+    if (vehicleCatalogSource === "custom") {
+      setters.setVehicleProfileMode("manual");
+      setters.setManualVehicleConfigs(normalizedSnapshot);
+      setters.setDefaultVehicleCatalogEdited(false);
+      setters.setDefaultVehicleConfigsDraft([]);
+    } else {
+      setters.setVehicleProfileMode("default");
+      setters.setDefaultVehicleCatalogEdited(false);
+      setters.setDefaultVehicleConfigsDraft([]);
+      setters.setManualVehicleConfigs([]);
+    }
   } else {
-    setters.setVehicleCatalogEdited(false);
-    setters.setVehicleConfigs([]);
+    setters.setVehicleProfileMode("default");
+    setters.setDefaultVehicleCatalogEdited(false);
+    setters.setDefaultVehicleConfigsDraft([]);
+    setters.setManualVehicleConfigs([]);
   }
 
   const direction = normalizeFleetServiceDirection(scenario.service_direction ?? globalPlanSummary.service_direction);

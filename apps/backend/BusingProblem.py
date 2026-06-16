@@ -82,6 +82,9 @@ OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM = float(os.environ.get("OSRM_RAW_COORD_FAL
 OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO", "3.0") or 3.0)
 OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM", "2.0") or 2.0)
 OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO", "0.35") or 0.35)
+OSRM_RAW_COORD_FALLBACK_MIN_SHAPE_EXTRA_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_SHAPE_EXTRA_KM", "0.8") or 0.8)
+OSRM_RAW_COORD_FALLBACK_MIN_BACKTRACK_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_BACKTRACK_KM", "0.35") or 0.35)
+OSRM_SNAP_CONNECTOR_MIN_METERS = float(os.environ.get("OSRM_SNAP_CONNECTOR_MIN_METERS", "25") or 25)
 
 INPUT_STOPS: list[dict[str, Any]] = []
 ADDRESSES: list[str] = []
@@ -1786,23 +1789,110 @@ def _osrm_driving_direction_for_coordinates(
     return int(round(float(best.get("distance", 0) or 0))), int(round(float(best.get("duration", 0) or 0))), geometry
 
 
-def _should_try_raw_coordinate_route(
+def _polyline_distance_km(geometry: list[tuple[float, float]]) -> float:
+    total = 0.0
+    previous: tuple[float, float] | None = None
+    for lat, lng in geometry:
+        if previous is not None:
+            total += haversine_distance_km(previous[0], previous[1], lat, lng)
+        previous = (lat, lng)
+    return total
+
+
+def _local_xy_km(lat: float, lng: float, ref_lat: float, ref_lng: float) -> tuple[float, float]:
+    mean_lat_rad = math.radians((lat + ref_lat) / 2.0)
+    x = (lng - ref_lng) * 111.320 * math.cos(mean_lat_rad)
+    y = (lat - ref_lat) * 110.574
+    return x, y
+
+
+def _plot_route_shape_warning(
     origin: dict[str, Any],
     destination: dict[str, Any],
+    geometry: list[tuple[float, float]] | None,
     distance_m: int,
-) -> bool:
+) -> str | None:
+    if not geometry or len(geometry) < 4:
+        return None
     try:
         origin_lat, origin_lng = point_osrm_lat_lng(origin, prefer_plot=True)
         destination_lat, destination_lng = point_osrm_lat_lng(destination, prefer_plot=True)
     except Exception:
-        return False
+        return None
+
     direct_km = haversine_distance_km(origin_lat, origin_lng, destination_lat, destination_lng)
     if direct_km <= 0 or direct_km > OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM:
-        return False
+        return None
+
+    route_km = max(float(distance_m) / 1000.0, _polyline_distance_km(geometry))
+    if route_km - direct_km < OSRM_RAW_COORD_FALLBACK_MIN_SHAPE_EXTRA_KM:
+        return None
+
+    dest_x, dest_y = _local_xy_km(destination_lat, destination_lng, origin_lat, origin_lng)
+    vector_len_sq = dest_x * dest_x + dest_y * dest_y
+    if vector_len_sq <= 0:
+        return None
+    vector_len = math.sqrt(vector_len_sq)
+
+    max_progress = -float("inf")
+    max_backtrack_km = 0.0
+    max_side_km = 0.0
+    min_progress = float("inf")
+    max_seen_progress = -float("inf")
+    for lat, lng in geometry:
+        x, y = _local_xy_km(float(lat), float(lng), origin_lat, origin_lng)
+        progress_km = (x * dest_x + y * dest_y) / vector_len
+        side_km = abs(x * dest_y - y * dest_x) / vector_len
+        if max_progress != -float("inf"):
+            max_backtrack_km = max(max_backtrack_km, max_progress - progress_km)
+        max_progress = max(max_progress, progress_km)
+        max_side_km = max(max_side_km, side_km)
+        min_progress = min(min_progress, progress_km)
+        max_seen_progress = max(max_seen_progress, progress_km)
+
+    if max_backtrack_km >= max(OSRM_RAW_COORD_FALLBACK_MIN_BACKTRACK_KM, direct_km * 0.22):
+        return "plot_geometry_backtracks"
+    if min_progress < -max(0.25, direct_km * 0.2) or max_seen_progress > direct_km + max(0.35, direct_km * 0.35):
+        return "plot_geometry_overshoots"
+    if max_side_km >= max(0.55, direct_km * 0.75) and route_km >= direct_km * 1.8:
+        return "plot_geometry_side_excursion"
+    return None
+
+
+def _raw_coordinate_route_trigger_reason(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    distance_m: int,
+    geometry: list[tuple[float, float]] | None = None,
+) -> str | None:
+    try:
+        origin_lat, origin_lng = point_osrm_lat_lng(origin, prefer_plot=True)
+        destination_lat, destination_lng = point_osrm_lat_lng(destination, prefer_plot=True)
+    except Exception:
+        return None
+    direct_km = haversine_distance_km(origin_lat, origin_lng, destination_lat, destination_lng)
+    if direct_km <= 0 or direct_km > OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM:
+        return None
+
+    shape_warning = _plot_route_shape_warning(origin, destination, geometry, distance_m)
+    if shape_warning:
+        return shape_warning
+
     route_km = float(distance_m) / 1000.0
     if route_km - direct_km < OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM:
-        return False
+        return None
     if distance_m < direct_km * 1000.0 * OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO:
+        return None
+    return "plot_route_detour"
+
+
+def _should_try_raw_coordinate_route(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    distance_m: int,
+    geometry: list[tuple[float, float]] | None = None,
+) -> bool:
+    if not _raw_coordinate_route_trigger_reason(origin, destination, distance_m, geometry):
         return False
     return point_has_distinct_raw_coordinate(origin) or point_has_distinct_raw_coordinate(destination)
 
@@ -1813,7 +1903,11 @@ def osrm_driving_direction_with_metadata(
 ) -> tuple[int, int, list[tuple[float, float]], dict[str, Any]]:
     distance_m, duration_s, geometry = _osrm_driving_direction_for_coordinates(origin, destination, prefer_plot=True)
     metadata: dict[str, Any] = {"coordinate_source": "plot"}
-    if not _should_try_raw_coordinate_route(origin, destination, distance_m):
+    trigger_reason = _raw_coordinate_route_trigger_reason(origin, destination, distance_m, geometry)
+    if trigger_reason:
+        metadata["plot_route_warning"] = trigger_reason
+    has_raw_alternative = point_has_distinct_raw_coordinate(origin) or point_has_distinct_raw_coordinate(destination)
+    if not trigger_reason or not has_raw_alternative:
         return distance_m, duration_s, geometry, metadata
 
     try:
@@ -1831,10 +1925,12 @@ def osrm_driving_direction_with_metadata(
     if raw_distance_m < min_distance or raw_duration_s < min_duration:
         return raw_distance_m, raw_duration_s, raw_geometry, {
             "coordinate_source": "raw_geocode_fallback",
+            "raw_coordinate_fallback_reason": trigger_reason,
             "plot_distance_m": distance_m,
             "plot_duration_s": duration_s,
         }
 
+    metadata["raw_coordinate_fallback_reason"] = trigger_reason
     metadata["raw_coordinate_distance_m"] = raw_distance_m
     metadata["raw_coordinate_duration_s"] = raw_duration_s
     return distance_m, duration_s, geometry, metadata
@@ -1896,6 +1992,47 @@ def choose_revenue_rule(distance_km: float) -> dict[str, Any] | None:
     return None
 
 
+def _snap_connector_for_point(
+    point: dict[str, Any],
+    snapped: tuple[float, float] | None,
+    connector_type: str,
+) -> dict[str, Any] | None:
+    if not snapped:
+        return None
+    try:
+        plot_lat, plot_lng = point_osrm_lat_lng(point, prefer_plot=True)
+    except Exception:
+        return None
+    snapped_lat, snapped_lng = float(snapped[0]), float(snapped[1])
+    distance_m = haversine_distance_km(plot_lat, plot_lng, snapped_lat, snapped_lng) * 1000.0
+    if distance_m < OSRM_SNAP_CONNECTOR_MIN_METERS:
+        return None
+    return {
+        "type": connector_type,
+        "distance_m": int(round(distance_m)),
+        "geometry": [(plot_lat, plot_lng), (snapped_lat, snapped_lng)]
+        if connector_type == "origin"
+        else [(snapped_lat, snapped_lng), (plot_lat, plot_lng)],
+    }
+
+
+def _snap_connectors_for_leg(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+    geometry: list[tuple[float, float]],
+) -> list[dict[str, Any]]:
+    if len(geometry) < 2:
+        return []
+    connectors: list[dict[str, Any]] = []
+    origin_connector = _snap_connector_for_point(origin, geometry[0], "origin")
+    if origin_connector:
+        connectors.append(origin_connector)
+    destination_connector = _snap_connector_for_point(destination, geometry[-1], "destination")
+    if destination_connector:
+        connectors.append(destination_connector)
+    return connectors
+
+
 def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list[dict[str, Any]]) -> None:
     for route in routes:
         leg_details: list[dict[str, Any]] = []
@@ -1910,10 +2047,7 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
                     points[from_node],
                     points[to_node],
                 )
-                if geometry_wgs:
-                    geometry_wgs[0] = (points[from_node]["plot_lat"], points[from_node]["plot_lng"])
-                    geometry_wgs[-1] = (points[to_node]["plot_lat"], points[to_node]["plot_lng"])
-                else:
+                if not geometry_wgs:
                     geometry_wgs = [
                         (points[from_node]["plot_lat"], points[from_node]["plot_lng"]),
                         (points[to_node]["plot_lat"], points[to_node]["plot_lng"]),
@@ -1932,6 +2066,7 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
             raw_osrm_time_s += int(duration_s)
             stop_service_time_s += stop_service_s
             actual_time_s += adjusted_duration_s + stop_service_s
+            snap_connectors = _snap_connectors_for_leg(points[from_node], points[to_node], geometry_wgs)
             leg_details.append(
                 {
                     "from_node": from_node,
@@ -1942,6 +2077,7 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
                     "traffic_adjusted_duration_s": adjusted_duration_s,
                     "stop_service_s": stop_service_s,
                     "geometry": geometry_wgs,
+                    "snap_connectors": snap_connectors,
                     **leg_metadata,
                 }
             )

@@ -288,6 +288,31 @@ export function InteractiveRouteMap({
         [sortedRoutes],
     );
 
+    const routeConnectorFeatures = useMemo<FeatureCollection>(
+        () => ({
+            type: "FeatureCollection",
+            features: (data.route_connectors || [])
+                .filter((connector) => connector.geometry.length >= 2)
+                .map((connector) => ({
+                    type: "Feature",
+                    id: connector.id,
+                    properties: {
+                        connector_id: connector.id,
+                        route_id: connector.route_id,
+                        route_index: connector.route_index,
+                        connector_type: connector.connector_type,
+                        color: routeColor(connector.route_index),
+                        distance_m: connector.distance_m,
+                    },
+                    geometry: {
+                        type: "LineString",
+                        coordinates: connector.geometry,
+                    },
+                })),
+        }),
+        [data.route_connectors],
+    );
+
     const selectedRouteFeatures = useMemo<FeatureCollection>(
         () => ({
             type: "FeatureCollection",
@@ -296,6 +321,15 @@ export function InteractiveRouteMap({
             ),
         }),
         [routeFeatures, selectedRouteId],
+    );
+    const selectedRouteConnectorFeatures = useMemo<FeatureCollection>(
+        () => ({
+            type: "FeatureCollection",
+            features: routeConnectorFeatures.features.filter(
+                (feature) => feature.properties.route_id === selectedRouteId,
+            ),
+        }),
+        [routeConnectorFeatures, selectedRouteId],
     );
     const contextRouteFeatures = useMemo<FeatureCollection>(
         () => ({
@@ -306,6 +340,16 @@ export function InteractiveRouteMap({
                     : routeFeatures.features,
         }),
         [routeFeatures, selectedRouteId, showRouteContext],
+    );
+    const contextRouteConnectorFeatures = useMemo<FeatureCollection>(
+        () => ({
+            type: "FeatureCollection",
+            features:
+                selectedRouteId && !showRouteContext
+                    ? []
+                    : routeConnectorFeatures.features,
+        }),
+        [routeConnectorFeatures, selectedRouteId, showRouteContext],
     );
 
     const stopFeatures = useMemo<FeatureCollection>(
@@ -914,6 +958,22 @@ export function InteractiveRouteMap({
                         />
                     </Source>
                     <Source
+                        id="route-connectors"
+                        type="geojson"
+                        data={contextRouteConnectorFeatures}
+                    >
+                        <Layer
+                            id="route-connectors-line"
+                            type="line"
+                            paint={{
+                                "line-color": ["get", "color"],
+                                "line-width": selectedRouteId ? 1.5 : 2,
+                                "line-opacity": selectedRouteId ? 0.2 : 0.6,
+                                "line-dasharray": [1.5, 1.5],
+                            }}
+                        />
+                    </Source>
+                    <Source
                         id="routes"
                         type="geojson"
                         data={contextRouteFeatures}
@@ -934,6 +994,22 @@ export function InteractiveRouteMap({
                                 "line-color": ["get", "color"],
                                 "line-width": selectedRouteId ? 3 : 4,
                                 "line-opacity": selectedRouteId ? 0.18 : 0.76,
+                            }}
+                        />
+                    </Source>
+                    <Source
+                        id="selected-route-connectors"
+                        type="geojson"
+                        data={selectedRouteConnectorFeatures}
+                    >
+                        <Layer
+                            id="selected-route-connectors-line"
+                            type="line"
+                            paint={{
+                                "line-color": ["get", "color"],
+                                "line-width": 3,
+                                "line-opacity": selectedRouteId ? 0.86 : 0,
+                                "line-dasharray": [1.5, 1.5],
                             }}
                         />
                     </Source>
@@ -1730,6 +1806,11 @@ function getDataBounds(data: JobMapData) {
 
     for (const route of data.routes) {
         for (const coordinate of route.geometry) {
+            addCoordinate(coordinate);
+        }
+    }
+    for (const connector of data.route_connectors || []) {
+        for (const coordinate of connector.geometry) {
             addCoordinate(coordinate);
         }
     }

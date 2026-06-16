@@ -486,6 +486,43 @@ def _route_geometry_from_leg_details(leg_details: list[dict[str, Any]]) -> list[
     return geometry
 
 
+def _route_connectors_from_leg_details(
+    leg_details: list[dict[str, Any]],
+    *,
+    route_id: str,
+    route_index: int,
+) -> list[dict[str, Any]]:
+    connectors: list[dict[str, Any]] = []
+    for leg_index, detail in enumerate(leg_details):
+        leg = dict(detail or {})
+        for connector_index, raw_connector in enumerate(list(leg.get("snap_connectors") or [])):
+            connector = dict(raw_connector or {})
+            geometry: list[list[float]] = []
+            for raw_pair in list(connector.get("geometry") or []):
+                if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) < 2:
+                    continue
+                lat = float(raw_pair[0])
+                lng = float(raw_pair[1])
+                point = [lng, lat]
+                if not geometry or geometry[-1] != point:
+                    geometry.append(point)
+            if len(geometry) < 2:
+                continue
+            connectors.append(
+                {
+                    "id": f"{route_id}:connector:{leg_index}:{connector_index}",
+                    "route_id": route_id,
+                    "route_index": route_index,
+                    "from_node": leg.get("from_node"),
+                    "to_node": leg.get("to_node"),
+                    "connector_type": str(connector.get("type") or "snap"),
+                    "distance_m": float(connector.get("distance_m", 0.0) or 0.0),
+                    "geometry": geometry,
+                }
+            )
+    return connectors
+
+
 def build_route_preview_map_data(
     route_preview: dict[str, Any],
     *,
@@ -498,6 +535,7 @@ def build_route_preview_map_data(
     service_direction_label = _service_direction_label(service_direction)
     route_payloads: list[dict[str, Any]] = []
     stop_payloads: list[dict[str, Any]] = []
+    route_connectors: list[dict[str, Any]] = []
     all_coordinates: list[tuple[float, float]] = []
 
     for route_index, route in enumerate(routes):
@@ -507,6 +545,15 @@ def build_route_preview_map_data(
         geometry = _route_geometry_from_leg_details(leg_details)
         for lng, lat in geometry:
             all_coordinates.append((lat, lng))
+        connectors = _route_connectors_from_leg_details(
+            leg_details,
+            route_id=route_id,
+            route_index=route_index,
+        )
+        route_connectors.extend(connectors)
+        for connector in connectors:
+            for lng, lat in list(connector.get("geometry") or []):
+                all_coordinates.append((lat, lng))
         cumulative_duration_s = 0.0
         cumulative_distance_m = 0.0
         stop_ids: list[str] = []
@@ -577,6 +624,7 @@ def build_route_preview_map_data(
         "bounds": _map_bounds_from_coordinates(all_coordinates),
         "routes": route_payloads,
         "stops": stop_payloads,
+        "route_connectors": route_connectors,
         "private_links": [],
         "summary": {
             "route_count": len(route_payloads),

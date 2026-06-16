@@ -222,6 +222,17 @@ export type JobMapPrivateLink = {
     geometry: number[][];
 };
 
+export type JobMapRouteConnector = {
+    id: string;
+    route_id: string;
+    route_index: number;
+    from_node?: number | null;
+    to_node?: number | null;
+    connector_type: string;
+    distance_m: number;
+    geometry: number[][];
+};
+
 export type JobMapData = {
     job_id: string;
     scenario_key: string;
@@ -231,6 +242,7 @@ export type JobMapData = {
     bounds?: JobMapBounds | null;
     routes: JobMapRoute[];
     stops: JobMapStop[];
+    route_connectors?: JobMapRouteConnector[];
     private_links: JobMapPrivateLink[];
     summary: {
         route_count: number;

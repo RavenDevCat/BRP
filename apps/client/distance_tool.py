@@ -44,6 +44,7 @@ OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
 }
 OSRM_REQUEST_TIMEOUT = 30
 OSRM_TABLE_DESTINATION_CHUNK_SIZE = 80
+OSRM_SNAP_CONNECTOR_MIN_METERS = float(os.environ.get("OSRM_SNAP_CONNECTOR_MIN_METERS", "25") or 25)
 
 
 def get_excel_sheet_names(excel_path: str | Path) -> list[str]:
@@ -234,6 +235,49 @@ def _straight_leg_geometry(origin_point: dict[str, Any], destination_point: dict
     ]
 
 
+def _snap_connector_for_point(
+    point: dict[str, Any],
+    snapped: tuple[float, float] | None,
+    connector_type: str,
+) -> dict[str, Any] | None:
+    if not snapped:
+        return None
+    try:
+        point_lat = float(point["lat"])
+        point_lng = float(point["lng"])
+        snapped_lat = float(snapped[0])
+        snapped_lng = float(snapped[1])
+    except (KeyError, TypeError, ValueError):
+        return None
+    distance_m = runtime.haversine_distance_km(point_lat, point_lng, snapped_lat, snapped_lng) * 1000.0
+    if distance_m < OSRM_SNAP_CONNECTOR_MIN_METERS:
+        return None
+    return {
+        "type": connector_type,
+        "distance_m": int(round(distance_m)),
+        "geometry": [(point_lat, point_lng), (snapped_lat, snapped_lng)]
+        if connector_type == "origin"
+        else [(snapped_lat, snapped_lng), (point_lat, point_lng)],
+    }
+
+
+def _snap_connectors_for_leg(
+    origin_point: dict[str, Any],
+    destination_point: dict[str, Any],
+    geometry: list[tuple[float, float]],
+) -> list[dict[str, Any]]:
+    if len(geometry) < 2:
+        return []
+    connectors: list[dict[str, Any]] = []
+    origin_connector = _snap_connector_for_point(origin_point, geometry[0], "origin")
+    if origin_connector:
+        connectors.append(origin_connector)
+    destination_connector = _snap_connector_for_point(destination_point, geometry[-1], "destination")
+    if destination_connector:
+        connectors.append(destination_connector)
+    return connectors
+
+
 def _request_osrm_route_leg_detail(
     origin_point: dict[str, Any],
     destination_point: dict[str, Any],
@@ -268,6 +312,7 @@ def _request_osrm_route_leg_detail(
         "duration_s": float(route["duration"]) if route.get("duration") is not None else None,
         "distance_m": float(route["distance"]) if route.get("distance") is not None else None,
         "geometry": geometry,
+        "snap_connectors": _snap_connectors_for_leg(origin_point, destination_point, geometry),
     }
 
 
@@ -290,6 +335,7 @@ def compute_osrm_route_leg_details(points: list[dict[str, Any]]) -> list[dict[st
                 "duration_s": float(duration_s) if duration_s is not None else None,
                 "distance_m": float(distance_m) if distance_m is not None else None,
                 "geometry": _straight_leg_geometry(origin_point, destination_point),
+                "snap_connectors": [],
             }
         details.append(detail)
     return details

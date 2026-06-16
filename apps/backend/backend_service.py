@@ -2541,6 +2541,41 @@ def _route_geometry_coordinates(route: dict[str, Any]) -> list[list[float]]:
     return coordinates
 
 
+def _route_connector_coordinates(
+    route: dict[str, Any],
+    route_id: str,
+    route_index: int,
+) -> list[dict[str, Any]]:
+    connectors: list[dict[str, Any]] = []
+    for leg_index, leg_detail in enumerate(list(route.get("leg_details") or [])):
+        for connector_index, raw_connector in enumerate(list(dict(leg_detail).get("snap_connectors") or [])):
+            connector = dict(raw_connector or {})
+            geometry: list[list[float]] = []
+            for raw_pair in list(connector.get("geometry") or []):
+                if not isinstance(raw_pair, (list, tuple)) or len(raw_pair) < 2:
+                    continue
+                lat = _float_or_none(raw_pair[0])
+                lng = _float_or_none(raw_pair[1])
+                if lat is None or lng is None:
+                    continue
+                geometry.append([lng, lat])
+            if len(geometry) < 2:
+                continue
+            connectors.append(
+                {
+                    "id": f"{route_id}:connector:{leg_index}:{connector_index}",
+                    "route_id": route_id,
+                    "route_index": route_index,
+                    "from_node": _int_or_none(dict(leg_detail).get("from_node")),
+                    "to_node": _int_or_none(dict(leg_detail).get("to_node")),
+                    "connector_type": str(connector.get("type") or "snap").strip() or "snap",
+                    "distance_m": float(connector.get("distance_m", 0.0) or 0.0),
+                    "geometry": geometry,
+                }
+            )
+    return connectors
+
+
 DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
 DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
 
@@ -3117,6 +3152,7 @@ def _build_job_map_payload(
 
     route_payloads: list[dict[str, Any]] = []
     stop_payloads: list[dict[str, Any]] = []
+    route_connectors: list[dict[str, Any]] = []
     all_coordinates: list[tuple[float, float]] = []
 
     for route_index, route in enumerate(routes):
@@ -3126,6 +3162,11 @@ def _build_job_map_payload(
         geometry = _route_geometry_coordinates(dict(route))
         for lng, lat in geometry:
             all_coordinates.append((lat, lng))
+        connectors = _route_connector_coordinates(dict(route), route_id, route_index)
+        route_connectors.extend(connectors)
+        for connector in connectors:
+            for lng, lat in list(connector.get("geometry") or []):
+                all_coordinates.append((lat, lng))
         nodes = list(route.get("nodes") or [])
         leg_details = list(route.get("leg_details") or [])
         cumulative_duration_s = 0.0
@@ -3273,6 +3314,7 @@ def _build_job_map_payload(
         "bounds": _map_bounds_from_coordinates(all_coordinates),
         "routes": route_payloads,
         "stops": stop_payloads,
+        "route_connectors": route_connectors,
         "private_links": private_links,
         "summary": {
             "route_count": len(route_payloads),

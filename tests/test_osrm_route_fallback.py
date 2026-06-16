@@ -33,3 +33,35 @@ def test_small_extra_detour_does_not_try_raw_coordinate_route() -> None:
     destination = _point(2, 31.0100, 121.0000, 31.0145, 121.0045)
 
     assert not planner._should_try_raw_coordinate_route(origin, destination, distance_m=2200)
+
+
+def test_short_leg_with_backtracking_geometry_tries_raw_coordinate_route() -> None:
+    origin = _point(1, 31.0000, 121.0000, 31.0045, 121.0045)
+    destination = _point(2, 31.0100, 121.0000, 31.0145, 121.0045)
+    geometry = [
+        (31.0045, 121.0045),
+        (31.0200, 121.0045),
+        (31.0060, 121.0045),
+        (31.0145, 121.0045),
+    ]
+
+    assert planner._should_try_raw_coordinate_route(
+        origin,
+        destination,
+        distance_m=3100,
+        geometry=geometry,
+    )
+
+
+def test_snap_connectors_keep_osrm_geometry_separate_from_stop_markers() -> None:
+    origin = _point(1, 31.0000, 121.0000, 31.0000, 121.0000)
+    destination = _point(2, 31.0100, 121.0100, 31.0100, 121.0100)
+    geometry = [(31.0005, 121.0005), (31.0095, 121.0095)]
+
+    connectors = planner._snap_connectors_for_leg(origin, destination, geometry)
+
+    assert [connector["type"] for connector in connectors] == ["origin", "destination"]
+    assert connectors[0]["geometry"][0] == (31.0000, 121.0000)
+    assert connectors[0]["geometry"][1] == geometry[0]
+    assert connectors[1]["geometry"][0] == geometry[-1]
+    assert connectors[1]["geometry"][1] == (31.0100, 121.0100)

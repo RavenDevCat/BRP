@@ -1,5 +1,3 @@
-$ErrorActionPreference = "Stop"
-
 param(
   [Parameter(Mandatory = $true)]
   [string]$TargetHead,
@@ -9,6 +7,8 @@ param(
   [string]$BackendTaskName = "BRP Backend",
   [string]$NginxTaskName = "BRP-Nginx-Public"
 )
+
+$ErrorActionPreference = "Stop"
 
 if (-not $ArchivePath) {
   $ArchivePath = Join-Path $Repo "state\brp-web-dist-$TargetHead.tgz"

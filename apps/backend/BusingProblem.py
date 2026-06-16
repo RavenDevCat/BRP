@@ -79,7 +79,8 @@ OSRM_LOCATION_DEFAULTS: dict[tuple[str, str], str] = {
     ("BK", ""): "http://127.0.0.1:5007",
 }
 OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM", "3.0") or 3.0)
-OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO", "6.0") or 6.0)
+OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO", "3.0") or 3.0)
+OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM", "2.0") or 2.0)
 OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO = float(os.environ.get("OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO", "0.35") or 0.35)
 
 INPUT_STOPS: list[dict[str, Any]] = []
@@ -1797,6 +1798,9 @@ def _should_try_raw_coordinate_route(
         return False
     direct_km = haversine_distance_km(origin_lat, origin_lng, destination_lat, destination_lng)
     if direct_km <= 0 or direct_km > OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM:
+        return False
+    route_km = float(distance_m) / 1000.0
+    if route_km - direct_km < OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM:
         return False
     if distance_m < direct_km * 1000.0 * OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO:
         return False

@@ -79,6 +79,41 @@ class InputAddressReviewTests(unittest.TestCase):
         self.assertEqual(route_warnings[0]["route_id"], "R1")
         self.assertEqual(route_warnings[0]["address"], "Suspicious stop")
 
+    def test_route_context_detour_prefers_final_route_leg_distances(self) -> None:
+        points = [
+            {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.0, "lng": 121.0},
+            {"node_id": 1, "address": "Previous stop", "lat": 31.0, "lng": 121.1},
+            {"node_id": 2, "address": "Corrected stop", "lat": 31.0, "lng": 121.15},
+            {"node_id": 3, "address": "Next stop", "lat": 31.0, "lng": 121.2},
+        ]
+        stale_distance_matrix = [
+            [0, 1000, 50000, 2000],
+            [1000, 0, 25000, 2000],
+            [50000, 25000, 0, 25000],
+            [2000, 2000, 25000, 0],
+        ]
+
+        review = planner_core.build_input_address_review(
+            FakePlanner(),
+            points,
+            service_direction="From School",
+            current_plan_assessment={"route_summaries": [{"route_id": "R1", "matched_node_ids": [0, 1, 2, 3]}]},
+            current_plan_distance_matrix=stale_distance_matrix,
+            current_plan_routes=[
+                {
+                    "route_id": "R1",
+                    "leg_details": [
+                        {"from_node": 0, "to_node": 1, "distance_m": 1000},
+                        {"from_node": 1, "to_node": 2, "distance_m": 1100},
+                        {"from_node": 2, "to_node": 3, "distance_m": 1200},
+                    ],
+                }
+            ],
+        )
+
+        route_warnings = [item for item in review["warnings"] if item["type"] == "route_context_detour"]
+        self.assertEqual(route_warnings, [])
+
     def test_region_mismatch_warning_for_accepted_china_point(self) -> None:
         points = [
             {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.23, "lng": 121.43},

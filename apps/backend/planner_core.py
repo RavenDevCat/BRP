@@ -2090,6 +2090,7 @@ def build_input_address_review(
     service_direction: str,
     current_plan_assessment: dict[str, Any] | None = None,
     current_plan_distance_matrix: list[list[float]] | None = None,
+    current_plan_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     warnings: list[dict[str, Any]] = []
     points = [dict(point) for point in list(original_points or [])]
@@ -2153,6 +2154,27 @@ def build_input_address_review(
             for index, point in enumerate(points)
         }
         route_summaries = list(current_plan_assessment.get("route_summaries") or [])
+        current_route_leg_distance_km: dict[str, dict[tuple[int, int], float]] = {}
+        for route in list(current_plan_routes or []):
+            route_id = str(route.get("route_id", "") or "").strip()
+            if not route_id:
+                continue
+            route_distances = current_route_leg_distance_km.setdefault(route_id, {})
+            for leg in list(route.get("leg_details") or []):
+                try:
+                    from_node = int(leg.get("from_node"))
+                    to_node = int(leg.get("to_node"))
+                except (TypeError, ValueError):
+                    continue
+                distance_m = leg.get("distance_m")
+                if distance_m is None:
+                    continue
+                try:
+                    distance_km = float(distance_m) / 1000.0
+                except (TypeError, ValueError):
+                    continue
+                if distance_km > 0:
+                    route_distances[(from_node, to_node)] = distance_km
         for route_summary in route_summaries:
             node_ids = [
                 int(node_id)
@@ -2162,10 +2184,12 @@ def build_input_address_review(
             if len(node_ids) < 3:
                 continue
             route_id = str(route_summary.get("route_id", "") or "").strip()
+            route_leg_distances = current_route_leg_distance_km.get(route_id, {})
             route_leg_lengths = [
                 value
                 for value in (
-                    _route_distance_km(planner, point_by_node, current_plan_distance_matrix, from_node, to_node)
+                    route_leg_distances.get((from_node, to_node))
+                    or _route_distance_km(planner, point_by_node, current_plan_distance_matrix, from_node, to_node)
                     for from_node, to_node in zip(node_ids, node_ids[1:])
                 )
                 if value is not None and value > 0
@@ -2187,6 +2211,7 @@ def build_input_address_review(
                     prev_node,
                     node_id,
                 )
+                prev_to_stop_km = route_leg_distances.get((prev_node, node_id)) or prev_to_stop_km
                 stop_to_next_km = _route_distance_km(
                     planner,
                     point_by_node,
@@ -2194,6 +2219,7 @@ def build_input_address_review(
                     node_id,
                     next_node,
                 )
+                stop_to_next_km = route_leg_distances.get((node_id, next_node)) or stop_to_next_km
                 prev_to_next_km = _route_distance_km(
                     planner,
                     point_by_node,
@@ -5391,6 +5417,7 @@ def run_backend_planner_with_prepared_data(
         service_direction=service_direction,
         current_plan_assessment=current_plan_assessment,
         current_plan_distance_matrix=assessment_distance,
+        current_plan_routes=list((current_plan_scenario or {}).get("routes") or []),
     )
 
     structured_results = {

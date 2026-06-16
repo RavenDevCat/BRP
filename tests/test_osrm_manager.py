@@ -6,6 +6,7 @@ from pathlib import Path
 
 def load_manager(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_ON_DEMAND_ENABLED", "true")
+    monkeypatch.setenv("OSRM_LOCAL_DATA_DIR", str(tmp_path / "osrm-data"))
     monkeypatch.setenv("BRP_OSRM_LOCK_DIR", str(tmp_path / "locks"))
     monkeypatch.setenv("BRP_OSRM_MANAGER_STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("BRP_OSRM_IDLE_TTL_SECONDS", "10")

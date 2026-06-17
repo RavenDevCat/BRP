@@ -5,7 +5,9 @@ import json
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -81,6 +83,38 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(parsed["SubState"], "waiting")
         self.assertEqual(parsed["Result"], "success")
         self.assertNotIn("NoEquals", parsed)
+
+    def test_timer_status_adds_local_time_and_next_relevant_timer(self) -> None:
+        class Result:
+            returncode = 0
+            stdout = (
+                "ActiveState=active\n"
+                "SubState=waiting\n"
+                "Result=success\n"
+                "NextElapseUSecRealtime=Wed 2026-06-17 22:20:00 UTC\n"
+                "LastTriggerUSec=Tue 2026-06-16 22:20:01 UTC\n"
+            )
+            stderr = ""
+
+        original = report_traffic_rollout_status._run_command
+        try:
+            report_traffic_rollout_status._run_command = lambda *_args, **_kwargs: Result()
+            rows = report_traffic_rollout_status.collect_timer_status(
+                ["brp-live-traffic-am.timer"],
+                local_tz=ZoneInfo("Asia/Shanghai"),
+                now=datetime(2026, 6, 17, 18, 20, tzinfo=timezone.utc),
+            )
+        finally:
+            report_traffic_rollout_status._run_command = original
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["next_elapse_local"], "2026-06-18T06:20:00+08:00")
+        self.assertEqual(rows[0]["last_trigger_local"], "2026-06-17T06:20:01+08:00")
+        self.assertEqual(rows[0]["seconds_until_next_elapse"], 14400)
+        next_timer = report_traffic_rollout_status._next_relevant_timer(rows)
+        self.assertIsNotNone(next_timer)
+        assert next_timer is not None
+        self.assertEqual(next_timer["unit"], "brp-live-traffic-am.timer")
 
     def test_service_status_flags_nonzero_exec_main_status(self) -> None:
         class Result:

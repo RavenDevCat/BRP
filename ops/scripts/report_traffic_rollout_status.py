@@ -12,8 +12,10 @@ import json
 import subprocess
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -40,6 +42,8 @@ DEFAULT_SERVICE_UNITS = (
     "brp-osrm-cleanup.service",
 )
 
+DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
+
 
 def _run_command(command: list[str], *, timeout: int = 10) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
@@ -55,8 +59,43 @@ def _parse_show_properties(output: str) -> dict[str, str]:
     return properties
 
 
-def collect_timer_status(timer_units: list[str]) -> list[dict[str, Any]]:
+def _load_timezone(name: str | None) -> ZoneInfo:
+    try:
+        return ZoneInfo(str(name or DEFAULT_LOCAL_TIMEZONE))
+    except Exception:
+        return ZoneInfo(DEFAULT_LOCAL_TIMEZONE)
+
+
+def _parse_systemd_utc_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in {"n/a", "never"}:
+        return None
+    if raw.endswith(" UTC"):
+        raw = raw[:-4]
+    for fmt in ("%a %Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+        try:
+            return datetime.strptime(raw, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def _timestamp_local(value: Any, local_tz: ZoneInfo) -> str:
+    timestamp = _parse_systemd_utc_timestamp(value)
+    if timestamp is None:
+        return ""
+    return timestamp.astimezone(local_tz).isoformat(timespec="seconds")
+
+
+def collect_timer_status(
+    timer_units: list[str],
+    *,
+    local_tz: ZoneInfo | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    local_tz = local_tz or _load_timezone(None)
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
     for unit in timer_units:
         try:
             result = _run_command(
@@ -90,6 +129,14 @@ def collect_timer_status(timer_units: list[str]) -> list[dict[str, Any]]:
             )
             continue
         props = _parse_show_properties(result.stdout)
+        next_elapse = props.get("NextElapseUSecRealtime", "")
+        last_trigger = props.get("LastTriggerUSec", "")
+        next_timestamp = _parse_systemd_utc_timestamp(next_elapse)
+        seconds_until = (
+            max(0, int(round((next_timestamp - now_utc).total_seconds())))
+            if next_timestamp is not None
+            else None
+        )
         rows.append(
             {
                 "unit": unit,
@@ -97,8 +144,11 @@ def collect_timer_status(timer_units: list[str]) -> list[dict[str, Any]]:
                 "active_state": props.get("ActiveState", ""),
                 "sub_state": props.get("SubState", ""),
                 "result": props.get("Result", ""),
-                "next_elapse": props.get("NextElapseUSecRealtime", ""),
-                "last_trigger": props.get("LastTriggerUSec", ""),
+                "next_elapse": next_elapse,
+                "next_elapse_local": _timestamp_local(next_elapse, local_tz),
+                "seconds_until_next_elapse": seconds_until,
+                "last_trigger": last_trigger,
+                "last_trigger_local": _timestamp_local(last_trigger, local_tz),
             }
         )
     return rows
@@ -111,8 +161,13 @@ def _status_int(value: Any) -> int | None:
         return None
 
 
-def collect_service_status(service_units: list[str]) -> list[dict[str, Any]]:
+def collect_service_status(
+    service_units: list[str],
+    *,
+    local_tz: ZoneInfo | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    local_tz = local_tz or _load_timezone(None)
     for unit in service_units:
         try:
             result = _run_command(
@@ -154,6 +209,8 @@ def collect_service_status(service_units: list[str]) -> list[dict[str, Any]]:
         exec_status = _status_int(props.get("ExecMainStatus"))
         result_status = props.get("Result", "")
         active_state = props.get("ActiveState", "")
+        exec_main_start = props.get("ExecMainStartTimestamp", "")
+        exec_main_exit = props.get("ExecMainExitTimestamp", "")
         problem = bool(
             result_status not in {"", "success"}
             or active_state == "failed"
@@ -168,8 +225,10 @@ def collect_service_status(service_units: list[str]) -> list[dict[str, Any]]:
                 "result": result_status,
                 "exec_main_code": props.get("ExecMainCode", ""),
                 "exec_main_status": exec_status,
-                "exec_main_start": props.get("ExecMainStartTimestamp", ""),
-                "exec_main_exit": props.get("ExecMainExitTimestamp", ""),
+                "exec_main_start": exec_main_start,
+                "exec_main_start_local": _timestamp_local(exec_main_start, local_tz),
+                "exec_main_exit": exec_main_exit,
+                "exec_main_exit_local": _timestamp_local(exec_main_exit, local_tz),
                 "problem": problem,
             }
         )
@@ -226,6 +285,25 @@ def summarize_rollout_gate(gate: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _next_relevant_timer(timer_status: list[dict[str, Any]]) -> dict[str, Any] | None:
+    candidates = [
+        row
+        for row in timer_status
+        if str(row.get("unit") or "").startswith("brp-live-traffic-")
+        and row.get("available")
+        and row.get("seconds_until_next_elapse") is not None
+    ]
+    if not candidates:
+        return None
+    item = min(candidates, key=lambda row: int(row.get("seconds_until_next_elapse") or 0))
+    return {
+        "unit": item.get("unit"),
+        "next_elapse": item.get("next_elapse"),
+        "next_elapse_local": item.get("next_elapse_local"),
+        "seconds_until_next_elapse": item.get("seconds_until_next_elapse"),
+    }
+
+
 def build_status(
     *,
     sample_dir: Path,
@@ -234,7 +312,10 @@ def build_status(
     min_geo_ratio: float,
     include_timers: bool,
     include_osrm: bool,
+    local_timezone: str = DEFAULT_LOCAL_TIMEZONE,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
+    local_tz = _load_timezone(local_timezone)
     gate = report_traffic_rollout_readiness.build_report(
         sample_dir,
         min_measured_at=min_measured_at,
@@ -242,8 +323,16 @@ def build_status(
         min_geo_ratio=min_geo_ratio,
     )
     rollout_summary = summarize_rollout_gate(gate)
-    timer_status = collect_timer_status(list(DEFAULT_TIMER_UNITS)) if include_timers else []
-    service_status = collect_service_status(list(DEFAULT_SERVICE_UNITS)) if include_timers else []
+    timer_status = (
+        collect_timer_status(list(DEFAULT_TIMER_UNITS), local_tz=local_tz, now=now)
+        if include_timers
+        else []
+    )
+    service_status = (
+        collect_service_status(list(DEFAULT_SERVICE_UNITS), local_tz=local_tz)
+        if include_timers
+        else []
+    )
     osrm_status = collect_osrm_manager_status() if include_osrm else {"available": False, "skipped": True}
     timer_problem_count = sum(1 for row in timer_status if not row.get("available") or row.get("active_state") == "failed")
     service_problem_count = sum(1 for row in service_status if bool(row.get("problem")))
@@ -256,11 +345,22 @@ def build_status(
         if gate.get("status") == "ok" and timer_problem_count == 0 and service_problem_count == 0 and not osrm_problem
         else "waiting"
     )
+    next_timer = _next_relevant_timer(timer_status)
+    next_step = "Run representative route audits and job attribution gates."
+    if status != "ready":
+        next_step = "Wait for fresh timer samples or fix reported timer/OSRM issues."
+        if next_timer:
+            next_step = (
+                f"Wait for {next_timer.get('unit')} at {next_timer.get('next_elapse_local')} "
+                "to collect fresh samples, or fix reported timer/OSRM issues."
+            )
     return {
         "status": status,
+        "local_timezone": str(local_tz),
         "rollout_gate": rollout_summary,
         "timers": {
             "problem_count": timer_problem_count,
+            "next_relevant_timer": next_timer,
             "items": timer_status,
         },
         "services": {
@@ -268,11 +368,7 @@ def build_status(
             "items": service_status,
         },
         "osrm_manager": osrm_status,
-        "next_step": (
-            "Run representative route audits and job attribution gates."
-            if status == "ready"
-            else "Wait for fresh timer samples or fix reported timer/OSRM issues."
-        ),
+        "next_step": next_step,
     }
 
 
@@ -289,6 +385,14 @@ def _print_status(report: dict[str, Any]) -> None:
     )
     timers = dict(report.get("timers") or {})
     print(f"timer_problem_count: {timers.get('problem_count')}")
+    next_timer = dict(timers.get("next_relevant_timer") or {})
+    if next_timer:
+        print(
+            "next_relevant_timer:",
+            next_timer.get("unit"),
+            next_timer.get("next_elapse_local") or next_timer.get("next_elapse"),
+            f"in={next_timer.get('seconds_until_next_elapse')}s",
+        )
     services = dict(report.get("services") or {})
     print(f"service_problem_count: {services.get('problem_count')}")
     osrm = dict(report.get("osrm_manager") or {})
@@ -321,6 +425,11 @@ def parse_args() -> argparse.Namespace:
         help="Profile to require. Defaults to the current CN Shanghai/Suzhou rollout profiles.",
     )
     parser.add_argument("--min-geo-ratio", type=float, default=1.0)
+    parser.add_argument(
+        "--local-timezone",
+        default=DEFAULT_LOCAL_TIMEZONE,
+        help=f"Timezone for local timer/service display. Default: {DEFAULT_LOCAL_TIMEZONE}.",
+    )
     parser.add_argument("--no-timers", action="store_true", help="Skip systemd timer status collection.")
     parser.add_argument("--no-osrm", action="store_true", help="Skip OSRM manager status collection.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
@@ -339,6 +448,7 @@ def main() -> None:
         min_geo_ratio=float(args.min_geo_ratio),
         include_timers=not args.no_timers,
         include_osrm=not args.no_osrm,
+        local_timezone=str(args.local_timezone or DEFAULT_LOCAL_TIMEZONE),
     )
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))

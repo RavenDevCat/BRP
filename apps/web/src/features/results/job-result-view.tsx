@@ -342,7 +342,11 @@ function AuditPanel({
   const [showTrafficRouteEvidence, setShowTrafficRouteEvidence] = useState(false);
   const trafficAttributionQuery = useQuery({
     queryKey: ["job-traffic-attribution", jobId, showTrafficRouteEvidence],
-    queryFn: () => getJobTrafficAttribution(jobId, { routeEvidence: showTrafficRouteEvidence }),
+    queryFn: () =>
+      getJobTrafficAttribution(jobId, {
+        routeEvidence: showTrafficRouteEvidence,
+        topMatches: showTrafficRouteEvidence,
+      }),
     enabled: trafficCoefficientMode === "attributed" && Boolean(jobId),
     staleTime: 60_000,
   });
@@ -585,19 +589,64 @@ function TrafficAttributionScenarioRow({
 function TrafficAttributionRouteEvidenceRow({ route }: { route: Record<string, unknown> }) {
   const t = useT();
   const fallback = Boolean(route.fallback);
+  const topMatches = asRecordArray(route.top_matches).slice(0, 3);
+  const topMatchCount = Number(route.top_match_count ?? topMatches.length);
   return (
-    <tr className="border-t border-border">
-      <td className="px-2 py-2 font-medium text-foreground">{stringValue(route.route_id || route.vehicle_id || "—")}</td>
-      <td className="px-2 py-2">{formatTrafficMultiplier(route.factor)}</td>
-      <td className="px-2 py-2">{formatTrafficMethodLabel(route.method, t)}</td>
-      <td className="px-2 py-2">
-        <Badge tone={fallback ? "warning" : "success"}>{formatTrafficQualityLabel(route.quality_reason, t)}</Badge>
-      </td>
-      <td className="px-2 py-2">{formatNumber(route.matched_sample_count)}</td>
-      <td className="px-2 py-2">{formatNumber(route.usable_geo_candidate_count || route.geo_candidate_count)}</td>
-      <td className="px-2 py-2">{formatPercent(route.avg_similarity, 100)}</td>
-      <td className="px-2 py-2">{formatNumber(route.osrm_duration_min)} {t("min")}</td>
-    </tr>
+    <>
+      <tr className="border-t border-border">
+        <td className="px-2 py-2 font-medium text-foreground">{stringValue(route.route_id || route.vehicle_id || "—")}</td>
+        <td className="px-2 py-2">{formatTrafficMultiplier(route.factor)}</td>
+        <td className="px-2 py-2">{formatTrafficMethodLabel(route.method, t)}</td>
+        <td className="px-2 py-2">
+          <Badge tone={fallback ? "warning" : "success"}>{formatTrafficQualityLabel(route.quality_reason, t)}</Badge>
+        </td>
+        <td className="px-2 py-2">
+          {formatNumber(route.matched_sample_count)}
+          {Number.isFinite(topMatchCount) && topMatchCount > 0 ? (
+            <span className="ml-1 text-muted-foreground">({formatNumber(topMatchCount)} {t("top")})</span>
+          ) : null}
+        </td>
+        <td className="px-2 py-2">{formatNumber(route.usable_geo_candidate_count || route.geo_candidate_count)}</td>
+        <td className="px-2 py-2">{formatPercent(route.avg_similarity, 100)}</td>
+        <td className="px-2 py-2">{formatNumber(route.osrm_duration_min)} {t("min")}</td>
+      </tr>
+      {topMatches.length ? (
+        <tr className="border-t border-border bg-muted/30">
+          <td className="px-2 py-3" colSpan={8}>
+            <div className="mb-2 text-xs font-medium text-foreground">{t("Top supporting matches")}</div>
+            <div className="grid gap-2 lg:grid-cols-3">
+              {topMatches.map((match, index) => (
+                <TrafficAttributionTopMatchCard
+                  key={`${stringValue(match.source_id)}-${stringValue(match.route_id)}-${index}`}
+                  match={match}
+                />
+              ))}
+            </div>
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function TrafficAttributionTopMatchCard({ match }: { match: Record<string, unknown> }) {
+  const t = useT();
+  const sourceId = stringValue(match.source_id) || t("Unknown source");
+  const routeId = stringValue(match.route_id) || t("Unknown route");
+  return (
+    <div className="rounded-md border border-border bg-surface px-3 py-2">
+      <div className="truncate text-xs font-medium text-foreground">
+        {t("Source")} {sourceId} · {t("Route")} {routeId}
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <div>{t("Factor")}: {formatTrafficMultiplier(match.factor) || t("Not available")}</div>
+        <div>{t("Score")}: {formatPercent(match.similarity_score, 100)}</div>
+        <div>{t("Geo score")}: {formatPercent(match.geo_similarity_score, 100)}</div>
+        <div>{t("Corridor")}: {formatPercent(match.corridor_overlap, 100)}</div>
+        <div>{t("Center distance")}: {formatDistanceKmValue(match.center_distance_km)}</div>
+        <div>{t("Bearing")}: {formatPercent(match.bearing_score, 100)}</div>
+      </div>
+    </div>
   );
 }
 
@@ -3131,6 +3180,14 @@ function formatTrafficMultiplier(value: unknown): string {
     return "";
   }
   return `${numericValue.toFixed(2).replace(/\.?0+$/, "")}x`;
+}
+
+function formatDistanceKmValue(value: unknown): string {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "Not available";
+  }
+  return `${formatNumber(numericValue)} km`;
 }
 
 function formatRouteCoverage(numerator: unknown, denominator: unknown): string {

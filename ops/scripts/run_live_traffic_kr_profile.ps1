@@ -48,6 +48,7 @@ Set-DefaultEnv "BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP" "4000"
 Set-DefaultEnv "BRP_KAKAO_NAVI_DAILY_CAP" "500"
 Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH" "500"
 Set-DefaultEnv "BRP_KAKAO_NAVI_MAX_WAYPOINTS" "5"
+Set-DefaultEnv "BRP_LIVE_TRAFFIC_MAX_API_CALLS_PER_RUN" "1000"
 
 foreach ($dir in @($env:BRP_BACKEND_JOBS_DIR, $env:BRP_SIDE_TOOLS_DIR, $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR, $env:BRP_LIVE_TRAFFIC_BASELINE_DIR)) {
     if ($dir) {
@@ -106,7 +107,7 @@ function Build-SamplerArgs {
         }
     }
 
-    $args = @("live_traffic_sampler.py", "--source", $source, "--period", $SamplePeriod, "--provider", $provider, "--market", $market, "--city", $city, "--sample-date", $SampleDate)
+    $args = @("live_traffic_sampler.py", "--source", $source, "--period", $SamplePeriod, "--provider", $provider, "--market", $market, "--city", $city, "--sample-date", $SampleDate, "--max-api-calls-per-run", $env:BRP_LIVE_TRAFFIC_MAX_API_CALLS_PER_RUN)
     if ($baselineDir) {
         $args += @("--baseline-dir", $baselineDir)
     }

@@ -17,6 +17,7 @@ else
   BACKEND_PYTHON="${BACKEND_PYTHON:-python3}"
 fi
 
+max_api_calls_per_run="${BRP_LIVE_TRAFFIC_MAX_API_CALLS_PER_RUN:-1000}"
 period="${1:-}"
 case "$period" in
   am_peak)
@@ -76,4 +77,4 @@ elif [ "$source" = "baseline_json" ]; then
 else
   source_args+=(--job-id "$job_id")
 fi
-exec "$BACKEND_PYTHON" live_traffic_sampler.py "${source_args[@]}" "${timing_args[@]}" "$@"
+exec "$BACKEND_PYTHON" live_traffic_sampler.py "${source_args[@]}" --max-api-calls-per-run "$max_api_calls_per_run" "${timing_args[@]}" "$@"

@@ -3795,6 +3795,184 @@ def _build_job_map_payload(
     return payload, None
 
 
+def _traffic_as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _traffic_as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
+def _traffic_method_counts(estimates: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in estimates:
+        method = str(_traffic_as_dict(item).get("method") or "unknown")
+        counts[method] = counts.get(method, 0) + 1
+    return counts
+
+
+def _traffic_quality_counts(estimates: list[Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in estimates:
+        reason = str(_traffic_as_dict(item).get("quality_reason") or "unknown")
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
+def _traffic_non_geo_routes(estimates: list[Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for item in estimates:
+        estimate = _traffic_as_dict(item)
+        method = str(estimate.get("method") or "unknown")
+        if method == "geo_route_similarity":
+            continue
+        routes.append(
+            {
+                "route_id": str(estimate.get("route_id") or ""),
+                "method": method,
+                "quality_reason": str(estimate.get("quality_reason") or "unknown"),
+                "reason": str(estimate.get("reason") or ""),
+                "factor": float(estimate.get("factor") or 0.0),
+                "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
+                "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
+                "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
+                "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
+            }
+        )
+    return routes[:limit]
+
+
+def _traffic_route_evidence(item: Any, *, include_top_matches: bool = False) -> dict[str, Any]:
+    estimate = _traffic_as_dict(item)
+    evidence: dict[str, Any] = {
+        "route_id": str(estimate.get("route_id") or ""),
+        "scenario": str(estimate.get("scenario") or ""),
+        "vehicle_id": str(estimate.get("vehicle_id") or ""),
+        "bus_type_name": str(estimate.get("bus_type_name") or ""),
+        "method": str(estimate.get("method") or "unknown"),
+        "quality_reason": str(estimate.get("quality_reason") or "unknown"),
+        "factor": float(estimate.get("factor") or 0.0),
+        "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
+        "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
+        "candidate_count": int(estimate.get("candidate_count") or 0),
+        "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
+        "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
+        "osrm_duration_min": round(float(estimate.get("osrm_duration_s") or 0.0) / 60.0, 2),
+        "stop_count": int(estimate.get("stop_count") or 0),
+        "fallback": bool(estimate.get("fallback")),
+        "reason": str(estimate.get("reason") or ""),
+    }
+    top_matches = _traffic_as_list(estimate.get("top_matches"))
+    if include_top_matches:
+        evidence["top_matches"] = [
+            {
+                "route_id": str(match.get("route_id") or ""),
+                "source_id": str(match.get("source_id") or ""),
+                "factor": float(match.get("factor") or 0.0),
+                "similarity_score": float(match.get("similarity_score") or 0.0),
+                "similarity_method": str(match.get("similarity_method") or "unknown"),
+                "geo_similarity_score": float(match.get("geo_similarity_score") or 0.0),
+                "corridor_overlap": float(match.get("corridor_overlap") or 0.0),
+                "center_distance_km": float(match.get("center_distance_km") or 0.0),
+                "bearing_score": float(match.get("bearing_score") or 0.0),
+                "duration_score": float(match.get("duration_score") or 0.0),
+                "stop_score": float(match.get("stop_score") or 0.0),
+                "scale_score": float(match.get("scale_score") or 0.0),
+            }
+            for match in (_traffic_as_dict(match) for match in top_matches)
+        ]
+    else:
+        evidence["top_match_count"] = len(top_matches)
+    return evidence
+
+
+def _traffic_scenario_summary(
+    name: str,
+    payload: dict[str, Any],
+    *,
+    include_route_evidence: bool = False,
+    include_top_matches: bool = False,
+) -> dict[str, Any]:
+    estimates = _traffic_as_list(payload.get("route_estimates"))
+    method_counts = _traffic_as_dict(payload.get("method_counts")) or _traffic_method_counts(estimates)
+    quality_counts = _traffic_as_dict(payload.get("quality_reason_counts")) or _traffic_quality_counts(estimates)
+    route_count = int(payload.get("route_count") or len(estimates) or 0)
+    geo_count = int(payload.get("geo_attributed_route_count") or method_counts.get("geo_route_similarity", 0) or 0)
+    summary: dict[str, Any] = {
+        "scenario": name,
+        "present": True,
+        "route_estimate_count": route_count,
+        "geo_attributed_route_count": geo_count,
+        "route_similarity_route_count": int(
+            payload.get("route_similarity_route_count") or method_counts.get("route_similarity", 0) or 0
+        ),
+        "fallback_route_count": int(payload.get("fallback_route_count") or method_counts.get("fallback", 0) or 0),
+        "non_geo_route_count": max(0, route_count - geo_count),
+        "non_geo_routes": _traffic_non_geo_routes(estimates),
+        "geo_attributed_route_ratio": (geo_count / route_count) if route_count else 0.0,
+        "observed_route_sample_count": int(payload.get("observed_route_sample_count") or 0),
+        "geo_route_sample_count": int(payload.get("geo_route_sample_count") or 0),
+        "scale_only_route_sample_count": int(payload.get("scale_only_route_sample_count") or 0),
+        "geo_route_sample_ratio": float(payload.get("geo_route_sample_ratio") or 0.0),
+        "geo_ready": bool(payload.get("geo_ready")),
+        "method_counts": method_counts,
+        "quality_reason_counts": quality_counts,
+    }
+    if include_route_evidence:
+        summary["route_evidence"] = [
+            _traffic_route_evidence(item, include_top_matches=include_top_matches)
+            for item in estimates
+        ]
+    return summary
+
+
+def _job_traffic_attribution_payload(
+    job_record: dict[str, Any],
+    *,
+    include_route_evidence: bool = False,
+    include_top_matches: bool = False,
+) -> dict[str, Any]:
+    result = _traffic_as_dict(job_record.get("result"))
+    structured = _traffic_as_dict(result.get("structured_results"))
+    traffic = _traffic_as_dict(structured.get("traffic_attribution") or result.get("traffic_attribution"))
+    scenario_estimates = _traffic_as_dict(traffic.get("scenario_route_estimates"))
+    scenarios: list[dict[str, Any]] = []
+    for name, payload in sorted(scenario_estimates.items()):
+        if isinstance(payload, dict):
+            scenarios.append(
+                _traffic_scenario_summary(
+                    str(name),
+                    payload,
+                    include_route_evidence=include_route_evidence,
+                    include_top_matches=include_top_matches,
+                )
+            )
+    return {
+        "job_id": str(job_record.get("job_id") or ""),
+        "status": str(job_record.get("status") or ""),
+        "service_direction": str(structured.get("service_direction") or result.get("service_direction") or ""),
+        "traffic_profile_name": str(structured.get("traffic_profile_name") or result.get("traffic_profile_name") or ""),
+        "traffic_time_multiplier": float(
+            structured.get("traffic_time_multiplier") or result.get("traffic_time_multiplier") or 0.0
+        ),
+        "traffic_coefficient_mode": str(structured.get("traffic_coefficient_mode") or ""),
+        "has_traffic_attribution": bool(traffic),
+        "attribution_enabled": bool(traffic.get("enabled")),
+        "attribution_succeeded": bool(traffic.get("succeeded")),
+        "attribution_mode": str(traffic.get("mode") or ""),
+        "attribution_method": str(traffic.get("method") or ""),
+        "attribution_reason": str(traffic.get("reason") or ""),
+        "attribution_confidence": str(traffic.get("confidence") or ""),
+        "route_level_applied": bool(traffic.get("route_level_applied")),
+        "observed_route_sample_count": int(traffic.get("observed_route_sample_count") or 0),
+        "geo_route_sample_count": int(traffic.get("geo_route_sample_count") or 0),
+        "scale_only_route_sample_count": int(traffic.get("scale_only_route_sample_count") or 0),
+        "geo_route_sample_ratio": float(traffic.get("geo_route_sample_ratio") or 0.0),
+        "scenario_count": len(scenarios),
+        "scenarios": scenarios,
+    }
+
+
 def _infer_output_directory_name(result: dict[str, Any]) -> str:
     structured = dict(result.get("structured_results") or {})
     outputs_root = (BASE_DIR / "outputs").resolve()
@@ -4553,6 +4731,37 @@ class BackendHandler(BaseHTTPRequestHandler):
                     )
                     return
                 self._send_json(200, map_data)
+                return
+            if len(parts) == 3 and parts[2] == "traffic-attribution":
+                job_id = parts[1].strip()
+                job_record = JOB_STORE.get_job(job_id)
+                if not job_record:
+                    self._send_json(404, {"error": f"Job not found: {job_id}"})
+                    return
+                if not _can_access_job(job_record, user_email, include_all=include_all):
+                    self._send_json(
+                        403, {"error": f"Job is not available for user: {user_email}"}
+                    )
+                    return
+                query_params = dict(parse_qsl(parsed.query))
+                include_route_evidence = query_params.get("route_evidence") in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                include_top_matches = query_params.get("top_matches") in {
+                    "1",
+                    "true",
+                    "yes",
+                }
+                self._send_json(
+                    200,
+                    _job_traffic_attribution_payload(
+                        job_record,
+                        include_route_evidence=include_route_evidence,
+                        include_top_matches=include_top_matches,
+                    ),
+                )
                 return
             if len(parts) != 2:
                 self._send_json(404, {"error": f"Unknown path: {path}"})

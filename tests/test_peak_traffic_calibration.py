@@ -268,6 +268,63 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(result["observed_route_sample_count"], 1)
         self.assertEqual(result["attributed_route_count"], 1)
 
+    def test_attribution_context_reports_geo_ready_sample_coverage(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "pm_routes.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-09T15:40:00+08:00",
+                        "local_date": "2026-06-09",
+                        "period": "pm_peak",
+                        "country": "China",
+                        "city": "Shanghai",
+                        "dry_run": False,
+                        "route_count": 2,
+                        "total_osrm_duration_s": 450.0,
+                        "total_api_duration_s": 820.0,
+                        "routes": [
+                            {
+                                "route_id": "geo-r1",
+                                "stop_count": 2,
+                                "osrm_duration_s": 200.0,
+                                "amap_duration_s": 320.0,
+                                "factor": 1.6,
+                                "route_fingerprint": {
+                                    "cell_count": 2,
+                                    "cells": ["3100:12100", "3101:12101"],
+                                },
+                            },
+                            {
+                                "route_id": "scale-r2",
+                                "stop_count": 3,
+                                "osrm_duration_s": 250.0,
+                                "amap_duration_s": 500.0,
+                                "factor": 2.0,
+                            },
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            context = planner_core.build_traffic_attribution_context(
+                [{"country": "China", "city": "Shanghai", "address": "School"}],
+                planner_core.PlannerConfig(
+                    service_direction="From School",
+                    traffic_coefficient_mode="attributed",
+                ),
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 9, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+            )
+
+        self.assertTrue(context["succeeded"])
+        self.assertEqual(context["observed_route_sample_count"], 2)
+        self.assertEqual(context["geo_route_sample_count"], 1)
+        self.assertEqual(context["scale_only_route_sample_count"], 1)
+        self.assertAlmostEqual(float(context["geo_route_sample_ratio"]), 0.5)
+        self.assertTrue(context["geo_ready"])
+
     def test_attributed_traffic_profile_is_disabled_in_legacy_mode(self) -> None:
         result = planner_core.resolve_attributed_traffic_profile(
             FakePlanner(),
@@ -472,6 +529,21 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(estimate["geo_candidate_count"], 1)
         self.assertEqual(estimate["usable_geo_candidate_count"], 0)
         self.assertLess(float(estimate["top_matches"][0]["geo_similarity_score"]), 0.18)
+
+    def test_traffic_route_estimate_summary_counts_methods_and_reasons(self) -> None:
+        summary = planner_core._traffic_route_estimate_summary(
+            [
+                {"method": "geo_route_similarity", "quality_reason": "geo_threshold_passed"},
+                {"method": "route_similarity", "quality_reason": "scale_similarity_only"},
+                {"method": "fallback", "quality_reason": "no_similar_route_sample"},
+            ]
+        )
+
+        self.assertEqual(summary["geo_attributed_route_count"], 1)
+        self.assertEqual(summary["route_similarity_route_count"], 1)
+        self.assertEqual(summary["fallback_route_count"], 1)
+        self.assertEqual(summary["method_counts"]["geo_route_similarity"], 1)
+        self.assertEqual(summary["quality_reason_counts"]["scale_similarity_only"], 1)
 
     def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

@@ -1191,6 +1191,22 @@ def _live_route_attribution_candidates(samples: list[dict[str, Any]]) -> list[di
     return candidates
 
 
+def _traffic_attribution_candidate_readiness(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    observed = len(candidates)
+    geo_count = sum(
+        1
+        for candidate in candidates
+        if bool((_route_traffic_fingerprint(candidate) or {}).get("cell_count"))
+    )
+    return {
+        "observed_route_sample_count": observed,
+        "geo_route_sample_count": geo_count,
+        "scale_only_route_sample_count": max(0, observed - geo_count),
+        "geo_route_sample_ratio": (float(geo_count) / float(observed)) if observed else 0.0,
+        "geo_ready": geo_count >= TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES,
+    }
+
+
 def _target_current_plan_route_features(
     planner: Any,
     current_plan: dict[str, Any] | None,
@@ -1417,6 +1433,7 @@ def build_traffic_attribution_context(
     )
     selected, selected_dates = _select_live_traffic_sample_window(matches)
     candidates = _live_route_attribution_candidates(selected)
+    readiness = _traffic_attribution_candidate_readiness(candidates)
     label = "AM Peak" if period == "am_peak" else "PM Peak"
     return {
         "enabled": True,
@@ -1431,7 +1448,7 @@ def build_traffic_attribution_context(
         "candidates": candidates,
         "sample_file_count": len(selected),
         "workday_count": len(selected_dates),
-        "observed_route_sample_count": len(candidates),
+        **readiness,
         "reason": "" if candidates else "no_route_level_samples",
     }
 
@@ -1523,7 +1540,9 @@ def resolve_attributed_traffic_profile(
     context = (
         f"{city.title()} {label} attributed traffic coefficient; "
         f"{len(route_estimates) or len(target_routes)} target route(s), "
-        f"{len(candidates)} observed route sample(s), confidence {confidence}"
+        f"{len(candidates)} observed route sample(s), "
+        f"{int(sample_context.get('geo_route_sample_count', 0) or 0)} geo-ready, "
+        f"confidence {confidence}"
     )
     if method == "city_period_average":
         context += "; route similarity unavailable, using city-period sample average"
@@ -1544,6 +1563,10 @@ def resolve_attributed_traffic_profile(
         "target_route_count": len(target_routes),
         "attributed_route_count": len(route_estimates),
         "observed_route_sample_count": len(candidates),
+        "geo_route_sample_count": int(sample_context.get("geo_route_sample_count", 0) or 0),
+        "scale_only_route_sample_count": int(sample_context.get("scale_only_route_sample_count", 0) or 0),
+        "geo_route_sample_ratio": float(sample_context.get("geo_route_sample_ratio", 0.0) or 0.0),
+        "geo_ready": bool(sample_context.get("geo_ready")),
         "sample_file_count": int(sample_context.get("sample_file_count", 0) or 0),
         "workday_count": len(selected_dates),
         "local_dates": selected_dates,
@@ -1630,6 +1653,8 @@ def apply_attributed_traffic_to_scenario_routes(
                 "stop_count": int(target.get("stop_count", 0) if target else 0),
                 "matched_sample_count": 0,
                 "avg_similarity": 0.0,
+                "method": "fallback",
+                "quality_reason": "no_similar_route_sample",
                 "fallback": True,
                 "reason": "no_similar_route_sample",
             }
@@ -1658,6 +1683,18 @@ def apply_attributed_traffic_to_scenario_routes(
             }
         )
     return estimates
+
+
+def _traffic_route_estimate_summary(estimates: list[dict[str, Any]]) -> dict[str, Any]:
+    method_counts = Counter(str(item.get("method") or "unknown") for item in estimates)
+    quality_reason_counts = Counter(str(item.get("quality_reason") or "unspecified") for item in estimates)
+    return {
+        "method_counts": dict(method_counts),
+        "quality_reason_counts": dict(quality_reason_counts),
+        "geo_attributed_route_count": int(method_counts.get("geo_route_similarity", 0)),
+        "route_similarity_route_count": int(method_counts.get("route_similarity", 0)),
+        "fallback_route_count": int(method_counts.get("fallback", 0)),
+    }
 
 
 def calibrate_peak_traffic_multiplier(
@@ -5837,6 +5874,17 @@ def _compute_scenario_without_render(
                 "observed_route_sample_count": int(
                     dict(route_traffic_attribution_context or {}).get("observed_route_sample_count", 0) or 0
                 ),
+                "geo_route_sample_count": int(
+                    dict(route_traffic_attribution_context or {}).get("geo_route_sample_count", 0) or 0
+                ),
+                "scale_only_route_sample_count": int(
+                    dict(route_traffic_attribution_context or {}).get("scale_only_route_sample_count", 0) or 0
+                ),
+                "geo_route_sample_ratio": float(
+                    dict(route_traffic_attribution_context or {}).get("geo_route_sample_ratio", 0.0) or 0.0
+                ),
+                "geo_ready": bool(dict(route_traffic_attribution_context or {}).get("geo_ready")),
+                **_traffic_route_estimate_summary(route_attribution_estimates),
                 "route_estimates": route_attribution_estimates,
             }
         if scenario_constraint_metadata:

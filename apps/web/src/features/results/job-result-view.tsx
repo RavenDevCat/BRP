@@ -339,9 +339,10 @@ function AuditPanel({
     result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode,
   );
   const trafficBasis = formatTrafficBasis(result, plannerConfig, trafficAttribution, t);
+  const [showTrafficRouteEvidence, setShowTrafficRouteEvidence] = useState(false);
   const trafficAttributionQuery = useQuery({
-    queryKey: ["job-traffic-attribution", jobId],
-    queryFn: () => getJobTrafficAttribution(jobId),
+    queryKey: ["job-traffic-attribution", jobId, showTrafficRouteEvidence],
+    queryFn: () => getJobTrafficAttribution(jobId, { routeEvidence: showTrafficRouteEvidence }),
     enabled: trafficCoefficientMode === "attributed" && Boolean(jobId),
     staleTime: 60_000,
   });
@@ -398,6 +399,8 @@ function AuditPanel({
           data={trafficAttributionQuery.data}
           error={trafficAttributionQuery.error}
           isLoading={trafficAttributionQuery.isLoading}
+          showRouteEvidence={showTrafficRouteEvidence}
+          onToggleRouteEvidence={() => setShowTrafficRouteEvidence((value) => !value)}
         />
       ) : null}
 
@@ -420,10 +423,14 @@ function TrafficAttributionEvidencePanel({
   data,
   error,
   isLoading,
+  showRouteEvidence,
+  onToggleRouteEvidence,
 }: {
   data?: JobTrafficAttributionResponse;
   error: unknown;
   isLoading: boolean;
+  showRouteEvidence: boolean;
+  onToggleRouteEvidence: () => void;
 }) {
   const t = useT();
   const scenarios = data?.scenarios ?? [];
@@ -479,11 +486,27 @@ function TrafficAttributionEvidencePanel({
               <ReadoutItem label="Confidence" value={confidence ? toTitle(confidence) : "Not available"} translateValue />
             </div>
             {scenarios.length ? (
-              <div className="space-y-2">
-                {scenarios.slice(0, 4).map((scenario) => (
-                  <TrafficAttributionScenarioRow key={scenario.scenario_key || scenario.scenario_label} scenario={scenario} />
-                ))}
-              </div>
+              <>
+                <div className="flex justify-end">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    icon={<GitCompareArrows className="h-4 w-4" />}
+                    onClick={onToggleRouteEvidence}
+                  >
+                    {showRouteEvidence ? t("Hide route evidence") : t("Show route evidence")}
+                  </Button>
+                </div>
+                <div className="space-y-2">
+                  {scenarios.slice(0, 4).map((scenario) => (
+                    <TrafficAttributionScenarioRow
+                      key={scenario.scenario_key || scenario.scenario_label}
+                      scenario={scenario}
+                      showRouteEvidence={showRouteEvidence}
+                    />
+                  ))}
+                </div>
+              </>
             ) : null}
           </>
         )}
@@ -492,10 +515,17 @@ function TrafficAttributionEvidencePanel({
   );
 }
 
-function TrafficAttributionScenarioRow({ scenario }: { scenario: JobTrafficAttributionScenarioSummary }) {
+function TrafficAttributionScenarioRow({
+  scenario,
+  showRouteEvidence,
+}: {
+  scenario: JobTrafficAttributionScenarioSummary;
+  showRouteEvidence: boolean;
+}) {
   const t = useT();
   const label = stringValue(scenario.scenario_label || scenario.scenario_key);
   const nonGeoCount = scenario.non_geo_routes?.length ?? 0;
+  const routeEvidence = (scenario.route_evidence ?? []).slice(0, 12);
   return (
     <div className="rounded-md border border-border bg-surface px-3 py-3">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
@@ -519,7 +549,55 @@ function TrafficAttributionScenarioRow({ scenario }: { scenario: JobTrafficAttri
           {formatCountMap(scenario.quality_reason_counts)}
         </div>
       </div>
+      {showRouteEvidence ? (
+        <div className="mt-3 overflow-x-auto">
+          {routeEvidence.length ? (
+            <table className="w-full min-w-[760px] border-collapse text-xs">
+              <thead className="bg-muted text-left uppercase text-muted-foreground">
+                <tr>
+                  <th className="px-2 py-2">{t("Route")}</th>
+                  <th className="px-2 py-2">{t("Factor")}</th>
+                  <th className="px-2 py-2">{t("Method")}</th>
+                  <th className="px-2 py-2">{t("Quality")}</th>
+                  <th className="px-2 py-2">{t("Matches")}</th>
+                  <th className="px-2 py-2">{t("Geo candidates")}</th>
+                  <th className="px-2 py-2">{t("Similarity")}</th>
+                  <th className="px-2 py-2">{t("OSRM")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {routeEvidence.map((route, index) => (
+                  <TrafficAttributionRouteEvidenceRow key={`${stringValue(route.route_id)}-${index}`} route={route} />
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
+              {t("Route evidence was not requested for this scenario.")}
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
+  );
+}
+
+function TrafficAttributionRouteEvidenceRow({ route }: { route: Record<string, unknown> }) {
+  const t = useT();
+  const fallback = Boolean(route.fallback);
+  return (
+    <tr className="border-t border-border">
+      <td className="px-2 py-2 font-medium text-foreground">{stringValue(route.route_id || route.vehicle_id || "—")}</td>
+      <td className="px-2 py-2">{formatTrafficMultiplier(route.factor)}</td>
+      <td className="px-2 py-2">{formatTrafficMethodLabel(route.method, t)}</td>
+      <td className="px-2 py-2">
+        <Badge tone={fallback ? "warning" : "success"}>{formatTrafficQualityLabel(route.quality_reason, t)}</Badge>
+      </td>
+      <td className="px-2 py-2">{formatNumber(route.matched_sample_count)}</td>
+      <td className="px-2 py-2">{formatNumber(route.usable_geo_candidate_count || route.geo_candidate_count)}</td>
+      <td className="px-2 py-2">{formatPercent(route.avg_similarity, 100)}</td>
+      <td className="px-2 py-2">{formatNumber(route.osrm_duration_min)} {t("min")}</td>
+    </tr>
   );
 }
 
@@ -3069,6 +3147,37 @@ function formatCountMap(value: Record<string, number> | Record<string, unknown> 
     .filter(([, count]) => Number(count) > 0)
     .map(([name, count]) => `${toTitle(name.replace(/_/g, " "))}: ${formatNumber(count)}`);
   return entries.length ? entries.join(" | ") : "Not available";
+}
+
+function formatTrafficMethodLabel(value: unknown, t: (key: string, fallback?: string) => string): string {
+  const method = stringValue(value);
+  if (method === "geo_route_similarity") {
+    return t("Geo route similarity");
+  }
+  if (method === "route_similarity") {
+    return t("Route similarity");
+  }
+  if (method === "city_period_average") {
+    return t("City-period average");
+  }
+  return method ? toTitle(method.replace(/_/g, " ")) : t("Unknown");
+}
+
+function formatTrafficQualityLabel(value: unknown, t: (key: string, fallback?: string) => string): string {
+  const quality = stringValue(value);
+  if (quality === "geo_route_similarity") {
+    return t("Geo route similarity");
+  }
+  if (quality === "geo_mismatch_fallback") {
+    return t("Geo mismatch fallback");
+  }
+  if (quality === "route_similarity") {
+    return t("Route similarity");
+  }
+  if (quality === "city_period_average") {
+    return t("City-period average");
+  }
+  return quality ? toTitle(quality.replace(/_/g, " ")) : t("Unknown");
 }
 
 function formatTrafficBasis(

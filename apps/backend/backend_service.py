@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import importlib
+import importlib.util
 import io
 import json
 import math
@@ -1638,6 +1639,92 @@ def _osrm_manager_status_payload() -> dict[str, Any]:
         },
         "manager": report,
     }
+
+
+_TRAFFIC_ROLLOUT_STATUS_MODULE: Any | None = None
+
+
+def _load_traffic_rollout_status_module() -> Any:
+    global _TRAFFIC_ROLLOUT_STATUS_MODULE
+    if _TRAFFIC_ROLLOUT_STATUS_MODULE is not None:
+        return _TRAFFIC_ROLLOUT_STATUS_MODULE
+    script_dir = REPO_ROOT / "ops" / "scripts"
+    script_path = script_dir / "report_traffic_rollout_status.py"
+    if not script_path.exists():
+        raise RuntimeError(f"missing traffic rollout status script: {script_path}")
+    if str(script_dir) not in sys.path:
+        sys.path.insert(0, str(script_dir))
+    spec = importlib.util.spec_from_file_location(
+        "brp_report_traffic_rollout_status",
+        script_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load traffic rollout status script: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _TRAFFIC_ROLLOUT_STATUS_MODULE = module
+    return module
+
+
+def _query_bool(query_params: dict[str, str], name: str, default: bool = True) -> bool:
+    raw = str(query_params.get(name, "")).strip().lower()
+    if not raw:
+        return default
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    return default
+
+
+def _traffic_rollout_status_payload(query_params: dict[str, str] | None = None) -> dict[str, Any]:
+    query_params = dict(query_params or {})
+    try:
+        report_module = _load_traffic_rollout_status_module()
+        readiness_module = report_module.report_traffic_rollout_readiness
+        min_geo_ratio = float(query_params.get("min_geo_ratio") or 1.0)
+        min_geo_ratio = min(1.0, max(0.0, min_geo_ratio))
+        sample_dir = Path(
+            query_params.get("sample_dir")
+            or readiness_module.report_live_traffic_readiness.DEFAULT_SAMPLE_DIR
+        )
+        min_measured_at = (
+            str(query_params.get("min_measured_at") or "").strip()
+            or os.environ.get("BRP_TRAFFIC_ROLLOUT_MIN_MEASURED_AT", "")
+            or readiness_module.DEFAULT_CUTOFF
+        )
+        local_timezone = str(
+            query_params.get("local_timezone")
+            or report_module.DEFAULT_LOCAL_TIMEZONE
+        )
+        report = report_module.build_status(
+            sample_dir=sample_dir,
+            min_measured_at=min_measured_at,
+            profiles=list(readiness_module.DEFAULT_PROFILES),
+            min_geo_ratio=min_geo_ratio,
+            include_timers=_query_bool(query_params, "include_timers", True),
+            include_osrm=_query_bool(query_params, "include_osrm", True),
+            include_budget=_query_bool(query_params, "include_budget", True),
+            local_timezone=local_timezone,
+        )
+        report["endpoint"] = {
+            "read_only": True,
+            "provider_api_called": bool(
+                dict(report.get("api_budget") or {}).get("provider_api_called")
+            ),
+            "osrm_started": bool(dict(report.get("api_budget") or {}).get("osrm_started")),
+        }
+        return report
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": str(exc),
+            "endpoint": {
+                "read_only": True,
+                "provider_api_called": False,
+                "osrm_started": False,
+            },
+        }
 
 
 def _resolve_staleness_seconds(timestamp: datetime | None) -> float | None:
@@ -4475,6 +4562,18 @@ class BackendHandler(BaseHTTPRequestHandler):
                 )
                 return
             self._send_json(200, _osrm_manager_status_payload())
+            return
+        if path == "/traffic-rollout/status":
+            if not include_all:
+                self._send_json(
+                    403,
+                    {"error": "Traffic rollout status is only available to admins."},
+                )
+                return
+            self._send_json(
+                200,
+                _traffic_rollout_status_payload(dict(parse_qsl(parsed.query))),
+            )
             return
         if path == "/workbooks/template":
             self._send_bytes(

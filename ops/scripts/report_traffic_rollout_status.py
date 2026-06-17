@@ -291,6 +291,13 @@ def collect_budget_status() -> dict[str, Any]:
         for row in profiles
         if row.get("source") == "baseline_json" and row.get("baseline_fast_path_ready") is not True
     ]
+    provider_api_called = bool(report.get("provider_api_called"))
+    osrm_started = bool(report.get("osrm_started"))
+    safety_violation_reasons = []
+    if provider_api_called:
+        safety_violation_reasons.append("provider_api_called")
+    if osrm_started:
+        safety_violation_reasons.append("osrm_started")
     compact_profiles = [
         {
             "profile": row.get("profile"),
@@ -308,9 +315,15 @@ def collect_budget_status() -> dict[str, Any]:
     ]
     return {
         "available": True,
-        "problem": bool(missing_profiles or over_cap_profiles or baseline_fast_path_problems),
-        "provider_api_called": bool(report.get("provider_api_called")),
-        "osrm_started": bool(report.get("osrm_started")),
+        "problem": bool(
+            missing_profiles
+            or over_cap_profiles
+            or baseline_fast_path_problems
+            or safety_violation_reasons
+        ),
+        "provider_api_called": provider_api_called,
+        "osrm_started": osrm_started,
+        "safety_violation_reasons": safety_violation_reasons,
         "profile_count": len(profiles),
         "missing_profile_count": len(missing_profiles),
         "missing_profiles": missing_profiles,

@@ -191,6 +191,35 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(status["total_estimated_api_call_count"], 1022)
         self.assertEqual(status["max_estimated_api_call_count"], 1001)
 
+    def test_budget_status_flags_safety_violations(self) -> None:
+        original = report_traffic_rollout_status.report_live_traffic_budget.build_report
+        try:
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = lambda _args: {
+                "provider_api_called": True,
+                "osrm_started": True,
+                "missing_profiles": [],
+                "profiles": [
+                    {
+                        "profile": "looks_ok",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "provider": "amap",
+                        "estimated_api_call_count": 21,
+                        "max_api_calls_per_run": 1000,
+                        "provider_refresh_cap": 0,
+                        "baseline_fast_path_ready": True,
+                        "status": "ok",
+                    }
+                ],
+            }
+
+            status = report_traffic_rollout_status.collect_budget_status()
+        finally:
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = original
+
+        self.assertTrue(status["problem"])
+        self.assertEqual(status["safety_violation_reasons"], ["provider_api_called", "osrm_started"])
+
     def test_build_status_includes_budget_when_requested(self) -> None:
         original = report_traffic_rollout_status.collect_budget_status
         try:

@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
+
 
 def load_manager(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_ON_DEMAND_ENABLED", "true")
@@ -109,10 +111,68 @@ def test_cleanup_idle_regions_only_stops_managed_expired_entries(monkeypatch, tm
 
     monkeypatch.setattr(manager.subprocess, "run", fake_run)
 
-    manager._cleanup_idle_regions(exclude_region="beijing")
+    stopped_regions = manager._cleanup_idle_regions(exclude_region="beijing")
 
+    assert stopped_regions == ["bangkok"]
     assert stopped == [["docker", "rm", "-f", "osrm-bangkok"]]
     state = manager._load_state()
     assert state["regions"]["bangkok"]["status"] == "stopped_idle"
     assert state["regions"]["shanghai"]["status"] == "ready"
     assert state["regions"]["suzhou"]["status"] == "ready"
+
+
+def test_manager_status_reports_state_dataset_and_container(monkeypatch, tmp_path):
+    manager = load_manager(monkeypatch, tmp_path)
+    config = manager.REGIONS["bangkok"]
+    config.dataset_dir.mkdir(parents=True, exist_ok=True)
+    (config.dataset_dir / config.dataset_file).write_text("stub", encoding="utf-8")
+    state_path = Path(manager.OSRM_STATE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        """
+{
+  "regions": {
+    "bangkok": {
+      "region": "bangkok",
+      "container": "osrm-bangkok",
+      "port": 5007,
+      "status": "ready",
+      "managed": true,
+      "last_seen_at": 1
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    def fake_inspect(command, **_kwargs):
+        assert command == ["docker", "inspect", "osrm-bangkok"]
+
+        class Result:
+            returncode = 0
+            stdout = '[{"State":{"Status":"running","Running":true,"StartedAt":"today"},"Config":{"Image":"osrm/osrm-backend"}}]'
+
+        return Result()
+
+    def fake_run(command, **kwargs):
+        if command == ["docker", "inspect", "osrm-bangkok"]:
+            return fake_inspect(command, **kwargs)
+
+        class Result:
+            returncode = 1
+            stdout = ""
+
+        return Result()
+
+    monkeypatch.setattr(manager.subprocess, "run", fake_run)
+
+    report = manager.manager_status()
+    bangkok = next(row for row in report["regions"] if row["region"] == "bangkok")
+
+    assert report["state_path"] == str(state_path)
+    assert bangkok["dataset_exists"] is True
+    assert bangkok["managed"] is True
+    assert bangkok["state_status"] == "ready"
+    assert bangkok["idle_expired"] is True
+    assert bangkok["container_status"]["status"] == "running"

@@ -321,6 +321,82 @@ def _available_memory_mb() -> float | None:
     return None
 
 
+def _container_runtime_status(config: RegionConfig) -> dict[str, object]:
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", config.container],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        return {"present": False, "error": str(exc)}
+    if result.returncode != 0:
+        return {"present": False}
+    try:
+        payload = json.loads(result.stdout)
+        item = payload[0] if isinstance(payload, list) and payload else {}
+        state = item.get("State") if isinstance(item, dict) else {}
+        config_payload = item.get("Config") if isinstance(item, dict) else {}
+        return {
+            "present": True,
+            "status": state.get("Status") if isinstance(state, dict) else None,
+            "running": bool(state.get("Running")) if isinstance(state, dict) else False,
+            "started_at": state.get("StartedAt") if isinstance(state, dict) else None,
+            "finished_at": state.get("FinishedAt") if isinstance(state, dict) else None,
+            "image": config_payload.get("Image") if isinstance(config_payload, dict) else None,
+        }
+    except Exception as exc:
+        return {"present": True, "error": str(exc)}
+
+
+def manager_status() -> dict[str, object]:
+    state = _load_state()
+    regions_state = state.get("regions") if isinstance(state, dict) else {}
+    if not isinstance(regions_state, dict):
+        regions_state = {}
+    now = time.time()
+    regions: list[dict[str, object]] = []
+    for region, config in sorted(REGIONS.items()):
+        raw_state = regions_state.get(region)
+        state_entry = raw_state if isinstance(raw_state, dict) else {}
+        last_seen = float(state_entry.get("last_seen_at") or 0)
+        last_seen_age_s = (now - last_seen) if last_seen > 0 else None
+        managed = bool(state_entry.get("managed"))
+        regions.append(
+            {
+                "region": region,
+                "container": config.container,
+                "port": config.port,
+                "base_url": state_entry.get("base_url") or f"http://127.0.0.1:{config.port}",
+                "dataset_path": str(config.dataset_dir / config.dataset_file),
+                "dataset_exists": (config.dataset_dir / config.dataset_file).exists(),
+                "state_status": state_entry.get("status"),
+                "managed": managed,
+                "last_seen_at": state_entry.get("last_seen_at"),
+                "last_seen_age_s": last_seen_age_s,
+                "idle_expired": bool(
+                    managed
+                    and OSRM_IDLE_TTL_SECONDS > 0
+                    and last_seen_age_s is not None
+                    and last_seen_age_s >= OSRM_IDLE_TTL_SECONDS
+                ),
+                "last_error": state_entry.get("last_error"),
+                "container_status": _container_runtime_status(config),
+            }
+        )
+    return {
+        "on_demand_enabled": ON_DEMAND_ENABLED,
+        "state_path": str(OSRM_STATE_PATH),
+        "lock_dir": str(OSRM_LOCK_DIR),
+        "idle_ttl_seconds": OSRM_IDLE_TTL_SECONDS,
+        "min_available_mb": OSRM_MIN_AVAILABLE_MB,
+        "available_memory_mb": _available_memory_mb(),
+        "regions": regions,
+    }
+
+
 def _load_state() -> dict[str, object]:
     try:
         if not OSRM_STATE_PATH.exists():
@@ -375,13 +451,14 @@ def _record_region_status(
     _save_state(state)
 
 
-def _cleanup_idle_regions(*, exclude_region: str | None = None) -> None:
+def _cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
+    stopped: list[str] = []
     if OSRM_IDLE_TTL_SECONDS <= 0:
-        return
+        return stopped
     state = _load_state()
     regions = state.get("regions")
     if not isinstance(regions, dict):
-        return
+        return stopped
     now = time.time()
     changed = False
     for region, raw in list(regions.items()):
@@ -404,6 +481,12 @@ def _cleanup_idle_regions(*, exclude_region: str | None = None) -> None:
         )
         raw["status"] = "stopped_idle"
         raw["last_seen_at"] = now
+        stopped.append(region)
         changed = True
     if changed:
         _save_state(state)
+    return stopped
+
+
+def cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
+    return _cleanup_idle_regions(exclude_region=exclude_region)

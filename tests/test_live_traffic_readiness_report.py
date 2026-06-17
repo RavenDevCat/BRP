@@ -77,6 +77,58 @@ class LiveTrafficReadinessReportTests(unittest.TestCase):
         self.assertFalse(results[2]["passed"])
         self.assertEqual(results[2]["reason"], "missing_sample_group")
 
+    def test_min_measured_at_filters_legacy_scale_only_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "legacy_scale_only.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-17T07:25:55+08:00",
+                        "routes": [{"route_id": "legacy", "factor": 1.9}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (sample_dir / "rollout_geo.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-18T07:25:55+08:00",
+                        "routes": [
+                            {
+                                "route_id": "geo",
+                                "factor": 1.8,
+                                "route_fingerprint": {"cell_count": 2, "cells": ["a", "b"]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            unfiltered = report_live_traffic_readiness.summarize(sample_dir)
+            filtered = report_live_traffic_readiness.summarize(
+                sample_dir,
+                min_measured_at="2026-06-18T00:00:00+08:00",
+            )
+            results = report_live_traffic_readiness.evaluate_requirements(
+                filtered,
+                [("CN", "Shanghai", "am_peak")],
+                min_geo_ratio=1.0,
+            )
+
+        self.assertEqual(unfiltered["sample_file_count"], 2)
+        self.assertEqual(unfiltered["groups"][0]["geo_route_sample_ratio"], 0.5)
+        self.assertEqual(filtered["sample_file_count"], 1)
+        self.assertEqual(filtered["filtered_file_count"], 1)
+        self.assertEqual(filtered["groups"][0]["geo_route_sample_ratio"], 1.0)
+        self.assertTrue(results[0]["passed"])
+
 
 if __name__ == "__main__":
     unittest.main()

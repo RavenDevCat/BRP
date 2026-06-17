@@ -38,6 +38,13 @@ def _load_sample(path: Path) -> dict[str, Any] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _measured_at_passes(payload: dict[str, Any], min_measured_at: str | None) -> bool:
+    if not min_measured_at:
+        return True
+    measured_at = str(payload.get("measured_at") or "").strip()
+    return bool(measured_at and measured_at >= min_measured_at)
+
+
 def _sample_key(payload: dict[str, Any]) -> tuple[str, str, str]:
     market = str(payload.get("market") or payload.get("country") or "").strip() or "unknown"
     city = str(payload.get("city") or "").strip() or "unknown"
@@ -60,9 +67,10 @@ def _empty_group() -> dict[str, Any]:
     }
 
 
-def summarize(sample_dir: Path) -> dict[str, Any]:
+def summarize(sample_dir: Path, *, min_measured_at: str | None = None) -> dict[str, Any]:
     groups: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(_empty_group)
     total_files = 0
+    filtered_files = 0
     unreadable_files = 0
 
     for path in sorted(sample_dir.glob("*.json")):
@@ -71,6 +79,9 @@ def summarize(sample_dir: Path) -> dict[str, Any]:
             unreadable_files += 1
             continue
         if bool(payload.get("dry_run")):
+            continue
+        if not _measured_at_passes(payload, min_measured_at):
+            filtered_files += 1
             continue
         total_files += 1
         group = groups[_sample_key(payload)]
@@ -121,6 +132,8 @@ def summarize(sample_dir: Path) -> dict[str, Any]:
     return {
         "sample_dir": str(sample_dir),
         "sample_file_count": total_files,
+        "filtered_file_count": filtered_files,
+        "min_measured_at": min_measured_at or "",
         "unreadable_file_count": unreadable_files,
         "groups": rows,
     }
@@ -193,7 +206,13 @@ def evaluate_requirements(
 
 def _print_table(summary: dict[str, Any]) -> None:
     print(f"sample_dir: {summary['sample_dir']}")
-    print(f"sample_files: {summary['sample_file_count']} unreadable: {summary['unreadable_file_count']}")
+    print(
+        f"sample_files: {summary['sample_file_count']} "
+        f"filtered: {summary.get('filtered_file_count', 0)} "
+        f"unreadable: {summary['unreadable_file_count']}"
+    )
+    if summary.get("min_measured_at"):
+        print(f"min_measured_at: {summary['min_measured_at']}")
     header = (
         "market city period files routes geo scale_only geo_ratio api_calls "
         "latest_measured_at latest_sample"
@@ -235,6 +254,14 @@ def main() -> None:
     parser.add_argument("--sample-dir", type=Path, default=DEFAULT_SAMPLE_DIR)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(
+        "--min-measured-at",
+        default="",
+        help=(
+            "Only include samples with measured_at greater than or equal to this ISO-like timestamp. "
+            "Use this to gate only samples collected after a traffic-attribution rollout."
+        ),
+    )
+    parser.add_argument(
         "--require-geo",
         action="append",
         default=[],
@@ -253,7 +280,7 @@ def main() -> None:
     if not 0.0 <= args.min_geo_ratio <= 1.0:
         parser.error("--min-geo-ratio must be between 0 and 1")
 
-    summary = summarize(args.sample_dir)
+    summary = summarize(args.sample_dir, min_measured_at=str(args.min_measured_at or "").strip() or None)
     requirement_results = evaluate_requirements(
         summary,
         list(args.require_geo),

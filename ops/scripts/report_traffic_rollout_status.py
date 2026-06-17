@@ -32,6 +32,14 @@ DEFAULT_TIMER_UNITS = (
     "brp-osrm-cleanup.timer",
 )
 
+DEFAULT_SERVICE_UNITS = (
+    "brp-live-traffic-am.service",
+    "brp-live-traffic-pm.service",
+    "brp-live-traffic-suzhou-am.service",
+    "brp-live-traffic-suzhou-pm.service",
+    "brp-osrm-cleanup.service",
+)
+
 
 def _run_command(command: list[str], *, timeout: int = 10) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, check=False, capture_output=True, text=True, timeout=timeout)
@@ -91,6 +99,78 @@ def collect_timer_status(timer_units: list[str]) -> list[dict[str, Any]]:
                 "result": props.get("Result", ""),
                 "next_elapse": props.get("NextElapseUSecRealtime", ""),
                 "last_trigger": props.get("LastTriggerUSec", ""),
+            }
+        )
+    return rows
+
+
+def _status_int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return None
+
+
+def collect_service_status(service_units: list[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for unit in service_units:
+        try:
+            result = _run_command(
+                [
+                    "systemctl",
+                    "show",
+                    unit,
+                    "-p",
+                    "ActiveState",
+                    "-p",
+                    "SubState",
+                    "-p",
+                    "Result",
+                    "-p",
+                    "ExecMainStatus",
+                    "-p",
+                    "ExecMainCode",
+                    "-p",
+                    "ExecMainStartTimestamp",
+                    "-p",
+                    "ExecMainExitTimestamp",
+                    "--no-pager",
+                ]
+            )
+        except Exception as exc:
+            rows.append({"unit": unit, "available": False, "problem": True, "error": str(exc)})
+            continue
+        if result.returncode != 0:
+            rows.append(
+                {
+                    "unit": unit,
+                    "available": False,
+                    "problem": True,
+                    "error": (result.stderr or result.stdout or "").strip(),
+                }
+            )
+            continue
+        props = _parse_show_properties(result.stdout)
+        exec_status = _status_int(props.get("ExecMainStatus"))
+        result_status = props.get("Result", "")
+        active_state = props.get("ActiveState", "")
+        problem = bool(
+            result_status not in {"", "success"}
+            or active_state == "failed"
+            or (exec_status is not None and exec_status != 0)
+        )
+        rows.append(
+            {
+                "unit": unit,
+                "available": True,
+                "active_state": active_state,
+                "sub_state": props.get("SubState", ""),
+                "result": result_status,
+                "exec_main_code": props.get("ExecMainCode", ""),
+                "exec_main_status": exec_status,
+                "exec_main_start": props.get("ExecMainStartTimestamp", ""),
+                "exec_main_exit": props.get("ExecMainExitTimestamp", ""),
+                "problem": problem,
             }
         )
     return rows
@@ -163,19 +243,29 @@ def build_status(
     )
     rollout_summary = summarize_rollout_gate(gate)
     timer_status = collect_timer_status(list(DEFAULT_TIMER_UNITS)) if include_timers else []
+    service_status = collect_service_status(list(DEFAULT_SERVICE_UNITS)) if include_timers else []
     osrm_status = collect_osrm_manager_status() if include_osrm else {"available": False, "skipped": True}
     timer_problem_count = sum(1 for row in timer_status if not row.get("available") or row.get("active_state") == "failed")
+    service_problem_count = sum(1 for row in service_status if bool(row.get("problem")))
     osrm_problem = bool(
         osrm_status.get("available")
         and (int(osrm_status.get("lock_count") or 0) > 0 or int(osrm_status.get("stale_lock_count") or 0) > 0)
     )
-    status = "ready" if gate.get("status") == "ok" and timer_problem_count == 0 and not osrm_problem else "waiting"
+    status = (
+        "ready"
+        if gate.get("status") == "ok" and timer_problem_count == 0 and service_problem_count == 0 and not osrm_problem
+        else "waiting"
+    )
     return {
         "status": status,
         "rollout_gate": rollout_summary,
         "timers": {
             "problem_count": timer_problem_count,
             "items": timer_status,
+        },
+        "services": {
+            "problem_count": service_problem_count,
+            "items": service_status,
         },
         "osrm_manager": osrm_status,
         "next_step": (
@@ -199,6 +289,8 @@ def _print_status(report: dict[str, Any]) -> None:
     )
     timers = dict(report.get("timers") or {})
     print(f"timer_problem_count: {timers.get('problem_count')}")
+    services = dict(report.get("services") or {})
+    print(f"service_problem_count: {services.get('problem_count')}")
     osrm = dict(report.get("osrm_manager") or {})
     print(
         "osrm_manager:",

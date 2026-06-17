@@ -36,6 +36,7 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(report["rollout_gate"]["status"], "failed")
         self.assertEqual(report["rollout_gate"]["failure_reason_counts"], {"missing_sample_group": 1})
         self.assertEqual(report["timers"]["problem_count"], 0)
+        self.assertEqual(report["services"]["problem_count"], 0)
         self.assertTrue(report["osrm_manager"]["skipped"])
 
     def test_reports_ready_when_gate_passes_and_no_ops_problems(self) -> None:
@@ -80,6 +81,31 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(parsed["SubState"], "waiting")
         self.assertEqual(parsed["Result"], "success")
         self.assertNotIn("NoEquals", parsed)
+
+    def test_service_status_flags_nonzero_exec_main_status(self) -> None:
+        class Result:
+            returncode = 0
+            stdout = (
+                "ActiveState=inactive\n"
+                "SubState=dead\n"
+                "Result=success\n"
+                "ExecMainStatus=1\n"
+                "ExecMainCode=1\n"
+                "ExecMainStartTimestamp=today\n"
+                "ExecMainExitTimestamp=today\n"
+            )
+            stderr = ""
+
+        original = report_traffic_rollout_status._run_command
+        try:
+            report_traffic_rollout_status._run_command = lambda *_args, **_kwargs: Result()
+            rows = report_traffic_rollout_status.collect_service_status(["brp-live-traffic-pm.service"])
+        finally:
+            report_traffic_rollout_status._run_command = original
+
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["problem"])
+        self.assertEqual(rows[0]["exec_main_status"], 1)
 
 
 if __name__ == "__main__":

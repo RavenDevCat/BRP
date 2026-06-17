@@ -76,6 +76,29 @@ def _quality_counts(estimates: list[Any]) -> dict[str, int]:
     return dict(Counter(str(_as_dict(item).get("quality_reason") or "unknown") for item in estimates))
 
 
+def _non_geo_route_summaries(estimates: list[Any], *, limit: int = 12) -> list[dict[str, Any]]:
+    routes: list[dict[str, Any]] = []
+    for item in estimates:
+        estimate = _as_dict(item)
+        method = str(estimate.get("method") or "unknown")
+        if method == "geo_route_similarity":
+            continue
+        routes.append(
+            {
+                "route_id": str(estimate.get("route_id") or ""),
+                "method": method,
+                "quality_reason": str(estimate.get("quality_reason") or "unknown"),
+                "reason": str(estimate.get("reason") or ""),
+                "factor": float(estimate.get("factor") or 0.0),
+                "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
+                "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
+                "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
+                "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
+            }
+        )
+    return routes[:limit]
+
+
 def _summarize_route_evidence(item: Any, *, include_top_matches: bool) -> dict[str, Any]:
     estimate = _as_dict(item)
     evidence: dict[str, Any] = {
@@ -135,6 +158,7 @@ def _summarize_scenario(
         payload.get("route_similarity_route_count") or method_counts.get("route_similarity", 0) or 0
     )
     fallback_count = int(payload.get("fallback_route_count") or method_counts.get("fallback", 0) or 0)
+    non_geo_routes = _non_geo_route_summaries(estimates)
     summary: dict[str, Any] = {
         "scenario": name,
         "present": True,
@@ -142,6 +166,8 @@ def _summarize_scenario(
         "geo_attributed_route_count": geo_count,
         "route_similarity_route_count": route_similarity_count,
         "fallback_route_count": fallback_count,
+        "non_geo_route_count": max(0, route_count - geo_count),
+        "non_geo_routes": non_geo_routes,
         "geo_attributed_route_ratio": (geo_count / route_count) if route_count else 0.0,
         "observed_route_sample_count": int(payload.get("observed_route_sample_count") or 0),
         "geo_route_sample_count": int(payload.get("geo_route_sample_count") or 0),
@@ -277,6 +303,8 @@ def evaluate_requirements(
                 "reason": reason,
                 "geo_attributed_route_ratio": ratio,
                 "geo_attributed_route_count": geo_count,
+                "non_geo_route_count": int(item.get("non_geo_route_count") or max(0, route_count - geo_count)),
+                "non_geo_routes": _as_list(item.get("non_geo_routes")),
                 "route_estimate_count": route_count,
                 "required_geo_attributed_route_ratio": min_geo_route_ratio,
             }
@@ -314,8 +342,18 @@ def _print_summary(summary: dict[str, Any], *, show_route_evidence: bool = False
             f"geo={scenario['geo_attributed_route_count']}",
             f"route_similarity={scenario['route_similarity_route_count']}",
             f"fallback={scenario['fallback_route_count']}",
+            f"non_geo={scenario['non_geo_route_count']}",
             f"geo_ratio={float(scenario['geo_attributed_route_ratio']):.3f}",
         )
+        non_geo_routes = _as_list(scenario.get("non_geo_routes"))
+        if non_geo_routes:
+            route_labels = [
+                f"{_as_dict(route).get('route_id') or '-'}"
+                f"({_as_dict(route).get('method') or '-'}/"
+                f"{_as_dict(route).get('quality_reason') or '-'})"
+                for route in non_geo_routes
+            ]
+            print("  non_geo_routes:", ", ".join(route_labels))
         if show_route_evidence:
             for route in _as_list(scenario.get("route_evidence")):
                 route_dict = _as_dict(route)

@@ -175,10 +175,16 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
         self.assertAlmostEqual(free_evidence[0]["osrm_duration_min"], 30.0)
         self.assertEqual(free_evidence[0]["top_matches"][0]["source_id"], "sample-file")
         self.assertEqual(free_evidence[0]["top_matches"][0]["route_id"], "sample-r1")
+        scenarios = {scenario["scenario"]: scenario for scenario in summary["scenarios"]}
+        self.assertEqual(scenarios["time_constrained"]["non_geo_route_count"], 1)
+        self.assertEqual(scenarios["time_constrained"]["non_geo_routes"][0]["route_id"], "R2")
+        self.assertEqual(scenarios["time_constrained"]["non_geo_routes"][0]["method"], "route_similarity")
         self.assertTrue(all(item["passed"] for item in pass_requirements))
         self.assertFalse(fail_requirements[1]["passed"])
         self.assertEqual(fail_requirements[1]["reason"], "geo_route_ratio_below_requirement")
         self.assertAlmostEqual(float(fail_requirements[1]["geo_attributed_route_ratio"]), 0.5)
+        self.assertEqual(fail_requirements[1]["non_geo_route_count"], 1)
+        self.assertEqual(fail_requirements[1]["non_geo_routes"][0]["route_id"], "R2")
 
     def test_reads_scenario_payload_when_top_level_attribution_lacks_scenario_estimates(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

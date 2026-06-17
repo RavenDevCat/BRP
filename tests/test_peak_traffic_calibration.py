@@ -427,6 +427,52 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(estimate["top_matches"][0]["route_id"], "near")
         self.assertLess(float(estimate["factor"]), 2.1)
 
+    def test_poor_geo_match_does_not_count_as_geo_attribution(self) -> None:
+        target_fingerprint = {
+            "cells": ["3100:12100", "3101:12101"],
+            "corridor_cells": ["3100:12100", "3101:12101"],
+            "stop_cells": ["3100:12100"],
+            "center": {"lat": 31.01, "lng": 121.01},
+            "bbox": {"min_lat": 31.0, "max_lat": 31.02, "min_lng": 121.0, "max_lng": 121.02},
+            "bearing_sector": 2,
+            "school_bearing_sector": 2,
+        }
+        far_fingerprint = {
+            "cells": ["3900:11600", "3901:11601"],
+            "corridor_cells": ["3900:11600", "3901:11601"],
+            "stop_cells": ["3900:11600"],
+            "center": {"lat": 39.91, "lng": 116.41},
+            "bbox": {"min_lat": 39.9, "max_lat": 39.92, "min_lng": 116.4, "max_lng": 116.42},
+            "bearing_sector": 10,
+            "school_bearing_sector": 10,
+        }
+
+        estimate = planner_core._route_attributed_factor(
+            {
+                "route_id": "new",
+                "osrm_duration_s": 1200.0,
+                "stop_count": 5,
+                "route_fingerprint": target_fingerprint,
+            },
+            [
+                {
+                    "route_id": "far",
+                    "factor": 3.0,
+                    "osrm_duration_s": 1200.0,
+                    "stop_count": 5,
+                    "route_fingerprint": far_fingerprint,
+                },
+            ],
+        )
+
+        self.assertIsNotNone(estimate)
+        assert estimate is not None
+        self.assertEqual(estimate["method"], "route_similarity")
+        self.assertEqual(estimate["quality_reason"], "insufficient_geo_match_fallback_to_route_similarity")
+        self.assertEqual(estimate["geo_candidate_count"], 1)
+        self.assertEqual(estimate["usable_geo_candidate_count"], 0)
+        self.assertLess(float(estimate["top_matches"][0]["geo_similarity_score"]), 0.18)
+
     def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_dir = Path(tmpdir)

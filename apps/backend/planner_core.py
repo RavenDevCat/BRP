@@ -74,6 +74,18 @@ TRAFFIC_ATTRIBUTION_CENTER_DECAY_KM = max(
     1.0,
     float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_CENTER_DECAY_KM", "12") or 12),
 )
+TRAFFIC_ATTRIBUTION_MIN_SIMILARITY = max(
+    0.0,
+    float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_SIMILARITY", "0.08") or 0.08),
+)
+TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY = max(
+    0.0,
+    float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY", "0.18") or 0.18),
+)
+TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES = max(
+    1,
+    int(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES", "1") or 1),
+)
 AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
     "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
     "false",
@@ -1142,7 +1154,7 @@ def _traffic_fingerprint_similarity(
         + 0.05 * bbox_score
     )
     return {
-        "score": max(0.001, float(score)),
+        "geo_score": max(0.001, float(score)),
         "corridor_overlap": float(corridor_overlap),
         "stop_overlap": float(stop_overlap),
         "center_distance_km": float(center_distance_km) if center_distance_km is not None else -1.0,
@@ -1244,10 +1256,12 @@ def _traffic_attribution_similarity_details(target: dict[str, Any], candidate: d
     scale_score = 0.75 * duration_score + 0.25 * stop_score
     fingerprint_similarity = _traffic_fingerprint_similarity(target, candidate)
     if fingerprint_similarity is not None:
-        score = 0.65 * float(fingerprint_similarity["score"]) + 0.35 * scale_score
+        geo_score = float(fingerprint_similarity["geo_score"])
+        score = 0.65 * geo_score + 0.35 * scale_score
         return {
             "score": max(0.001, float(score)),
             "method": "geo_route_similarity",
+            "geo_score": geo_score,
             "duration_score": float(duration_score),
             "stop_score": float(stop_score),
             "scale_score": float(scale_score),
@@ -1256,6 +1270,7 @@ def _traffic_attribution_similarity_details(target: dict[str, Any], candidate: d
     return {
         "score": max(0.001, float(duration_score * stop_score)),
         "method": "route_similarity",
+        "geo_score": 0.0,
         "duration_score": float(duration_score),
         "stop_score": float(stop_score),
         "scale_score": float(scale_score),
@@ -1276,7 +1291,7 @@ def _route_attributed_factor(
     target: dict[str, Any],
     candidates: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    ranked = sorted(
+    ranked_all = sorted(
         (
             {
                 **candidate,
@@ -1285,7 +1300,8 @@ def _route_attributed_factor(
                     "similarity_method": details["method"],
                     "duration_score": details["duration_score"],
                     "stop_score": details["stop_score"],
-                    "geo_similarity_score": details.get("score", 0.0) if details["method"] == "geo_route_similarity" else 0.0,
+                    "scale_score": details["scale_score"],
+                    "geo_similarity_score": details.get("geo_score", 0.0) if details["method"] == "geo_route_similarity" else 0.0,
                     "corridor_overlap": details["corridor_overlap"],
                     "center_distance_km": details["center_distance_km"],
                     "bearing_score": details["bearing_score"],
@@ -1295,7 +1311,34 @@ def _route_attributed_factor(
         ),
         key=lambda item: float(item["similarity_score"]),
         reverse=True,
-    )[:TRAFFIC_ATTRIBUTION_TOP_K]
+    )
+
+    geo_candidates = [
+        item
+        for item in ranked_all
+        if item.get("similarity_method") == "geo_route_similarity"
+    ]
+    geo_ranked = [
+        item
+        for item in geo_candidates
+        if float(item.get("geo_similarity_score", 0.0) or 0.0) >= TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY
+    ]
+    scale_ranked = [
+        item
+        for item in ranked_all
+        if float(item.get("similarity_score", 0.0) or 0.0) >= TRAFFIC_ATTRIBUTION_MIN_SIMILARITY
+    ]
+    quality_reason = ""
+    if geo_candidates:
+        if len(geo_ranked) >= TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES:
+            ranked = geo_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
+            quality_reason = "geo_threshold_passed"
+        else:
+            ranked = scale_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
+            quality_reason = "insufficient_geo_match_fallback_to_route_similarity"
+    else:
+        ranked = scale_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
+        quality_reason = "scale_similarity_only"
     if not ranked:
         return None
     total_weight = sum(
@@ -1311,7 +1354,11 @@ def _route_attributed_factor(
     avg_similarity = sum(float(item["similarity_score"]) for item in ranked) / float(len(ranked))
     return {
         "route_id": str(target.get("route_id") or ""),
-        "method": "geo_route_similarity" if any(item.get("similarity_method") == "geo_route_similarity" for item in ranked) else "route_similarity",
+        "method": "geo_route_similarity" if quality_reason == "geo_threshold_passed" else "route_similarity",
+        "quality_reason": quality_reason,
+        "candidate_count": len(ranked_all),
+        "geo_candidate_count": len(geo_candidates),
+        "usable_geo_candidate_count": len(geo_ranked),
         "factor": float(factor),
         "weight_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
         "osrm_duration_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
@@ -1327,6 +1374,10 @@ def _route_attributed_factor(
                 "stop_count": int(item.get("stop_count", 0) or 0),
                 "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
                 "similarity_method": str(item.get("similarity_method") or "route_similarity"),
+                "duration_score": float(item.get("duration_score", 0.0) or 0.0),
+                "stop_score": float(item.get("stop_score", 0.0) or 0.0),
+                "scale_score": float(item.get("scale_score", 0.0) or 0.0),
+                "geo_similarity_score": float(item.get("geo_similarity_score", 0.0) or 0.0),
                 "corridor_overlap": float(item.get("corridor_overlap", 0.0) or 0.0),
                 "center_distance_km": float(item.get("center_distance_km", -1.0) or -1.0),
                 "bearing_score": float(item.get("bearing_score", 0.0) or 0.0),
@@ -1589,9 +1640,13 @@ def apply_attributed_traffic_to_scenario_routes(
         route["traffic_attribution"] = {
             "scenario": scenario_label,
             "method": str(estimate.get("method") or "route_similarity") if int(estimate.get("matched_sample_count", 0) or 0) else "fallback",
+            "quality_reason": str(estimate.get("quality_reason") or ""),
             "factor": float(factor),
             "avg_similarity": float(estimate.get("avg_similarity", 0.0) or 0.0),
             "matched_sample_count": int(estimate.get("matched_sample_count", 0) or 0),
+            "candidate_count": int(estimate.get("candidate_count", 0) or 0),
+            "geo_candidate_count": int(estimate.get("geo_candidate_count", 0) or 0),
+            "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count", 0) or 0),
             "top_matches": list(estimate.get("top_matches") or []),
         }
         estimates.append(

@@ -49,6 +49,10 @@ DEFAULT_DUE_WINDOW_MINUTES = int(os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_DUE_WIND
 DEFAULT_ROUTE_START_TIMES_PATH = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_PATH", "").strip()
 DEFAULT_ROUTE_START_TIMES_JSON = os.environ.get("BRP_LIVE_TRAFFIC_ROUTE_START_TIMES_JSON", "").strip()
 DEFAULT_PROVIDER = os.environ.get("BRP_LIVE_TRAFFIC_PROVIDER", "auto").strip().lower() or "auto"
+DEFAULT_MAX_API_CALLS_PER_RUN = max(
+    0,
+    int(os.environ.get("BRP_LIVE_TRAFFIC_MAX_API_CALLS_PER_RUN", "1000") or 0),
+)
 DEFAULT_GOOGLE_ROUTES_USAGE_PATH = Path(
     os.environ.get("BRP_GOOGLE_ROUTES_USAGE_PATH", str(DEFAULT_OUTPUT_DIR.parent / "google_routes_usage.json"))
 ).expanduser()
@@ -1006,6 +1010,31 @@ def _dry_run_provider_result(
     }
 
 
+def _estimated_route_api_calls(provider: str, route_points: list[dict[str, Any]], args: argparse.Namespace) -> int:
+    if provider == GOOGLE_ROUTES_PROVIDER:
+        return len(_google_routes_chunk_points(route_points, int(args.google_routes_max_intermediates)))
+    if provider == KAKAO_NAVI_PROVIDER:
+        return len(_balanced_route_point_chunks(route_points, int(args.kakao_navi_max_waypoints)))
+    return 1
+
+
+def _estimated_api_call_count(
+    provider: str,
+    candidates: list[tuple[dict[str, Any], str, int, float, dict[str, Any], list[dict[str, Any]]]],
+    args: argparse.Namespace,
+) -> int:
+    return sum(_estimated_route_api_calls(provider, route_points, args) for *_prefix, route_points in candidates)
+
+
+def _enforce_api_call_budget(provider: str, estimated_calls: int, args: argparse.Namespace) -> None:
+    per_run_cap = int(getattr(args, "max_api_calls_per_run", DEFAULT_MAX_API_CALLS_PER_RUN) or 0)
+    if per_run_cap > 0 and estimated_calls > per_run_cap:
+        raise RuntimeError(
+            f"Live traffic refresh would use {estimated_calls} {provider} API call(s), "
+            f"above per-run cap {per_run_cap}"
+        )
+
+
 def run_sample(args: argparse.Namespace) -> dict[str, Any]:
     _source_payload, source_metadata, points, routes = _load_source(args)
     if not points or not routes:
@@ -1034,20 +1063,14 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         route_points = _route_points(points, route)
         candidates.append((route, route_id, stop_count, osrm_s, schedule, route_points))
 
+    estimated_calls = _estimated_api_call_count(provider, candidates, args)
+    _enforce_api_call_budget(provider, estimated_calls, args)
     if provider == GOOGLE_ROUTES_PROVIDER:
-        estimated_calls = sum(
-            len(_google_routes_chunk_points(route_points, int(args.google_routes_max_intermediates)))
-            for *_prefix, route_points in candidates
-        )
         if estimated_calls > int(args.google_routes_max_calls_per_refresh):
             raise RuntimeError(
                 f"Google Routes refresh would use {estimated_calls} call(s), above cap {args.google_routes_max_calls_per_refresh}"
             )
     if provider == KAKAO_NAVI_PROVIDER:
-        estimated_calls = sum(
-            len(_balanced_route_point_chunks(route_points, int(args.kakao_navi_max_waypoints)))
-            for *_prefix, route_points in candidates
-        )
         if estimated_calls > int(args.kakao_navi_max_calls_per_refresh):
             raise RuntimeError(
                 f"Kakao Navi refresh would use {estimated_calls} call(s), above cap {args.kakao_navi_max_calls_per_refresh}"
@@ -1141,6 +1164,8 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
         "route_start_time_count": len(route_start_times),
         "sample_due_routes_only": bool(args.sample_due_routes_only),
         "route_due_window_minutes": args.route_due_window_minutes,
+        "estimated_api_call_count": estimated_calls,
+        "max_api_calls_per_run": int(args.max_api_calls_per_run),
         "api": (
             GOOGLE_ROUTES_URL
             if provider == GOOGLE_ROUTES_PROVIDER
@@ -1188,6 +1213,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--route-due-window-minutes", type=int, default=DEFAULT_DUE_WINDOW_MINUTES)
     parser.add_argument("--now-local-time", default="")
     parser.add_argument("--strategy", default=DEFAULT_STRATEGY)
+    parser.add_argument("--max-api-calls-per-run", type=int, default=DEFAULT_MAX_API_CALLS_PER_RUN)
     parser.add_argument("--google-routes-usage-path", type=Path, default=DEFAULT_GOOGLE_ROUTES_USAGE_PATH)
     parser.add_argument("--google-routes-monthly-safety-cap", type=int, default=GOOGLE_ROUTES_MONTHLY_SAFETY_CAP)
     parser.add_argument("--google-routes-daily-cap", type=int, default=GOOGLE_ROUTES_DAILY_CAP)

@@ -40,6 +40,29 @@ class LiveTrafficSamplerTests(unittest.TestCase):
         self.assertEqual(result["api_duration_s"], 700)
         self.assertEqual(result["provider"], live_traffic_sampler.KAKAO_NAVI_PROVIDER)
 
+    def test_universal_budget_counts_amap_one_call_per_route(self) -> None:
+        args = argparse.Namespace(
+            max_api_calls_per_run=2,
+            google_routes_max_intermediates=25,
+            kakao_navi_max_waypoints=5,
+        )
+        candidates = [
+            ({}, "r1", 2, 100.0, {}, [{"node_id": 0}, {"node_id": 1}]),
+            ({}, "r2", 2, 100.0, {}, [{"node_id": 0}, {"node_id": 1}]),
+            ({}, "r3", 2, 100.0, {}, [{"node_id": 0}, {"node_id": 1}]),
+        ]
+
+        estimated = live_traffic_sampler._estimated_api_call_count("amap", candidates, args)
+
+        self.assertEqual(estimated, 3)
+        with self.assertRaisesRegex(RuntimeError, "above per-run cap 2"):
+            live_traffic_sampler._enforce_api_call_budget("amap", estimated, args)
+
+    def test_universal_budget_can_be_disabled(self) -> None:
+        args = argparse.Namespace(max_api_calls_per_run=0)
+
+        live_traffic_sampler._enforce_api_call_budget("amap", 5000, args)
+
     def test_raw_osrm_seconds_accepts_current_route_audit_fields(self) -> None:
         self.assertEqual(
             live_traffic_sampler._raw_osrm_seconds({"time_s": 321}),

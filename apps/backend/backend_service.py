@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from . import osrm_manager
     from .ai_audit import generate_ai_audit_report
     from .planner_core import (
         PlannerConfig,
@@ -42,6 +43,7 @@ try:
         summarize_live_traffic_samples,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    import osrm_manager
     from ai_audit import generate_ai_audit_report
     from planner_core import (
         PlannerConfig,
@@ -1596,6 +1598,42 @@ def _deployment_features_payload() -> dict[str, Any]:
     return {
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
         "default_traffic_coefficient_mode": DEFAULT_TRAFFIC_COEFFICIENT_MODE,
+    }
+
+
+def _osrm_manager_status_payload() -> dict[str, Any]:
+    try:
+        report = osrm_manager.manager_status()
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error": str(exc),
+        }
+    regions = [row for row in report.get("regions", []) if isinstance(row, dict)]
+    locks = [row for row in report.get("locks", []) if isinstance(row, dict)]
+    running_regions = []
+    idle_expired_regions = []
+    for row in regions:
+        container_status = row.get("container_status")
+        if isinstance(container_status, dict) and container_status.get("running"):
+            running_regions.append(row.get("region"))
+        if row.get("idle_expired"):
+            idle_expired_regions.append(row.get("region"))
+    return {
+        "status": "ok",
+        "summary": {
+            "region_count": len(regions),
+            "running_region_count": len(running_regions),
+            "running_regions": running_regions,
+            "idle_expired_region_count": len(idle_expired_regions),
+            "idle_expired_regions": idle_expired_regions,
+            "lock_count": len(locks),
+            "locked_lock_count": sum(1 for row in locks if row.get("locked")),
+            "stale_lock_count": sum(1 for row in locks if row.get("stale")),
+            "on_demand_enabled": bool(report.get("on_demand_enabled")),
+            "available_memory_mb": report.get("available_memory_mb"),
+        },
+        "manager": report,
     }
 
 
@@ -4247,6 +4285,15 @@ class BackendHandler(BaseHTTPRequestHandler):
             return
         if path == "/deployment-features":
             self._send_json(200, _deployment_features_payload())
+            return
+        if path == "/osrm-manager/status":
+            if not include_all:
+                self._send_json(
+                    403,
+                    {"error": "OSRM manager status is only available to admins."},
+                )
+                return
+            self._send_json(200, _osrm_manager_status_payload())
             return
         if path == "/workbooks/template":
             self._send_bytes(

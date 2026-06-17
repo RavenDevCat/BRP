@@ -183,6 +183,26 @@ def _print_locks(locks: list[dict[str, object]]) -> None:
         )
 
 
+def cleanup_idle(force: bool = False) -> dict[str, object]:
+    active = _active_worker_processes()
+    if active and not force:
+        return {
+            "status": "skipped_active_workers",
+            "active_workers": active,
+            "stopped_regions": [],
+            "removed_stale_locks": [],
+        }
+
+    stopped = osrm_manager.cleanup_idle_regions()
+    removed_locks = osrm_manager.cleanup_stale_locks()
+    return {
+        "status": "ok",
+        "active_workers": active,
+        "stopped_regions": stopped,
+        "removed_stale_locks": removed_locks,
+    }
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Report or clean BRP OSRM manager state.")
     parser.add_argument("--env-file", type=Path, default=_preparse_env_file(sys.argv[1:]) or DEFAULT_ENV_FILE)
@@ -230,33 +250,18 @@ def main() -> None:
         return
 
     if args.command == "cleanup-idle":
-        active = _active_worker_processes()
-        if active and not args.force:
-            result = {
-                "status": "refused_active_workers",
-                "active_workers": active,
-                "stopped_regions": [],
-                "removed_stale_locks": [],
-            }
-            if args.json:
-                print(json.dumps(result, ensure_ascii=False, indent=2))
-            else:
-                print("Refusing cleanup because BRP worker processes are active:")
-                for line in active:
-                    print(f"  {line}")
-                print("Use --force only during a verified maintenance window.")
-            raise SystemExit(2)
-        stopped = osrm_manager.cleanup_idle_regions()
-        removed_locks = osrm_manager.cleanup_stale_locks()
-        result = {
-            "status": "ok",
-            "active_workers": active,
-            "stopped_regions": stopped,
-            "removed_stale_locks": removed_locks,
-        }
+        result = cleanup_idle(force=args.force)
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
+            active = result.get("active_workers")
+            if result.get("status") == "skipped_active_workers" and isinstance(active, list):
+                print("Skipping cleanup because BRP worker processes are active:")
+                for line in active:
+                    print(f"  {line}")
+                print("Use --force only during a verified maintenance window.")
+            stopped = result.get("stopped_regions")
+            removed_locks = result.get("removed_stale_locks")
             print(f"stopped_regions={','.join(stopped) if stopped else '-'}")
             print(f"removed_stale_locks={','.join(removed_locks) if removed_locks else '-'}")
         return

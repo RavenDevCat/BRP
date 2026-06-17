@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -43,10 +44,44 @@ import osrm_manager  # noqa: E402
 
 
 ACTIVE_WORKER_PATTERNS = (
-    "backend_job_runner",
-    "live_traffic_sampler",
-    "run_live_traffic_",
+    "backend_job_runner.py",
+    "live_traffic_sampler.py",
 )
+ACTIVE_WRAPPER_PREFIX = "run_live_traffic_"
+SHELL_NAMES = {"bash", "dash", "sh", "zsh"}
+
+
+def _basename(token: str) -> str:
+    return Path(token).name
+
+
+def _is_active_worker_process(comm: str, args: str) -> bool:
+    try:
+        tokens = shlex.split(args)
+    except ValueError:
+        tokens = args.split()
+    if not tokens:
+        return False
+
+    command_name = _basename(comm or tokens[0])
+    basenames = [_basename(token) for token in tokens]
+
+    if command_name.startswith("python"):
+        return any(name in ACTIVE_WORKER_PATTERNS for name in basenames)
+
+    if command_name in SHELL_NAMES:
+        # Real wrapper processes are invoked as `bash /path/run_live_traffic_*.sh ...`.
+        # Ignore `bash -c "rg ... run_live_traffic_..."` diagnostics that merely
+        # mention wrapper names in a command string.
+        for token in tokens[1:]:
+            if token.startswith("-"):
+                if token == "-c":
+                    return False
+                continue
+            return _basename(token).startswith(ACTIVE_WRAPPER_PREFIX)
+        return False
+
+    return command_name.startswith(ACTIVE_WRAPPER_PREFIX)
 
 
 def _active_worker_processes() -> list[str]:
@@ -54,7 +89,7 @@ def _active_worker_processes() -> list[str]:
         return []
     try:
         result = subprocess.run(
-            ["pgrep", "-af", "|".join(ACTIVE_WORKER_PATTERNS)],
+            ["ps", "-eo", "pid=,comm=,args="],
             check=False,
             capture_output=True,
             text=True,
@@ -67,7 +102,12 @@ def _active_worker_processes() -> list[str]:
         stripped = line.strip()
         if not stripped or "report_osrm_manager.py" in stripped:
             continue
-        rows.append(stripped)
+        parts = stripped.split(None, 2)
+        if len(parts) < 3:
+            continue
+        _pid, comm, args = parts
+        if _is_active_worker_process(comm, args):
+            rows.append(stripped)
     return rows
 
 

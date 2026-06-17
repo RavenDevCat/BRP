@@ -63,6 +63,41 @@ export type AiAuditResponse = {
     message?: string;
 };
 
+export type JobTrafficAttributionScenarioSummary = {
+    scenario_key: string;
+    scenario_label: string;
+    route_estimate_count: number;
+    attributed_route_count: number;
+    geo_attributed_route_count: number;
+    geo_attributed_route_ratio: number;
+    method_counts: Record<string, number>;
+    quality_reason_counts: Record<string, number>;
+    non_geo_routes: Array<Record<string, unknown>>;
+    route_evidence?: Array<Record<string, unknown>>;
+};
+
+export type JobTrafficAttributionResponse = {
+    job_id: string;
+    job_status?: string;
+    traffic_profile_name?: string;
+    traffic_time_multiplier?: number;
+    traffic_coefficient_mode?: string;
+    has_traffic_attribution: boolean;
+    attribution_enabled: boolean;
+    attribution_succeeded: boolean;
+    attribution_mode?: string;
+    attribution_method?: string;
+    attribution_reason?: string;
+    attribution_confidence?: string;
+    route_level_applied: boolean;
+    observed_route_sample_count: number;
+    geo_route_sample_count: number;
+    scale_only_route_sample_count: number;
+    geo_route_sample_ratio: number;
+    scenario_count: number;
+    scenarios: JobTrafficAttributionScenarioSummary[];
+};
+
 export type JobMapBounds = {
     min_lng: number;
     min_lat: number;
@@ -632,6 +667,23 @@ export function getJobArtifactUrl(
 export function getJobMapData(jobId: string, scenarioKey: string) {
     return apiFetch<JobMapData>(
         `/jobs/${encodeURIComponent(jobId)}/map-data/${encodeURIComponent(scenarioKey)}`,
+    );
+}
+
+export function getJobTrafficAttribution(
+    jobId: string,
+    options: { routeEvidence?: boolean; topMatches?: boolean } = {},
+) {
+    const params = new URLSearchParams();
+    if (options.routeEvidence) {
+        params.set("route_evidence", "1");
+    }
+    if (options.topMatches) {
+        params.set("top_matches", "1");
+    }
+    const query = params.toString();
+    return apiFetch<JobTrafficAttributionResponse>(
+        `/jobs/${encodeURIComponent(jobId)}/traffic-attribution${query ? `?${query}` : ""}`,
     );
 }
 

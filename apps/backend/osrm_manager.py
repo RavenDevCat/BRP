@@ -41,6 +41,7 @@ OSRM_LOCK_DIR = Path(os.environ.get("BRP_OSRM_LOCK_DIR", "/tmp/brp-osrm-locks"))
 OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", str(_default_state_path()))).expanduser()
 OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
 OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
+OSRM_STALE_LOCK_TTL_SECONDS = float(os.environ.get("BRP_OSRM_STALE_LOCK_TTL_SECONDS", "3600") or 3600)
 
 
 @dataclass(frozen=True)
@@ -391,8 +392,10 @@ def manager_status() -> dict[str, object]:
         "state_path": str(OSRM_STATE_PATH),
         "lock_dir": str(OSRM_LOCK_DIR),
         "idle_ttl_seconds": OSRM_IDLE_TTL_SECONDS,
+        "stale_lock_ttl_seconds": OSRM_STALE_LOCK_TTL_SECONDS,
         "min_available_mb": OSRM_MIN_AVAILABLE_MB,
         "available_memory_mb": _available_memory_mb(),
+        "locks": lock_status(),
         "regions": regions,
     }
 
@@ -490,3 +493,79 @@ def _cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
 
 def cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
     return _cleanup_idle_regions(exclude_region=exclude_region)
+
+
+def _lock_file_status(path: Path, now: float) -> dict[str, object]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return {
+            "path": str(path),
+            "name": path.name,
+            "present": False,
+            "locked": False,
+            "age_s": None,
+            "stale": False,
+        }
+    locked = False
+    try:
+        with path.open("a") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                locked = True
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    except Exception:
+        locked = True
+    age_s = max(0.0, now - float(stat.st_mtime))
+    stale = bool(
+        not locked
+        and OSRM_STALE_LOCK_TTL_SECONDS > 0
+        and age_s >= OSRM_STALE_LOCK_TTL_SECONDS
+    )
+    return {
+        "path": str(path),
+        "name": path.name,
+        "present": True,
+        "locked": locked,
+        "age_s": age_s,
+        "stale": stale,
+    }
+
+
+def lock_status() -> list[dict[str, object]]:
+    if not OSRM_LOCK_DIR.exists():
+        return []
+    now = time.time()
+    locks: list[dict[str, object]] = []
+    for path in sorted(OSRM_LOCK_DIR.glob("*.lock")):
+        if path.is_file():
+            locks.append(_lock_file_status(path, now))
+    return locks
+
+
+def cleanup_stale_locks() -> list[str]:
+    removed: list[str] = []
+    if OSRM_STALE_LOCK_TTL_SECONDS <= 0 or not OSRM_LOCK_DIR.exists():
+        return removed
+    for item in lock_status():
+        if not item.get("stale"):
+            continue
+        path = Path(str(item.get("path") or ""))
+        try:
+            with path.open("a") as handle:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    continue
+                try:
+                    path.unlink(missing_ok=True)
+                    removed.append(str(path))
+                finally:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            _log(f"failed to remove stale lock {path}: {exc}")
+    return removed

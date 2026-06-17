@@ -115,6 +115,7 @@ def _print_status(report: dict[str, object]) -> None:
     print(f"state_path={report.get('state_path')}")
     print(f"on_demand_enabled={report.get('on_demand_enabled')}")
     print(f"idle_ttl_seconds={report.get('idle_ttl_seconds')}")
+    print(f"stale_lock_ttl_seconds={report.get('stale_lock_ttl_seconds')}")
     available = report.get("available_memory_mb")
     if isinstance(available, (int, float)):
         print(f"available_memory_mb={available:.0f}")
@@ -141,6 +142,38 @@ def _print_status(report: dict[str, object]) -> None:
             f"{'yes' if row.get('idle_expired') else 'no ':>12} "
             f"{age_label:>15}"
         )
+    locks = [row for row in report.get("locks", []) if isinstance(row, dict)]
+    if not locks:
+        print("locks=-")
+        return
+    print("locks")
+    print("name                 locked stale age_s")
+    for row in locks:
+        age = row.get("age_s")
+        age_label = f"{age:.0f}" if isinstance(age, (int, float)) else "-"
+        print(
+            f"{str(row.get('name', '')):<20} "
+            f"{'yes' if row.get('locked') else 'no ':>6} "
+            f"{'yes' if row.get('stale') else 'no ':>5} "
+            f"{age_label:>5}"
+        )
+
+
+def _print_locks(locks: list[dict[str, object]]) -> None:
+    if not locks:
+        print("locks=-")
+        return
+    print("name                 locked stale age_s path")
+    for row in locks:
+        age = row.get("age_s")
+        age_label = f"{age:.0f}" if isinstance(age, (int, float)) else "-"
+        print(
+            f"{str(row.get('name', '')):<20} "
+            f"{'yes' if row.get('locked') else 'no ':>6} "
+            f"{'yes' if row.get('stale') else 'no ':>5} "
+            f"{age_label:>5} "
+            f"{row.get('path')}"
+        )
 
 
 def parse_args() -> argparse.Namespace:
@@ -149,6 +182,10 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
     status = subparsers.add_parser("status", help="Print OSRM manager state without starting OSRM.")
     status.add_argument("--json", action="store_true")
+    locks = subparsers.add_parser("locks", help="Print OSRM manager lock state without starting OSRM.")
+    locks.add_argument("--json", action="store_true")
+    stale_locks = subparsers.add_parser("cleanup-stale-locks", help="Remove unlocked OSRM manager lock files past TTL.")
+    stale_locks.add_argument("--json", action="store_true")
     cleanup = subparsers.add_parser("cleanup-idle", help="Stop manager-owned idle OSRM containers past TTL.")
     cleanup.add_argument("--json", action="store_true")
     cleanup.add_argument("--force", action="store_true", help="Allow cleanup even if BRP worker processes are active.")
@@ -165,6 +202,26 @@ def main() -> None:
             _print_status(report)
         return
 
+    if args.command == "locks":
+        locks = osrm_manager.lock_status()
+        if args.json:
+            print(json.dumps({"locks": locks}, ensure_ascii=False, indent=2))
+        else:
+            _print_locks(locks)
+        return
+
+    if args.command == "cleanup-stale-locks":
+        removed_locks = osrm_manager.cleanup_stale_locks()
+        result = {
+            "status": "ok",
+            "removed_stale_locks": removed_locks,
+        }
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"removed_stale_locks={','.join(removed_locks) if removed_locks else '-'}")
+        return
+
     if args.command == "cleanup-idle":
         active = _active_worker_processes()
         if active and not args.force:
@@ -172,6 +229,7 @@ def main() -> None:
                 "status": "refused_active_workers",
                 "active_workers": active,
                 "stopped_regions": [],
+                "removed_stale_locks": [],
             }
             if args.json:
                 print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -182,15 +240,18 @@ def main() -> None:
                 print("Use --force only during a verified maintenance window.")
             raise SystemExit(2)
         stopped = osrm_manager.cleanup_idle_regions()
+        removed_locks = osrm_manager.cleanup_stale_locks()
         result = {
             "status": "ok",
             "active_workers": active,
             "stopped_regions": stopped,
+            "removed_stale_locks": removed_locks,
         }
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(f"stopped_regions={','.join(stopped) if stopped else '-'}")
+            print(f"removed_stale_locks={','.join(removed_locks) if removed_locks else '-'}")
         return
 
     raise SystemExit(f"Unsupported command: {args.command}")

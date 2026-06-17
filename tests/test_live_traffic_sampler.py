@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
+import tempfile
 import unittest
 from datetime import datetime
 from pathlib import Path
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 
@@ -114,6 +117,61 @@ class LiveTrafficSamplerTests(unittest.TestCase):
         self.assertEqual(schedule["schedule_source"], "period_departure")
         self.assertIsNone(schedule["target_arrival_local_time"])
         self.assertTrue(str(schedule["planned_departure_local_time"]).endswith("15:40:00+09:00"))
+
+    def test_baseline_json_with_coordinates_avoids_geocode_and_osrm_rebuild(self) -> None:
+        baseline = {
+            "baseline_id": "fixture",
+            "source_title": "Fixture",
+            "service_direction": "to_school",
+            "source_run_sha256": "abc",
+            "routes": [
+                {
+                    "route_id": "route-1",
+                    "bus_type": "Large Bus",
+                    "historical_duration_s": 1234.5,
+                    "historical_distance_m": 6789.0,
+                    "stops": [
+                        {
+                            "stop_sequence": 1,
+                            "address": "A",
+                            "country": "China",
+                            "city": "Suzhou",
+                            "lat": 31.1,
+                            "lng": 120.1,
+                            "passenger_count": 2,
+                        },
+                        {
+                            "stop_sequence": 2,
+                            "address": "School",
+                            "country": "China",
+                            "city": "Suzhou",
+                            "lat": 31.2,
+                            "lng": 120.2,
+                            "is_school": True,
+                        },
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "baseline.json"
+            path.write_text(json.dumps(baseline), encoding="utf-8")
+            args = argparse.Namespace(baseline_path=str(path), baseline_dir=Path(tmpdir))
+
+            with (
+                mock.patch.object(live_traffic_sampler.planner, "geocode_records", side_effect=AssertionError("geocode")),
+                mock.patch.object(live_traffic_sampler, "_route_osrm_metrics", side_effect=AssertionError("osrm")),
+            ):
+                _payload, metadata, points, routes = live_traffic_sampler._scenario_from_baseline_json(args)
+
+        self.assertEqual(metadata["baseline_load_mode"], "coordinates")
+        self.assertEqual(metadata["geocode_warning_count"], 0)
+        self.assertEqual([point["node_id"] for point in points], [0, 1])
+        self.assertEqual(points[0]["passenger_count"], 2)
+        self.assertEqual(routes[0]["nodes"], [0, 1])
+        self.assertEqual(routes[0]["raw_osrm_time_s"], 1234.5)
+        self.assertEqual(routes[0]["distance_m"], 6789.0)
+        self.assertEqual(routes[0]["baseline_metric_source"], "baseline_json_coordinates")
 
 
 if __name__ == "__main__":

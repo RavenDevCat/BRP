@@ -448,6 +448,89 @@ def _baseline_point_key(stop: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _float_or_none(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed
+
+
+def _baseline_route_metric(raw_route: dict[str, Any], *names: str) -> float | None:
+    for name in names:
+        value = _float_or_none(raw_route.get(name))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def _baseline_stop_point(stop: dict[str, Any], node_id: int) -> dict[str, Any] | None:
+    lat = _float_or_none(stop.get("lat", stop.get("latitude")))
+    lng = _float_or_none(stop.get("lng", stop.get("longitude")))
+    if lat is None or lng is None:
+        return None
+    point = dict(stop)
+    point["node_id"] = node_id
+    point["lat"] = lat
+    point["lng"] = lng
+    point.setdefault("passenger_count", int(stop.get("passenger_count", 0) or 0))
+    return point
+
+
+def _scenario_from_baseline_coordinates(
+    baseline: dict[str, Any],
+    raw_routes: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]] | None:
+    points: list[dict[str, Any]] = []
+    routes: list[dict[str, Any]] = []
+    for route_index, raw_route in enumerate(raw_routes, start=1):
+        stops = sorted(list(raw_route.get("stops") or []), key=lambda item: int(item.get("stop_sequence", 0) or 0))
+        if len(stops) < 2:
+            return None
+        route_points: list[dict[str, Any]] = []
+        for stop in stops:
+            point = _baseline_stop_point(stop, len(points))
+            if point is None:
+                return None
+            route_points.append(point)
+            points.append(point)
+        duration_s = _baseline_route_metric(
+            raw_route,
+            "raw_osrm_time_s",
+            "raw_duration_s",
+            "historical_duration_s",
+            "duration_s",
+            "time_s",
+        )
+        distance_m = _baseline_route_metric(
+            raw_route,
+            "distance_m",
+            "raw_distance_m",
+            "historical_distance_m",
+            "total_distance_m",
+        )
+        if duration_s is None or distance_m is None:
+            return None
+        route_id = str(raw_route.get("route_id") or route_index).strip()
+        routes.append(
+            {
+                "route_id": route_id,
+                "vehicle_id": route_index,
+                "bus_type_name": str(raw_route.get("bus_type") or raw_route.get("vehicle_type") or "").strip(),
+                "nodes": [int(point["node_id"]) for point in route_points],
+                "raw_osrm_time_s": duration_s,
+                "distance_m": distance_m,
+                "leg_details": [],
+                "baseline_metric_source": "baseline_json_coordinates",
+            }
+        )
+    if not routes:
+        return None
+    return points, routes
+
+
 def _route_osrm_metrics(route_points: list[dict[str, Any]]) -> tuple[float, float, list[dict[str, Any]]]:
     distance_m = 0.0
     duration_s = 0.0
@@ -481,6 +564,21 @@ def _scenario_from_baseline_json(args: argparse.Namespace) -> tuple[dict[str, An
     raw_routes = list(baseline.get("routes") or [])
     if not raw_routes:
         raise ValueError(f"Baseline {path} does not contain routes")
+
+    coordinate_scenario = _scenario_from_baseline_coordinates(baseline, raw_routes)
+    if coordinate_scenario is not None:
+        points, routes = coordinate_scenario
+        metadata = {
+            "source": "baseline_json",
+            "source_id": str(baseline.get("baseline_id") or path.stem),
+            "service_direction": _normalize_service_direction(baseline.get("service_direction")),
+            "title": str(baseline.get("source_workbook_name") or baseline.get("source_title") or path.name),
+            "baseline_path": str(path),
+            "source_workbook_sha256": baseline.get("source_workbook_sha256") or baseline.get("source_run_sha256"),
+            "geocode_warning_count": 0,
+            "baseline_load_mode": "coordinates",
+        }
+        return baseline, metadata, points, routes
 
     school_address = str(baseline.get("school_address") or "").strip()
     unique_records: list[dict[str, Any]] = []
@@ -547,6 +645,7 @@ def _scenario_from_baseline_json(args: argparse.Namespace) -> tuple[dict[str, An
         "baseline_path": str(path),
         "source_workbook_sha256": baseline.get("source_workbook_sha256"),
         "geocode_warning_count": len(warnings),
+        "baseline_load_mode": "geocode_osrm",
     }
     return baseline, metadata, points, routes
 

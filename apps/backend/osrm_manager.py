@@ -175,7 +175,6 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
 
     OSRM_LOCK_DIR.mkdir(parents=True, exist_ok=True)
     with _file_lock(OSRM_LOCK_DIR / f"{region}.lock"):
-        _cleanup_idle_regions(exclude_region=region)
         now = time.monotonic()
         cached_until = READY_CACHE.get(region, 0.0)
         if cached_until > now:
@@ -185,6 +184,7 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
             READY_CACHE[region] = now + OSRM_READY_CACHE_SECONDS
             return
         with _file_lock(OSRM_LOCK_DIR / "global-start.lock"):
+            _cleanup_idle_regions(exclude_region=region)
             if _is_osrm_ready(config, url):
                 _record_region_status(config, "ready", base_url=url, managed=False)
                 READY_CACHE[region] = time.monotonic() + OSRM_READY_CACHE_SECONDS
@@ -467,6 +467,23 @@ def _load_state() -> dict[str, object]:
     return {"regions": {}}
 
 
+def _region_lock_is_held(region: str) -> bool:
+    path = OSRM_LOCK_DIR / f"{region}.lock"
+    try:
+        if not path.exists():
+            return False
+        with path.open("a") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False
+    except Exception:
+        return True
+
+
 def _save_state(state: dict[str, object]) -> None:
     try:
         OSRM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -521,6 +538,8 @@ def _cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
     changed = False
     for region, raw in list(regions.items()):
         if region == exclude_region or not isinstance(raw, dict):
+            continue
+        if _region_lock_is_held(region):
             continue
         if not raw.get("managed"):
             continue

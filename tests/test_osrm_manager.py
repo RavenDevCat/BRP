@@ -124,6 +124,59 @@ def test_cleanup_idle_regions_only_stops_managed_expired_entries(monkeypatch, tm
     assert state["regions"]["suzhou"]["status"] == "ready"
 
 
+def test_cleanup_idle_regions_skips_regions_with_active_locks(monkeypatch, tmp_path):
+    if os.name == "nt":
+        return
+    import fcntl
+
+    manager = load_manager(monkeypatch, tmp_path)
+    state_path = Path(manager.OSRM_STATE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        """
+{
+  "regions": {
+    "shanghai": {
+      "region": "shanghai",
+      "container": "osrm-shanghai",
+      "port": 5002,
+      "status": "ready",
+      "managed": true,
+      "last_seen_at": 1
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+    lock_path = Path(manager.OSRM_LOCK_DIR) / "shanghai.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    stopped = []
+
+    def fake_run(command, **_kwargs):
+        stopped.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(manager.subprocess, "run", fake_run)
+    try:
+        stopped_regions = manager._cleanup_idle_regions(exclude_region="suzhou")
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()
+
+    assert stopped_regions == []
+    assert stopped == []
+    state = manager._load_state()
+    assert state["regions"]["shanghai"]["status"] == "ready"
+
+
 def test_lock_status_reports_unlocked_stale_lock(monkeypatch, tmp_path):
     manager = load_manager(monkeypatch, tmp_path)
     lock_dir = Path(manager.OSRM_LOCK_DIR)

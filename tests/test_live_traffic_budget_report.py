@@ -53,6 +53,33 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         }
         Path(tmpdir, "fixture.json").write_text(json.dumps(payload), encoding="utf-8")
 
+    def _write_fast_path_baseline(self, tmpdir: str) -> None:
+        payload = {
+            "baseline_id": "fixture",
+            "service_direction": "to_school",
+            "routes": [
+                {
+                    "route_id": "r1",
+                    "raw_osrm_time_s": 100,
+                    "distance_m": 1000,
+                    "stops": [
+                        {"stop_sequence": 1, "address": "school", "lat": 31.1, "lng": 121.1},
+                        {"stop_sequence": 2, "address": "home", "lat": 31.2, "lng": 121.2},
+                    ],
+                },
+                {
+                    "route_id": "r2",
+                    "historical_duration_s": 200,
+                    "historical_distance_m": 2000,
+                    "stops": [
+                        {"stop_sequence": 1, "address": "school", "lat": 31.1, "lng": 121.1},
+                        {"stop_sequence": 2, "address": "home2", "lat": 31.3, "lng": 121.3},
+                    ],
+                },
+            ],
+        }
+        Path(tmpdir, "fixture.json").write_text(json.dumps(payload), encoding="utf-8")
+
     def test_baseline_json_budget_is_outline_only_and_does_not_load_sampler_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             self._write_baseline(tmpdir)
@@ -66,6 +93,23 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         self.assertEqual(row["candidate_route_count"], 2)
         self.assertEqual(row["estimated_api_call_count"], 2)
         self.assertEqual(row["status"], "ok")
+        self.assertFalse(row["baseline_fast_path_ready"])
+        self.assertEqual(row["baseline_stop_count"], 5)
+        self.assertEqual(row["baseline_coordinate_stop_count"], 0)
+        self.assertEqual(row["baseline_metric_route_count"], 0)
+
+    def test_baseline_json_budget_reports_fast_path_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            self._write_fast_path_baseline(tmpdir)
+            args = self._baseline_args(tmpdir)
+
+            row = budget.evaluate_profile("fixture", args)
+
+        self.assertTrue(row["baseline_fast_path_ready"])
+        self.assertEqual(row["baseline_stop_count"], 4)
+        self.assertEqual(row["baseline_coordinate_stop_count"], 4)
+        self.assertEqual(row["baseline_metric_route_count"], 2)
+        self.assertEqual(row["estimated_api_call_count"], 2)
 
     def test_baseline_json_budget_flags_universal_cap_overage(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

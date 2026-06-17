@@ -74,6 +74,29 @@ def _resolve_baseline_path(args: SimpleNamespace) -> Path:
     return path
 
 
+def _positive_number(value: Any) -> bool:
+    try:
+        return float(value) > 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _has_stop_coordinates(stop: dict[str, Any]) -> bool:
+    return _positive_number(stop.get("lat", stop.get("latitude"))) and _positive_number(stop.get("lng", stop.get("longitude")))
+
+
+def _has_route_metrics(route: dict[str, Any]) -> bool:
+    has_duration = any(
+        _positive_number(route.get(name))
+        for name in ("raw_osrm_time_s", "raw_duration_s", "historical_duration_s", "duration_s", "time_s")
+    )
+    has_distance = any(
+        _positive_number(route.get(name))
+        for name in ("distance_m", "raw_distance_m", "historical_distance_m", "total_distance_m")
+    )
+    return has_duration and has_distance
+
+
 def _build_sampler_args(
     *,
     city: str,
@@ -170,10 +193,17 @@ def _baseline_route_outlines(args: SimpleNamespace) -> tuple[dict[str, Any], dic
     path = _resolve_baseline_path(args)
     baseline = json.loads(path.read_text(encoding="utf-8"))
     routes: list[dict[str, Any]] = []
+    total_stop_count = 0
+    coordinate_stop_count = 0
+    metric_route_count = 0
     for route_index, raw_route in enumerate(list(baseline.get("routes") or []), start=1):
         stops = sorted(list(raw_route.get("stops") or []), key=lambda item: int(item.get("stop_sequence", 0) or 0))
         if len(stops) < 2:
             continue
+        total_stop_count += len(stops)
+        coordinate_stop_count += sum(1 for stop in stops if _has_stop_coordinates(stop))
+        if _has_route_metrics(raw_route):
+            metric_route_count += 1
         route_id = str(raw_route.get("route_id") or route_index).strip()
         routes.append(
             {
@@ -189,6 +219,11 @@ def _baseline_route_outlines(args: SimpleNamespace) -> tuple[dict[str, Any], dic
         "service_direction": baseline.get("service_direction"),
         "title": baseline.get("title"),
         "safe_outline_only": True,
+        "baseline_path": str(path),
+        "baseline_stop_count": total_stop_count,
+        "baseline_coordinate_stop_count": coordinate_stop_count,
+        "baseline_metric_route_count": metric_route_count,
+        "baseline_fast_path_ready": bool(routes) and coordinate_stop_count == total_stop_count and metric_route_count == len(routes),
     }
     return baseline, metadata, routes
 
@@ -273,6 +308,11 @@ def evaluate_profile(
         "provider_refresh_cap": provider_cap,
         "status": status,
         "safe_outline_only": bool(metadata.get("safe_outline_only")),
+        "baseline_fast_path_ready": metadata.get("baseline_fast_path_ready"),
+        "baseline_stop_count": metadata.get("baseline_stop_count"),
+        "baseline_coordinate_stop_count": metadata.get("baseline_coordinate_stop_count"),
+        "baseline_metric_route_count": metadata.get("baseline_metric_route_count"),
+        "baseline_path": metadata.get("baseline_path"),
         "sample_due_routes_only": bool(args.sample_due_routes_only),
     }
 
@@ -313,8 +353,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _print_table(report: dict[str, Any]) -> None:
-    print("profile                 provider       routes candidates calls cap provider_cap status")
+    print("profile                 provider       routes candidates calls cap provider_cap fast_path status")
     for row in report["profiles"]:
+        fast_path = row.get("baseline_fast_path_ready")
+        fast_path_label = "yes" if fast_path is True else "no" if fast_path is False else "-"
         print(
             f"{row.get('profile', ''):<23} "
             f"{row.get('provider', '-'):>12} "
@@ -323,6 +365,7 @@ def _print_table(report: dict[str, Any]) -> None:
             f"{str(row.get('estimated_api_call_count', '-')):>5} "
             f"{str(row.get('max_api_calls_per_run', '-')):>3} "
             f"{str(row.get('provider_refresh_cap', '-')):>12} "
+            f"{fast_path_label:>9} "
             f"{row.get('status', 'error')}"
         )
         if row.get("error"):
@@ -338,6 +381,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--now-local-time", default="")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--require-under-cap", action="store_true")
+    parser.add_argument("--require-baseline-fast-path", action="store_true")
     return parser.parse_args()
 
 
@@ -350,6 +394,10 @@ def main() -> None:
         _print_table(report)
     if args.require_under_cap:
         bad = [row for row in report["profiles"] if row.get("status") != "ok"]
+        if bad:
+            raise SystemExit(1)
+    if args.require_baseline_fast_path:
+        bad = [row for row in report["profiles"] if row.get("source") == "baseline_json" and row.get("baseline_fast_path_ready") is not True]
         if bad:
             raise SystemExit(1)
 

@@ -4,6 +4,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
 
 
@@ -227,3 +229,71 @@ def test_manager_status_reports_state_dataset_and_container(monkeypatch, tmp_pat
     assert bangkok["state_status"] == "ready"
     assert bangkok["idle_expired"] is True
     assert bangkok["container_status"]["status"] == "running"
+    assert report["max_running_regions"] == manager.OSRM_MAX_RUNNING_REGIONS
+    assert report["running_managed_regions"] == ["bangkok"]
+
+
+def test_ensure_region_refuses_when_running_region_limit_is_reached(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRP_OSRM_MAX_RUNNING_REGIONS", "1")
+    manager = load_manager(monkeypatch, tmp_path)
+    bangkok = manager.REGIONS["bangkok"]
+    bangkok.dataset_dir.mkdir(parents=True, exist_ok=True)
+    (bangkok.dataset_dir / bangkok.dataset_file).write_text("stub", encoding="utf-8")
+    state_path = Path(manager.OSRM_STATE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        """
+{
+  "regions": {
+    "suzhou": {
+      "region": "suzhou",
+      "container": "osrm-suzhou",
+      "port": 5004,
+      "status": "ready",
+      "managed": true,
+      "last_seen_at": REPLACE_NOW
+    }
+  }
+}
+""".replace("REPLACE_NOW", str(time.time())),
+        encoding="utf-8",
+    )
+
+    def fake_ready(_config, _base_url):
+        return False
+
+    def fake_container_status(config):
+        if config.region == "suzhou":
+            return {"present": True, "running": True, "status": "running"}
+        return {"present": False}
+
+    monkeypatch.setattr(manager, "_is_osrm_ready", fake_ready)
+    monkeypatch.setattr(manager, "_container_runtime_status", fake_container_status)
+
+    with pytest.raises(manager.OsrmManagerError, match="BRP_OSRM_MAX_RUNNING_REGIONS=1"):
+        manager.ensure_region("bangkok")
+
+    state = manager._load_state()
+    bangkok_state = state["regions"]["bangkok"]
+    assert bangkok_state["status"] == "error"
+    assert "Active managed regions: suzhou" in bangkok_state["last_error"]
+
+
+def test_file_lock_times_out_instead_of_waiting_forever(monkeypatch, tmp_path):
+    if os.name == "nt":
+        return
+    import fcntl
+
+    monkeypatch.setenv("BRP_OSRM_LOCK_WAIT_SECONDS", "0.01")
+    manager = load_manager(monkeypatch, tmp_path)
+    lock_path = Path(manager.OSRM_LOCK_DIR) / "global-start.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with pytest.raises(manager.OsrmManagerError, match="queued behind global-start.lock"):
+            with manager._file_lock(lock_path):
+                pass
+    finally:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        handle.close()

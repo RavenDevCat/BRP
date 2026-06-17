@@ -19,6 +19,9 @@ class OsrmManagerApiTests(unittest.TestCase):
                 return {
                     "on_demand_enabled": True,
                     "available_memory_mb": 2048,
+                    "lock_wait_seconds": 120,
+                    "max_running_regions": 2,
+                    "running_managed_regions": ["suzhou"],
                     "locks": [
                         {"name": "shanghai.lock", "locked": False, "stale": True},
                         {"name": "suzhou.lock", "locked": True, "stale": False},
@@ -54,6 +57,9 @@ class OsrmManagerApiTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["locked_lock_count"], 1)
         self.assertEqual(payload["summary"]["stale_lock_count"], 1)
         self.assertEqual(payload["summary"]["available_memory_mb"], 2048)
+        self.assertEqual(payload["summary"]["lock_wait_seconds"], 120)
+        self.assertEqual(payload["summary"]["max_running_regions"], 2)
+        self.assertEqual(payload["summary"]["running_managed_regions"], ["suzhou"])
         self.assertIs(payload["manager"]["on_demand_enabled"], True)
 
     def test_status_payload_returns_structured_error(self) -> None:

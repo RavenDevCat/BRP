@@ -116,6 +116,13 @@ def _print_status(report: dict[str, object]) -> None:
     print(f"on_demand_enabled={report.get('on_demand_enabled')}")
     print(f"idle_ttl_seconds={report.get('idle_ttl_seconds')}")
     print(f"stale_lock_ttl_seconds={report.get('stale_lock_ttl_seconds')}")
+    print(f"lock_wait_seconds={report.get('lock_wait_seconds')}")
+    print(f"max_running_regions={report.get('max_running_regions')}")
+    running_regions = report.get("running_managed_regions")
+    if isinstance(running_regions, list) and running_regions:
+        print(f"running_managed_regions={','.join(str(item) for item in running_regions)}")
+    else:
+        print("running_managed_regions=-")
     available = report.get("available_memory_mb")
     if isinstance(available, (int, float)):
         print(f"available_memory_mb={available:.0f}")

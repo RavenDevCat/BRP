@@ -42,6 +42,8 @@ OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", str(_defaul
 OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
 OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
 OSRM_STALE_LOCK_TTL_SECONDS = float(os.environ.get("BRP_OSRM_STALE_LOCK_TTL_SECONDS", "3600") or 3600)
+OSRM_LOCK_WAIT_SECONDS = float(os.environ.get("BRP_OSRM_LOCK_WAIT_SECONDS", "120") or 120)
+OSRM_MAX_RUNNING_REGIONS = int(os.environ.get("BRP_OSRM_MAX_RUNNING_REGIONS", "0") or 0)
 
 
 @dataclass(frozen=True)
@@ -196,7 +198,21 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
 @contextmanager
 def _file_lock(path: Path) -> Iterator[None]:
     with path.open("w") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        if OSRM_LOCK_WAIT_SECONDS < 0:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + OSRM_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError as exc:
+                    if time.monotonic() >= deadline:
+                        raise OsrmManagerError(
+                            f"Routing engine startup is queued behind {path.name} for more than "
+                            f"{OSRM_LOCK_WAIT_SECONDS:.0f}s. Try again shortly or inspect OSRM manager locks."
+                        ) from exc
+                    time.sleep(min(0.25, max(0.01, deadline - time.monotonic())))
         try:
             yield
         finally:
@@ -251,6 +267,7 @@ def _start_region(config: RegionConfig) -> None:
         _record_region_status(config, "error", error=message, managed=False)
         raise OsrmManagerError(message)
     _assert_memory_available(config)
+    _assert_running_region_capacity(config)
     _log(f"starting {config.region} OSRM container {config.container} on {config.port}")
     _record_region_status(config, "starting", managed=True)
     subprocess.run(
@@ -352,6 +369,41 @@ def _container_runtime_status(config: RegionConfig) -> dict[str, object]:
         return {"present": True, "error": str(exc)}
 
 
+def _running_managed_regions(*, exclude_region: str | None = None) -> list[str]:
+    state = _load_state()
+    regions = state.get("regions")
+    if not isinstance(regions, dict):
+        return []
+    running: list[str] = []
+    for region, raw in regions.items():
+        if region == exclude_region or not isinstance(raw, dict) or not raw.get("managed"):
+            continue
+        config = REGIONS.get(region)
+        if config is None:
+            continue
+        container_status = _container_runtime_status(config)
+        if isinstance(container_status, dict) and container_status.get("running"):
+            running.append(region)
+    return sorted(running)
+
+
+def _assert_running_region_capacity(config: RegionConfig) -> None:
+    if OSRM_MAX_RUNNING_REGIONS <= 0:
+        return
+    running_regions = _running_managed_regions(exclude_region=config.region)
+    if len(running_regions) < OSRM_MAX_RUNNING_REGIONS:
+        return
+    message = (
+        f"Routing engine unavailable for {config.region}: OSRM manager already has "
+        f"{len(running_regions)} running managed region(s), meeting "
+        f"BRP_OSRM_MAX_RUNNING_REGIONS={OSRM_MAX_RUNNING_REGIONS}. "
+        f"Active managed regions: {', '.join(running_regions) or '-'}. "
+        "Try again after idle cleanup or raise the limit during a maintenance window."
+    )
+    _record_region_status(config, "error", error=message, managed=False)
+    raise OsrmManagerError(message)
+
+
 def manager_status() -> dict[str, object]:
     state = _load_state()
     regions_state = state.get("regions") if isinstance(state, dict) else {}
@@ -393,8 +445,11 @@ def manager_status() -> dict[str, object]:
         "lock_dir": str(OSRM_LOCK_DIR),
         "idle_ttl_seconds": OSRM_IDLE_TTL_SECONDS,
         "stale_lock_ttl_seconds": OSRM_STALE_LOCK_TTL_SECONDS,
+        "lock_wait_seconds": OSRM_LOCK_WAIT_SECONDS,
         "min_available_mb": OSRM_MIN_AVAILABLE_MB,
+        "max_running_regions": OSRM_MAX_RUNNING_REGIONS,
         "available_memory_mb": _available_memory_mb(),
+        "running_managed_regions": _running_managed_regions(),
         "locks": lock_status(),
         "regions": regions,
     }

@@ -236,7 +236,11 @@ def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
 
 
 def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
-    return asdict(_build_planner_config(config_payload))
+    payload = asdict(_build_planner_config(config_payload))
+    payload["traffic_coefficient_mode"] = normalize_traffic_coefficient_mode(
+        payload.get("traffic_coefficient_mode")
+    )
+    return payload
 
 
 def _client_core_module() -> Any:

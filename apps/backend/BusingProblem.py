@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+from contextlib import contextmanager
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -45,6 +46,18 @@ def maybe_ensure_osrm_base_url(base_url: str) -> None:
     from osrm_manager import ensure_osrm_base_url
 
     ensure_osrm_base_url(base_url)
+
+
+@contextmanager
+def osrm_base_url_use(base_url: str):
+    enabled = os.environ.get("BRP_OSRM_ON_DEMAND_ENABLED", "").strip().lower()
+    if enabled not in {"1", "true", "yes", "on"}:
+        yield
+        return
+    from osrm_manager import use_osrm_base_url
+
+    with use_osrm_base_url(base_url):
+        yield
 
 
 GOOGLE_GEOCODE_BASE_URL = os.environ.get(
@@ -570,12 +583,12 @@ def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimite
 
 
 def osrm_request_json(service: str, coordinates: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-    maybe_ensure_osrm_base_url(OSRM_BASE_URL)
-    response = requests.get(
-        f"{OSRM_BASE_URL}/{service}/v1/driving/{coordinates}",
-        params=params or {},
-        timeout=REQUEST_TIMEOUT,
-    )
+    with osrm_base_url_use(OSRM_BASE_URL):
+        response = requests.get(
+            f"{OSRM_BASE_URL}/{service}/v1/driving/{coordinates}",
+            params=params or {},
+            timeout=REQUEST_TIMEOUT,
+        )
     response.raise_for_status()
     payload = response.json()
     if payload.get("code") != "Ok":

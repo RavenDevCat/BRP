@@ -13,6 +13,7 @@ def load_manager(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_ON_DEMAND_ENABLED", "true")
     monkeypatch.setenv("OSRM_LOCAL_DATA_DIR", str(tmp_path / "osrm-data"))
     monkeypatch.setenv("BRP_OSRM_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("BRP_OSRM_USAGE_DIR", str(tmp_path / "usage"))
     monkeypatch.setenv("BRP_OSRM_MANAGER_STATE_PATH", str(tmp_path / "state.json"))
     monkeypatch.setenv("BRP_OSRM_IDLE_TTL_SECONDS", "10")
     monkeypatch.setenv("BRP_OSRM_STALE_LOCK_TTL_SECONDS", "10")
@@ -175,6 +176,66 @@ def test_cleanup_idle_regions_skips_regions_with_active_locks(monkeypatch, tmp_p
     assert stopped == []
     state = manager._load_state()
     assert state["regions"]["shanghai"]["status"] == "ready"
+
+
+def test_use_osrm_base_url_holds_shared_use_lease(monkeypatch, tmp_path):
+    manager = load_manager(monkeypatch, tmp_path)
+    ensured = []
+
+    def fake_ensure(region, *, base_url=None):
+        ensured.append((region, base_url))
+
+    monkeypatch.setattr(manager, "ensure_region", fake_ensure)
+
+    with manager.use_osrm_base_url("http://127.0.0.1:5007"):
+        assert ensured == [("bangkok", "http://127.0.0.1:5007")]
+        assert manager.active_use_regions() == ["bangkok"]
+
+    assert manager.active_use_regions() == []
+    state = manager._load_state()
+    assert state["regions"]["bangkok"]["status"] == "ready"
+
+
+def test_cleanup_idle_regions_skips_regions_with_active_use_lease(monkeypatch, tmp_path):
+    manager = load_manager(monkeypatch, tmp_path)
+    state_path = Path(manager.OSRM_STATE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        """
+{
+  "regions": {
+    "shanghai": {
+      "region": "shanghai",
+      "container": "osrm-shanghai",
+      "port": 5002,
+      "status": "ready",
+      "managed": true,
+      "last_seen_at": 1
+    }
+  }
+}
+""",
+        encoding="utf-8",
+    )
+
+    stopped = []
+
+    def fake_run(command, **_kwargs):
+        stopped.append(command)
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
+    monkeypatch.setattr(manager.subprocess, "run", fake_run)
+
+    with manager._region_use_lease("shanghai"):
+        assert manager._cleanup_idle_regions(exclude_region=None) == []
+
+    assert stopped == []
+    assert manager._cleanup_idle_regions(exclude_region=None) == ["shanghai"]
+    assert stopped == [["docker", "rm", "-f", "osrm-shanghai"]]
 
 
 def test_lock_status_reports_unlocked_stale_lock(monkeypatch, tmp_path):

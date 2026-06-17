@@ -38,6 +38,7 @@ OSRM_START_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_START_TIMEOUT_SECOND
 OSRM_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_HEALTH_TIMEOUT_SECONDS", "2.5") or 2.5)
 OSRM_READY_CACHE_SECONDS = float(os.environ.get("BRP_OSRM_READY_CACHE_SECONDS", "30") or 30)
 OSRM_LOCK_DIR = Path(os.environ.get("BRP_OSRM_LOCK_DIR", "/tmp/brp-osrm-locks")).expanduser()
+OSRM_USAGE_DIR = Path(os.environ.get("BRP_OSRM_USAGE_DIR", str(OSRM_LOCK_DIR / "usage"))).expanduser()
 OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", str(_default_state_path()))).expanduser()
 OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
 OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
@@ -155,6 +156,26 @@ def ensure_osrm_base_url(base_url: str) -> None:
     if not region:
         return
     ensure_region(region, base_url=base_url)
+
+
+@contextmanager
+def use_osrm_base_url(base_url: str) -> Iterator[None]:
+    region = region_for_base_url(base_url)
+    if not ON_DEMAND_ENABLED or not region:
+        yield
+        return
+    config = REGIONS.get(region)
+    if config is None:
+        yield
+        return
+    with _region_use_lease(region):
+        ensure_region(region, base_url=base_url)
+        try:
+            yield
+        except Exception:
+            raise
+        else:
+            _record_region_status(config, "ready", base_url=base_url, managed=False)
 
 
 def ensure_region(region: str, *, base_url: str | None = None) -> None:
@@ -436,6 +457,7 @@ def manager_status() -> dict[str, object]:
                     and last_seen_age_s >= OSRM_IDLE_TTL_SECONDS
                 ),
                 "last_error": state_entry.get("last_error"),
+                "active_use": _region_use_is_active(region),
                 "container_status": _container_runtime_status(config),
             }
         )
@@ -443,6 +465,7 @@ def manager_status() -> dict[str, object]:
         "on_demand_enabled": ON_DEMAND_ENABLED,
         "state_path": str(OSRM_STATE_PATH),
         "lock_dir": str(OSRM_LOCK_DIR),
+        "usage_dir": str(OSRM_USAGE_DIR),
         "idle_ttl_seconds": OSRM_IDLE_TTL_SECONDS,
         "stale_lock_ttl_seconds": OSRM_STALE_LOCK_TTL_SECONDS,
         "lock_wait_seconds": OSRM_LOCK_WAIT_SECONDS,
@@ -450,6 +473,7 @@ def manager_status() -> dict[str, object]:
         "max_running_regions": OSRM_MAX_RUNNING_REGIONS,
         "available_memory_mb": _available_memory_mb(),
         "running_managed_regions": _running_managed_regions(),
+        "active_use_regions": active_use_regions(),
         "locks": lock_status(),
         "regions": regions,
     }
@@ -482,6 +506,39 @@ def _region_lock_is_held(region: str) -> bool:
                 return False
     except Exception:
         return True
+
+
+@contextmanager
+def _region_use_lease(region: str) -> Iterator[None]:
+    OSRM_USAGE_DIR.mkdir(parents=True, exist_ok=True)
+    path = OSRM_USAGE_DIR / f"{region}.use"
+    with path.open("a") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _region_use_is_active(region: str) -> bool:
+    path = OSRM_USAGE_DIR / f"{region}.use"
+    try:
+        if not path.exists():
+            return False
+        with path.open("a") as handle:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                return False
+    except Exception:
+        return True
+
+
+def active_use_regions() -> list[str]:
+    return sorted(region for region in REGIONS if _region_use_is_active(region))
 
 
 def _save_state(state: dict[str, object]) -> None:
@@ -540,6 +597,8 @@ def _cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
         if region == exclude_region or not isinstance(raw, dict):
             continue
         if _region_lock_is_held(region):
+            continue
+        if _region_use_is_active(region):
             continue
         if not raw.get("managed"):
             continue

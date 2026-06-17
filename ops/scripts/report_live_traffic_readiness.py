@@ -67,45 +67,30 @@ def _empty_group() -> dict[str, Any]:
     }
 
 
-def summarize(sample_dir: Path, *, min_measured_at: str | None = None) -> dict[str, Any]:
-    groups: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(_empty_group)
-    total_files = 0
-    filtered_files = 0
-    unreadable_files = 0
+def _add_sample_to_group(group: dict[str, Any], payload: dict[str, Any], path: Path) -> None:
+    routes = list(payload.get("routes") or [])
+    geo_count = sum(1 for route in routes if isinstance(route, dict) and _route_has_fingerprint(route))
+    route_count = len(routes)
+    measured_at = str(payload.get("measured_at") or "")
 
-    for path in sorted(sample_dir.glob("*.json")):
-        payload = _load_sample(path)
-        if payload is None:
-            unreadable_files += 1
-            continue
-        if bool(payload.get("dry_run")):
-            continue
-        if not _measured_at_passes(payload, min_measured_at):
-            filtered_files += 1
-            continue
-        total_files += 1
-        group = groups[_sample_key(payload)]
-        routes = list(payload.get("routes") or [])
-        geo_count = sum(1 for route in routes if isinstance(route, dict) and _route_has_fingerprint(route))
-        route_count = len(routes)
-        measured_at = str(payload.get("measured_at") or "")
+    group["sample_file_count"] += 1
+    group["route_sample_count"] += route_count
+    group["geo_route_sample_count"] += geo_count
+    group["scale_only_route_sample_count"] += max(0, route_count - geo_count)
+    group["api_call_count"] += int(payload.get("api_call_count", 0) or 0)
+    group["estimated_api_call_count"] += int(payload.get("estimated_api_call_count", 0) or 0)
+    if measured_at and measured_at > str(group["latest_measured_at"] or ""):
+        group["latest_measured_at"] = measured_at
+        group["latest_sample"] = path.name
+    provider = str(payload.get("provider") or "").strip()
+    if provider:
+        group["providers"].add(provider)
+    weekday = str(payload.get("sample_weekday") or "").strip()
+    if weekday:
+        group["weekdays"].add(weekday)
 
-        group["sample_file_count"] += 1
-        group["route_sample_count"] += route_count
-        group["geo_route_sample_count"] += geo_count
-        group["scale_only_route_sample_count"] += max(0, route_count - geo_count)
-        group["api_call_count"] += int(payload.get("api_call_count", 0) or 0)
-        group["estimated_api_call_count"] += int(payload.get("estimated_api_call_count", 0) or 0)
-        if measured_at and measured_at > str(group["latest_measured_at"] or ""):
-            group["latest_measured_at"] = measured_at
-            group["latest_sample"] = path.name
-        provider = str(payload.get("provider") or "").strip()
-        if provider:
-            group["providers"].add(provider)
-        weekday = str(payload.get("sample_weekday") or "").strip()
-        if weekday:
-            group["weekdays"].add(weekday)
 
+def _group_rows(groups: dict[tuple[str, str, str], dict[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for (market, city, period), group in sorted(groups.items()):
         route_count = int(group["route_sample_count"])
@@ -128,6 +113,30 @@ def summarize(sample_dir: Path, *, min_measured_at: str | None = None) -> dict[s
                 "weekdays": sorted(group["weekdays"]),
             }
         )
+    return rows
+
+
+def summarize(sample_dir: Path, *, min_measured_at: str | None = None) -> dict[str, Any]:
+    groups: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(_empty_group)
+    excluded_groups: dict[tuple[str, str, str], dict[str, Any]] = defaultdict(_empty_group)
+    total_files = 0
+    filtered_files = 0
+    unreadable_files = 0
+
+    for path in sorted(sample_dir.glob("*.json")):
+        payload = _load_sample(path)
+        if payload is None:
+            unreadable_files += 1
+            continue
+        if bool(payload.get("dry_run")):
+            continue
+        if not _measured_at_passes(payload, min_measured_at):
+            filtered_files += 1
+            _add_sample_to_group(excluded_groups[_sample_key(payload)], payload, path)
+            continue
+        total_files += 1
+        group = groups[_sample_key(payload)]
+        _add_sample_to_group(group, payload, path)
 
     return {
         "sample_dir": str(sample_dir),
@@ -135,7 +144,8 @@ def summarize(sample_dir: Path, *, min_measured_at: str | None = None) -> dict[s
         "filtered_file_count": filtered_files,
         "min_measured_at": min_measured_at or "",
         "unreadable_file_count": unreadable_files,
-        "groups": rows,
+        "groups": _group_rows(groups),
+        "excluded_groups": _group_rows(excluded_groups),
     }
 
 
@@ -159,9 +169,16 @@ def evaluate_requirements(
         for row in summary.get("groups", [])
         if isinstance(row, dict)
     }
+    excluded_rows = {
+        (_norm(row.get("market")), _norm(row.get("city")), _norm(row.get("period"))): row
+        for row in summary.get("excluded_groups", [])
+        if isinstance(row, dict)
+    }
     results: list[dict[str, Any]] = []
     for market, city, period in requirements:
-        row = rows.get((_norm(market), _norm(city), _norm(period)))
+        key = (_norm(market), _norm(city), _norm(period))
+        row = rows.get(key)
+        excluded_row = excluded_rows.get(key) or {}
         if row is None:
             results.append(
                 {
@@ -174,6 +191,10 @@ def evaluate_requirements(
                     "geo_route_sample_count": 0,
                     "route_sample_count": 0,
                     "required_geo_route_sample_ratio": min_geo_ratio,
+                    "latest_excluded_measured_at": excluded_row.get("latest_measured_at") or "",
+                    "latest_excluded_sample": excluded_row.get("latest_sample") or "",
+                    "excluded_route_sample_count": int(excluded_row.get("route_sample_count", 0) or 0),
+                    "excluded_geo_route_sample_count": int(excluded_row.get("geo_route_sample_count", 0) or 0),
                 }
             )
             continue
@@ -199,6 +220,10 @@ def evaluate_requirements(
                 "required_geo_route_sample_ratio": min_geo_ratio,
                 "latest_measured_at": row.get("latest_measured_at") or "",
                 "latest_sample": row.get("latest_sample") or "",
+                "latest_excluded_measured_at": excluded_row.get("latest_measured_at") or "",
+                "latest_excluded_sample": excluded_row.get("latest_sample") or "",
+                "excluded_route_sample_count": int(excluded_row.get("route_sample_count", 0) or 0),
+                "excluded_geo_route_sample_count": int(excluded_row.get("geo_route_sample_count", 0) or 0),
             }
         )
     return results
@@ -246,6 +271,7 @@ def _print_table(summary: dict[str, Any]) -> None:
                 f"geo={result['geo_route_sample_count']}",
                 f"routes={result['route_sample_count']}",
                 result["reason"],
+                f"latest_excluded={result.get('latest_excluded_sample') or '-'}",
             )
 
 

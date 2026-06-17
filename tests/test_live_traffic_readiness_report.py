@@ -126,8 +126,43 @@ class LiveTrafficReadinessReportTests(unittest.TestCase):
         self.assertEqual(unfiltered["groups"][0]["geo_route_sample_ratio"], 0.5)
         self.assertEqual(filtered["sample_file_count"], 1)
         self.assertEqual(filtered["filtered_file_count"], 1)
+        self.assertEqual(filtered["excluded_groups"][0]["latest_sample"], "legacy_scale_only.json")
         self.assertEqual(filtered["groups"][0]["geo_route_sample_ratio"], 1.0)
         self.assertTrue(results[0]["passed"])
+        self.assertEqual(results[0]["latest_excluded_sample"], "legacy_scale_only.json")
+
+    def test_missing_post_cutoff_group_reports_latest_excluded_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "legacy_scale_only.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "pm_peak",
+                        "measured_at": "2026-06-17T15:40:00+08:00",
+                        "routes": [{"route_id": "legacy", "factor": 1.9}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            filtered = report_live_traffic_readiness.summarize(
+                sample_dir,
+                min_measured_at="2026-06-18T00:00:00+08:00",
+            )
+            results = report_live_traffic_readiness.evaluate_requirements(
+                filtered,
+                [("CN", "Shanghai", "pm_peak")],
+                min_geo_ratio=1.0,
+            )
+
+        self.assertEqual(filtered["sample_file_count"], 0)
+        self.assertEqual(filtered["filtered_file_count"], 1)
+        self.assertEqual(results[0]["reason"], "missing_sample_group")
+        self.assertEqual(results[0]["latest_excluded_sample"], "legacy_scale_only.json")
+        self.assertEqual(results[0]["excluded_route_sample_count"], 1)
+        self.assertEqual(results[0]["excluded_geo_route_sample_count"], 0)
 
 
 if __name__ == "__main__":

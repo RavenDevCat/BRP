@@ -76,7 +76,56 @@ def _quality_counts(estimates: list[Any]) -> dict[str, int]:
     return dict(Counter(str(_as_dict(item).get("quality_reason") or "unknown") for item in estimates))
 
 
-def _summarize_scenario(name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def _summarize_route_evidence(item: Any, *, include_top_matches: bool) -> dict[str, Any]:
+    estimate = _as_dict(item)
+    evidence: dict[str, Any] = {
+        "route_id": str(estimate.get("route_id") or ""),
+        "scenario": str(estimate.get("scenario") or ""),
+        "vehicle_id": str(estimate.get("vehicle_id") or ""),
+        "bus_type_name": str(estimate.get("bus_type_name") or ""),
+        "method": str(estimate.get("method") or "unknown"),
+        "quality_reason": str(estimate.get("quality_reason") or "unknown"),
+        "factor": float(estimate.get("factor") or 0.0),
+        "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
+        "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
+        "candidate_count": int(estimate.get("candidate_count") or 0),
+        "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
+        "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
+        "osrm_duration_min": round(float(estimate.get("osrm_duration_s") or 0.0) / 60.0, 2),
+        "stop_count": int(estimate.get("stop_count") or 0),
+        "fallback": bool(estimate.get("fallback")),
+        "reason": str(estimate.get("reason") or ""),
+    }
+    if include_top_matches:
+        evidence["top_matches"] = [
+            {
+                "route_id": str(match.get("route_id") or ""),
+                "source_id": str(match.get("source_id") or ""),
+                "factor": float(match.get("factor") or 0.0),
+                "similarity_score": float(match.get("similarity_score") or 0.0),
+                "similarity_method": str(match.get("similarity_method") or "unknown"),
+                "geo_similarity_score": float(match.get("geo_similarity_score") or 0.0),
+                "corridor_overlap": float(match.get("corridor_overlap") or 0.0),
+                "center_distance_km": float(match.get("center_distance_km") or 0.0),
+                "bearing_score": float(match.get("bearing_score") or 0.0),
+                "duration_score": float(match.get("duration_score") or 0.0),
+                "stop_score": float(match.get("stop_score") or 0.0),
+                "scale_score": float(match.get("scale_score") or 0.0),
+            }
+            for match in (_as_dict(match) for match in _as_list(estimate.get("top_matches")))
+        ]
+    else:
+        evidence["top_match_count"] = len(_as_list(estimate.get("top_matches")))
+    return evidence
+
+
+def _summarize_scenario(
+    name: str,
+    payload: dict[str, Any],
+    *,
+    include_route_evidence: bool = False,
+    include_top_matches: bool = False,
+) -> dict[str, Any]:
     estimates = _as_list(payload.get("route_estimates"))
     method_counts = _as_dict(payload.get("method_counts")) or _method_counts(estimates)
     quality_counts = _as_dict(payload.get("quality_reason_counts")) or _quality_counts(estimates)
@@ -86,7 +135,7 @@ def _summarize_scenario(name: str, payload: dict[str, Any]) -> dict[str, Any]:
         payload.get("route_similarity_route_count") or method_counts.get("route_similarity", 0) or 0
     )
     fallback_count = int(payload.get("fallback_route_count") or method_counts.get("fallback", 0) or 0)
-    return {
+    summary: dict[str, Any] = {
         "scenario": name,
         "present": True,
         "route_estimate_count": route_count,
@@ -102,9 +151,21 @@ def _summarize_scenario(name: str, payload: dict[str, Any]) -> dict[str, Any]:
         "method_counts": method_counts,
         "quality_reason_counts": quality_counts,
     }
+    if include_route_evidence:
+        summary["route_evidence"] = [
+            _summarize_route_evidence(item, include_top_matches=include_top_matches)
+            for item in estimates
+        ]
+    return summary
 
 
-def summarize_job(job: str, job_dir: Path = DEFAULT_JOB_DIR) -> dict[str, Any]:
+def summarize_job(
+    job: str,
+    job_dir: Path = DEFAULT_JOB_DIR,
+    *,
+    include_route_evidence: bool = False,
+    include_top_matches: bool = False,
+) -> dict[str, Any]:
     payload = _load_job(job, job_dir)
     result, structured = _result_sections(payload)
     traffic = _traffic_attribution(result, structured)
@@ -113,7 +174,14 @@ def summarize_job(job: str, job_dir: Path = DEFAULT_JOB_DIR) -> dict[str, Any]:
     scenarios: list[dict[str, Any]] = []
     for name, data in sorted(scenario_estimates.items()):
         if isinstance(data, dict):
-            scenarios.append(_summarize_scenario(str(name), data))
+            scenarios.append(
+                _summarize_scenario(
+                    str(name),
+                    data,
+                    include_route_evidence=include_route_evidence,
+                    include_top_matches=include_top_matches,
+                )
+            )
 
     present_scenarios = {str(item.get("scenario")) for item in scenarios}
     for scenario_name, structured_key in _scenario_candidates(structured).items():
@@ -122,7 +190,14 @@ def summarize_job(job: str, job_dir: Path = DEFAULT_JOB_DIR) -> dict[str, Any]:
         scenario_payload = _as_dict(structured.get(structured_key))
         route_attribution = _as_dict(scenario_payload.get("traffic_route_attribution"))
         if route_attribution:
-            scenarios.append(_summarize_scenario(scenario_name, route_attribution))
+            scenarios.append(
+                _summarize_scenario(
+                    scenario_name,
+                    route_attribution,
+                    include_route_evidence=include_route_evidence,
+                    include_top_matches=include_top_matches,
+                )
+            )
             present_scenarios.add(scenario_name)
 
     return {
@@ -209,7 +284,7 @@ def evaluate_requirements(
     return results
 
 
-def _print_summary(summary: dict[str, Any]) -> None:
+def _print_summary(summary: dict[str, Any], *, show_route_evidence: bool = False) -> None:
     print(f"job_id: {summary['job_id']}")
     print(f"status: {summary['status']}")
     print(f"service_direction: {summary['service_direction']}")
@@ -241,6 +316,30 @@ def _print_summary(summary: dict[str, Any]) -> None:
             f"fallback={scenario['fallback_route_count']}",
             f"geo_ratio={float(scenario['geo_attributed_route_ratio']):.3f}",
         )
+        if show_route_evidence:
+            for route in _as_list(scenario.get("route_evidence")):
+                route_dict = _as_dict(route)
+                print(
+                    "  route",
+                    route_dict.get("route_id") or "-",
+                    f"factor={float(route_dict.get('factor') or 0.0):.3f}",
+                    f"method={route_dict.get('method') or '-'}",
+                    f"quality={route_dict.get('quality_reason') or '-'}",
+                    f"matches={int(route_dict.get('matched_sample_count') or 0)}",
+                    f"avg_similarity={float(route_dict.get('avg_similarity') or 0.0):.3f}",
+                    f"geo_candidates={int(route_dict.get('usable_geo_candidate_count') or 0)}/"
+                    f"{int(route_dict.get('geo_candidate_count') or 0)}",
+                )
+                for match in _as_list(route_dict.get("top_matches")):
+                    match_dict = _as_dict(match)
+                    print(
+                        "    match",
+                        match_dict.get("source_id") or "-",
+                        match_dict.get("route_id") or "-",
+                        f"factor={float(match_dict.get('factor') or 0.0):.3f}",
+                        f"score={float(match_dict.get('similarity_score') or 0.0):.3f}",
+                        f"method={match_dict.get('similarity_method') or '-'}",
+                    )
     requirements = _as_list(summary.get("requirements"))
     if requirements:
         print("requirements")
@@ -255,6 +354,21 @@ def main() -> None:
     parser.add_argument("--job", required=True, help="Job seed/id or path to a job JSON file.")
     parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--include-route-evidence",
+        action="store_true",
+        help="Include per-route attribution factor evidence in JSON output.",
+    )
+    parser.add_argument(
+        "--include-top-matches",
+        action="store_true",
+        help="Include top matched historical sample routes inside route evidence.",
+    )
+    parser.add_argument(
+        "--show-route-evidence",
+        action="store_true",
+        help="Print per-route attribution factor evidence in text output. Implies --include-route-evidence.",
+    )
     parser.add_argument("--require-attribution", action="store_true", help="Require job-level attribution success.")
     parser.add_argument(
         "--require-scenario",
@@ -274,7 +388,14 @@ def main() -> None:
     if not 0.0 <= args.min_geo_route_ratio <= 1.0:
         parser.error("--min-geo-route-ratio must be between 0 and 1")
 
-    summary = summarize_job(args.job, args.job_dir)
+    include_route_evidence = bool(args.include_route_evidence or args.show_route_evidence)
+    include_top_matches = bool(args.include_top_matches)
+    summary = summarize_job(
+        args.job,
+        args.job_dir,
+        include_route_evidence=include_route_evidence,
+        include_top_matches=include_top_matches,
+    )
     requirements = evaluate_requirements(
         summary,
         require_attribution=bool(args.require_attribution),
@@ -286,7 +407,7 @@ def main() -> None:
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
     else:
-        _print_summary(summary)
+        _print_summary(summary, show_route_evidence=bool(args.show_route_evidence))
     if any(not item["passed"] for item in requirements):
         print("One or more job traffic-attribution requirements failed.", file=sys.stderr)
         raise SystemExit(1)

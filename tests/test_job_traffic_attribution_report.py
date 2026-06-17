@@ -83,8 +83,40 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                                             "method_counts": {"geo_route_similarity": 2},
                                             "quality_reason_counts": {"geo_threshold_passed": 2},
                                             "route_estimates": [
-                                                {"route_id": "R1", "method": "geo_route_similarity"},
-                                                {"route_id": "R2", "method": "geo_route_similarity"},
+                                                {
+                                                    "route_id": "R1",
+                                                    "method": "geo_route_similarity",
+                                                    "quality_reason": "geo_threshold_passed",
+                                                    "factor": 1.23,
+                                                    "avg_similarity": 0.91,
+                                                    "matched_sample_count": 3,
+                                                    "candidate_count": 7,
+                                                    "geo_candidate_count": 5,
+                                                    "usable_geo_candidate_count": 3,
+                                                    "osrm_duration_s": 1800,
+                                                    "stop_count": 6,
+                                                    "top_matches": [
+                                                        {
+                                                            "route_id": "sample-r1",
+                                                            "source_id": "sample-file",
+                                                            "factor": 1.2,
+                                                            "similarity_score": 0.94,
+                                                            "similarity_method": "geo_route_similarity",
+                                                            "geo_similarity_score": 0.89,
+                                                            "corridor_overlap": 0.7,
+                                                            "center_distance_km": 1.5,
+                                                            "bearing_score": 0.8,
+                                                            "duration_score": 0.95,
+                                                            "stop_score": 0.9,
+                                                            "scale_score": 0.92,
+                                                        }
+                                                    ],
+                                                },
+                                                {
+                                                    "route_id": "R2",
+                                                    "method": "geo_route_similarity",
+                                                    "quality_reason": "geo_threshold_passed",
+                                                },
                                             ],
                                         },
                                         "time_constrained": {
@@ -107,6 +139,12 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
             )
 
             summary = report_job_traffic_attribution.summarize_job("geo", job_dir)
+            evidence_summary = report_job_traffic_attribution.summarize_job(
+                "geo",
+                job_dir,
+                include_route_evidence=True,
+                include_top_matches=True,
+            )
             pass_requirements = report_job_traffic_attribution.evaluate_requirements(
                 summary,
                 require_attribution=True,
@@ -124,6 +162,19 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
         self.assertTrue(summary["attribution_succeeded"])
         self.assertTrue(summary["route_level_applied"])
         self.assertEqual(summary["scenario_count"], 2)
+        self.assertNotIn("route_evidence", summary["scenarios"][0])
+        free_evidence = {
+            scenario["scenario"]: scenario for scenario in evidence_summary["scenarios"]
+        }["free_optimization_baseline"]["route_evidence"]
+        self.assertEqual(free_evidence[0]["route_id"], "R1")
+        self.assertEqual(free_evidence[0]["method"], "geo_route_similarity")
+        self.assertEqual(free_evidence[0]["quality_reason"], "geo_threshold_passed")
+        self.assertAlmostEqual(free_evidence[0]["factor"], 1.23)
+        self.assertEqual(free_evidence[0]["matched_sample_count"], 3)
+        self.assertEqual(free_evidence[0]["usable_geo_candidate_count"], 3)
+        self.assertAlmostEqual(free_evidence[0]["osrm_duration_min"], 30.0)
+        self.assertEqual(free_evidence[0]["top_matches"][0]["source_id"], "sample-file")
+        self.assertEqual(free_evidence[0]["top_matches"][0]["route_id"], "sample-r1")
         self.assertTrue(all(item["passed"] for item in pass_requirements))
         self.assertFalse(fail_requirements[1]["passed"])
         self.assertEqual(fail_requirements[1]["reason"], "geo_route_ratio_below_requirement")

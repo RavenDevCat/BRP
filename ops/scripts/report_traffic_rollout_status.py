@@ -24,6 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 import report_traffic_rollout_readiness  # noqa: E402
+import report_live_traffic_budget  # noqa: E402
 
 
 DEFAULT_TIMER_UNITS = (
@@ -269,6 +270,63 @@ def collect_osrm_manager_status() -> dict[str, Any]:
     }
 
 
+def collect_budget_status() -> dict[str, Any]:
+    args = argparse.Namespace(
+        include_off_peak=False,
+        profile=[],
+        max_api_calls_per_run=None,
+        sample_due_routes_only=False,
+        now_local_time="",
+    )
+    try:
+        report = report_live_traffic_budget.build_report(args)
+    except Exception as exc:
+        return {"available": False, "problem": True, "error": str(exc)}
+
+    profiles = [row for row in report.get("profiles", []) if isinstance(row, dict)]
+    missing_profiles = [str(item) for item in list(report.get("missing_profiles") or [])]
+    over_cap_profiles = [row for row in profiles if row.get("status") != "ok"]
+    baseline_fast_path_problems = [
+        row
+        for row in profiles
+        if row.get("source") == "baseline_json" and row.get("baseline_fast_path_ready") is not True
+    ]
+    compact_profiles = [
+        {
+            "profile": row.get("profile"),
+            "city": row.get("city"),
+            "period": row.get("period"),
+            "provider": row.get("provider"),
+            "estimated_api_call_count": int(row.get("estimated_api_call_count") or 0),
+            "max_api_calls_per_run": int(row.get("max_api_calls_per_run") or 0),
+            "provider_refresh_cap": int(row.get("provider_refresh_cap") or 0),
+            "baseline_fast_path_ready": row.get("baseline_fast_path_ready"),
+            "status": row.get("status"),
+            "error": row.get("error", ""),
+        }
+        for row in profiles
+    ]
+    return {
+        "available": True,
+        "problem": bool(missing_profiles or over_cap_profiles or baseline_fast_path_problems),
+        "provider_api_called": bool(report.get("provider_api_called")),
+        "osrm_started": bool(report.get("osrm_started")),
+        "profile_count": len(profiles),
+        "missing_profile_count": len(missing_profiles),
+        "missing_profiles": missing_profiles,
+        "over_cap_count": len(over_cap_profiles),
+        "over_cap_profiles": [row.get("profile") for row in over_cap_profiles],
+        "baseline_fast_path_problem_count": len(baseline_fast_path_problems),
+        "baseline_fast_path_problem_profiles": [row.get("profile") for row in baseline_fast_path_problems],
+        "total_estimated_api_call_count": sum(int(row.get("estimated_api_call_count") or 0) for row in profiles),
+        "max_estimated_api_call_count": max(
+            [int(row.get("estimated_api_call_count") or 0) for row in profiles],
+            default=0,
+        ),
+        "profiles": compact_profiles,
+    }
+
+
 def summarize_rollout_gate(gate: dict[str, Any]) -> dict[str, Any]:
     readiness = dict(gate.get("readiness") or {})
     requirements = [row for row in readiness.get("requirements", []) if isinstance(row, dict)]
@@ -345,6 +403,7 @@ def build_status(
     min_geo_ratio: float,
     include_timers: bool,
     include_osrm: bool,
+    include_budget: bool = False,
     local_timezone: str = DEFAULT_LOCAL_TIMEZONE,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -367,15 +426,21 @@ def build_status(
         else []
     )
     osrm_status = collect_osrm_manager_status() if include_osrm else {"available": False, "skipped": True}
+    budget_status = collect_budget_status() if include_budget else {"available": False, "skipped": True}
     timer_problem_count = sum(1 for row in timer_status if not row.get("available") or row.get("active_state") == "failed")
     service_problem_count = sum(1 for row in service_status if bool(row.get("problem")))
     osrm_problem = bool(
         osrm_status.get("available")
         and (int(osrm_status.get("lock_count") or 0) > 0 or int(osrm_status.get("stale_lock_count") or 0) > 0)
     )
+    budget_problem = bool(budget_status.get("problem"))
     status = (
         "ready"
-        if gate.get("status") == "ok" and timer_problem_count == 0 and service_problem_count == 0 and not osrm_problem
+        if gate.get("status") == "ok"
+        and timer_problem_count == 0
+        and service_problem_count == 0
+        and not osrm_problem
+        and not budget_problem
         else "waiting"
     )
     next_timer = _next_relevant_timer(timer_status)
@@ -401,6 +466,7 @@ def build_status(
             "problem_services": _problem_services(service_status),
             "items": service_status,
         },
+        "api_budget": budget_status,
         "osrm_manager": osrm_status,
         "next_step": next_step,
     }
@@ -435,6 +501,18 @@ def _print_status(report: dict[str, Any]) -> None:
     problem_services = [row.get("unit") for row in list(services.get("problem_services") or [])]
     if problem_services:
         print("problem_services:", ", ".join(str(item) for item in problem_services))
+    budget = dict(report.get("api_budget") or {})
+    if budget.get("skipped"):
+        print("api_budget: skipped")
+    else:
+        print(
+            "api_budget:",
+            f"available={budget.get('available')}",
+            f"problem={budget.get('problem')}",
+            f"total_calls={budget.get('total_estimated_api_call_count')}",
+            f"max_calls={budget.get('max_estimated_api_call_count')}",
+            f"fast_path_problems={budget.get('baseline_fast_path_problem_count')}",
+        )
     osrm = dict(report.get("osrm_manager") or {})
     print(
         "osrm_manager:",
@@ -472,6 +550,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--no-timers", action="store_true", help="Skip systemd timer status collection.")
     parser.add_argument("--no-osrm", action="store_true", help="Skip OSRM manager status collection.")
+    parser.add_argument("--no-budget", action="store_true", help="Skip API budget / baseline fast-path preflight.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args()
 
@@ -488,6 +567,7 @@ def main() -> None:
         min_geo_ratio=float(args.min_geo_ratio),
         include_timers=not args.no_timers,
         include_osrm=not args.no_osrm,
+        include_budget=not args.no_budget,
         local_timezone=str(args.local_timezone or DEFAULT_LOCAL_TIMEZONE),
     )
     if args.json:

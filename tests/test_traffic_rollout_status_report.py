@@ -143,6 +143,78 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertTrue(rows[0]["problem"])
         self.assertEqual(rows[0]["exec_main_status"], 1)
 
+    def test_budget_status_summarizes_api_and_fast_path_problems(self) -> None:
+        original = report_traffic_rollout_status.report_live_traffic_budget.build_report
+        try:
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = lambda _args: {
+                "provider_api_called": False,
+                "osrm_started": False,
+                "missing_profiles": ["missing_profile"],
+                "profiles": [
+                    {
+                        "profile": "ok_profile",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "provider": "amap",
+                        "estimated_api_call_count": 21,
+                        "max_api_calls_per_run": 1000,
+                        "provider_refresh_cap": 0,
+                        "baseline_fast_path_ready": True,
+                        "status": "ok",
+                    },
+                    {
+                        "profile": "bad_profile",
+                        "city": "Suzhou",
+                        "period": "pm_peak",
+                        "provider": "amap",
+                        "estimated_api_call_count": 1001,
+                        "max_api_calls_per_run": 1000,
+                        "provider_refresh_cap": 0,
+                        "baseline_fast_path_ready": False,
+                        "source": "baseline_json",
+                        "status": "over_cap",
+                    },
+                ],
+            }
+
+            status = report_traffic_rollout_status.collect_budget_status()
+        finally:
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = original
+
+        self.assertTrue(status["available"])
+        self.assertTrue(status["problem"])
+        self.assertFalse(status["provider_api_called"])
+        self.assertFalse(status["osrm_started"])
+        self.assertEqual(status["missing_profile_count"], 1)
+        self.assertEqual(status["over_cap_profiles"], ["bad_profile"])
+        self.assertEqual(status["baseline_fast_path_problem_profiles"], ["bad_profile"])
+        self.assertEqual(status["total_estimated_api_call_count"], 1022)
+        self.assertEqual(status["max_estimated_api_call_count"], 1001)
+
+    def test_build_status_includes_budget_when_requested(self) -> None:
+        original = report_traffic_rollout_status.collect_budget_status
+        try:
+            report_traffic_rollout_status.collect_budget_status = lambda: {
+                "available": True,
+                "problem": True,
+                "total_estimated_api_call_count": 1001,
+            }
+            with tempfile.TemporaryDirectory() as tmpdir:
+                report = report_traffic_rollout_status.build_status(
+                    sample_dir=Path(tmpdir),
+                    min_measured_at="2026-06-18T00:00:00+08:00",
+                    profiles=[("CN", "Shanghai", "am_peak")],
+                    min_geo_ratio=1.0,
+                    include_timers=False,
+                    include_osrm=False,
+                    include_budget=True,
+                )
+        finally:
+            report_traffic_rollout_status.collect_budget_status = original
+
+        self.assertEqual(report["api_budget"]["total_estimated_api_call_count"], 1001)
+        self.assertEqual(report["status"], "waiting")
+
     def test_problem_services_are_summarized(self) -> None:
         rows = [
             {

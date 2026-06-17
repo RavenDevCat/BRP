@@ -7,7 +7,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { DEFAULT_PLANNER_CONFIG, SERVICE_DIRECTION_OPTIONS, TRAFFIC_PROFILE_OPTIONS } from "@/features/planner/config";
+import {
+  DEFAULT_PLANNER_CONFIG,
+  SERVICE_DIRECTION_OPTIONS,
+  TRAFFIC_COEFFICIENT_MODE_OPTIONS,
+  TRAFFIC_PROFILE_OPTIONS,
+} from "@/features/planner/config";
 import {
   getWorkbookTemplateUrl,
   previewWorkbook,
@@ -261,6 +266,32 @@ export function NewJobPage() {
                       </option>
                     ))}
                   </select>
+                </Field>
+                <Field label="Coefficient Logic">
+                  <div className="grid grid-cols-2 gap-2">
+                    {TRAFFIC_COEFFICIENT_MODE_OPTIONS.map((option) => {
+                      const selected = config.traffic_coefficient_mode === option.value;
+                      return (
+                        <button
+                          key={option.value}
+                          type="button"
+                          className={`h-10 rounded-md border px-3 text-sm font-medium transition ${
+                            selected
+                              ? "border-primary bg-primary text-white shadow-sm"
+                              : "border-border bg-surface text-foreground hover:border-primary/60"
+                          }`}
+                          onClick={() => updateUserConfig({ traffic_coefficient_mode: option.value })}
+                        >
+                          {t(option.label)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {config.traffic_coefficient_mode === "attributed"
+                      ? t("Uses existing traffic samples to estimate the coefficient from similar route duration and stop-count evidence.")
+                      : t("Keeps the current fixed/live traffic coefficient behavior.")}
+                  </div>
                 </Field>
                 <Field label="Target Duration">
                   <input

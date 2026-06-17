@@ -280,6 +280,7 @@ export type PlannerConfigPayload = {
     nearby_cluster_radius_m: number;
     comfort_load_factor: number;
     traffic_profile_name: string;
+    traffic_coefficient_mode: string;
     service_direction: string;
     to_school_arrival_time: string;
     from_school_departure_time: string;

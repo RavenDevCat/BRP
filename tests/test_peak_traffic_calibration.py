@@ -174,6 +174,116 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.9)
         self.assertEqual(result["route_sample_count"], 21)
 
+    def test_attributed_traffic_profile_uses_route_similarity_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "pm_routes.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-09T15:40:00+08:00",
+                        "local_date": "2026-06-09",
+                        "period": "pm_peak",
+                        "country": "China",
+                        "city": "Shanghai",
+                        "dry_run": False,
+                        "route_count": 1,
+                        "total_osrm_duration_s": 200.0,
+                        "total_amap_duration_s": 320.0,
+                        "routes": [
+                            {
+                                "route_id": "sample-r1",
+                                "provider": "amap",
+                                "stop_count": 2,
+                                "osrm_duration_s": 200.0,
+                                "amap_duration_s": 320.0,
+                                "factor": 1.6,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            points = [
+                {
+                    "node_id": 0,
+                    "country": "China",
+                    "city": "Shanghai",
+                    "address": "School",
+                    "lat": 31.0,
+                    "lng": 121.0,
+                    "is_depot": True,
+                },
+                {
+                    "node_id": 1,
+                    "country": "China",
+                    "city": "Shanghai",
+                    "address": "Stop A",
+                    "lat": 31.1,
+                    "lng": 121.1,
+                },
+                {
+                    "node_id": 2,
+                    "country": "China",
+                    "city": "Shanghai",
+                    "address": "Stop B",
+                    "lat": 31.2,
+                    "lng": 121.2,
+                },
+            ]
+            current_plan = {
+                "service_direction": "From School",
+                "stops": [
+                    {"stop_id": "R1__0", **points[0]},
+                    {"stop_id": "R1__1", **points[1]},
+                    {"stop_id": "R1__2", **points[2]},
+                ],
+                "assignments": [
+                    {"route_id": "R1", "stop_id": "R1__0", "stop_sequence": 1, "bus_type": "Bus"},
+                    {"route_id": "R1", "stop_id": "R1__1", "stop_sequence": 2, "bus_type": "Bus"},
+                    {"route_id": "R1", "stop_id": "R1__2", "stop_sequence": 3, "bus_type": "Bus"},
+                ],
+                "fleet": [{"bus_type": "Bus", "seat_count": 42}],
+            }
+            result = planner_core.resolve_attributed_traffic_profile(
+                FakePlanner(),
+                current_plan,
+                points,
+                [{"country": "China", "city": "Shanghai", "address": "School", "passenger_count": 0}],
+                planner_core.PlannerConfig(
+                    service_direction="From School",
+                    traffic_coefficient_mode="attributed",
+                ),
+                "PM Peak",
+                1.75,
+                "Shanghai default",
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 9, 16, 0, tzinfo=ZoneInfo("Asia/Shanghai")),
+            )
+
+        self.assertTrue(result["succeeded"])
+        self.assertEqual(result["mode"], "attributed")
+        self.assertEqual(result["method"], "route_similarity")
+        self.assertEqual(result["traffic_profile_name"], "PM Peak (Attributed)")
+        self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.6)
+        self.assertEqual(result["observed_route_sample_count"], 1)
+        self.assertEqual(result["attributed_route_count"], 1)
+
+    def test_attributed_traffic_profile_is_disabled_in_legacy_mode(self) -> None:
+        result = planner_core.resolve_attributed_traffic_profile(
+            FakePlanner(),
+            {},
+            [],
+            [{"country": "China", "city": "Shanghai", "address": "School", "passenger_count": 0}],
+            planner_core.PlannerConfig(traffic_coefficient_mode="legacy"),
+            "PM Peak",
+            1.75,
+            "Shanghai default",
+        )
+
+        self.assertFalse(result["enabled"])
+        self.assertEqual(result["mode"], "legacy")
+        self.assertEqual(result["reason"], "legacy_mode")
+
     def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_dir = Path(tmpdir)

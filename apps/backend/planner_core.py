@@ -60,6 +60,12 @@ LIVE_TRAFFIC_MIN_ROUTE_SAMPLES = max(
     1,
     int(os.environ.get("BRP_LIVE_TRAFFIC_MIN_ROUTE_SAMPLES", "1") or 1),
 )
+TRAFFIC_COEFFICIENT_MODE_LEGACY = "legacy"
+TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED = "attributed"
+TRAFFIC_ATTRIBUTION_TOP_K = max(
+    1,
+    int(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_TOP_K", "5") or 5),
+)
 AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
     "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
     "false",
@@ -210,6 +216,7 @@ class PlannerConfig:
     nearby_cluster_radius_m: int = 500
     comfort_load_factor: float = 1.0
     traffic_profile_name: str = "Off-Peak"
+    traffic_coefficient_mode: str = TRAFFIC_COEFFICIENT_MODE_LEGACY
     service_direction: str = "From School"
     to_school_arrival_time: str = "08:00"
     from_school_departure_time: str = "15:40"
@@ -424,6 +431,13 @@ def resolve_traffic_profile(
     return normalized, float(TRAFFIC_PROFILE_MULTIPLIERS[normalized]), "Global default"
 
 
+def normalize_traffic_coefficient_mode(value: str | None) -> str:
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"attributed", "attribution", "route_attributed", "similarity"}:
+        return TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED
+    return TRAFFIC_COEFFICIENT_MODE_LEGACY
+
+
 def live_traffic_period_for_service_direction(service_direction: str | None) -> str | None:
     normalized = normalize_service_direction(service_direction)
     if normalized == "To School":
@@ -526,6 +540,20 @@ def _matching_live_traffic_samples(
     return matches
 
 
+def _select_live_traffic_sample_window(matches: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+    selected_dates: list[str] = []
+    selected: list[dict[str, Any]] = []
+    for item in matches:
+        local_date = str(item["_local_date"])
+        if local_date not in selected_dates:
+            if len(selected_dates) >= LIVE_TRAFFIC_ROLLING_WORKDAYS:
+                continue
+            selected_dates.append(local_date)
+        if local_date in selected_dates:
+            selected.append(item)
+    return selected, selected_dates
+
+
 def summarize_live_traffic_samples(
     *,
     service_direction: str | None,
@@ -547,16 +575,7 @@ def summarize_live_traffic_samples(
     if not matches:
         return None
 
-    selected_dates: list[str] = []
-    selected: list[dict[str, Any]] = []
-    for item in matches:
-        local_date = str(item["_local_date"])
-        if local_date not in selected_dates:
-            if len(selected_dates) >= LIVE_TRAFFIC_ROLLING_WORKDAYS:
-                continue
-            selected_dates.append(local_date)
-        if local_date in selected_dates:
-            selected.append(item)
+    selected, selected_dates = _select_live_traffic_sample_window(matches)
 
     total_osrm = sum(float(item.get("total_osrm_duration_s", 0.0) or 0.0) for item in selected)
     total_api = sum(float(item.get("_total_api_duration_s", item.get("total_api_duration_s", 0.0)) or 0.0) for item in selected)
@@ -858,6 +877,288 @@ def _selected_route_traffic_stats(
     selected_routes = dict(route_periods.get(selected_period) or {})
     stats = selected_routes.get(str(route_id).strip())
     return dict(stats) if isinstance(stats, dict) else None
+
+
+def _route_sample_factor(route: dict[str, Any]) -> float | None:
+    try:
+        factor = float(route.get("factor"))
+    except (TypeError, ValueError):
+        factor = 0.0
+    if factor > 0:
+        return factor
+    osrm_duration_s = float(route.get("osrm_duration_s", 0.0) or 0.0)
+    api_duration_s = route.get("api_duration_s")
+    if api_duration_s is None:
+        api_duration_s = route.get("amap_duration_s")
+    api_duration_s = float(api_duration_s or 0.0)
+    if osrm_duration_s <= 0 or api_duration_s <= 0:
+        return None
+    return api_duration_s / osrm_duration_s
+
+
+def _live_route_attribution_candidates(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for sample in samples:
+        measured_at = sample.get("_measured_at")
+        for route in list(sample.get("routes") or []):
+            route = dict(route or {})
+            factor = _route_sample_factor(route)
+            osrm_duration_s = float(route.get("osrm_duration_s", 0.0) or 0.0)
+            if factor is None or osrm_duration_s <= 0:
+                continue
+            candidates.append(
+                {
+                    "route_id": str(route.get("route_id") or "").strip(),
+                    "source_id": str(route.get("source_id") or sample.get("source_id") or "").strip(),
+                    "sample_path": str(sample.get("_path") or ""),
+                    "provider": str(route.get("provider") or sample.get("provider") or "").strip(),
+                    "measured_at": measured_at.isoformat(timespec="seconds") if isinstance(measured_at, datetime) else "",
+                    "osrm_duration_s": osrm_duration_s,
+                    "api_duration_s": float(route.get("api_duration_s") or route.get("amap_duration_s") or 0.0),
+                    "stop_count": int(route.get("stop_count", 0) or 0),
+                    "factor": float(factor),
+                }
+            )
+    return candidates
+
+
+def _target_current_plan_route_features(
+    planner: Any,
+    current_plan: dict[str, Any] | None,
+    prepared_original_points: list[dict[str, Any]],
+    service_direction: str,
+) -> list[dict[str, Any]]:
+    route_points_by_id = _current_plan_matched_route_points(
+        current_plan,
+        prepared_original_points,
+        service_direction,
+    )
+    if not route_points_by_id:
+        return []
+    features: list[dict[str, Any]] = []
+    previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
+    planner.OSRM_BASE_URL = planner.resolve_osrm_base_url(prepared_original_points)
+    try:
+        for route_id, points in route_points_by_id.items():
+            osrm_duration_s = 0.0
+            distance_m = 0.0
+            leg_count = 0
+            for origin, destination in zip(points[:-1], points[1:]):
+                try:
+                    leg_distance_m, leg_duration_s, _geometry = planner.osrm_driving_direction(origin, destination)
+                except Exception:
+                    continue
+                if float(leg_duration_s or 0.0) <= 0:
+                    continue
+                distance_m += float(leg_distance_m or 0.0)
+                osrm_duration_s += float(leg_duration_s or 0.0)
+                leg_count += 1
+            if osrm_duration_s <= 0 or leg_count <= 0:
+                continue
+            features.append(
+                {
+                    "route_id": str(route_id),
+                    "osrm_duration_s": osrm_duration_s,
+                    "distance_m": distance_m,
+                    "stop_count": max(0, len(points) - 1),
+                    "leg_count": leg_count,
+                }
+            )
+    finally:
+        planner.OSRM_BASE_URL = previous_osrm_base_url
+    return features
+
+
+def _traffic_attribution_similarity(target: dict[str, Any], candidate: dict[str, Any]) -> float:
+    target_duration = max(1.0, float(target.get("osrm_duration_s", 0.0) or 0.0))
+    candidate_duration = max(1.0, float(candidate.get("osrm_duration_s", 0.0) or 0.0))
+    duration_gap = abs(math.log(target_duration / candidate_duration))
+    duration_score = 1.0 / (1.0 + duration_gap * 1.8)
+    target_stop_count = int(target.get("stop_count", 0) or 0)
+    candidate_stop_count = int(candidate.get("stop_count", 0) or 0)
+    stop_score = 1.0 / (1.0 + abs(target_stop_count - candidate_stop_count) / 4.0)
+    return max(0.001, duration_score * stop_score)
+
+
+def _route_attributed_factor(
+    target: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    ranked = sorted(
+        (
+            {
+                **candidate,
+                "similarity_score": _traffic_attribution_similarity(target, candidate),
+            }
+            for candidate in candidates
+        ),
+        key=lambda item: float(item["similarity_score"]),
+        reverse=True,
+    )[:TRAFFIC_ATTRIBUTION_TOP_K]
+    if not ranked:
+        return None
+    total_weight = sum(
+        max(0.001, float(item["similarity_score"])) * max(60.0, float(item["osrm_duration_s"]))
+        for item in ranked
+    )
+    if total_weight <= 0:
+        return None
+    factor = sum(
+        float(item["factor"]) * max(0.001, float(item["similarity_score"])) * max(60.0, float(item["osrm_duration_s"]))
+        for item in ranked
+    ) / total_weight
+    avg_similarity = sum(float(item["similarity_score"]) for item in ranked) / float(len(ranked))
+    return {
+        "route_id": str(target.get("route_id") or ""),
+        "factor": float(factor),
+        "weight_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
+        "osrm_duration_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
+        "stop_count": int(target.get("stop_count", 0) or 0),
+        "matched_sample_count": len(ranked),
+        "avg_similarity": float(avg_similarity),
+        "top_matches": [
+            {
+                "route_id": str(item.get("route_id") or ""),
+                "source_id": str(item.get("source_id") or ""),
+                "factor": float(item.get("factor", 0.0) or 0.0),
+                "osrm_duration_s": float(item.get("osrm_duration_s", 0.0) or 0.0),
+                "stop_count": int(item.get("stop_count", 0) or 0),
+                "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+            }
+            for item in ranked[:3]
+        ],
+    }
+
+
+def _traffic_attribution_confidence(score: float, route_count: int, sample_count: int) -> str:
+    if route_count >= 3 and sample_count >= 10 and score >= 0.55:
+        return "high"
+    if route_count >= 1 and sample_count >= 3 and score >= 0.35:
+        return "medium"
+    return "low"
+
+
+def resolve_attributed_traffic_profile(
+    planner: Any,
+    current_plan: dict[str, Any] | None,
+    prepared_original_points: list[dict[str, Any]],
+    input_records: list[dict[str, Any]],
+    config: PlannerConfig,
+    fallback_profile_name: str,
+    fallback_multiplier: float,
+    fallback_context: str,
+    sample_dir: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    mode = normalize_traffic_coefficient_mode(config.traffic_coefficient_mode)
+    if mode != TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED:
+        return {"enabled": False, "mode": mode, "reason": "legacy_mode"}
+    country, city = infer_traffic_location(input_records)
+    period = live_traffic_period_for_service_direction(config.service_direction)
+    if period is None:
+        return {"enabled": True, "succeeded": False, "mode": mode, "reason": "unsupported_service_direction"}
+    matches = _matching_live_traffic_samples(
+        country=country,
+        city=city,
+        period=period,
+        sample_dir=sample_dir,
+        now=now,
+    )
+    selected, selected_dates = _select_live_traffic_sample_window(matches)
+    candidates = _live_route_attribution_candidates(selected)
+    if not candidates:
+        return {
+            "enabled": True,
+            "succeeded": False,
+            "mode": mode,
+            "reason": "no_route_level_samples",
+            "fallback_profile_name": fallback_profile_name,
+            "fallback_multiplier": float(fallback_multiplier),
+            "fallback_context": fallback_context,
+        }
+
+    service_direction = normalize_service_direction(config.service_direction)
+    target_routes = _target_current_plan_route_features(
+        planner,
+        current_plan,
+        prepared_original_points,
+        service_direction,
+    )
+    route_estimates = [
+        estimate
+        for target in target_routes
+        if (estimate := _route_attributed_factor(target, candidates)) is not None
+    ]
+    if route_estimates:
+        factor = _weighted_average_factor(
+            [
+                {"factor": float(item["factor"]), "weight_s": max(60.0, float(item["weight_s"]))}
+                for item in route_estimates
+            ]
+        )
+        avg_similarity = sum(
+            float(item["avg_similarity"]) * max(60.0, float(item["weight_s"]))
+            for item in route_estimates
+        ) / sum(max(60.0, float(item["weight_s"])) for item in route_estimates)
+        method = "route_similarity"
+    else:
+        factor = _weighted_average_factor(
+            [
+                {"factor": float(item["factor"]), "weight_s": max(60.0, float(item["osrm_duration_s"]))}
+                for item in candidates
+            ]
+        )
+        avg_similarity = 0.0
+        method = "city_period_average"
+
+    if factor is None:
+        return {
+            "enabled": True,
+            "succeeded": False,
+            "mode": mode,
+            "reason": "no_usable_attribution_factor",
+            "fallback_profile_name": fallback_profile_name,
+            "fallback_multiplier": float(fallback_multiplier),
+            "fallback_context": fallback_context,
+        }
+    label = "AM Peak" if period == "am_peak" else "PM Peak"
+    confidence = _traffic_attribution_confidence(
+        avg_similarity,
+        len(route_estimates),
+        len(candidates),
+    )
+    context = (
+        f"{city.title()} {label} attributed traffic coefficient; "
+        f"{len(route_estimates) or len(target_routes)} target route(s), "
+        f"{len(candidates)} observed route sample(s), confidence {confidence}"
+    )
+    if method == "city_period_average":
+        context += "; route similarity unavailable, using city-period sample average"
+    return {
+        "enabled": True,
+        "succeeded": True,
+        "mode": mode,
+        "method": method,
+        "country": country,
+        "city": city,
+        "period": period,
+        "period_label": label,
+        "traffic_profile_name": f"{label} (Attributed)",
+        "traffic_time_multiplier": float(factor),
+        "traffic_profile_context": context,
+        "confidence": confidence,
+        "confidence_score": float(avg_similarity),
+        "target_route_count": len(target_routes),
+        "attributed_route_count": len(route_estimates),
+        "observed_route_sample_count": len(candidates),
+        "sample_file_count": len(selected),
+        "workday_count": len(selected_dates),
+        "local_dates": selected_dates,
+        "fallback_profile_name": fallback_profile_name,
+        "fallback_multiplier": float(fallback_multiplier),
+        "fallback_context": fallback_context,
+        "route_estimates": route_estimates[:24],
+    }
 
 
 def calibrate_peak_traffic_multiplier(
@@ -5228,42 +5529,77 @@ def run_backend_planner_with_prepared_data(
     log_stream = _StreamingLogCapture(callback=progress_callback)
     started_at = time.perf_counter()
     traffic_calibration: dict[str, Any] = {}
+    traffic_attribution: dict[str, Any] = {
+        "enabled": False,
+        "mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
+        "reason": "legacy_mode",
+    }
     with redirect_stdout(log_stream), redirect_stderr(log_stream):
         planner.log(
             f"[BACKEND] Starting route optimization for service direction `{normalize_service_direction(config.service_direction)}`."
         )
         try:
-            traffic_calibration = calibrate_peak_traffic_multiplier(
-                planner,
-                current_plan,
-                original_points,
-                input_records,
-                config,
-                traffic_profile_name,
-                traffic_time_multiplier,
-                traffic_profile_context,
-            )
-            if traffic_calibration.get("succeeded"):
-                traffic_profile_name = str(traffic_calibration["traffic_profile_name"])
-                traffic_time_multiplier = float(traffic_calibration["traffic_time_multiplier"])
-                traffic_profile_context = str(traffic_calibration["traffic_profile_context"])
+            if normalize_traffic_coefficient_mode(config.traffic_coefficient_mode) == TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED:
+                traffic_attribution = resolve_attributed_traffic_profile(
+                    planner,
+                    current_plan,
+                    original_points,
+                    input_records,
+                    config,
+                    traffic_profile_name,
+                    traffic_time_multiplier,
+                    traffic_profile_context,
+                )
+                traffic_calibration = {"enabled": False, "reason": "attributed_coefficient_mode"}
+                if traffic_attribution.get("succeeded"):
+                    traffic_profile_name = str(traffic_attribution["traffic_profile_name"])
+                    traffic_time_multiplier = float(traffic_attribution["traffic_time_multiplier"])
+                    traffic_profile_context = str(traffic_attribution["traffic_profile_context"])
+                    planner.log(
+                        f"[BACKEND] Attributed traffic coefficient selected {traffic_time_multiplier:.2f}x "
+                        f"({traffic_attribution.get('confidence')} confidence, "
+                        f"{traffic_attribution.get('observed_route_sample_count')} observed route sample(s))."
+                    )
+                else:
+                    planner.log(
+                        "[WARN] Attributed traffic coefficient did not produce a usable factor; "
+                        f"falling back to {traffic_time_multiplier:.2f}x."
+                    )
                 planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
                 planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
                 planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
-                planner.log(
-                    f"[BACKEND] AMap peak calibration selected {traffic_time_multiplier:.2f}x "
-                    f"for {traffic_calibration.get('selected_period')} "
-                    f"({traffic_calibration.get('sampled_edge_count')} edge(s))."
-                )
-            elif traffic_calibration.get("enabled"):
-                planner.log(
-                    "[WARN] AMap peak calibration did not produce a usable factor; "
-                    f"falling back to {traffic_time_multiplier:.2f}x."
-                )
             else:
-                reason = str(traffic_calibration.get("reason", "not_applicable"))
-                planner.log(f"[BACKEND] AMap peak calibration skipped: {reason}.")
-            if live_traffic_sample and not traffic_calibration.get("succeeded"):
+                traffic_calibration = calibrate_peak_traffic_multiplier(
+                    planner,
+                    current_plan,
+                    original_points,
+                    input_records,
+                    config,
+                    traffic_profile_name,
+                    traffic_time_multiplier,
+                    traffic_profile_context,
+                )
+                if traffic_calibration.get("succeeded"):
+                    traffic_profile_name = str(traffic_calibration["traffic_profile_name"])
+                    traffic_time_multiplier = float(traffic_calibration["traffic_time_multiplier"])
+                    traffic_profile_context = str(traffic_calibration["traffic_profile_context"])
+                    planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
+                    planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
+                    planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
+                    planner.log(
+                        f"[BACKEND] AMap peak calibration selected {traffic_time_multiplier:.2f}x "
+                        f"for {traffic_calibration.get('selected_period')} "
+                        f"({traffic_calibration.get('sampled_edge_count')} edge(s))."
+                    )
+                elif traffic_calibration.get("enabled"):
+                    planner.log(
+                        "[WARN] AMap peak calibration did not produce a usable factor; "
+                        f"falling back to {traffic_time_multiplier:.2f}x."
+                    )
+                else:
+                    reason = str(traffic_calibration.get("reason", "not_applicable"))
+                    planner.log(f"[BACKEND] AMap peak calibration skipped: {reason}.")
+            if live_traffic_sample and not traffic_calibration.get("succeeded") and not traffic_attribution.get("succeeded"):
                 planner.log(
                     f"[BACKEND] Live traffic sample selected {traffic_time_multiplier:.2f}x "
                     f"for {live_traffic_sample.get('city')} {live_traffic_sample.get('period')} "
@@ -5279,7 +5615,14 @@ def run_backend_planner_with_prepared_data(
                 "fallback_multiplier": float(traffic_time_multiplier),
                 "fallback_context": traffic_profile_context,
             }
-            planner.log(f"[WARN] AMap peak calibration failed; falling back to fixed traffic profile: {exc}")
+            traffic_attribution = {
+                "enabled": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode) == TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED,
+                "succeeded": False,
+                "mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
+                "reason": "coefficient_selection_exception",
+                "error": str(exc),
+            }
+            planner.log(f"[WARN] Traffic coefficient selection failed; falling back to fixed traffic profile: {exc}")
         planner.log(
             f"[BACKEND] Using traffic profile `{traffic_profile_name}` "
             f"with travel-time multiplier {traffic_time_multiplier:.2f}x "
@@ -5447,6 +5790,8 @@ def run_backend_planner_with_prepared_data(
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
+        "traffic_coefficient_mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
+        "traffic_attribution": traffic_attribution,
         "traffic_calibration": traffic_calibration,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
@@ -5471,6 +5816,8 @@ def run_backend_planner_with_prepared_data(
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
         "traffic_profile_context": traffic_profile_context,
+        "traffic_coefficient_mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
+        "traffic_attribution": traffic_attribution,
         "traffic_calibration": traffic_calibration,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),

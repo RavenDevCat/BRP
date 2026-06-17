@@ -325,6 +325,11 @@ function AuditPanel({
   const t = useT();
   const recommendations = asStringArray(currentComparison.recommendations);
   const plannerConfig = asRecord(result.planner_config);
+  const trafficAttribution = asRecord(result.traffic_attribution);
+  const trafficCoefficientMode = normalizeTrafficCoefficientMode(
+    result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode,
+  );
+  const trafficBasis = formatTrafficBasis(result, plannerConfig, trafficAttribution, t);
 
   return (
     <div className="space-y-4">
@@ -353,6 +358,9 @@ function AuditPanel({
           <div className="grid gap-3 text-sm md:grid-cols-3">
             <ReadoutItem label="Service direction" value={stringValue(result.service_direction || plannerConfig.service_direction)} translateValue />
             <ReadoutItem label="Traffic profile" value={stringValue(result.traffic_profile_name || plannerConfig.traffic_profile_name)} translateValue />
+            <ReadoutItem label="Traffic multiplier" value={formatTrafficMultiplier(result.traffic_time_multiplier)} />
+            <ReadoutItem label="Coefficient logic" value={trafficCoefficientMode === "attributed" ? "Attributed coefficient" : "Legacy coefficient"} translateValue />
+            <ReadoutItem label="Traffic basis" value={trafficBasis} />
             <ReadoutItem label="Current bus mix" value={formatBusMix(asRecord(currentPlan.bus_mix))} />
           </div>
           {recommendations.length ? (
@@ -2900,6 +2908,43 @@ function stringValue(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function normalizeTrafficCoefficientMode(value: unknown): "legacy" | "attributed" {
+  const normalized = stringValue(value).trim().toLowerCase().replace(/-/g, "_");
+  return normalized === "attributed" || normalized === "attribution" || normalized === "route_attributed"
+    ? "attributed"
+    : "legacy";
+}
+
+function formatTrafficMultiplier(value: unknown): string {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return "";
+  }
+  return `${numericValue.toFixed(2).replace(/\.?0+$/, "")}x`;
+}
+
+function formatTrafficBasis(
+  result: Record<string, unknown>,
+  plannerConfig: Record<string, unknown>,
+  trafficAttribution: Record<string, unknown>,
+  t: (key: string, fallback?: string) => string,
+): string {
+  if (normalizeTrafficCoefficientMode(result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode) !== "attributed") {
+    return stringValue(result.traffic_profile_context || trafficAttribution.fallback_context || plannerConfig.traffic_profile_name);
+  }
+  if (trafficAttribution.succeeded !== true) {
+    const reason = stringValue(trafficAttribution.reason || "Not available");
+    return `${t("Fallback to legacy coefficient")} (${reason})`;
+  }
+  const method = stringValue(trafficAttribution.method);
+  const methodLabel = method === "route_similarity" ? t("Route similarity") : t("City-period average");
+  const confidence = stringValue(trafficAttribution.confidence);
+  const confidenceLabel = confidence ? t(toTitle(confidence)) : t("Not available");
+  const observedRoutes = formatNumber(trafficAttribution.observed_route_sample_count);
+  const targetRoutes = formatNumber(trafficAttribution.attributed_route_count || trafficAttribution.target_route_count);
+  return `${methodLabel}; ${confidenceLabel}; ${observedRoutes} ${t("observed routes")}; ${targetRoutes} ${t("target routes")}`;
 }
 
 function formatSignedNumber(value: unknown): string {

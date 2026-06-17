@@ -23,6 +23,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   nearby_cluster_radius_m: 500,
   comfort_load_factor: 1.0,
   traffic_profile_name: "Off-Peak",
+  traffic_coefficient_mode: "legacy",
   service_direction: "From School",
   to_school_arrival_time: "08:00",
   from_school_departure_time: "15:40",
@@ -34,3 +35,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
 
 export const SERVICE_DIRECTION_OPTIONS = ["From School", "To School"];
 export const TRAFFIC_PROFILE_OPTIONS = ["Off-Peak", "AM Peak", "PM Peak"];
+export const TRAFFIC_COEFFICIENT_MODE_OPTIONS = [
+  { value: "legacy", label: "Legacy coefficient" },
+  { value: "attributed", label: "Attributed coefficient" },
+] as const;

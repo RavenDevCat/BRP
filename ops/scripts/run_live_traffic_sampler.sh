@@ -68,6 +68,15 @@ if [ -z "$job_id" ]; then
 fi
 
 shift || true
+if [ "${BRP_LIVE_TRAFFIC_PREFLIGHT_ENABLED:-1}" != "0" ] && [ "${BRP_LIVE_TRAFFIC_PREFLIGHT_ENABLED:-1}" != "false" ]; then
+  preflight_profile_prefix="${BRP_LIVE_TRAFFIC_PREFLIGHT_PROFILE_PREFIX:-shanghai}"
+  city_profile="${preflight_profile_prefix}_${period}"
+  preflight_args=(--profile "$city_profile" --require-under-cap --require-baseline-fast-path)
+  if [ "$period" = "off_peak" ]; then
+    preflight_args=(--include-off-peak "${preflight_args[@]}")
+  fi
+  "$BACKEND_PYTHON" "$ROOT_DIR/ops/scripts/report_live_traffic_budget.py" "${preflight_args[@]}"
+fi
 cd "$ROOT_DIR/apps/backend"
 source_args=(--source "$source" --period "$period" --market "$market" --city "$city")
 if [ "$source" = "fleet_planner" ]; then

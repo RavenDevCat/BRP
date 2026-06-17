@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tempfile
@@ -121,6 +122,31 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         self.assertEqual(row["estimated_api_call_count"], 2)
         self.assertEqual(row["max_api_calls_per_run"], 1)
         self.assertEqual(row["status"], "over_cap")
+
+    def test_profile_specs_can_filter_single_active_profile(self) -> None:
+        specs = budget._profile_specs(False, [" shanghai_pm_peak "])
+
+        self.assertEqual(specs, (("shanghai_pm_peak", "Shanghai", "pm_peak"),))
+
+    def test_profile_specs_requires_include_off_peak_for_optional_profile(self) -> None:
+        self.assertEqual(budget._profile_specs(False, ["shanghai_off_peak"]), ())
+        self.assertEqual(budget._profile_specs(True, ["shanghai_off_peak"]), (("shanghai_off_peak", "Shanghai", "off_peak"),))
+
+    def test_build_report_records_missing_profile_without_evaluating(self) -> None:
+        args = argparse.Namespace(
+            include_off_peak=False,
+            profile=[" missing_profile "],
+            max_api_calls_per_run=1000,
+            sample_due_routes_only=False,
+            now_local_time="",
+        )
+
+        with mock.patch.object(budget, "evaluate_profile", side_effect=AssertionError("should not evaluate missing profiles")):
+            report = budget.build_report(args)
+
+        self.assertEqual(report["selected_profiles"], ["missing_profile"])
+        self.assertEqual(report["missing_profiles"], ["missing_profile"])
+        self.assertEqual(report["profiles"], [])
 
 
 if __name__ == "__main__":

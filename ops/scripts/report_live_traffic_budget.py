@@ -317,13 +317,24 @@ def evaluate_profile(
     }
 
 
-def _profile_specs(include_off_peak: bool) -> tuple[tuple[str, str, str], ...]:
-    return ACTIVE_TIMER_SPECS + (OPTIONAL_SPECS if include_off_peak else ())
+def _selected_profile_names(selected_profiles: list[str] | None = None) -> tuple[str, ...]:
+    return tuple(profile.strip() for profile in selected_profiles or [] if profile.strip())
+
+
+def _profile_specs(include_off_peak: bool, selected_profiles: list[str] | None = None) -> tuple[tuple[str, str, str], ...]:
+    specs = ACTIVE_TIMER_SPECS + (OPTIONAL_SPECS if include_off_peak else ())
+    selected = set(_selected_profile_names(selected_profiles))
+    if not selected:
+        return specs
+    return tuple(spec for spec in specs if spec[0] in selected)
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:
     rows: list[dict[str, Any]] = []
-    for profile_name, city, period in _profile_specs(args.include_off_peak):
+    selected_profiles = _selected_profile_names(args.profile)
+    specs = _profile_specs(args.include_off_peak, args.profile)
+    missing_profiles = sorted(set(selected_profiles) - {spec[0] for spec in specs})
+    for profile_name, city, period in specs:
         sampler_args = _build_sampler_args(
             city=city,
             period=period,
@@ -348,12 +359,16 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
         "mode": "read_only_budget_preflight",
         "provider_api_called": False,
         "osrm_started": False,
+        "selected_profiles": list(selected_profiles),
+        "missing_profiles": missing_profiles,
         "profiles": rows,
     }
 
 
 def _print_table(report: dict[str, Any]) -> None:
     print("profile                 provider       routes candidates calls cap provider_cap fast_path status")
+    for profile in report.get("missing_profiles") or []:
+        print(f"{profile:<23} {'-':>12} {'-':>6} {'-':>10} {'-':>5} {'-':>3} {'-':>12} {'-':>9} missing")
     for row in report["profiles"]:
         fast_path = row.get("baseline_fast_path_ready")
         fast_path_label = "yes" if fast_path is True else "no" if fast_path is False else "-"
@@ -376,6 +391,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Read-only live traffic API budget preflight.")
     parser.add_argument("--env-file", type=Path, default=_preparse_env_file(sys.argv[1:]) or DEFAULT_ENV_FILE)
     parser.add_argument("--include-off-peak", action="store_true")
+    parser.add_argument("--profile", action="append", default=[], help="Limit report to one profile, e.g. shanghai_pm_peak. May be repeated.")
     parser.add_argument("--max-api-calls-per-run", type=int, default=None)
     parser.add_argument("--sample-due-routes-only", action="store_true")
     parser.add_argument("--now-local-time", default="")
@@ -393,11 +409,15 @@ def main() -> None:
     else:
         _print_table(report)
     if args.require_under_cap:
-        bad = [row for row in report["profiles"] if row.get("status") != "ok"]
+        bad = list(report.get("missing_profiles") or []) + [row for row in report["profiles"] if row.get("status") != "ok"]
         if bad:
             raise SystemExit(1)
     if args.require_baseline_fast_path:
-        bad = [row for row in report["profiles"] if row.get("source") == "baseline_json" and row.get("baseline_fast_path_ready") is not True]
+        bad = list(report.get("missing_profiles") or []) + [
+            row
+            for row in report["profiles"]
+            if row.get("source") == "baseline_json" and row.get("baseline_fast_path_ready") is not True
+        ]
         if bad:
             raise SystemExit(1)
 

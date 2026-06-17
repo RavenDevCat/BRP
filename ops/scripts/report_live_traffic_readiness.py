@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
 
 DEFAULT_SAMPLE_DIR = Path("/opt/brp/shared/runtime/traffic_samples")
+
+
+def _norm(value: Any) -> str:
+    return str(value or "").strip().casefold()
 
 
 def _route_has_fingerprint(route: dict[str, Any]) -> bool:
@@ -121,6 +126,71 @@ def summarize(sample_dir: Path) -> dict[str, Any]:
     }
 
 
+def _parse_requirement(value: str) -> tuple[str, str, str]:
+    parts = [part.strip() for part in value.split(":")]
+    if len(parts) != 3 or not all(parts):
+        raise argparse.ArgumentTypeError(
+            "requirements must use MARKET:CITY:PERIOD, for example CN:Shanghai:am_peak"
+        )
+    return parts[0], parts[1], parts[2]
+
+
+def evaluate_requirements(
+    summary: dict[str, Any],
+    requirements: list[tuple[str, str, str]],
+    *,
+    min_geo_ratio: float,
+) -> list[dict[str, Any]]:
+    rows = {
+        (_norm(row.get("market")), _norm(row.get("city")), _norm(row.get("period"))): row
+        for row in summary.get("groups", [])
+        if isinstance(row, dict)
+    }
+    results: list[dict[str, Any]] = []
+    for market, city, period in requirements:
+        row = rows.get((_norm(market), _norm(city), _norm(period)))
+        if row is None:
+            results.append(
+                {
+                    "market": market,
+                    "city": city,
+                    "period": period,
+                    "passed": False,
+                    "reason": "missing_sample_group",
+                    "geo_route_sample_ratio": 0.0,
+                    "geo_route_sample_count": 0,
+                    "route_sample_count": 0,
+                    "required_geo_route_sample_ratio": min_geo_ratio,
+                }
+            )
+            continue
+        geo_ratio = float(row.get("geo_route_sample_ratio") or 0.0)
+        geo_count = int(row.get("geo_route_sample_count") or 0)
+        route_count = int(row.get("route_sample_count") or 0)
+        passed = route_count > 0 and geo_count > 0 and geo_ratio >= min_geo_ratio
+        reason = "ok" if passed else "geo_ratio_below_requirement"
+        if route_count <= 0:
+            reason = "no_route_samples"
+        elif geo_count <= 0:
+            reason = "no_geo_route_samples"
+        results.append(
+            {
+                "market": row.get("market") or market,
+                "city": row.get("city") or city,
+                "period": row.get("period") or period,
+                "passed": passed,
+                "reason": reason,
+                "geo_route_sample_ratio": geo_ratio,
+                "geo_route_sample_count": geo_count,
+                "route_sample_count": route_count,
+                "required_geo_route_sample_ratio": min_geo_ratio,
+                "latest_measured_at": row.get("latest_measured_at") or "",
+                "latest_sample": row.get("latest_sample") or "",
+            }
+        )
+    return results
+
+
 def _print_table(summary: dict[str, Any]) -> None:
     print(f"sample_dir: {summary['sample_dir']}")
     print(f"sample_files: {summary['sample_file_count']} unreadable: {summary['unreadable_file_count']}")
@@ -143,19 +213,61 @@ def _print_table(summary: dict[str, Any]) -> None:
             row["latest_measured_at"],
             row["latest_sample"],
         )
+    requirements = summary.get("requirements") or []
+    if requirements:
+        print("requirements")
+        for result in requirements:
+            status = "ok" if result["passed"] else "fail"
+            print(
+                status,
+                result["market"],
+                result["city"],
+                result["period"],
+                f"geo_ratio={float(result['geo_route_sample_ratio']):.3f}",
+                f"geo={result['geo_route_sample_count']}",
+                f"routes={result['route_sample_count']}",
+                result["reason"],
+            )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sample-dir", type=Path, default=DEFAULT_SAMPLE_DIR)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    parser.add_argument(
+        "--require-geo",
+        action="append",
+        default=[],
+        type=_parse_requirement,
+        metavar="MARKET:CITY:PERIOD",
+        help="Require a market/city/period group to have geo-ready route samples.",
+    )
+    parser.add_argument(
+        "--min-geo-ratio",
+        type=float,
+        default=1.0,
+        help="Minimum geo-ready route sample ratio for --require-geo checks. Default: 1.0.",
+    )
     args = parser.parse_args()
 
+    if not 0.0 <= args.min_geo_ratio <= 1.0:
+        parser.error("--min-geo-ratio must be between 0 and 1")
+
     summary = summarize(args.sample_dir)
+    requirement_results = evaluate_requirements(
+        summary,
+        list(args.require_geo),
+        min_geo_ratio=float(args.min_geo_ratio),
+    )
+    if requirement_results:
+        summary["requirements"] = requirement_results
     if args.json:
         print(json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True))
     else:
         _print_table(summary)
+    if any(not result["passed"] for result in requirement_results):
+        print("One or more geo-readiness requirements failed.", file=sys.stderr)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

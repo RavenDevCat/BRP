@@ -1350,8 +1350,7 @@ def _route_attributed_factor(
             ranked = geo_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
             quality_reason = "geo_threshold_passed"
         else:
-            ranked = scale_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
-            quality_reason = "insufficient_geo_match_fallback_to_route_similarity"
+            return None
     else:
         ranked = scale_ranked[:TRAFFIC_ATTRIBUTION_TOP_K]
         quality_reason = "scale_similarity_only"

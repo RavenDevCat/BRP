@@ -484,7 +484,7 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(estimate["top_matches"][0]["route_id"], "near")
         self.assertLess(float(estimate["factor"]), 2.1)
 
-    def test_poor_geo_match_does_not_count_as_geo_attribution(self) -> None:
+    def test_poor_geo_match_does_not_fallback_to_scale_similarity(self) -> None:
         target_fingerprint = {
             "cells": ["3100:12100", "3101:12101"],
             "corridor_cells": ["3100:12100", "3101:12101"],
@@ -522,13 +522,29 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
             ],
         )
 
+        self.assertIsNone(estimate)
+
+    def test_scale_similarity_remains_available_for_legacy_samples_without_geo(self) -> None:
+        estimate = planner_core._route_attributed_factor(
+            {
+                "route_id": "new",
+                "osrm_duration_s": 1200.0,
+                "stop_count": 5,
+            },
+            [
+                {
+                    "route_id": "legacy",
+                    "factor": 1.8,
+                    "osrm_duration_s": 1250.0,
+                    "stop_count": 5,
+                },
+            ],
+        )
+
         self.assertIsNotNone(estimate)
         assert estimate is not None
         self.assertEqual(estimate["method"], "route_similarity")
-        self.assertEqual(estimate["quality_reason"], "insufficient_geo_match_fallback_to_route_similarity")
-        self.assertEqual(estimate["geo_candidate_count"], 1)
-        self.assertEqual(estimate["usable_geo_candidate_count"], 0)
-        self.assertLess(float(estimate["top_matches"][0]["geo_similarity_score"]), 0.18)
+        self.assertEqual(estimate["quality_reason"], "scale_similarity_only")
 
     def test_traffic_route_estimate_summary_counts_methods_and_reasons(self) -> None:
         summary = planner_core._traffic_route_estimate_summary(

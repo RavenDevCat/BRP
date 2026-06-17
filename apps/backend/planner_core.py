@@ -1038,6 +1038,47 @@ def _traffic_attribution_confidence(score: float, route_count: int, sample_count
     return "low"
 
 
+def build_traffic_attribution_context(
+    input_records: list[dict[str, Any]],
+    config: PlannerConfig,
+    sample_dir: Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    mode = normalize_traffic_coefficient_mode(config.traffic_coefficient_mode)
+    if mode != TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED:
+        return {"enabled": False, "mode": mode, "reason": "legacy_mode"}
+    country, city = infer_traffic_location(input_records)
+    period = live_traffic_period_for_service_direction(config.service_direction)
+    if period is None:
+        return {"enabled": True, "mode": mode, "succeeded": False, "reason": "unsupported_service_direction"}
+    matches = _matching_live_traffic_samples(
+        country=country,
+        city=city,
+        period=period,
+        sample_dir=sample_dir,
+        now=now,
+    )
+    selected, selected_dates = _select_live_traffic_sample_window(matches)
+    candidates = _live_route_attribution_candidates(selected)
+    label = "AM Peak" if period == "am_peak" else "PM Peak"
+    return {
+        "enabled": True,
+        "succeeded": bool(candidates),
+        "mode": mode,
+        "country": country,
+        "city": city,
+        "period": period,
+        "period_label": label,
+        "selected": selected,
+        "selected_dates": selected_dates,
+        "candidates": candidates,
+        "sample_file_count": len(selected),
+        "workday_count": len(selected_dates),
+        "observed_route_sample_count": len(candidates),
+        "reason": "" if candidates else "no_route_level_samples",
+    }
+
+
 def resolve_attributed_traffic_profile(
     planner: Any,
     current_plan: dict[str, Any] | None,
@@ -1053,25 +1094,21 @@ def resolve_attributed_traffic_profile(
     mode = normalize_traffic_coefficient_mode(config.traffic_coefficient_mode)
     if mode != TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED:
         return {"enabled": False, "mode": mode, "reason": "legacy_mode"}
-    country, city = infer_traffic_location(input_records)
-    period = live_traffic_period_for_service_direction(config.service_direction)
-    if period is None:
-        return {"enabled": True, "succeeded": False, "mode": mode, "reason": "unsupported_service_direction"}
-    matches = _matching_live_traffic_samples(
-        country=country,
-        city=city,
-        period=period,
-        sample_dir=sample_dir,
-        now=now,
-    )
-    selected, selected_dates = _select_live_traffic_sample_window(matches)
-    candidates = _live_route_attribution_candidates(selected)
+    sample_context = build_traffic_attribution_context(input_records, config, sample_dir=sample_dir, now=now)
+    if not sample_context.get("enabled"):
+        return sample_context
+    country = str(sample_context.get("country") or "")
+    city = str(sample_context.get("city") or "")
+    period = str(sample_context.get("period") or "")
+    label = str(sample_context.get("period_label") or ("AM Peak" if period == "am_peak" else "PM Peak"))
+    candidates = list(sample_context.get("candidates") or [])
+    selected_dates = list(sample_context.get("selected_dates") or [])
     if not candidates:
         return {
             "enabled": True,
             "succeeded": False,
             "mode": mode,
-            "reason": "no_route_level_samples",
+            "reason": str(sample_context.get("reason") or "no_route_level_samples"),
             "fallback_profile_name": fallback_profile_name,
             "fallback_multiplier": float(fallback_multiplier),
             "fallback_context": fallback_context,
@@ -1121,7 +1158,6 @@ def resolve_attributed_traffic_profile(
             "fallback_multiplier": float(fallback_multiplier),
             "fallback_context": fallback_context,
         }
-    label = "AM Peak" if period == "am_peak" else "PM Peak"
     confidence = _traffic_attribution_confidence(
         avg_similarity,
         len(route_estimates),
@@ -1151,7 +1187,7 @@ def resolve_attributed_traffic_profile(
         "target_route_count": len(target_routes),
         "attributed_route_count": len(route_estimates),
         "observed_route_sample_count": len(candidates),
-        "sample_file_count": len(selected),
+        "sample_file_count": int(sample_context.get("sample_file_count", 0) or 0),
         "workday_count": len(selected_dates),
         "local_dates": selected_dates,
         "fallback_profile_name": fallback_profile_name,
@@ -1159,6 +1195,99 @@ def resolve_attributed_traffic_profile(
         "fallback_context": fallback_context,
         "route_estimates": route_estimates[:24],
     }
+
+
+def _route_raw_osrm_duration_s(route: dict[str, Any]) -> float:
+    raw_osrm_duration_s = float(route.get("raw_osrm_time_s", 0.0) or 0.0)
+    if raw_osrm_duration_s > 0:
+        return raw_osrm_duration_s
+    return sum(
+        float(leg.get("raw_osrm_duration_s", 0.0) or 0.0)
+        for leg in list(route.get("leg_details") or [])
+    )
+
+
+def _optimized_route_attribution_target(route: dict[str, Any], route_index: int) -> dict[str, Any] | None:
+    raw_osrm_duration_s = _route_raw_osrm_duration_s(route)
+    if raw_osrm_duration_s <= 0:
+        return None
+    stop_count = int(route.get("stop_count", 0) or 0)
+    if stop_count <= 0:
+        stop_count = len([node for node in list(route.get("nodes") or [])[1:] if int(node) != 0])
+    return {
+        "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
+        "osrm_duration_s": raw_osrm_duration_s,
+        "stop_count": max(0, stop_count),
+    }
+
+
+def _apply_route_traffic_factor(route: dict[str, Any], factor: float) -> None:
+    route_factor = max(0.1, float(factor))
+    route["traffic_buffer_factor"] = route_factor
+    adjusted_drive_time_s = 0
+    stop_service_time_s = 0
+    for leg in list(route.get("leg_details") or []):
+        raw_osrm_duration_s = int(float(leg.get("raw_osrm_duration_s", 0.0) or 0.0))
+        stop_service_s = int(float(leg.get("stop_service_s", 0.0) or 0.0))
+        adjusted_duration_s = int(round(raw_osrm_duration_s * route_factor)) if raw_osrm_duration_s else 0
+        leg["traffic_adjusted_duration_s"] = adjusted_duration_s
+        leg["duration_s"] = adjusted_duration_s + stop_service_s
+        adjusted_drive_time_s += adjusted_duration_s
+        stop_service_time_s += stop_service_s
+    if adjusted_drive_time_s:
+        route["traffic_adjusted_drive_time_s"] = adjusted_drive_time_s
+        route["stop_service_time_s"] = stop_service_time_s
+        route["time_s"] = adjusted_drive_time_s + stop_service_time_s
+
+
+def apply_attributed_traffic_to_scenario_routes(
+    routes: list[dict[str, Any]],
+    attribution_context: dict[str, Any] | None,
+    fallback_multiplier: float,
+    scenario_label: str,
+) -> list[dict[str, Any]]:
+    context = dict(attribution_context or {})
+    if not context.get("enabled") or not context.get("candidates"):
+        return []
+    candidates = list(context.get("candidates") or [])
+    estimates: list[dict[str, Any]] = []
+    for route_index, route in enumerate(routes, start=1):
+        target = _optimized_route_attribution_target(route, route_index)
+        estimate = _route_attributed_factor(target, candidates) if target else None
+        if estimate is None:
+            factor = float(fallback_multiplier)
+            estimate = {
+                "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
+                "factor": factor,
+                "weight_s": float(target.get("osrm_duration_s", 0.0) if target else 0.0),
+                "osrm_duration_s": float(target.get("osrm_duration_s", 0.0) if target else 0.0),
+                "stop_count": int(target.get("stop_count", 0) if target else 0),
+                "matched_sample_count": 0,
+                "avg_similarity": 0.0,
+                "fallback": True,
+                "reason": "no_similar_route_sample",
+            }
+        else:
+            factor = float(estimate["factor"])
+        _apply_route_traffic_factor(route, factor)
+        route["traffic_time_source"] = "Attributed route-level traffic samples"
+        route["traffic_attribution"] = {
+            "scenario": scenario_label,
+            "method": "route_similarity" if int(estimate.get("matched_sample_count", 0) or 0) else "fallback",
+            "factor": float(factor),
+            "avg_similarity": float(estimate.get("avg_similarity", 0.0) or 0.0),
+            "matched_sample_count": int(estimate.get("matched_sample_count", 0) or 0),
+            "top_matches": list(estimate.get("top_matches") or []),
+        }
+        estimates.append(
+            {
+                **estimate,
+                "scenario": scenario_label,
+                "vehicle_id": route.get("vehicle_id"),
+                "bus_type_name": route.get("bus_type_name"),
+            }
+        )
+    return estimates
 
 
 def calibrate_peak_traffic_multiplier(
@@ -5254,6 +5383,8 @@ def _compute_scenario_without_render(
     bus_type_configs: list[dict[str, Any]] | None = None,
     node_time_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
+    route_traffic_attribution_context: dict[str, Any] | None = None,
+    route_traffic_fallback_multiplier: float | None = None,
 ) -> dict[str, Any]:
     if len(points) <= 1:
         routes: list[dict[str, Any]] = []
@@ -5317,9 +5448,26 @@ def _compute_scenario_without_render(
             planner.MIN_SOLVER_VEHICLE_COUNT = 0
         final_routes = planner.solve_routes(points, solve_time, solve_distance)
         planner.enrich_routes_with_actual_driving(points, final_routes)
+        route_attribution_estimates = apply_attributed_traffic_to_scenario_routes(
+            final_routes,
+            route_traffic_attribution_context,
+            float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
+            scenario_label,
+        )
         planner.annotate_and_price_routes(points, final_routes)
         result = planner.build_scenario_result(points, final_routes, "")
         result["output_html"] = ""
+        if route_attribution_estimates:
+            result["traffic_route_attribution"] = {
+                "enabled": True,
+                "method": "route_similarity",
+                "scenario": scenario_label,
+                "route_count": len(route_attribution_estimates),
+                "observed_route_sample_count": int(
+                    dict(route_traffic_attribution_context or {}).get("observed_route_sample_count", 0) or 0
+                ),
+                "route_estimates": route_attribution_estimates,
+            }
         if scenario_constraint_metadata:
             result["time_constraint"] = scenario_constraint_metadata
         return result
@@ -5534,12 +5682,17 @@ def run_backend_planner_with_prepared_data(
         "mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
         "reason": "legacy_mode",
     }
+    route_traffic_attribution_context: dict[str, Any] = {}
     with redirect_stdout(log_stream), redirect_stderr(log_stream):
         planner.log(
             f"[BACKEND] Starting route optimization for service direction `{normalize_service_direction(config.service_direction)}`."
         )
         try:
             if normalize_traffic_coefficient_mode(config.traffic_coefficient_mode) == TRAFFIC_COEFFICIENT_MODE_ATTRIBUTED:
+                route_traffic_attribution_context = build_traffic_attribution_context(
+                    input_records,
+                    config,
+                )
                 traffic_attribution = resolve_attributed_traffic_profile(
                     planner,
                     current_plan,
@@ -5634,6 +5787,8 @@ def run_backend_planner_with_prepared_data(
             original_points,
             "Free optimization baseline",
             bus_type_configs=free_baseline_bus_type_configs,
+            route_traffic_attribution_context=route_traffic_attribution_context,
+            route_traffic_fallback_multiplier=traffic_time_multiplier,
         )
         free_optimization_baseline = _attach_free_baseline_metadata(
             original_result,
@@ -5641,14 +5796,26 @@ def run_backend_planner_with_prepared_data(
             free_baseline_bus_type_configs,
         )
         if config.include_subway_aggregation_scenario:
-            subway_result = _compute_scenario_without_render(planner, subway_points, "Subway aggregated")
+            subway_result = _compute_scenario_without_render(
+                planner,
+                subway_points,
+                "Subway aggregated",
+                route_traffic_attribution_context=route_traffic_attribution_context,
+                route_traffic_fallback_multiplier=traffic_time_multiplier,
+            )
         else:
             planner.log("[BACKEND] Skipping subway aggregation scenario for this run.")
             subway_result = _build_skipped_scenario_result(
                 "Subway alternative baseline was disabled for this run."
             )
         if config.include_nearby_aggregation_scenario:
-            nearby_result = _compute_scenario_without_render(planner, nearby_points, "Nearby-address aggregated")
+            nearby_result = _compute_scenario_without_render(
+                planner,
+                nearby_points,
+                "Nearby-address aggregated",
+                route_traffic_attribution_context=route_traffic_attribution_context,
+                route_traffic_fallback_multiplier=traffic_time_multiplier,
+            )
         else:
             planner.log("[BACKEND] Skipping nearby aggregation scenario for this run.")
             nearby_result = _build_skipped_scenario_result(
@@ -5688,6 +5855,8 @@ def run_backend_planner_with_prepared_data(
                     bus_type_configs=free_baseline_bus_type_configs,
                     node_time_upper_bounds_builder=time_constraint_builder,
                     time_constraint_metadata=time_constraint_metadata,
+                    route_traffic_attribution_context=route_traffic_attribution_context,
+                    route_traffic_fallback_multiplier=traffic_time_multiplier,
                 )
                 time_constrained_result["baseline_name"] = "time_constrained_optimization"
                 time_constrained_result["time_constraint"] = {
@@ -5751,6 +5920,24 @@ def run_backend_planner_with_prepared_data(
             nearby_result,
             service_direction=service_direction,
         )
+        if traffic_attribution.get("succeeded"):
+            scenario_route_estimates: dict[str, Any] = {}
+            for scenario_key, scenario_result in (
+                ("free_optimization_baseline", free_optimization_baseline),
+                ("subway", subway_result),
+                ("nearby", nearby_result),
+                ("time_constrained", time_constrained_result),
+            ):
+                route_attribution = dict((scenario_result or {}).get("traffic_route_attribution") or {})
+                if route_attribution:
+                    scenario_route_estimates[scenario_key] = route_attribution
+            if scenario_route_estimates:
+                traffic_attribution["route_level_applied"] = True
+                traffic_attribution["route_level_note"] = (
+                    "Scenario routes use their own attributed traffic factor; "
+                    "the job-level multiplier is retained as a solver/fallback coefficient."
+                )
+                traffic_attribution["scenario_route_estimates"] = scenario_route_estimates
     log_stream.flush()
 
     service_original_points = [point for point in original_points if not bool(point.get("is_depot"))]

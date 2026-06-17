@@ -284,6 +284,65 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(result["mode"], "legacy")
         self.assertEqual(result["reason"], "legacy_mode")
 
+    def test_route_level_attribution_rewrites_optimized_route_duration(self) -> None:
+        routes = [
+            {
+                "vehicle_id": 1,
+                "bus_type_name": "Bus",
+                "nodes": [0, 1, 2],
+                "stop_count": 2,
+                "raw_osrm_time_s": 200.0,
+                "traffic_buffer_factor": 1.0,
+                "traffic_adjusted_drive_time_s": 200,
+                "stop_service_time_s": 60,
+                "time_s": 260,
+                "leg_details": [
+                    {
+                        "from_node": 0,
+                        "to_node": 1,
+                        "raw_osrm_duration_s": 100,
+                        "traffic_adjusted_duration_s": 100,
+                        "stop_service_s": 60,
+                        "duration_s": 160,
+                    },
+                    {
+                        "from_node": 1,
+                        "to_node": 2,
+                        "raw_osrm_duration_s": 100,
+                        "traffic_adjusted_duration_s": 100,
+                        "stop_service_s": 0,
+                        "duration_s": 100,
+                    },
+                ],
+            }
+        ]
+        estimates = planner_core.apply_attributed_traffic_to_scenario_routes(
+            routes,
+            {
+                "enabled": True,
+                "candidates": [
+                    {
+                        "route_id": "sample-r1",
+                        "source_id": "fixture",
+                        "factor": 1.6,
+                        "osrm_duration_s": 200.0,
+                        "stop_count": 2,
+                    }
+                ],
+                "observed_route_sample_count": 1,
+            },
+            fallback_multiplier=1.75,
+            scenario_label="Free optimization baseline",
+        )
+
+        self.assertEqual(len(estimates), 1)
+        self.assertAlmostEqual(float(routes[0]["traffic_buffer_factor"]), 1.6)
+        self.assertEqual(routes[0]["traffic_adjusted_drive_time_s"], 320)
+        self.assertEqual(routes[0]["time_s"], 380)
+        self.assertEqual(routes[0]["leg_details"][0]["traffic_adjusted_duration_s"], 160)
+        self.assertEqual(routes[0]["leg_details"][0]["duration_s"], 220)
+        self.assertEqual(routes[0]["traffic_time_source"], "Attributed route-level traffic samples")
+
     def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_dir = Path(tmpdir)

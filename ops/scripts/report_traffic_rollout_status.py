@@ -274,11 +274,29 @@ def summarize_rollout_gate(gate: dict[str, Any]) -> dict[str, Any]:
     requirements = [row for row in readiness.get("requirements", []) if isinstance(row, dict)]
     reason_counts = Counter(str(row.get("reason") or "") for row in requirements if not row.get("passed"))
     passed_count = sum(1 for row in requirements if row.get("passed"))
+    missing_profiles = [
+        {
+            "profile": f"{row.get('market')}:{row.get('city')}:{row.get('period')}",
+            "market": row.get("market"),
+            "city": row.get("city"),
+            "period": row.get("period"),
+            "reason": row.get("reason"),
+            "route_sample_count": int(row.get("route_sample_count") or 0),
+            "geo_route_sample_count": int(row.get("geo_route_sample_count") or 0),
+            "latest_excluded_sample": row.get("latest_excluded_sample") or "",
+            "latest_excluded_measured_at": row.get("latest_excluded_measured_at") or "",
+            "excluded_route_sample_count": int(row.get("excluded_route_sample_count") or 0),
+            "excluded_geo_route_sample_count": int(row.get("excluded_geo_route_sample_count") or 0),
+        }
+        for row in requirements
+        if not row.get("passed")
+    ]
     return {
         "status": gate.get("status"),
         "passed_requirement_count": passed_count,
         "failed_requirement_count": max(0, len(requirements) - passed_count),
         "failure_reason_counts": dict(sorted(reason_counts.items())),
+        "missing_profiles": missing_profiles,
         "sample_file_count": readiness.get("sample_file_count"),
         "filtered_file_count": readiness.get("filtered_file_count"),
         "requirements": requirements,
@@ -302,6 +320,21 @@ def _next_relevant_timer(timer_status: list[dict[str, Any]]) -> dict[str, Any] |
         "next_elapse_local": item.get("next_elapse_local"),
         "seconds_until_next_elapse": item.get("seconds_until_next_elapse"),
     }
+
+
+def _problem_services(service_status: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {
+            "unit": row.get("unit"),
+            "result": row.get("result"),
+            "active_state": row.get("active_state"),
+            "exec_main_status": row.get("exec_main_status"),
+            "exec_main_exit_local": row.get("exec_main_exit_local"),
+            "error": row.get("error", ""),
+        }
+        for row in service_status
+        if bool(row.get("problem"))
+    ]
 
 
 def build_status(
@@ -365,6 +398,7 @@ def build_status(
         },
         "services": {
             "problem_count": service_problem_count,
+            "problem_services": _problem_services(service_status),
             "items": service_status,
         },
         "osrm_manager": osrm_status,
@@ -383,6 +417,9 @@ def _print_status(report: dict[str, Any]) -> None:
         f"failed={gate.get('failed_requirement_count')}",
         f"reasons={gate.get('failure_reason_counts')}",
     )
+    missing_profiles = [row.get("profile") for row in list(gate.get("missing_profiles") or [])]
+    if missing_profiles:
+        print("missing_profiles:", ", ".join(str(item) for item in missing_profiles))
     timers = dict(report.get("timers") or {})
     print(f"timer_problem_count: {timers.get('problem_count')}")
     next_timer = dict(timers.get("next_relevant_timer") or {})
@@ -395,6 +432,9 @@ def _print_status(report: dict[str, Any]) -> None:
         )
     services = dict(report.get("services") or {})
     print(f"service_problem_count: {services.get('problem_count')}")
+    problem_services = [row.get("unit") for row in list(services.get("problem_services") or [])]
+    if problem_services:
+        print("problem_services:", ", ".join(str(item) for item in problem_services))
     osrm = dict(report.get("osrm_manager") or {})
     print(
         "osrm_manager:",

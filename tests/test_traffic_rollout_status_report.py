@@ -37,6 +37,8 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(report["status"], "waiting")
         self.assertEqual(report["rollout_gate"]["status"], "failed")
         self.assertEqual(report["rollout_gate"]["failure_reason_counts"], {"missing_sample_group": 1})
+        self.assertEqual(report["rollout_gate"]["missing_profiles"][0]["profile"], "CN:Shanghai:am_peak")
+        self.assertEqual(report["rollout_gate"]["missing_profiles"][0]["reason"], "missing_sample_group")
         self.assertEqual(report["timers"]["problem_count"], 0)
         self.assertEqual(report["services"]["problem_count"], 0)
         self.assertTrue(report["osrm_manager"]["skipped"])
@@ -140,6 +142,25 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertTrue(rows[0]["problem"])
         self.assertEqual(rows[0]["exec_main_status"], 1)
+
+    def test_problem_services_are_summarized(self) -> None:
+        rows = [
+            {
+                "unit": "brp-live-traffic-pm.service",
+                "problem": True,
+                "result": "success",
+                "active_state": "inactive",
+                "exec_main_status": 1,
+                "exec_main_exit_local": "2026-06-17T15:40:02+08:00",
+            },
+            {"unit": "brp-live-traffic-am.service", "problem": False},
+        ]
+
+        problems = report_traffic_rollout_status._problem_services(rows)
+
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(problems[0]["unit"], "brp-live-traffic-pm.service")
+        self.assertEqual(problems[0]["exec_main_status"], 1)
 
 
 if __name__ == "__main__":

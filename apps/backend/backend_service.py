@@ -35,6 +35,7 @@ try:
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
+        normalize_traffic_coefficient_mode,
         rerender_html_from_structured_results,
         resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
@@ -47,6 +48,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
+        normalize_traffic_coefficient_mode,
         rerender_html_from_structured_results,
         resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
@@ -172,6 +174,9 @@ def _env_flag(name: str, default: bool = False) -> bool:
 
 GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
 ENABLE_LANGUAGE_SWITCH = not _env_flag("BRP_DISABLE_LANGUAGE_SWITCH", False)
+DEFAULT_TRAFFIC_COEFFICIENT_MODE = normalize_traffic_coefficient_mode(
+    os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy")
+)
 AMAP_DISPLAY_GEOMETRY_ENABLED = _env_flag("BRP_AMAP_DISPLAY_GEOMETRY_ENABLED", True)
 AMAP_DISPLAY_GEOMETRY_CACHE_PATH = Path(
     os.environ.get(
@@ -1586,6 +1591,7 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
 def _deployment_features_payload() -> dict[str, Any]:
     return {
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
+        "default_traffic_coefficient_mode": DEFAULT_TRAFFIC_COEFFICIENT_MODE,
     }
 
 

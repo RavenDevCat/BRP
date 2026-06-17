@@ -1,6 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { CheckCircle2, Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,7 @@ import {
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
 import {
+  getDeploymentFeatures,
   getWorkbookTemplateUrl,
   previewWorkbook,
   submitWorkbookJob,
@@ -37,18 +38,51 @@ const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
 
 const COMFORT_LOAD_FACTOR = 0.85;
 const FULL_CAPACITY_LOAD_FACTOR = 1.0;
+const TRAFFIC_COEFFICIENT_MODE_VALUES = TRAFFIC_COEFFICIENT_MODE_OPTIONS.map((option) => option.value);
+
+function normalizeTrafficCoefficientMode(value: unknown) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return TRAFFIC_COEFFICIENT_MODE_VALUES.includes(normalized as (typeof TRAFFIC_COEFFICIENT_MODE_VALUES)[number])
+    ? normalized
+    : DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode;
+}
 
 export function NewJobPage() {
   const t = useT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const featuresQuery = useQuery({
+    queryKey: ["deployment-features"],
+    queryFn: getDeploymentFeatures,
+    staleTime: 60_000,
+  });
+  const defaultTrafficCoefficientMode = normalizeTrafficCoefficientMode(
+    featuresQuery.data?.default_traffic_coefficient_mode,
+  );
+  const defaultConfig = useMemo(
+    () => ({
+      ...DEFAULT_PLANNER_CONFIG,
+      traffic_coefficient_mode: defaultTrafficCoefficientMode,
+    }),
+    [defaultTrafficCoefficientMode],
+  );
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
   const [jobCustomName, setJobCustomName] = useState("");
-  const [config, setConfig] = useState<PlannerConfigPayload>(DEFAULT_PLANNER_CONFIG);
+  const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
+
+  useEffect(() => {
+    if (Object.prototype.hasOwnProperty.call(configOverridesRef.current, "traffic_coefficient_mode")) {
+      return;
+    }
+    setConfig((current) => ({
+      ...current,
+      traffic_coefficient_mode: defaultTrafficCoefficientMode,
+    }));
+  }, [defaultTrafficCoefficientMode]);
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
@@ -59,11 +93,15 @@ export function NewJobPage() {
     if (subwayAggregationBlocked) {
       delete safeOverrides.include_subway_aggregation_scenario;
     }
-    return { ...baseConfig, ...safeOverrides };
+    const nextConfig = { ...baseConfig, ...safeOverrides };
+    if (!Object.prototype.hasOwnProperty.call(safeOverrides, "traffic_coefficient_mode")) {
+      nextConfig.traffic_coefficient_mode = defaultTrafficCoefficientMode;
+    }
+    return nextConfig;
   }
 
   function resetConfigToDefaultsWithOverrides() {
-    setConfig(buildConfigWithOverrides(DEFAULT_PLANNER_CONFIG));
+    setConfig(buildConfigWithOverrides(defaultConfig));
   }
 
   function updateUserConfig(patch: Partial<PlannerConfigPayload>) {
@@ -84,7 +122,7 @@ export function NewJobPage() {
     setConfig(
       preview
         ? buildConfigWithOverrides(preview.suggested_config, Boolean(preview.subway_aggregation_block_reason), nextOverrides)
-        : buildConfigWithOverrides(DEFAULT_PLANNER_CONFIG, false, nextOverrides),
+        : buildConfigWithOverrides(defaultConfig, false, nextOverrides),
     );
   }
 

@@ -30,6 +30,7 @@ export type GoogleGeocodeUsage = {
 
 export type DeploymentFeatures = {
     language_switch_enabled: boolean;
+    default_traffic_coefficient_mode?: string;
 };
 
 export type JobSummary = {

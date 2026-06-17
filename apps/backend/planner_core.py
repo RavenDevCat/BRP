@@ -66,6 +66,14 @@ TRAFFIC_ATTRIBUTION_TOP_K = max(
     1,
     int(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_TOP_K", "5") or 5),
 )
+TRAFFIC_ATTRIBUTION_GRID_DEGREES = max(
+    0.001,
+    float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_GRID_DEGREES", "0.01") or 0.01),
+)
+TRAFFIC_ATTRIBUTION_CENTER_DECAY_KM = max(
+    1.0,
+    float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_CENTER_DECAY_KM", "12") or 12),
+)
 AMAP_TRAFFIC_CALIBRATION_ENABLED = os.environ.get(
     "BRP_AMAP_TRAFFIC_CALIBRATION_ENABLED",
     "false",
@@ -896,6 +904,254 @@ def _route_sample_factor(route: dict[str, Any]) -> float | None:
     return api_duration_s / osrm_duration_s
 
 
+def _traffic_float(value: Any) -> float | None:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(result):
+        return None
+    return result
+
+
+def _traffic_point_coordinates(point: dict[str, Any]) -> tuple[float, float] | None:
+    lat = _traffic_float(point.get("plot_lat"))
+    lng = _traffic_float(point.get("plot_lng"))
+    if lat is None or lng is None:
+        lat = _traffic_float(point.get("lat"))
+        lng = _traffic_float(point.get("lng"))
+    if lat is None or lng is None:
+        return None
+    if abs(lat) > 90 or abs(lng) > 180:
+        return None
+    return lat, lng
+
+
+def _traffic_geometry_coordinates(geometry: Any) -> list[tuple[float, float]]:
+    coords: list[tuple[float, float]] = []
+    for item in list(geometry or []):
+        lat = lng = None
+        if isinstance(item, dict):
+            lat = _traffic_float(item.get("lat") or item.get("latitude"))
+            lng = _traffic_float(item.get("lng") or item.get("lon") or item.get("longitude"))
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            lat = _traffic_float(item[0])
+            lng = _traffic_float(item[1])
+        if lat is None or lng is None or abs(lat) > 90 or abs(lng) > 180:
+            continue
+        coords.append((lat, lng))
+    return coords
+
+
+def _traffic_grid_cell(lat: float, lng: float, grid_degrees: float = TRAFFIC_ATTRIBUTION_GRID_DEGREES) -> str:
+    return f"{math.floor(lat / grid_degrees)}:{math.floor(lng / grid_degrees)}"
+
+
+def _traffic_haversine_km(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lat1, lng1 = math.radians(a[0]), math.radians(a[1])
+    lat2, lng2 = math.radians(b[0]), math.radians(b[1])
+    dlat = lat2 - lat1
+    dlng = lng2 - lng1
+    h = math.sin(dlat / 2.0) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlng / 2.0) ** 2
+    return 6371.0088 * 2.0 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def _traffic_bearing_sector(origin: tuple[float, float], destination: tuple[float, float], sectors: int = 16) -> int | None:
+    if origin == destination:
+        return None
+    lat1 = math.radians(origin[0])
+    lat2 = math.radians(destination[0])
+    dlng = math.radians(destination[1] - origin[1])
+    y = math.sin(dlng) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlng)
+    bearing = (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+    return int(round(bearing / (360.0 / sectors))) % sectors
+
+
+def _traffic_bbox(coords: list[tuple[float, float]]) -> dict[str, float] | None:
+    if not coords:
+        return None
+    lats = [lat for lat, _lng in coords]
+    lngs = [lng for _lat, lng in coords]
+    return {
+        "min_lat": round(min(lats), 6),
+        "max_lat": round(max(lats), 6),
+        "min_lng": round(min(lngs), 6),
+        "max_lng": round(max(lngs), 6),
+    }
+
+
+def _traffic_bbox_overlap_score(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float:
+    if not a or not b:
+        return 0.0
+    min_lat = max(float(a.get("min_lat", 0.0) or 0.0), float(b.get("min_lat", 0.0) or 0.0))
+    max_lat = min(float(a.get("max_lat", 0.0) or 0.0), float(b.get("max_lat", 0.0) or 0.0))
+    min_lng = max(float(a.get("min_lng", 0.0) or 0.0), float(b.get("min_lng", 0.0) or 0.0))
+    max_lng = min(float(a.get("max_lng", 0.0) or 0.0), float(b.get("max_lng", 0.0) or 0.0))
+    intersection = max(0.0, max_lat - min_lat) * max(0.0, max_lng - min_lng)
+    area_a = max(0.0, float(a.get("max_lat", 0.0) or 0.0) - float(a.get("min_lat", 0.0) or 0.0)) * max(
+        0.0,
+        float(a.get("max_lng", 0.0) or 0.0) - float(a.get("min_lng", 0.0) or 0.0),
+    )
+    area_b = max(0.0, float(b.get("max_lat", 0.0) or 0.0) - float(b.get("min_lat", 0.0) or 0.0)) * max(
+        0.0,
+        float(b.get("max_lng", 0.0) or 0.0) - float(b.get("min_lng", 0.0) or 0.0),
+    )
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
+
+
+def _traffic_sector_similarity(a: Any, b: Any, sectors: int = 16) -> float:
+    if a is None or b is None:
+        return 0.0
+    try:
+        sector_a = int(a)
+        sector_b = int(b)
+    except (TypeError, ValueError):
+        return 0.0
+    gap = abs(sector_a - sector_b) % sectors
+    gap = min(gap, sectors - gap)
+    return max(0.0, 1.0 - gap / (sectors / 2.0))
+
+
+def build_route_traffic_fingerprint(
+    route: dict[str, Any] | None = None,
+    *,
+    all_points: list[dict[str, Any]] | None = None,
+    route_points: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    route = dict(route or {})
+    if route_points is None and all_points is not None:
+        route_points = []
+        for node_id in list(route.get("nodes") or []):
+            try:
+                route_points.append(dict(all_points[int(node_id)]))
+            except (IndexError, TypeError, ValueError):
+                continue
+    route_points = [dict(point) for point in list(route_points or [])]
+    point_coord_pairs = [
+        (point, coord)
+        for point in route_points
+        if (coord := _traffic_point_coordinates(point)) is not None
+    ]
+    stop_coords = [coord for _point, coord in point_coord_pairs]
+    geometry_coords: list[tuple[float, float]] = []
+    for leg in list(route.get("leg_details") or []):
+        geometry_coords.extend(_traffic_geometry_coordinates(leg.get("geometry")))
+    corridor_coords = geometry_coords or stop_coords
+    if len(corridor_coords) < 2 and len(stop_coords) < 2:
+        return None
+    center_coords = corridor_coords or stop_coords
+    center_lat = sum(lat for lat, _lng in center_coords) / len(center_coords)
+    center_lng = sum(lng for _lat, lng in center_coords) / len(center_coords)
+    start = stop_coords[0] if stop_coords else center_coords[0]
+    end = stop_coords[-1] if stop_coords else center_coords[-1]
+    school_coord = next(
+        (
+            coord
+            for point, coord in point_coord_pairs
+            if bool(point.get("is_depot") or point.get("is_school"))
+        ),
+        None,
+    )
+    if school_coord is None and stop_coords:
+        school_coord = stop_coords[0]
+    corridor_cells = sorted({_traffic_grid_cell(lat, lng) for lat, lng in corridor_coords})
+    stop_cells = sorted({_traffic_grid_cell(lat, lng) for lat, lng in stop_coords})
+    cells = sorted(set(corridor_cells) | set(stop_cells))
+    return {
+        "schema_version": 1,
+        "grid_degrees": TRAFFIC_ATTRIBUTION_GRID_DEGREES,
+        "cell_count": len(cells),
+        "cells": cells[:500],
+        "corridor_cells": corridor_cells[:500],
+        "stop_cells": stop_cells[:200],
+        "point_count": len(stop_coords),
+        "geometry_point_count": len(geometry_coords),
+        "center": {"lat": round(center_lat, 6), "lng": round(center_lng, 6)},
+        "start": {"lat": round(start[0], 6), "lng": round(start[1], 6)},
+        "end": {"lat": round(end[0], 6), "lng": round(end[1], 6)},
+        "bbox": _traffic_bbox(center_coords),
+        "bearing_sector": _traffic_bearing_sector(start, end),
+        "school_bearing_sector": _traffic_bearing_sector(school_coord, (center_lat, center_lng)) if school_coord else None,
+    }
+
+
+def _route_traffic_fingerprint(route: dict[str, Any]) -> dict[str, Any]:
+    fingerprint = route.get("route_fingerprint")
+    if not isinstance(fingerprint, dict):
+        fingerprint = route.get("traffic_fingerprint")
+    return dict(fingerprint) if isinstance(fingerprint, dict) else {}
+
+
+def _traffic_center_tuple(fingerprint: dict[str, Any]) -> tuple[float, float] | None:
+    center = dict(fingerprint.get("center") or {})
+    lat = _traffic_float(center.get("lat"))
+    lng = _traffic_float(center.get("lng"))
+    if lat is None or lng is None:
+        return None
+    return lat, lng
+
+
+def _traffic_cell_jaccard(a: list[Any], b: list[Any]) -> float:
+    set_a = {str(item) for item in a if str(item)}
+    set_b = {str(item) for item in b if str(item)}
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+
+def _traffic_fingerprint_similarity(
+    target: dict[str, Any],
+    candidate: dict[str, Any],
+) -> dict[str, float] | None:
+    target_fp = _route_traffic_fingerprint(target)
+    candidate_fp = _route_traffic_fingerprint(candidate)
+    if not target_fp or not candidate_fp:
+        return None
+    corridor_overlap = _traffic_cell_jaccard(
+        list(target_fp.get("corridor_cells") or target_fp.get("cells") or []),
+        list(candidate_fp.get("corridor_cells") or candidate_fp.get("cells") or []),
+    )
+    stop_overlap = _traffic_cell_jaccard(list(target_fp.get("stop_cells") or []), list(candidate_fp.get("stop_cells") or []))
+    target_center = _traffic_center_tuple(target_fp)
+    candidate_center = _traffic_center_tuple(candidate_fp)
+    center_distance_km = (
+        _traffic_haversine_km(target_center, candidate_center)
+        if target_center is not None and candidate_center is not None
+        else None
+    )
+    center_score = (
+        1.0 / (1.0 + float(center_distance_km or 0.0) / TRAFFIC_ATTRIBUTION_CENTER_DECAY_KM)
+        if center_distance_km is not None
+        else 0.0
+    )
+    bbox_score = _traffic_bbox_overlap_score(
+        dict(target_fp.get("bbox") or {}),
+        dict(candidate_fp.get("bbox") or {}),
+    )
+    bearing_score = max(
+        _traffic_sector_similarity(target_fp.get("bearing_sector"), candidate_fp.get("bearing_sector")),
+        _traffic_sector_similarity(target_fp.get("school_bearing_sector"), candidate_fp.get("school_bearing_sector")),
+    )
+    score = (
+        0.45 * corridor_overlap
+        + 0.15 * stop_overlap
+        + 0.25 * center_score
+        + 0.10 * bearing_score
+        + 0.05 * bbox_score
+    )
+    return {
+        "score": max(0.001, float(score)),
+        "corridor_overlap": float(corridor_overlap),
+        "stop_overlap": float(stop_overlap),
+        "center_distance_km": float(center_distance_km) if center_distance_km is not None else -1.0,
+        "center_score": float(center_score),
+        "bearing_score": float(bearing_score),
+        "bbox_score": float(bbox_score),
+    }
+
+
 def _live_route_attribution_candidates(samples: list[dict[str, Any]]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for sample in samples:
@@ -917,6 +1173,7 @@ def _live_route_attribution_candidates(samples: list[dict[str, Any]]) -> list[di
                     "api_duration_s": float(route.get("api_duration_s") or route.get("amap_duration_s") or 0.0),
                     "stop_count": int(route.get("stop_count", 0) or 0),
                     "factor": float(factor),
+                    "route_fingerprint": _route_traffic_fingerprint(route),
                 }
             )
     return candidates
@@ -943,9 +1200,10 @@ def _target_current_plan_route_features(
             osrm_duration_s = 0.0
             distance_m = 0.0
             leg_count = 0
+            leg_details: list[dict[str, Any]] = []
             for origin, destination in zip(points[:-1], points[1:]):
                 try:
-                    leg_distance_m, leg_duration_s, _geometry = planner.osrm_driving_direction(origin, destination)
+                    leg_distance_m, leg_duration_s, geometry = planner.osrm_driving_direction(origin, destination)
                 except Exception:
                     continue
                 if float(leg_duration_s or 0.0) <= 0:
@@ -953,8 +1211,13 @@ def _target_current_plan_route_features(
                 distance_m += float(leg_distance_m or 0.0)
                 osrm_duration_s += float(leg_duration_s or 0.0)
                 leg_count += 1
+                leg_details.append({"geometry": geometry})
             if osrm_duration_s <= 0 or leg_count <= 0:
                 continue
+            fingerprint = build_route_traffic_fingerprint(
+                {"leg_details": leg_details},
+                route_points=points,
+            )
             features.append(
                 {
                     "route_id": str(route_id),
@@ -962,6 +1225,7 @@ def _target_current_plan_route_features(
                     "distance_m": distance_m,
                     "stop_count": max(0, len(points) - 1),
                     "leg_count": leg_count,
+                    "route_fingerprint": fingerprint or {},
                 }
             )
     finally:
@@ -969,7 +1233,7 @@ def _target_current_plan_route_features(
     return features
 
 
-def _traffic_attribution_similarity(target: dict[str, Any], candidate: dict[str, Any]) -> float:
+def _traffic_attribution_similarity_details(target: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     target_duration = max(1.0, float(target.get("osrm_duration_s", 0.0) or 0.0))
     candidate_duration = max(1.0, float(candidate.get("osrm_duration_s", 0.0) or 0.0))
     duration_gap = abs(math.log(target_duration / candidate_duration))
@@ -977,7 +1241,35 @@ def _traffic_attribution_similarity(target: dict[str, Any], candidate: dict[str,
     target_stop_count = int(target.get("stop_count", 0) or 0)
     candidate_stop_count = int(candidate.get("stop_count", 0) or 0)
     stop_score = 1.0 / (1.0 + abs(target_stop_count - candidate_stop_count) / 4.0)
-    return max(0.001, duration_score * stop_score)
+    scale_score = 0.75 * duration_score + 0.25 * stop_score
+    fingerprint_similarity = _traffic_fingerprint_similarity(target, candidate)
+    if fingerprint_similarity is not None:
+        score = 0.65 * float(fingerprint_similarity["score"]) + 0.35 * scale_score
+        return {
+            "score": max(0.001, float(score)),
+            "method": "geo_route_similarity",
+            "duration_score": float(duration_score),
+            "stop_score": float(stop_score),
+            "scale_score": float(scale_score),
+            **fingerprint_similarity,
+        }
+    return {
+        "score": max(0.001, float(duration_score * stop_score)),
+        "method": "route_similarity",
+        "duration_score": float(duration_score),
+        "stop_score": float(stop_score),
+        "scale_score": float(scale_score),
+        "corridor_overlap": 0.0,
+        "stop_overlap": 0.0,
+        "center_distance_km": -1.0,
+        "center_score": 0.0,
+        "bearing_score": 0.0,
+        "bbox_score": 0.0,
+    }
+
+
+def _traffic_attribution_similarity(target: dict[str, Any], candidate: dict[str, Any]) -> float:
+    return float(_traffic_attribution_similarity_details(target, candidate)["score"])
 
 
 def _route_attributed_factor(
@@ -988,7 +1280,16 @@ def _route_attributed_factor(
         (
             {
                 **candidate,
-                "similarity_score": _traffic_attribution_similarity(target, candidate),
+                **{
+                    "similarity_score": (details := _traffic_attribution_similarity_details(target, candidate))["score"],
+                    "similarity_method": details["method"],
+                    "duration_score": details["duration_score"],
+                    "stop_score": details["stop_score"],
+                    "geo_similarity_score": details.get("score", 0.0) if details["method"] == "geo_route_similarity" else 0.0,
+                    "corridor_overlap": details["corridor_overlap"],
+                    "center_distance_km": details["center_distance_km"],
+                    "bearing_score": details["bearing_score"],
+                },
             }
             for candidate in candidates
         ),
@@ -1010,6 +1311,7 @@ def _route_attributed_factor(
     avg_similarity = sum(float(item["similarity_score"]) for item in ranked) / float(len(ranked))
     return {
         "route_id": str(target.get("route_id") or ""),
+        "method": "geo_route_similarity" if any(item.get("similarity_method") == "geo_route_similarity" for item in ranked) else "route_similarity",
         "factor": float(factor),
         "weight_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
         "osrm_duration_s": float(target.get("osrm_duration_s", 0.0) or 0.0),
@@ -1024,6 +1326,10 @@ def _route_attributed_factor(
                 "osrm_duration_s": float(item.get("osrm_duration_s", 0.0) or 0.0),
                 "stop_count": int(item.get("stop_count", 0) or 0),
                 "similarity_score": float(item.get("similarity_score", 0.0) or 0.0),
+                "similarity_method": str(item.get("similarity_method") or "route_similarity"),
+                "corridor_overlap": float(item.get("corridor_overlap", 0.0) or 0.0),
+                "center_distance_km": float(item.get("center_distance_km", -1.0) or -1.0),
+                "bearing_score": float(item.get("bearing_score", 0.0) or 0.0),
             }
             for item in ranked[:3]
         ],
@@ -1207,18 +1513,26 @@ def _route_raw_osrm_duration_s(route: dict[str, Any]) -> float:
     )
 
 
-def _optimized_route_attribution_target(route: dict[str, Any], route_index: int) -> dict[str, Any] | None:
+def _optimized_route_attribution_target(
+    route: dict[str, Any],
+    route_index: int,
+    points: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
     raw_osrm_duration_s = _route_raw_osrm_duration_s(route)
     if raw_osrm_duration_s <= 0:
         return None
     stop_count = int(route.get("stop_count", 0) or 0)
     if stop_count <= 0:
         stop_count = len([node for node in list(route.get("nodes") or [])[1:] if int(node) != 0])
-    return {
+    target = {
         "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
         "osrm_duration_s": raw_osrm_duration_s,
         "stop_count": max(0, stop_count),
     }
+    fingerprint = build_route_traffic_fingerprint(route, all_points=points)
+    if fingerprint:
+        target["route_fingerprint"] = fingerprint
+    return target
 
 
 def _apply_route_traffic_factor(route: dict[str, Any], factor: float) -> None:
@@ -1245,6 +1559,7 @@ def apply_attributed_traffic_to_scenario_routes(
     attribution_context: dict[str, Any] | None,
     fallback_multiplier: float,
     scenario_label: str,
+    points: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     context = dict(attribution_context or {})
     if not context.get("enabled") or not context.get("candidates"):
@@ -1252,7 +1567,7 @@ def apply_attributed_traffic_to_scenario_routes(
     candidates = list(context.get("candidates") or [])
     estimates: list[dict[str, Any]] = []
     for route_index, route in enumerate(routes, start=1):
-        target = _optimized_route_attribution_target(route, route_index)
+        target = _optimized_route_attribution_target(route, route_index, points)
         estimate = _route_attributed_factor(target, candidates) if target else None
         if estimate is None:
             factor = float(fallback_multiplier)
@@ -1273,7 +1588,7 @@ def apply_attributed_traffic_to_scenario_routes(
         route["traffic_time_source"] = "Attributed route-level traffic samples"
         route["traffic_attribution"] = {
             "scenario": scenario_label,
-            "method": "route_similarity" if int(estimate.get("matched_sample_count", 0) or 0) else "fallback",
+            "method": str(estimate.get("method") or "route_similarity") if int(estimate.get("matched_sample_count", 0) or 0) else "fallback",
             "factor": float(factor),
             "avg_similarity": float(estimate.get("avg_similarity", 0.0) or 0.0),
             "matched_sample_count": int(estimate.get("matched_sample_count", 0) or 0),
@@ -5453,6 +5768,7 @@ def _compute_scenario_without_render(
             route_traffic_attribution_context,
             float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
             scenario_label,
+            points=points,
         )
         planner.annotate_and_price_routes(points, final_routes)
         result = planner.build_scenario_result(points, final_routes, "")

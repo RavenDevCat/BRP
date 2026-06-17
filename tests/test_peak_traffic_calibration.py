@@ -343,6 +343,90 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(routes[0]["leg_details"][0]["duration_s"], 220)
         self.assertEqual(routes[0]["traffic_time_source"], "Attributed route-level traffic samples")
 
+    def test_route_traffic_fingerprint_uses_corridor_geometry(self) -> None:
+        points = [
+            {"node_id": 0, "lat": 31.0000, "lng": 121.0000, "is_depot": True},
+            {"node_id": 1, "lat": 31.0100, "lng": 121.0100},
+            {"node_id": 2, "lat": 31.0200, "lng": 121.0200},
+        ]
+        route = {
+            "nodes": [0, 1, 2],
+            "leg_details": [
+                {"geometry": [[31.0000, 121.0000], [31.0050, 121.0050], [31.0100, 121.0100]]},
+                {"geometry": [[31.0100, 121.0100], [31.0150, 121.0150], [31.0200, 121.0200]]},
+            ],
+        }
+
+        fingerprint = planner_core.build_route_traffic_fingerprint(route, all_points=points)
+
+        self.assertIsNotNone(fingerprint)
+        assert fingerprint is not None
+        self.assertGreaterEqual(fingerprint["cell_count"], 3)
+        self.assertGreaterEqual(fingerprint["geometry_point_count"], 6)
+        self.assertIn("center", fingerprint)
+        self.assertIn("bbox", fingerprint)
+        self.assertIsNotNone(fingerprint["school_bearing_sector"])
+
+    def test_geo_route_similarity_prefers_same_corridor_sample(self) -> None:
+        target_fingerprint = {
+            "cells": ["3100:12100", "3101:12101", "3102:12102"],
+            "corridor_cells": ["3100:12100", "3101:12101", "3102:12102"],
+            "stop_cells": ["3100:12100", "3102:12102"],
+            "center": {"lat": 31.01, "lng": 121.01},
+            "bbox": {"min_lat": 31.0, "max_lat": 31.02, "min_lng": 121.0, "max_lng": 121.02},
+            "bearing_sector": 2,
+            "school_bearing_sector": 2,
+        }
+        near_fingerprint = {
+            "cells": ["3100:12100", "3101:12101", "3102:12102"],
+            "corridor_cells": ["3100:12100", "3101:12101", "3102:12102"],
+            "stop_cells": ["3100:12100", "3102:12102"],
+            "center": {"lat": 31.011, "lng": 121.011},
+            "bbox": {"min_lat": 31.0, "max_lat": 31.021, "min_lng": 121.0, "max_lng": 121.021},
+            "bearing_sector": 2,
+            "school_bearing_sector": 2,
+        }
+        far_fingerprint = {
+            "cells": ["3200:12200", "3201:12201", "3202:12202"],
+            "corridor_cells": ["3200:12200", "3201:12201", "3202:12202"],
+            "stop_cells": ["3200:12200", "3202:12202"],
+            "center": {"lat": 32.01, "lng": 122.01},
+            "bbox": {"min_lat": 32.0, "max_lat": 32.02, "min_lng": 122.0, "max_lng": 122.02},
+            "bearing_sector": 10,
+            "school_bearing_sector": 10,
+        }
+
+        estimate = planner_core._route_attributed_factor(
+            {
+                "route_id": "new",
+                "osrm_duration_s": 1200.0,
+                "stop_count": 5,
+                "route_fingerprint": target_fingerprint,
+            },
+            [
+                {
+                    "route_id": "far",
+                    "factor": 3.0,
+                    "osrm_duration_s": 1200.0,
+                    "stop_count": 5,
+                    "route_fingerprint": far_fingerprint,
+                },
+                {
+                    "route_id": "near",
+                    "factor": 1.4,
+                    "osrm_duration_s": 1200.0,
+                    "stop_count": 5,
+                    "route_fingerprint": near_fingerprint,
+                },
+            ],
+        )
+
+        self.assertIsNotNone(estimate)
+        assert estimate is not None
+        self.assertEqual(estimate["method"], "geo_route_similarity")
+        self.assertEqual(estimate["top_matches"][0]["route_id"], "near")
+        self.assertLess(float(estimate["factor"]), 2.1)
+
     def test_live_traffic_sample_matches_korea_weekday_profile(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_dir = Path(tmpdir)

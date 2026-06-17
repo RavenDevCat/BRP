@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 import requests
 
 import BusingProblem as planner
+import planner_core
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1103,6 +1104,11 @@ def run_sample(args: argparse.Namespace) -> dict[str, Any]:
             "stop_count": stop_count,
             "osrm_duration_s": osrm_s,
             "factor": factor,
+            "route_fingerprint": planner_core.build_route_traffic_fingerprint(
+                route,
+                all_points=points,
+                route_points=route_points,
+            ) or {},
             **provider_result,
             **schedule,
         }

@@ -24,10 +24,13 @@ import {
     cancelJob,
     deleteJob,
     getDeploymentFeatures,
+    getCurrentUser,
     getHealth,
     getJob,
+    getTrafficRolloutStatus,
     listJobs,
 } from "@/lib/api";
+import type { TrafficRolloutStatusResponse } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -60,6 +63,19 @@ export function DashboardPage() {
     const t = useT();
     const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
     const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: listJobs });
+    const userQuery = useQuery({
+        queryKey: ["me"],
+        queryFn: getCurrentUser,
+        staleTime: 60_000,
+    });
+    const isAdmin = userQuery.data?.is_admin === true;
+    const rolloutQuery = useQuery({
+        queryKey: ["traffic-rollout-status"],
+        queryFn: getTrafficRolloutStatus,
+        enabled: isAdmin,
+        staleTime: 60_000,
+        refetchInterval: 60_000,
+    });
     const jobs = jobsQuery.data || [];
     const runningCount = jobs.filter((job) =>
         ["queued", "running"].includes(job.status),
@@ -123,6 +139,14 @@ export function DashboardPage() {
                     icon={<XCircle className="h-4 w-4" aria-hidden="true" />}
                 />
             </div>
+
+            {isAdmin ? (
+                <TrafficRolloutStatusCard
+                    status={rolloutQuery.data}
+                    isLoading={rolloutQuery.isLoading}
+                    error={rolloutQuery.error as Error | null}
+                />
+            ) : null}
 
             <section className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -841,6 +865,200 @@ function StatusPanel({
             </CardContent>
         </Card>
     );
+}
+
+function TrafficRolloutStatusCard({
+    status,
+    isLoading,
+    error,
+}: {
+    status?: TrafficRolloutStatusResponse;
+    isLoading: boolean;
+    error?: Error | null;
+}) {
+    const t = useT();
+    const rolloutStatus = status?.status || (isLoading ? "checking" : "unknown");
+    const missingProfiles = status?.rollout_gate?.missing_profiles?.length ?? 0;
+    const nextTimer = status?.timers?.next_relevant_timer;
+
+    return (
+        <Card>
+            <CardHeader>
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h2 className="text-sm font-semibold">
+                                {t("Traffic rollout")}
+                            </h2>
+                            <Badge tone={rolloutStatusTone(rolloutStatus)}>
+                                {t(rolloutStatus)}
+                            </Badge>
+                        </div>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                            {t("Route-network coefficient rollout gate")}
+                        </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                        <Badge tone="neutral">{t("Read-only")}</Badge>
+                        <Badge
+                            tone={
+                                status?.endpoint?.provider_api_called
+                                    ? "danger"
+                                    : "success"
+                            }
+                        >
+                            {t("Provider calls")}:{" "}
+                            {status?.endpoint?.provider_api_called
+                                ? t("yes")
+                                : t("no")}
+                        </Badge>
+                        <Badge
+                            tone={
+                                status?.endpoint?.osrm_started
+                                    ? "danger"
+                                    : "success"
+                            }
+                        >
+                            {t("OSRM starts")}:{" "}
+                            {status?.endpoint?.osrm_started
+                                ? t("yes")
+                                : t("no")}
+                        </Badge>
+                    </div>
+                </div>
+            </CardHeader>
+            <CardContent>
+                {error ? (
+                    <InlineError message={t("Traffic rollout status could not load")} />
+                ) : (
+                    <div className="grid gap-3 md:grid-cols-4">
+                        <RolloutMetric
+                            label={t("Missing profiles")}
+                            value={formatNumber(missingProfiles)}
+                            detail={rolloutGateDetail(status)}
+                            tone={missingProfiles ? "warning" : "success"}
+                        />
+                        <RolloutMetric
+                            label={t("API budget")}
+                            value={formatRolloutApiBudget(status)}
+                            detail={
+                                status?.api_budget?.problem
+                                    ? t("problem")
+                                    : t("under cap")
+                            }
+                            tone={
+                                status?.api_budget?.problem
+                                    ? "danger"
+                                    : "success"
+                            }
+                        />
+                        <RolloutMetric
+                            label={t("OSRM manager")}
+                            value={formatRolloutOsrm(status)}
+                            detail={`${formatNumber(status?.osrm_manager?.lock_count ?? 0)} ${t("locks")}`}
+                            tone={
+                                status?.osrm_manager?.available === false
+                                    ? "danger"
+                                    : "success"
+                            }
+                        />
+                        <RolloutMetric
+                            label={t("Next timer")}
+                            value={formatNextTimer(nextTimer)}
+                            detail={nextTimer?.unit || t("No active timer")}
+                            tone={
+                                status?.timers?.problem_count
+                                    ? "warning"
+                                    : "neutral"
+                            }
+                        />
+                    </div>
+                )}
+                {status?.next_step ? (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                        {status.next_step}
+                    </p>
+                ) : null}
+            </CardContent>
+        </Card>
+    );
+}
+
+function RolloutMetric({
+    label,
+    value,
+    detail,
+    tone,
+}: {
+    label: string;
+    value: string;
+    detail: string;
+    tone: "neutral" | "success" | "warning" | "danger" | "info";
+}) {
+    return (
+        <div className="rounded-lg border border-border bg-background px-3 py-3">
+            <div className="flex items-start justify-between gap-3">
+                <span className="text-xs font-medium uppercase text-muted-foreground">
+                    {label}
+                </span>
+                <Badge tone={tone} className="min-h-5 px-1.5 py-0 text-[11px]">
+                    {value}
+                </Badge>
+            </div>
+            <div className="mt-2 text-xs text-muted-foreground">{detail}</div>
+        </div>
+    );
+}
+
+function rolloutStatusTone(
+    status: string,
+): "neutral" | "success" | "warning" | "danger" | "info" {
+    if (status === "ready") {
+        return "success";
+    }
+    if (status === "waiting" || status === "checking") {
+        return "warning";
+    }
+    if (status === "error") {
+        return "danger";
+    }
+    return "neutral";
+}
+
+function rolloutGateDetail(status?: TrafficRolloutStatusResponse) {
+    const passed = status?.rollout_gate?.passed_requirement_count ?? 0;
+    const failed = status?.rollout_gate?.failed_requirement_count ?? 0;
+    return `${formatNumber(passed)} passed / ${formatNumber(failed)} failed`;
+}
+
+function formatRolloutApiBudget(status?: TrafficRolloutStatusResponse) {
+    const total = status?.api_budget?.total_estimated_api_call_count;
+    const max = status?.api_budget?.max_estimated_api_call_count;
+    if (typeof total !== "number" && typeof max !== "number") {
+        return "--";
+    }
+    return `${formatNumber(total ?? 0)} / ${formatNumber(max ?? 0)}`;
+}
+
+function formatRolloutOsrm(status?: TrafficRolloutStatusResponse) {
+    if (status?.osrm_manager?.available === false) {
+        return "offline";
+    }
+    const running = status?.osrm_manager?.running_region_count ?? 0;
+    return `${formatNumber(running)} running`;
+}
+
+function formatNextTimer(
+    timer?: NonNullable<TrafficRolloutStatusResponse["timers"]>["next_relevant_timer"],
+) {
+    const seconds = timer?.seconds_until_next_elapse;
+    if (typeof seconds === "number") {
+        return `${formatNumber(Math.max(0, Math.round(seconds / 60)))} min`;
+    }
+    if (timer?.next_elapse_local) {
+        return timer.next_elapse_local;
+    }
+    return "--";
 }
 
 function TimelineItem({ label, value }: { label: string; value: string }) {

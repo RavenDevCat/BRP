@@ -28,6 +28,50 @@ export type GoogleGeocodeUsage = {
     label?: string;
 };
 
+export type TrafficRolloutStatusResponse = {
+    status: string;
+    next_step?: string;
+    endpoint?: {
+        read_only?: boolean;
+        provider_api_called?: boolean;
+        osrm_started?: boolean;
+    };
+    rollout_gate?: {
+        status?: string;
+        passed_requirement_count?: number;
+        failed_requirement_count?: number;
+        missing_profiles?: Array<Record<string, unknown>>;
+        failure_reason_counts?: Record<string, number>;
+    };
+    timers?: {
+        problem_count?: number;
+        next_relevant_timer?: {
+            unit?: string;
+            next_elapse_local?: string;
+            seconds_until_next_elapse?: number;
+        } | null;
+    };
+    services?: {
+        problem_count?: number;
+        problem_services?: Array<Record<string, unknown>>;
+    };
+    api_budget?: {
+        problem?: boolean;
+        total_estimated_api_call_count?: number;
+        max_estimated_api_call_count?: number;
+        provider_api_called?: boolean;
+        osrm_started?: boolean;
+        safety_violation_reasons?: string[];
+    };
+    osrm_manager?: {
+        available?: boolean;
+        lock_count?: number;
+        stale_lock_count?: number;
+        running_region_count?: number;
+        running_regions?: string[];
+    };
+};
+
 export type DeploymentFeatures = {
     language_switch_enabled: boolean;
     default_traffic_coefficient_mode?: string;
@@ -628,6 +672,10 @@ export function getGoogleGeocodeUsage() {
 
 export function getDeploymentFeatures() {
     return apiFetch<DeploymentFeatures>("/deployment-features");
+}
+
+export function getTrafficRolloutStatus() {
+    return apiFetch<TrafficRolloutStatusResponse>("/traffic-rollout/status");
 }
 
 export function getWorkbookTemplateUrl() {

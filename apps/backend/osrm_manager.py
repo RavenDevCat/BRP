@@ -22,6 +22,12 @@ def _env_bool(name: str, default: bool) -> bool:
     return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
+def _default_state_path() -> Path:
+    if os.name == "nt":
+        return Path(__file__).resolve().parents[2] / "state" / "osrm_manager" / "state.json"
+    return Path("/opt/brp/shared/runtime/osrm_manager/state.json")
+
+
 ON_DEMAND_ENABLED = _env_bool("BRP_OSRM_ON_DEMAND_ENABLED", False)
 OSRM_LOCAL_DATA_DIR = Path(os.environ.get("OSRM_LOCAL_DATA_DIR", "/opt/brp/osrm-data")).expanduser()
 OSRM_BIND_HOST = os.environ.get("OSRM_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
@@ -32,7 +38,7 @@ OSRM_START_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_START_TIMEOUT_SECOND
 OSRM_HEALTH_TIMEOUT_SECONDS = float(os.environ.get("BRP_OSRM_HEALTH_TIMEOUT_SECONDS", "2.5") or 2.5)
 OSRM_READY_CACHE_SECONDS = float(os.environ.get("BRP_OSRM_READY_CACHE_SECONDS", "30") or 30)
 OSRM_LOCK_DIR = Path(os.environ.get("BRP_OSRM_LOCK_DIR", "/tmp/brp-osrm-locks")).expanduser()
-OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", "/tmp/brp-osrm-manager-state.json")).expanduser()
+OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", str(_default_state_path()))).expanduser()
 OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
 OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
 

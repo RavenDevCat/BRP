@@ -1,4 +1,5 @@
 import importlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -13,6 +14,21 @@ def load_manager(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_MIN_AVAILABLE_MB", "0")
     sys.modules.pop("osrm_manager", None)
     return importlib.import_module("osrm_manager")
+
+
+def test_default_state_path_uses_shared_runtime_on_linux(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRP_OSRM_ON_DEMAND_ENABLED", "true")
+    monkeypatch.setenv("OSRM_LOCAL_DATA_DIR", str(tmp_path / "osrm-data"))
+    monkeypatch.setenv("BRP_OSRM_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.delenv("BRP_OSRM_MANAGER_STATE_PATH", raising=False)
+    sys.modules.pop("osrm_manager", None)
+
+    manager = importlib.import_module("osrm_manager")
+
+    if os.name == "nt":
+        assert str(manager.OSRM_STATE_PATH).endswith("state\\osrm_manager\\state.json")
+    else:
+        assert str(manager.OSRM_STATE_PATH) == "/opt/brp/shared/runtime/osrm_manager/state.json"
 
 
 def test_ensure_region_starts_only_once_when_ready_cache_is_warm(monkeypatch, tmp_path):

@@ -226,6 +226,112 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
         self.assertEqual(summary["scenarios"][0]["scenario"], "free_optimization_baseline")
         self.assertEqual(summary["scenarios"][0]["geo_attributed_route_count"], 1)
 
+    def test_find_latest_job_applies_filters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = Path(tmpdir)
+            (job_dir / "older.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "older",
+                        "status": "succeeded",
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "To School",
+                                "traffic_coefficient_mode": "legacy",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "newer.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "newer",
+                        "status": "succeeded",
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "From School",
+                                "traffic_coefficient_mode": "attributed",
+                                "traffic_attribution": {
+                                    "enabled": True,
+                                    "succeeded": True,
+                                    "route_level_applied": True,
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_id": "older",
+                            "status": "succeeded",
+                            "finished_at": "2026-06-18T01:00:00+00:00",
+                        },
+                        {
+                            "job_id": "newer",
+                            "status": "succeeded",
+                            "finished_at": "2026-06-18T02:00:00+00:00",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            job_id, selection = report_job_traffic_attribution.find_latest_job(
+                job_dir,
+                status="succeeded",
+                service_direction="From School",
+                traffic_coefficient_mode="attributed",
+                require_attribution=True,
+            )
+
+        self.assertEqual(job_id, "newer")
+        self.assertEqual(selection["selected_job_id"], "newer")
+        self.assertEqual(selection["scanned_job_count"], 1)
+
+    def test_find_latest_job_reports_no_match(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = Path(tmpdir)
+            (job_dir / "legacy.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "legacy",
+                        "status": "succeeded",
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "To School",
+                                "traffic_coefficient_mode": "legacy",
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_id": "legacy",
+                            "status": "succeeded",
+                            "finished_at": "2026-06-18T01:00:00+00:00",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(LookupError):
+                report_job_traffic_attribution.find_latest_job(
+                    job_dir,
+                    traffic_coefficient_mode="attributed",
+                    require_attribution=True,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()

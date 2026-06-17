@@ -17,6 +17,7 @@ from typing import Any
 
 
 DEFAULT_JOB_DIR = Path("/opt/brp/shared/runtime/jobs")
+DEFAULT_LATEST_SCAN_LIMIT = 200
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -45,6 +46,51 @@ def _load_job(job: str, job_dir: Path) -> dict[str, Any]:
         raise ValueError(f"{path} did not contain a JSON object")
     payload["_resolved_path"] = str(path)
     return payload
+
+
+def _normal_key(value: Any) -> str:
+    return " ".join(str(value or "").strip().lower().replace("_", " ").split())
+
+
+def _job_sort_key(entry: dict[str, Any]) -> str:
+    return str(
+        entry.get("finished_at")
+        or entry.get("started_at")
+        or entry.get("created_at")
+        or entry.get("mtime")
+        or ""
+    )
+
+
+def _job_index_candidates(job_dir: Path, *, limit: int) -> list[dict[str, Any]]:
+    index_path = job_dir / "index.json"
+    entries: list[dict[str, Any]] = []
+    if index_path.exists():
+        try:
+            payload = json.loads(index_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                entries = [_as_dict(item) for item in payload]
+        except Exception:
+            entries = []
+    if not entries:
+        for path in job_dir.glob("*.json"):
+            if path.name == "index.json":
+                continue
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            entries.append(
+                {
+                    "job_id": path.stem,
+                    "created_at": "",
+                    "finished_at": "",
+                    "mtime": f"{stat.st_mtime:.6f}",
+                }
+            )
+    entries = [entry for entry in entries if str(entry.get("job_id") or "").strip()]
+    entries.sort(key=_job_sort_key, reverse=True)
+    return entries[: max(1, limit)]
 
 
 def _result_sections(job: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -253,6 +299,62 @@ def summarize_job(
     }
 
 
+def find_latest_job(
+    job_dir: Path = DEFAULT_JOB_DIR,
+    *,
+    status: str = "",
+    service_direction: str = "",
+    traffic_coefficient_mode: str = "",
+    require_attribution: bool = False,
+    limit: int = DEFAULT_LATEST_SCAN_LIMIT,
+) -> tuple[str, dict[str, Any]]:
+    expected_status = _normal_key(status)
+    expected_direction = _normal_key(service_direction)
+    expected_mode = _normal_key(traffic_coefficient_mode)
+    diagnostics: dict[str, Any] = {
+        "mode": "latest",
+        "scanned_job_count": 0,
+        "skipped_job_count": 0,
+        "filters": {
+            "status": status,
+            "service_direction": service_direction,
+            "traffic_coefficient_mode": traffic_coefficient_mode,
+            "require_attribution": require_attribution,
+            "limit": limit,
+        },
+    }
+    for entry in _job_index_candidates(job_dir, limit=limit):
+        job_id = str(entry.get("job_id") or "").strip()
+        if not job_id:
+            continue
+        diagnostics["scanned_job_count"] += 1
+        try:
+            summary = summarize_job(job_id, job_dir)
+        except Exception:
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if expected_status and _normal_key(summary.get("status")) != expected_status:
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if expected_direction and _normal_key(summary.get("service_direction")) != expected_direction:
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if expected_mode and _normal_key(summary.get("traffic_coefficient_mode")) != expected_mode:
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if require_attribution and not (
+            bool(summary.get("attribution_succeeded")) and bool(summary.get("route_level_applied"))
+        ):
+            diagnostics["skipped_job_count"] += 1
+            continue
+        diagnostics["selected_job_id"] = job_id
+        return job_id, diagnostics
+    raise LookupError(
+        "No matching job found in latest job history. "
+        f"Scanned {diagnostics['scanned_job_count']} job(s) from {job_dir}."
+    )
+
+
 def evaluate_requirements(
     summary: dict[str, Any],
     *,
@@ -389,7 +491,12 @@ def _print_summary(summary: dict[str, Any], *, show_route_evidence: bool = False
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--job", required=True, help="Job seed/id or path to a job JSON file.")
+    parser.add_argument("--job", help="Job seed/id or path to a job JSON file.")
+    parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Inspect the latest job matching the optional filters instead of passing --job manually.",
+    )
     parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(
@@ -421,19 +528,66 @@ def main() -> None:
         default=1.0,
         help="Minimum scenario route ratio that must use geo_route_similarity. Default: 1.0.",
     )
+    parser.add_argument(
+        "--latest-limit",
+        type=int,
+        default=DEFAULT_LATEST_SCAN_LIMIT,
+        help=f"Maximum recent jobs to scan with --latest. Default: {DEFAULT_LATEST_SCAN_LIMIT}.",
+    )
+    parser.add_argument(
+        "--latest-status",
+        default="succeeded",
+        help="Status filter used with --latest. Default: succeeded. Use empty string to disable.",
+    )
+    parser.add_argument(
+        "--service-direction",
+        default="",
+        help="Optional service direction filter used with --latest, for example 'To School' or 'From School'.",
+    )
+    parser.add_argument(
+        "--traffic-coefficient-mode",
+        default="",
+        help="Optional traffic coefficient mode filter used with --latest, for example 'attributed'.",
+    )
+    parser.add_argument(
+        "--latest-require-attribution",
+        action="store_true",
+        help="With --latest, only select jobs where route-level traffic attribution was applied.",
+    )
     args = parser.parse_args()
 
+    if bool(args.job) == bool(args.latest):
+        parser.error("Provide exactly one of --job or --latest")
     if not 0.0 <= args.min_geo_route_ratio <= 1.0:
         parser.error("--min-geo-route-ratio must be between 0 and 1")
+    if args.latest_limit <= 0:
+        parser.error("--latest-limit must be positive")
 
     include_route_evidence = bool(args.include_route_evidence or args.show_route_evidence)
     include_top_matches = bool(args.include_top_matches)
+    selection: dict[str, Any] = {}
+    job = str(args.job or "")
+    if args.latest:
+        try:
+            job, selection = find_latest_job(
+                args.job_dir,
+                status=str(args.latest_status or ""),
+                service_direction=str(args.service_direction or ""),
+                traffic_coefficient_mode=str(args.traffic_coefficient_mode or ""),
+                require_attribution=bool(args.latest_require_attribution),
+                limit=int(args.latest_limit),
+            )
+        except LookupError as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(1) from exc
     summary = summarize_job(
-        args.job,
+        job,
         args.job_dir,
         include_route_evidence=include_route_evidence,
         include_top_matches=include_top_matches,
     )
+    if selection:
+        summary["selection"] = selection
     requirements = evaluate_requirements(
         summary,
         require_attribution=bool(args.require_attribution),

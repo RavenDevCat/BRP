@@ -182,6 +182,8 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     const [desktopHistoryCollapsed, setDesktopHistoryCollapsed] =
         useState(true);
     const desktopHistoryRef = useRef<HTMLDivElement | null>(null);
+    const navigate = useNavigate();
+    const queryClient = useQueryClient();
     const jobsQuery = useQuery({
         queryKey: ["jobs"],
         queryFn: listJobs,
@@ -190,6 +192,20 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     const jobs = jobsQuery.data || [];
     const resolvedJobId = selectedJobId || jobs[0]?.job_id || "";
     const selectedJob = jobs.find((job) => job.job_id === resolvedJobId);
+
+    const historyDeleteMutation = useMutation({
+        mutationFn: (jobId: string) => deleteJob(jobId),
+        onSuccess: async (_data, deletedJobId) => {
+            queryClient.removeQueries({ queryKey: ["jobs", deletedJobId] });
+            await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+            if (deletedJobId === selectedJobId || deletedJobId === resolvedJobId) {
+                await navigate({ to: "/jobs" });
+            }
+        },
+    });
+    const deletingJobId = historyDeleteMutation.isPending
+        ? (historyDeleteMutation.variables ?? null)
+        : null;
 
     useEffect(() => {
         if (selectedJobId) {
@@ -277,6 +293,9 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                     error={jobsQuery.error as Error | null}
                     onOpenChange={setMobileHistoryOpen}
                     onRefresh={() => void jobsQuery.refetch()}
+                    onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
+                    deletingJobId={deletingJobId}
+                    deleteError={historyDeleteMutation.error as Error | null}
                 />
 
                 <div
@@ -292,6 +311,9 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                         error={jobsQuery.error as Error | null}
                         onCollapsedChange={setDesktopHistoryCollapsed}
                         onRefresh={() => void jobsQuery.refetch()}
+                        onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
+                        deletingJobId={deletingJobId}
+                        deleteError={historyDeleteMutation.error as Error | null}
                     />
                 </div>
 
@@ -328,6 +350,9 @@ function JobHistoryMobilePanel({
     error,
     onOpenChange,
     onRefresh,
+    onDelete,
+    deletingJobId,
+    deleteError,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
     selectedJob?: Awaited<ReturnType<typeof listJobs>>[number];
@@ -338,6 +363,9 @@ function JobHistoryMobilePanel({
     error?: Error | null;
     onOpenChange: (open: boolean) => void;
     onRefresh: () => void;
+    onDelete: (jobId: string) => void;
+    deletingJobId?: string | null;
+    deleteError?: Error | null;
 }) {
     const t = useT();
     return (
@@ -404,6 +432,9 @@ function JobHistoryMobilePanel({
                     selectedJobId={selectedJobId}
                     isLoading={isLoading}
                     error={error}
+                    onDelete={onDelete}
+                    deletingJobId={deletingJobId}
+                    deleteError={deleteError}
                 />
             </CardContent>
         </Card>
@@ -420,6 +451,9 @@ function JobHistoryDesktopPanel({
     error,
     onCollapsedChange,
     onRefresh,
+    onDelete,
+    deletingJobId,
+    deleteError,
 }: {
     className?: string;
     jobs: Awaited<ReturnType<typeof listJobs>>;
@@ -430,6 +464,9 @@ function JobHistoryDesktopPanel({
     error?: Error | null;
     onCollapsedChange: (collapsed: boolean) => void;
     onRefresh: () => void;
+    onDelete: (jobId: string) => void;
+    deletingJobId?: string | null;
+    deleteError?: Error | null;
 }) {
     const t = useT();
     if (collapsed) {
@@ -530,6 +567,9 @@ function JobHistoryDesktopPanel({
                     selectedJobId={selectedJobId}
                     isLoading={isLoading}
                     error={error}
+                    onDelete={onDelete}
+                    deletingJobId={deletingJobId}
+                    deleteError={deleteError}
                 />
             </CardContent>
         </Card>
@@ -541,11 +581,17 @@ function JobHistoryContent({
     selectedJobId,
     isLoading,
     error,
+    onDelete,
+    deletingJobId,
+    deleteError,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
     selectedJobId: string;
     isLoading: boolean;
     error?: Error | null;
+    onDelete: (jobId: string) => void;
+    deletingJobId?: string | null;
+    deleteError?: Error | null;
 }) {
     const t = useT();
     if (error) {
@@ -572,76 +618,131 @@ function JobHistoryContent({
             />
         );
     }
-    return <JobHistorySubList jobs={jobs} selectedJobId={selectedJobId} />;
+    return (
+        <>
+            {deleteError ? (
+                <div className="mb-3">
+                    <InlineError message={deleteError.message} />
+                </div>
+            ) : null}
+            <JobHistorySubList
+                jobs={jobs}
+                selectedJobId={selectedJobId}
+                onDelete={onDelete}
+                deletingJobId={deletingJobId}
+            />
+        </>
+    );
 }
 
 function JobHistorySubList({
     jobs,
     selectedJobId,
+    onDelete,
+    deletingJobId,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
     selectedJobId: string;
+    onDelete: (jobId: string) => void;
+    deletingJobId?: string | null;
 }) {
     const t = useT();
     return (
         <div className="max-h-72 space-y-2 overflow-auto pr-1 xl:max-h-[calc(100vh-220px)]">
             {jobs.map((job) => {
                 const active = job.job_id === selectedJobId;
+                const isDeleting = deletingJobId === job.job_id;
                 const summary = job.prepared_payload_summary || {};
                 return (
-                    <Link
+                    <div
                         key={job.job_id}
-                        to="/jobs/$jobId"
-                        params={{ jobId: job.job_id }}
                         className={[
-                            "block rounded-md border px-3 py-3 text-sm transition",
+                            "flex items-stretch gap-1 rounded-md border p-2 text-sm transition",
                             active
                                 ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
                         ].join(" ")}
                     >
-                        <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                                <div className="truncate font-semibold">
-                                    {getJobName(job)}
-                                </div>
-                                <div
-                                    className={
-                                        active
-                                            ? "mt-1 text-xs text-primary-foreground/75"
-                                            : "mt-1 text-xs text-muted-foreground"
-                                    }
-                                >
-                                    {formatDateTime(job.created_at)}
-                                </div>
-                            </div>
-                            <Badge
-                                tone={
-                                    active
-                                        ? "neutral"
-                                        : getJobStatusTone(job.status)
-                                }
-                                >
-                                {t(job.status)}
-                            </Badge>
-                        </div>
-                        <div
-                            className={
-                                active
-                                    ? "mt-3 grid grid-cols-2 gap-2 text-xs text-primary-foreground/80"
-                                    : "mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground"
-                            }
+                        <Link
+                            to="/jobs/$jobId"
+                            params={{ jobId: job.job_id }}
+                            className="min-w-0 flex-1 px-1 py-1"
                         >
-                            <span>
-                                {formatNumber(jobInputStopCount(summary))}{" "}
-                                {t("stops")}
-                            </span>
-                            <span>
-                                {formatNumber(summary.current_plan_route_count)}{" "}
-                                {t("routes")}
-                            </span>
-                        </div>
-                    </Link>
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                    <div className="truncate font-semibold">
+                                        {getJobName(job)}
+                                    </div>
+                                    <div
+                                        className={
+                                            active
+                                                ? "mt-1 text-xs text-primary-foreground/75"
+                                                : "mt-1 text-xs text-muted-foreground"
+                                        }
+                                    >
+                                        {formatDateTime(job.created_at)}
+                                    </div>
+                                </div>
+                                <Badge
+                                    tone={
+                                        active
+                                            ? "neutral"
+                                            : getJobStatusTone(job.status)
+                                    }
+                                    >
+                                    {t(job.status)}
+                                </Badge>
+                            </div>
+                            <div
+                                className={
+                                    active
+                                        ? "mt-2 grid grid-cols-2 gap-2 text-xs text-primary-foreground/80"
+                                        : "mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground"
+                                }
+                            >
+                                <span>
+                                    {formatNumber(jobInputStopCount(summary))}{" "}
+                                    {t("stops")}
+                                </span>
+                                <span>
+                                    {formatNumber(summary.current_plan_route_count)}{" "}
+                                    {t("routes")}
+                                </span>
+                            </div>
+                        </Link>
+                        <button
+                            type="button"
+                            className={[
+                                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                                active
+                                    ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
+                                    : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+                            ].join(" ")}
+                            aria-label={`${t("Delete job")}: ${getJobName(job)}`}
+                            title={t("Delete job")}
+                            disabled={isDeleting}
+                            onClick={() => {
+                                if (
+                                    window.confirm(
+                                        t(
+                                            "Delete this job from local history? This cannot be undone.",
+                                        ),
+                                    )
+                                ) {
+                                    onDelete(job.job_id);
+                                }
+                            }}
+                        >
+                            {isDeleting ? (
+                                <Loader2
+                                    className="h-4 w-4 animate-spin"
+                                    aria-hidden="true"
+                                />
+                            ) : (
+                                <Trash2 className="h-4 w-4" aria-hidden="true" />
+                            )}
+                        </button>
+                    </div>
                 );
             })}
         </div>

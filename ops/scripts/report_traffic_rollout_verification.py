@@ -38,6 +38,8 @@ def _job_check(
     required_scenarios: list[str],
     min_geo_route_ratio: float,
     latest_limit: int,
+    latest_job_name_contains: str,
+    latest_source_label_contains: str,
     include_route_evidence: bool,
     include_top_matches: bool,
 ) -> dict[str, Any]:
@@ -53,6 +55,8 @@ def _job_check(
             status="succeeded",
             service_direction=service_direction,
             traffic_coefficient_mode="attributed",
+            job_name_contains=latest_job_name_contains,
+            source_label_contains=latest_source_label_contains,
             require_attribution=True,
             limit=latest_limit,
         )
@@ -127,6 +131,8 @@ def build_verification(args: argparse.Namespace) -> dict[str, Any]:
             required_scenarios=required_scenarios,
             min_geo_route_ratio=float(args.min_geo_route_ratio),
             latest_limit=int(args.latest_limit),
+            latest_job_name_contains=str(args.latest_job_name_contains or ""),
+            latest_source_label_contains=str(args.latest_source_label_contains or ""),
             include_route_evidence=bool(args.include_route_evidence),
             include_top_matches=bool(args.include_top_matches),
         )
@@ -214,6 +220,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-geo-ratio", type=float, default=1.0)
     parser.add_argument("--min-geo-route-ratio", type=float, default=1.0)
     parser.add_argument("--latest-limit", type=int, default=report_job_traffic_attribution.DEFAULT_LATEST_SCAN_LIMIT)
+    parser.add_argument("--latest-job-name-contains", default="")
+    parser.add_argument("--latest-source-label-contains", default="")
     parser.add_argument("--local-timezone", default=report_traffic_rollout_status.DEFAULT_LOCAL_TIMEZONE)
     parser.add_argument("--check-jobs-when-waiting", action="store_true")
     parser.add_argument("--include-route-evidence", action="store_true")

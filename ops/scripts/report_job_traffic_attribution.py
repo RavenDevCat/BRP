@@ -52,6 +52,13 @@ def _normal_key(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().replace("_", " ").split())
 
 
+def _contains_text(value: Any, needle: str) -> bool:
+    expected = str(needle or "").strip().lower()
+    if not expected:
+        return True
+    return expected in str(value or "").strip().lower()
+
+
 def _job_sort_key(entry: dict[str, Any]) -> str:
     return str(
         entry.get("finished_at")
@@ -240,6 +247,7 @@ def summarize_job(
 ) -> dict[str, Any]:
     payload = _load_job(job, job_dir)
     result, structured = _result_sections(payload)
+    metadata = _as_dict(payload.get("metadata"))
     traffic = _traffic_attribution(result, structured)
     scenario_estimates = _as_dict(traffic.get("scenario_route_estimates"))
 
@@ -276,6 +284,8 @@ def summarize_job(
         "job_id": str(payload.get("job_id") or Path(str(payload.get("_resolved_path"))).stem),
         "path": str(payload.get("_resolved_path") or ""),
         "status": str(payload.get("status") or ""),
+        "job_name": str(metadata.get("job_name") or metadata.get("job_default_name") or payload.get("name") or ""),
+        "source_label": str(metadata.get("source_label") or ""),
         "service_direction": str(structured.get("service_direction") or result.get("service_direction") or ""),
         "traffic_profile_name": str(structured.get("traffic_profile_name") or result.get("traffic_profile_name") or ""),
         "traffic_time_multiplier": float(
@@ -305,6 +315,8 @@ def find_latest_job(
     status: str = "",
     service_direction: str = "",
     traffic_coefficient_mode: str = "",
+    job_name_contains: str = "",
+    source_label_contains: str = "",
     require_attribution: bool = False,
     limit: int = DEFAULT_LATEST_SCAN_LIMIT,
 ) -> tuple[str, dict[str, Any]]:
@@ -319,6 +331,8 @@ def find_latest_job(
             "status": status,
             "service_direction": service_direction,
             "traffic_coefficient_mode": traffic_coefficient_mode,
+            "job_name_contains": job_name_contains,
+            "source_label_contains": source_label_contains,
             "require_attribution": require_attribution,
             "limit": limit,
         },
@@ -340,6 +354,12 @@ def find_latest_job(
             diagnostics["skipped_job_count"] += 1
             continue
         if expected_mode and _normal_key(summary.get("traffic_coefficient_mode")) != expected_mode:
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if not _contains_text(summary.get("job_name"), job_name_contains):
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if not _contains_text(summary.get("source_label"), source_label_contains):
             diagnostics["skipped_job_count"] += 1
             continue
         if require_attribution and not (
@@ -550,6 +570,16 @@ def main() -> None:
         help="Optional traffic coefficient mode filter used with --latest, for example 'attributed'.",
     )
     parser.add_argument(
+        "--latest-job-name-contains",
+        default="",
+        help="Optional substring filter for metadata.job_name used with --latest.",
+    )
+    parser.add_argument(
+        "--latest-source-label-contains",
+        default="",
+        help="Optional substring filter for metadata.source_label used with --latest.",
+    )
+    parser.add_argument(
         "--latest-require-attribution",
         action="store_true",
         help="With --latest, only select jobs where route-level traffic attribution was applied.",
@@ -574,6 +604,8 @@ def main() -> None:
                 status=str(args.latest_status or ""),
                 service_direction=str(args.service_direction or ""),
                 traffic_coefficient_mode=str(args.traffic_coefficient_mode or ""),
+                job_name_contains=str(args.latest_job_name_contains or ""),
+                source_label_contains=str(args.latest_source_label_contains or ""),
                 require_attribution=bool(args.latest_require_attribution),
                 limit=int(args.latest_limit),
             )

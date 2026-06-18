@@ -32,6 +32,8 @@ def _args(tmpdir: str, **overrides: object) -> argparse.Namespace:
         "min_geo_ratio": 1.0,
         "min_geo_route_ratio": 1.0,
         "latest_limit": 200,
+        "latest_job_name_contains": "",
+        "latest_source_label_contains": "",
         "local_timezone": "Asia/Shanghai",
         "check_jobs_when_waiting": False,
         "include_route_evidence": False,
@@ -79,6 +81,10 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                         {
                             "job_id": job_id,
                             "status": "succeeded",
+                            "metadata": {
+                                "job_name": f"DEMH {direction} rollout",
+                                "source_label": f"DEMH-{direction}.xlsx",
+                            },
                             "result": {
                                 "structured_results": {
                                     "service_direction": direction,
@@ -121,6 +127,8 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                     tmpdir,
                     profile=[("CN", "Shanghai", "am_peak")],
                     service_direction=["To School", "From School"],
+                    latest_job_name_contains="rollout",
+                    latest_source_label_contains="DEMH",
                 )
             )
 
@@ -128,6 +136,63 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
         self.assertFalse(report["job_checks_skipped"])
         self.assertEqual([check["job_id"] for check in report["job_checks"]], ["to_job", "from_job"])
         self.assertTrue(all(check["status"] == "passed" for check in report["job_checks"]))
+
+    def test_verification_metadata_filter_can_fail_job_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            sample_dir = root / "samples"
+            job_dir = root / "jobs"
+            sample_dir.mkdir()
+            job_dir.mkdir()
+            (sample_dir / "geo.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-18T07:20:00+08:00",
+                        "routes": [{"route_id": "sample", "route_fingerprint": {"cells": ["a"]}}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "to_job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "to_job",
+                        "status": "succeeded",
+                        "metadata": {"job_name": "DEMH To School rollout", "source_label": "DEMH-To School.xlsx"},
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "To School",
+                                "traffic_coefficient_mode": "attributed",
+                                "traffic_attribution": {
+                                    "enabled": True,
+                                    "succeeded": True,
+                                    "route_level_applied": True,
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps([{"job_id": "to_job", "status": "succeeded", "finished_at": "2026-06-18T01:00:00+00:00"}]),
+                encoding="utf-8",
+            )
+
+            report = report_traffic_rollout_verification.build_verification(
+                _args(
+                    tmpdir,
+                    profile=[("CN", "Shanghai", "am_peak")],
+                    service_direction=["To School"],
+                    latest_job_name_contains="not this one",
+                )
+            )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["job_checks"][0]["reason"], "no_matching_attributed_job")
 
     def test_reports_failed_when_latest_job_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

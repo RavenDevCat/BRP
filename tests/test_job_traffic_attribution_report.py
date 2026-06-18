@@ -234,6 +234,10 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                     {
                         "job_id": "older",
                         "status": "succeeded",
+                        "metadata": {
+                            "job_name": "DEMH-To School - temporary",
+                            "source_label": "DEMH-To School.xlsx",
+                        },
                         "result": {
                             "structured_results": {
                                 "service_direction": "To School",
@@ -249,6 +253,10 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                     {
                         "job_id": "newer",
                         "status": "succeeded",
+                        "metadata": {
+                            "job_name": "DEMH-From School - rollout",
+                            "source_label": "DEMH-From School.xlsx",
+                        },
                         "result": {
                             "structured_results": {
                                 "service_direction": "From School",
@@ -287,12 +295,64 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                 status="succeeded",
                 service_direction="From School",
                 traffic_coefficient_mode="attributed",
+                job_name_contains="rollout",
+                source_label_contains="From School",
                 require_attribution=True,
             )
 
         self.assertEqual(job_id, "newer")
         self.assertEqual(selection["selected_job_id"], "newer")
         self.assertEqual(selection["scanned_job_count"], 1)
+
+    def test_find_latest_job_rejects_metadata_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = Path(tmpdir)
+            (job_dir / "newer.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "newer",
+                        "status": "succeeded",
+                        "metadata": {
+                            "job_name": "DEMH-From School - rollout",
+                            "source_label": "DEMH-From School.xlsx",
+                        },
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "From School",
+                                "traffic_coefficient_mode": "attributed",
+                                "traffic_attribution": {
+                                    "enabled": True,
+                                    "succeeded": True,
+                                    "route_level_applied": True,
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_id": "newer",
+                            "status": "succeeded",
+                            "finished_at": "2026-06-18T02:00:00+00:00",
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(LookupError):
+                report_job_traffic_attribution.find_latest_job(
+                    job_dir,
+                    status="succeeded",
+                    service_direction="From School",
+                    traffic_coefficient_mode="attributed",
+                    job_name_contains="15min",
+                    require_attribution=True,
+                )
 
     def test_find_latest_job_reports_no_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

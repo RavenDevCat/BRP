@@ -253,6 +253,8 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                     {
                         "job_id": "newer",
                         "status": "succeeded",
+                        "created_at": "2026-06-18T01:59:00+00:00",
+                        "finished_at": "2026-06-18T02:00:00+00:00",
                         "metadata": {
                             "job_name": "DEMH-From School - rollout",
                             "source_label": "DEMH-From School.xlsx",
@@ -297,6 +299,8 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                 traffic_coefficient_mode="attributed",
                 job_name_contains="rollout",
                 source_label_contains="From School",
+                min_created_at="2026-06-18T01:00:00+00:00",
+                min_finished_at="2026-06-18T02:00:00+00:00",
                 require_attribution=True,
             )
 
@@ -310,11 +314,13 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
             (job_dir / "newer.json").write_text(
                 json.dumps(
                     {
-                        "job_id": "newer",
-                        "status": "succeeded",
-                        "metadata": {
-                            "job_name": "DEMH-From School - rollout",
-                            "source_label": "DEMH-From School.xlsx",
+                            "job_id": "newer",
+                            "status": "succeeded",
+                            "created_at": "2026-06-18T01:59:00+00:00",
+                            "finished_at": "2026-06-18T02:00:00+00:00",
+                            "metadata": {
+                                "job_name": "DEMH-From School - rollout",
+                                "source_label": "DEMH-From School.xlsx",
                         },
                         "result": {
                             "structured_results": {
@@ -351,6 +357,54 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                     service_direction="From School",
                     traffic_coefficient_mode="attributed",
                     job_name_contains="15min",
+                    require_attribution=True,
+                )
+
+    def test_find_latest_job_rejects_too_old_finished_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = Path(tmpdir)
+            (job_dir / "old.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "old",
+                        "status": "succeeded",
+                        "created_at": "2026-06-18T01:00:00+00:00",
+                        "finished_at": "2026-06-18T01:10:00+00:00",
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "From School",
+                                "traffic_coefficient_mode": "attributed",
+                                "traffic_attribution": {
+                                    "enabled": True,
+                                    "succeeded": True,
+                                    "route_level_applied": True,
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "job_id": "old",
+                            "status": "succeeded",
+                            "finished_at": "2026-06-18T01:10:00+00:00",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(LookupError):
+                report_job_traffic_attribution.find_latest_job(
+                    job_dir,
+                    status="succeeded",
+                    service_direction="From School",
+                    traffic_coefficient_mode="attributed",
+                    min_finished_at="2026-06-18T02:00:00+00:00",
                     require_attribution=True,
                 )
 

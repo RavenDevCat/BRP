@@ -40,6 +40,8 @@ def _job_check(
     latest_limit: int,
     latest_job_name_contains: str,
     latest_source_label_contains: str,
+    latest_min_created_at: str,
+    latest_min_finished_at: str,
     include_route_evidence: bool,
     include_top_matches: bool,
 ) -> dict[str, Any]:
@@ -57,6 +59,8 @@ def _job_check(
             traffic_coefficient_mode="attributed",
             job_name_contains=latest_job_name_contains,
             source_label_contains=latest_source_label_contains,
+            min_created_at=latest_min_created_at,
+            min_finished_at=latest_min_finished_at,
             require_attribution=True,
             limit=latest_limit,
         )
@@ -133,6 +137,8 @@ def build_verification(args: argparse.Namespace) -> dict[str, Any]:
             latest_limit=int(args.latest_limit),
             latest_job_name_contains=str(args.latest_job_name_contains or ""),
             latest_source_label_contains=str(args.latest_source_label_contains or ""),
+            latest_min_created_at=str(args.latest_min_created_at or ""),
+            latest_min_finished_at=str(args.latest_min_finished_at or ""),
             include_route_evidence=bool(args.include_route_evidence),
             include_top_matches=bool(args.include_top_matches),
         )
@@ -222,6 +228,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--latest-limit", type=int, default=report_job_traffic_attribution.DEFAULT_LATEST_SCAN_LIMIT)
     parser.add_argument("--latest-job-name-contains", default="")
     parser.add_argument("--latest-source-label-contains", default="")
+    parser.add_argument("--latest-min-created-at", default="")
+    parser.add_argument("--latest-min-finished-at", default="")
     parser.add_argument("--local-timezone", default=report_traffic_rollout_status.DEFAULT_LOCAL_TIMEZONE)
     parser.add_argument("--check-jobs-when-waiting", action="store_true")
     parser.add_argument("--include-route-evidence", action="store_true")

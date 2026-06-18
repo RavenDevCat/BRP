@@ -34,6 +34,8 @@ def _args(tmpdir: str, **overrides: object) -> argparse.Namespace:
         "latest_limit": 200,
         "latest_job_name_contains": "",
         "latest_source_label_contains": "",
+        "latest_min_created_at": "",
+        "latest_min_finished_at": "",
         "local_timezone": "Asia/Shanghai",
         "check_jobs_when_waiting": False,
         "include_route_evidence": False,
@@ -81,6 +83,8 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                         {
                             "job_id": job_id,
                             "status": "succeeded",
+                            "created_at": "2026-06-18T02:00:00+00:00",
+                            "finished_at": "2026-06-18T02:05:00+00:00",
                             "metadata": {
                                 "job_name": f"DEMH {direction} rollout",
                                 "source_label": f"DEMH-{direction}.xlsx",
@@ -129,6 +133,7 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                     service_direction=["To School", "From School"],
                     latest_job_name_contains="rollout",
                     latest_source_label_contains="DEMH",
+                    latest_min_finished_at="2026-06-18T02:00:00+00:00",
                 )
             )
 
@@ -161,6 +166,8 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                     {
                         "job_id": "to_job",
                         "status": "succeeded",
+                        "created_at": "2026-06-18T02:00:00+00:00",
+                        "finished_at": "2026-06-18T02:05:00+00:00",
                         "metadata": {"job_name": "DEMH To School rollout", "source_label": "DEMH-To School.xlsx"},
                         "result": {
                             "structured_results": {
@@ -188,6 +195,64 @@ class TrafficRolloutVerificationReportTests(unittest.TestCase):
                     profile=[("CN", "Shanghai", "am_peak")],
                     service_direction=["To School"],
                     latest_job_name_contains="not this one",
+                )
+            )
+
+        self.assertEqual(report["status"], "failed")
+        self.assertEqual(report["job_checks"][0]["reason"], "no_matching_attributed_job")
+
+    def test_verification_min_finished_at_can_fail_job_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            sample_dir = root / "samples"
+            job_dir = root / "jobs"
+            sample_dir.mkdir()
+            job_dir.mkdir()
+            (sample_dir / "geo.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-18T07:20:00+08:00",
+                        "routes": [{"route_id": "sample", "route_fingerprint": {"cells": ["a"]}}],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "to_job.json").write_text(
+                json.dumps(
+                    {
+                        "job_id": "to_job",
+                        "status": "succeeded",
+                        "created_at": "2026-06-18T01:00:00+00:00",
+                        "finished_at": "2026-06-18T01:05:00+00:00",
+                        "result": {
+                            "structured_results": {
+                                "service_direction": "To School",
+                                "traffic_coefficient_mode": "attributed",
+                                "traffic_attribution": {
+                                    "enabled": True,
+                                    "succeeded": True,
+                                    "route_level_applied": True,
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "index.json").write_text(
+                json.dumps([{"job_id": "to_job", "status": "succeeded", "finished_at": "2026-06-18T01:05:00+00:00"}]),
+                encoding="utf-8",
+            )
+
+            report = report_traffic_rollout_verification.build_verification(
+                _args(
+                    tmpdir,
+                    profile=[("CN", "Shanghai", "am_peak")],
+                    service_direction=["To School"],
+                    latest_min_finished_at="2026-06-18T02:00:00+00:00",
                 )
             )
 

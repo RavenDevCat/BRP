@@ -12,6 +12,7 @@ import argparse
 import json
 import sys
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,31 @@ def _contains_text(value: Any, needle: str) -> bool:
     if not expected:
         return True
     return expected in str(value or "").strip().lower()
+
+
+def _parse_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _timestamp_at_or_after(value: Any, minimum: str) -> bool:
+    if not str(minimum or "").strip():
+        return True
+    actual = _parse_timestamp(value)
+    threshold = _parse_timestamp(minimum)
+    if actual is None or threshold is None:
+        return False
+    return actual >= threshold
 
 
 def _job_sort_key(entry: dict[str, Any]) -> str:
@@ -284,6 +310,9 @@ def summarize_job(
         "job_id": str(payload.get("job_id") or Path(str(payload.get("_resolved_path"))).stem),
         "path": str(payload.get("_resolved_path") or ""),
         "status": str(payload.get("status") or ""),
+        "created_at": str(payload.get("created_at") or ""),
+        "started_at": str(payload.get("started_at") or ""),
+        "finished_at": str(payload.get("finished_at") or ""),
         "job_name": str(metadata.get("job_name") or metadata.get("job_default_name") or payload.get("name") or ""),
         "source_label": str(metadata.get("source_label") or ""),
         "service_direction": str(structured.get("service_direction") or result.get("service_direction") or ""),
@@ -317,6 +346,8 @@ def find_latest_job(
     traffic_coefficient_mode: str = "",
     job_name_contains: str = "",
     source_label_contains: str = "",
+    min_created_at: str = "",
+    min_finished_at: str = "",
     require_attribution: bool = False,
     limit: int = DEFAULT_LATEST_SCAN_LIMIT,
 ) -> tuple[str, dict[str, Any]]:
@@ -333,6 +364,8 @@ def find_latest_job(
             "traffic_coefficient_mode": traffic_coefficient_mode,
             "job_name_contains": job_name_contains,
             "source_label_contains": source_label_contains,
+            "min_created_at": min_created_at,
+            "min_finished_at": min_finished_at,
             "require_attribution": require_attribution,
             "limit": limit,
         },
@@ -360,6 +393,12 @@ def find_latest_job(
             diagnostics["skipped_job_count"] += 1
             continue
         if not _contains_text(summary.get("source_label"), source_label_contains):
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if not _timestamp_at_or_after(summary.get("created_at"), min_created_at):
+            diagnostics["skipped_job_count"] += 1
+            continue
+        if not _timestamp_at_or_after(summary.get("finished_at"), min_finished_at):
             diagnostics["skipped_job_count"] += 1
             continue
         if require_attribution and not (
@@ -580,6 +619,16 @@ def main() -> None:
         help="Optional substring filter for metadata.source_label used with --latest.",
     )
     parser.add_argument(
+        "--latest-min-created-at",
+        default="",
+        help="Optional ISO timestamp lower bound for job created_at used with --latest.",
+    )
+    parser.add_argument(
+        "--latest-min-finished-at",
+        default="",
+        help="Optional ISO timestamp lower bound for job finished_at used with --latest.",
+    )
+    parser.add_argument(
         "--latest-require-attribution",
         action="store_true",
         help="With --latest, only select jobs where route-level traffic attribution was applied.",
@@ -606,6 +655,8 @@ def main() -> None:
                 traffic_coefficient_mode=str(args.traffic_coefficient_mode or ""),
                 job_name_contains=str(args.latest_job_name_contains or ""),
                 source_label_contains=str(args.latest_source_label_contains or ""),
+                min_created_at=str(args.latest_min_created_at or ""),
+                min_finished_at=str(args.latest_min_finished_at or ""),
                 require_attribution=bool(args.latest_require_attribution),
                 limit=int(args.latest_limit),
             )

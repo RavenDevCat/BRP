@@ -196,10 +196,28 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     const historyDeleteMutation = useMutation({
         mutationFn: (jobId: string) => deleteJob(jobId),
         onSuccess: async (_data, deletedJobId) => {
+            const deletedJobIndex = jobs.findIndex(
+                (job) => job.job_id === deletedJobId,
+            );
+            const replacementJobId =
+                deletedJobIndex >= 0
+                    ? (jobs[deletedJobIndex + 1]?.job_id ??
+                        jobs[deletedJobIndex - 1]?.job_id ??
+                        "")
+                    : "";
+            const shouldReplaceSelection =
+                deletedJobId === selectedJobId || deletedJobId === resolvedJobId;
             queryClient.removeQueries({ queryKey: ["jobs", deletedJobId] });
             await queryClient.invalidateQueries({ queryKey: ["jobs"] });
-            if (deletedJobId === selectedJobId || deletedJobId === resolvedJobId) {
-                await navigate({ to: "/jobs" });
+            if (shouldReplaceSelection) {
+                if (replacementJobId) {
+                    await navigate({
+                        to: "/jobs/$jobId",
+                        params: { jobId: replacementJobId },
+                    });
+                } else {
+                    await navigate({ to: "/jobs" });
+                }
             }
         },
     });

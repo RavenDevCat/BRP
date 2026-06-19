@@ -183,7 +183,8 @@ BRP supports two traffic-profile sampling modes:
   JSON exports. It refreshes Monday-Friday profiles as a batch rather than
   running a daily realtime timer. Google Routes is not used for KR traffic
   profiles because Seoul driving probes returned empty routes in production
-  diagnostics.
+  diagnostics. Seoul, Incheon, Gyeonggi, and nearby Seoul-metro cities share one
+  `Seoul Metro` route-attribution bucket for reusable KR traffic factors.
 - Bangkok currently uses a conservative static traffic multiplier until a richer
   Bangkok traffic-profile sampling strategy is added.
 

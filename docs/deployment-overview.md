@@ -175,6 +175,9 @@ The South Korea deployment can refresh weekday traffic profiles with Kakao Navi
 future directions. This is separate from the Google geocode usage counter and
 should use its own persistent usage file. Do not use Google Routes for KR/Seoul
 driving profiles; production probes returned HTTP 200 with empty route results.
+Route-level traffic attribution normalizes Seoul, Incheon, Gyeonggi, and nearby
+Seoul-metro cities into a shared `Seoul Metro` matching bucket while keeping the
+stored sample market as `KR`.
 
 Recommended defaults:
 

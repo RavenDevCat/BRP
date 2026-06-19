@@ -83,6 +83,10 @@ It is not a code changelog. Record changes here when users or operators should k
   Monday-Friday profiles from stable baseline JSON exports, not daily realtime
   live timers. Google Routes was removed from the KR plan after production
   probes returned empty Seoul driving routes.
+- Route-level traffic attribution now treats Seoul, Incheon, Gyeonggi, and
+  nearby Seoul-metro cities as one reusable Seoul Metro profile bucket, so KR
+  Kakao samples can support cross-boundary school routes instead of requiring an
+  exact workbook city match.
 - Kakao Navi calls are guarded by independent monthly, daily, and per-refresh
   caps plus a persistent usage counter separate from the Google geocode counter.
 - Added Linux/staging and Windows/KR wrappers for refreshing KR weekday profiles

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import json
 import os
 import socket
@@ -13,6 +12,55 @@ from typing import Iterator
 from urllib.parse import urlparse
 
 import requests
+
+try:  # Linux/macOS file locks.
+    import fcntl
+except ModuleNotFoundError:  # pragma: no cover - exercised on Windows.
+    fcntl = None  # type: ignore[assignment]
+
+try:  # Windows does not ship fcntl; keep the module importable on KR prod.
+    import msvcrt
+except ModuleNotFoundError:  # pragma: no cover - exercised on POSIX.
+    msvcrt = None  # type: ignore[assignment]
+
+
+def _lock_file_exclusive(handle, *, nonblocking: bool = False) -> None:
+    if fcntl is not None:
+        flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
+        fcntl.flock(handle.fileno(), flags)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        mode = msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK
+        try:
+            msvcrt.locking(handle.fileno(), mode, 1)
+        except OSError as exc:
+            if nonblocking:
+                raise BlockingIOError(str(exc)) from exc
+            raise
+
+
+def _lock_file_shared(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        return
+    if msvcrt is not None:
+        # Windows msvcrt does not expose a shared advisory lock. KR runs OSRM
+        # on-demand disabled, so an exclusive byte lock is sufficient fallback.
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+
+
+def _unlock_file(handle) -> None:
+    if fcntl is not None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    if msvcrt is not None:
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -220,12 +268,12 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
 def _file_lock(path: Path) -> Iterator[None]:
     with path.open("w") as handle:
         if OSRM_LOCK_WAIT_SECONDS < 0:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _lock_file_exclusive(handle)
         else:
             deadline = time.monotonic() + OSRM_LOCK_WAIT_SECONDS
             while True:
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _lock_file_exclusive(handle, nonblocking=True)
                     break
                 except BlockingIOError as exc:
                     if time.monotonic() >= deadline:
@@ -237,7 +285,7 @@ def _file_lock(path: Path) -> Iterator[None]:
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
 
 
 def _is_osrm_ready(config: RegionConfig, base_url: str) -> bool:
@@ -498,11 +546,11 @@ def _region_lock_is_held(region: str) -> bool:
             return False
         with path.open("a") as handle:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock_file_exclusive(handle, nonblocking=True)
             except BlockingIOError:
                 return True
             else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
                 return False
     except Exception:
         return True
@@ -513,11 +561,11 @@ def _region_use_lease(region: str) -> Iterator[None]:
     OSRM_USAGE_DIR.mkdir(parents=True, exist_ok=True)
     path = OSRM_USAGE_DIR / f"{region}.use"
     with path.open("a") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        _lock_file_shared(handle)
         try:
             yield
         finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock_file(handle)
 
 
 def _region_use_is_active(region: str) -> bool:
@@ -527,11 +575,11 @@ def _region_use_is_active(region: str) -> bool:
             return False
         with path.open("a") as handle:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock_file_exclusive(handle, nonblocking=True)
             except BlockingIOError:
                 return True
             else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
                 return False
     except Exception:
         return True
@@ -644,11 +692,11 @@ def _lock_file_status(path: Path, now: float) -> dict[str, object]:
     try:
         with path.open("a") as handle:
             try:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock_file_exclusive(handle, nonblocking=True)
             except BlockingIOError:
                 locked = True
             else:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
     except Exception:
         locked = True
     age_s = max(0.0, now - float(stat.st_mtime))
@@ -689,14 +737,14 @@ def cleanup_stale_locks() -> list[str]:
         try:
             with path.open("a") as handle:
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    _lock_file_exclusive(handle, nonblocking=True)
                 except BlockingIOError:
                     continue
                 try:
                     path.unlink(missing_ok=True)
                     removed.append(str(path))
                 finally:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    _unlock_file(handle)
         except FileNotFoundError:
             continue
         except Exception as exc:

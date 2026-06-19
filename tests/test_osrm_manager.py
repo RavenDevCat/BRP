@@ -37,6 +37,18 @@ def test_default_state_path_uses_shared_runtime_on_linux(monkeypatch, tmp_path):
         assert str(manager.OSRM_STATE_PATH) == "/opt/brp/shared/runtime/osrm_manager/state.json"
 
 
+def test_lock_helpers_are_safe_without_platform_lock_modules(monkeypatch, tmp_path):
+    manager = load_manager(monkeypatch, tmp_path)
+    monkeypatch.setattr(manager, "fcntl", None)
+    monkeypatch.setattr(manager, "msvcrt", None)
+    lock_path = tmp_path / "noop.lock"
+
+    with manager._file_lock(lock_path):
+        assert lock_path.exists()
+
+    assert manager._region_lock_is_held("missing") is False
+
+
 def test_ensure_region_starts_only_once_when_ready_cache_is_warm(monkeypatch, tmp_path):
     manager = load_manager(monkeypatch, tmp_path)
     config = manager.REGIONS["bangkok"]

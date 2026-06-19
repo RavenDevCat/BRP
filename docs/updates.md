@@ -4,6 +4,32 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-20
+
+### Korea Route-Level Traffic Attribution Verified
+
+- South Korea Route Audit jobs can now use the same route-network attribution
+  model as the China deployment: historical Kakao Navi samples are matched to
+  each route by route fingerprint and Seoul-metro geography instead of applying
+  one flat market coefficient.
+- Seoul, Incheon, Gyeonggi, and nearby Seoul-metro cities are grouped into the
+  shared `Seoul Metro` attribution bucket for traffic-factor matching.
+- KR production now defaults new jobs to attributed traffic coefficients.
+- A full Monday-Friday Kakao profile refresh produced 345 geo-ready route
+  samples, and a representative KR Route Audit verification job confirmed
+  route-level factors in Current Plan, Free Optimization Baseline, and
+  15-minute constrained scenarios.
+- Existing completed jobs keep their stored results; rerun a job to regenerate
+  route timings with the new KR attribution behavior.
+
+### KR Windows Backend Compatibility Hardened
+
+- The OSRM manager module is now import-safe on Windows as well as Linux.
+- This prevents KR backend restarts from failing on POSIX-only file-lock imports
+  while preserving Linux file locking for on-demand OSRM environments.
+- KR production should continue to start the backend through the `BRP Backend`
+  Scheduled Task.
+
 ## 2026-06-14
 
 ### Fleet Planner Map Workspace Completed

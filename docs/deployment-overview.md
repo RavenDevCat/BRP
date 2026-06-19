@@ -199,6 +199,7 @@ export BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP="4000"
 export BRP_KAKAO_NAVI_DAILY_CAP="500"
 export BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH="500"
 export BRP_KAKAO_NAVI_MAX_WAYPOINTS="5"
+export BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE="attributed"
 ```
 
 Linux/staging validation:
@@ -213,6 +214,12 @@ KR production Windows wrapper:
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
 .\ops\scripts\install_live_traffic_kr_timer.ps1
 ```
+
+On KR Windows production, keep the backend under the `BRP Backend` Scheduled
+Task. If a deploy appears to update Git and frontend assets but backend feature
+flags still look old, check for stale `backend_service.py` Python child
+processes and restart through the scheduled task. Do not stop unrelated relay
+processes such as the Google geocode relay.
 
 Do not schedule the KR profile refresh until the source-specific inputs are
 configured and a dry-run confirms the expected call count. `baseline_json`

@@ -185,6 +185,8 @@ BRP supports two traffic-profile sampling modes:
   profiles because Seoul driving probes returned empty routes in production
   diagnostics. Seoul, Incheon, Gyeonggi, and nearby Seoul-metro cities share one
   `Seoul Metro` route-attribution bucket for reusable KR traffic factors.
+  Production verification confirmed route-level attributed factors for KR
+  current-plan, free-baseline, and 15-minute constrained Route Audit scenarios.
 - Bangkok currently uses a conservative static traffic multiplier until a richer
   Bangkok traffic-profile sampling strategy is added.
 

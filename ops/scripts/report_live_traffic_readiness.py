@@ -17,10 +17,79 @@ from typing import Any
 
 
 DEFAULT_SAMPLE_DIR = Path("/opt/brp/shared/runtime/traffic_samples")
+KOREA_TRAFFIC_METRO_CITY = "Seoul Metro"
+KOREA_TRAFFIC_METRO_CITY_ALIASES = {
+    "seoul",
+    "seoul si",
+    "seoul-si",
+    "seoul special city",
+    "서울",
+    "서울시",
+    "서울특별시",
+    "incheon",
+    "inchon",
+    "incheon si",
+    "incheon-si",
+    "incheon metropolitan city",
+    "인천",
+    "인천시",
+    "인천광역시",
+    "gyeonggi",
+    "gyeonggi do",
+    "gyeonggi-do",
+    "gyeonggi province",
+    "kyonggi",
+    "경기",
+    "경기도",
+    "seongnam",
+    "seongnam si",
+    "seongnam-si",
+    "bundang",
+    "bundang gu",
+    "bundang-gu",
+    "성남",
+    "성남시",
+    "분당",
+    "분당구",
+    "gimpo",
+    "gimpo si",
+    "gimpo-si",
+    "김포",
+    "김포시",
+    "suwon",
+    "suwon si",
+    "suwon-si",
+    "수원",
+    "수원시",
+    "yongin",
+    "yongin si",
+    "yongin-si",
+    "용인",
+    "용인시",
+    "goyang",
+    "goyang si",
+    "goyang-si",
+    "고양",
+    "고양시",
+}
 
 
 def _norm(value: Any) -> str:
     return str(value or "").strip().casefold()
+
+
+def _norm_country(value: Any) -> str:
+    normalized = _norm(value)
+    if normalized in {"kr", "korea", "south korea", "republic of korea", "korea, republic of", "대한민국", "한국"}:
+        return "south korea"
+    return normalized
+
+
+def _traffic_city_for_market(market: Any, city: Any) -> str:
+    normalized_city = " ".join(_norm(city).replace("_", " ").replace("-", " ").split())
+    if _norm_country(market) == "south korea" and normalized_city in KOREA_TRAFFIC_METRO_CITY_ALIASES:
+        return KOREA_TRAFFIC_METRO_CITY
+    return str(city or "").strip() or "unknown"
 
 
 def _route_has_fingerprint(route: dict[str, Any]) -> bool:
@@ -47,7 +116,7 @@ def _measured_at_passes(payload: dict[str, Any], min_measured_at: str | None) ->
 
 def _sample_key(payload: dict[str, Any]) -> tuple[str, str, str]:
     market = str(payload.get("market") or payload.get("country") or "").strip() or "unknown"
-    city = str(payload.get("city") or "").strip() or "unknown"
+    city = _traffic_city_for_market(payload.get("country") or market, payload.get("city"))
     period = str(payload.get("period") or "").strip() or "unknown"
     return market, city, period
 
@@ -165,18 +234,18 @@ def evaluate_requirements(
     min_geo_ratio: float,
 ) -> list[dict[str, Any]]:
     rows = {
-        (_norm(row.get("market")), _norm(row.get("city")), _norm(row.get("period"))): row
+        (_norm(row.get("market")), _norm(_traffic_city_for_market(row.get("market"), row.get("city"))), _norm(row.get("period"))): row
         for row in summary.get("groups", [])
         if isinstance(row, dict)
     }
     excluded_rows = {
-        (_norm(row.get("market")), _norm(row.get("city")), _norm(row.get("period"))): row
+        (_norm(row.get("market")), _norm(_traffic_city_for_market(row.get("market"), row.get("city"))), _norm(row.get("period"))): row
         for row in summary.get("excluded_groups", [])
         if isinstance(row, dict)
     }
     results: list[dict[str, Any]] = []
     for market, city, period in requirements:
-        key = (_norm(market), _norm(city), _norm(period))
+        key = (_norm(market), _norm(_traffic_city_for_market(market, city)), _norm(period))
         row = rows.get(key)
         excluded_row = excluded_rows.get(key) or {}
         if row is None:

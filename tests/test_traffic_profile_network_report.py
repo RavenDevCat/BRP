@@ -141,3 +141,39 @@ def test_main_returns_nonzero_for_failed_required_profile(tmp_path: Path, capsys
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "requirement_failed CN:Shanghai:pm_peak" in captured.err
+
+
+def test_network_report_groups_korea_samples_as_seoul_metro(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "kr.json",
+        {
+            "measured_at": "2026-06-15T07:00:00+09:00",
+            "market": "KR",
+            "country": "South Korea",
+            "city": "Seoul",
+            "period": "am_peak",
+            "provider": "kakao_navi",
+            "routes": [
+                {
+                    "route_id": "R1",
+                    "factor": 1.8,
+                    "osrm_duration_s": 100.0,
+                    "route_fingerprint": {
+                        "cell_count": 1,
+                        "corridor_cells": ["3750:12690"],
+                        "center": {"lat": 37.5, "lng": 126.9},
+                    },
+                }
+            ],
+        },
+    )
+
+    result = report.build_network_report(
+        tmp_path,
+        require_profiles=["KR:Incheon:am_peak"],
+        min_geo_route_ratio=1.0,
+    )
+
+    assert result["status"] == "ready"
+    assert result["profiles"][0]["profile_key"] == "KR:Seoul Metro:am_peak"
+    assert result["required_profiles"][0]["profile_key"] == "KR:Seoul Metro:am_peak"

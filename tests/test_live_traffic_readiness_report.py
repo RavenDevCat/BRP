@@ -164,6 +164,40 @@ class LiveTrafficReadinessReportTests(unittest.TestCase):
         self.assertEqual(results[0]["excluded_route_sample_count"], 1)
         self.assertEqual(results[0]["excluded_geo_route_sample_count"], 0)
 
+    def test_korea_samples_are_grouped_as_seoul_metro(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "kr.json").write_text(
+                json.dumps(
+                    {
+                        "market": "KR",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-15T07:00:00+09:00",
+                        "routes": [
+                            {
+                                "route_id": "geo",
+                                "factor": 1.8,
+                                "route_fingerprint": {"cell_count": 2, "cells": ["a", "b"]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            summary = report_live_traffic_readiness.summarize(sample_dir)
+            results = report_live_traffic_readiness.evaluate_requirements(
+                summary,
+                [("KR", "Incheon", "am_peak")],
+                min_geo_ratio=1.0,
+            )
+
+        self.assertEqual(summary["groups"][0]["city"], "Seoul Metro")
+        self.assertTrue(results[0]["passed"])
+        self.assertEqual(results[0]["city"], "Seoul Metro")
+
 
 if __name__ == "__main__":
     unittest.main()

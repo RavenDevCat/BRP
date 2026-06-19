@@ -22,6 +22,61 @@ from typing import Any
 DEFAULT_SAMPLE_DIR = Path("/opt/brp/shared/runtime/traffic_samples")
 DEFAULT_TOP_BUCKETS = 20
 DEFAULT_MIN_BUCKET_ROUTE_COUNT = 3
+KOREA_TRAFFIC_METRO_CITY = "Seoul Metro"
+KOREA_TRAFFIC_METRO_CITY_ALIASES = {
+    "seoul",
+    "seoul si",
+    "seoul-si",
+    "seoul special city",
+    "서울",
+    "서울시",
+    "서울특별시",
+    "incheon",
+    "inchon",
+    "incheon si",
+    "incheon-si",
+    "incheon metropolitan city",
+    "인천",
+    "인천시",
+    "인천광역시",
+    "gyeonggi",
+    "gyeonggi do",
+    "gyeonggi-do",
+    "gyeonggi province",
+    "kyonggi",
+    "경기",
+    "경기도",
+    "seongnam",
+    "seongnam si",
+    "seongnam-si",
+    "bundang",
+    "bundang gu",
+    "bundang-gu",
+    "성남",
+    "성남시",
+    "분당",
+    "분당구",
+    "gimpo",
+    "gimpo si",
+    "gimpo-si",
+    "김포",
+    "김포시",
+    "suwon",
+    "suwon si",
+    "suwon-si",
+    "수원",
+    "수원시",
+    "yongin",
+    "yongin si",
+    "yongin-si",
+    "용인",
+    "용인시",
+    "goyang",
+    "goyang si",
+    "goyang-si",
+    "고양",
+    "고양시",
+}
 
 
 def _as_dict(value: Any) -> dict[str, Any]:
@@ -49,6 +104,23 @@ def _int(value: Any, default: int = 0) -> int:
 
 def _normal_text(value: Any) -> str:
     return " ".join(str(value or "").strip().split())
+
+
+def _normal_country(value: Any) -> str:
+    normalized = _normal_text(value).casefold()
+    if normalized in {"kr", "korea", "south korea", "republic of korea", "korea, republic of", "대한민국", "한국"}:
+        return "south korea"
+    return normalized
+
+
+def _traffic_city_for_profile(market: Any, country: Any, city: Any) -> str:
+    normalized_city = " ".join(_normal_text(city).casefold().replace("_", " ").replace("-", " ").split())
+    if (
+        _normal_country(country) == "south korea"
+        or _normal_country(market) == "south korea"
+    ) and normalized_city in KOREA_TRAFFIC_METRO_CITY_ALIASES:
+        return KOREA_TRAFFIC_METRO_CITY
+    return _normal_text(city) or "unknown"
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
@@ -104,16 +176,28 @@ def _iter_samples(sample_dir: Path) -> list[dict[str, Any]]:
 
 def _profile_key(sample: dict[str, Any]) -> str:
     market = _normal_text(sample.get("market") or sample.get("country") or "unknown")
-    city = _normal_text(sample.get("city") or "unknown")
+    city = _traffic_city_for_profile(market, sample.get("country"), sample.get("city") or "unknown")
     period = _normal_text(sample.get("period") or "unknown")
     return f"{market}:{city}:{period}"
+
+
+def _canonical_profile_key(value: str) -> str:
+    parts = [part.strip() for part in str(value or "").split(":")]
+    if len(parts) != 3:
+        return str(value or "").strip()
+    market, city, period = parts
+    return f"{market}:{_traffic_city_for_profile(market, market, city)}:{period}"
+
+
+def _normal_profile_key(value: str) -> str:
+    return _canonical_profile_key(value).casefold()
 
 
 def _profile_key_matches(profile_key: str, filters: list[str]) -> bool:
     if not filters:
         return True
-    normal_key = profile_key.lower()
-    return any(normal_key == str(item or "").strip().lower() for item in filters)
+    normal_key = _normal_profile_key(profile_key)
+    return any(normal_key == _normal_profile_key(str(item or "")) for item in filters)
 
 
 def _route_factor(route: dict[str, Any]) -> float:
@@ -390,11 +474,11 @@ def build_network_report(
         for profile_key, grouped_rows in grouped.items()
     ]
     profile_summaries.sort(key=lambda item: item["profile_key"])
-    by_key = {str(item["profile_key"]).lower(): item for item in profile_summaries}
+    by_key = {_normal_profile_key(str(item["profile_key"])): item for item in profile_summaries}
     required_results: list[dict[str, Any]] = []
     for required in require_profiles:
-        key = str(required or "").strip()
-        summary = by_key.get(key.lower())
+        key = _canonical_profile_key(str(required or "").strip())
+        summary = by_key.get(_normal_profile_key(key))
         if summary is None:
             required_results.append({"profile_key": key, "passed": False, "reason": "missing_profile"})
             continue

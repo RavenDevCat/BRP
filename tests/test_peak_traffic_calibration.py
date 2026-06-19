@@ -649,6 +649,94 @@ class PeakTrafficCalibrationTests(unittest.TestCase):
         self.assertEqual(result["sample_weekday"], "mon")
         self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.7)
 
+    def test_korea_live_traffic_samples_match_metro_profile_across_city_boundaries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "seoul_mon.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-15T06:00:00+09:00",
+                        "local_date": "2026-06-15",
+                        "sample_date": "2026-06-15",
+                        "sample_weekday": "mon",
+                        "period": "am_peak",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "provider": "kakao_navi",
+                        "dry_run": False,
+                        "route_count": 23,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_api_duration_s": 1600.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = planner_core.summarize_live_traffic_samples(
+                service_direction="To School",
+                input_records=[{"country": "KR", "city": "Incheon", "address": "School"}],
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 15, 8, 30, tzinfo=ZoneInfo("Asia/Seoul")),
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result["city"], "SEOUL METRO")
+        self.assertEqual(result["providers"], ["kakao_navi"])
+        self.assertAlmostEqual(float(result["traffic_time_multiplier"]), 1.6)
+
+    def test_korea_route_attribution_context_uses_kakao_metro_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "seoul_pm_routes.json").write_text(
+                json.dumps(
+                    {
+                        "measured_at": "2026-06-15T15:40:00+09:00",
+                        "local_date": "2026-06-15",
+                        "sample_date": "2026-06-15",
+                        "sample_weekday": "mon",
+                        "period": "pm_peak",
+                        "country": "South Korea",
+                        "city": "Seoul",
+                        "provider": "kakao_navi",
+                        "dry_run": False,
+                        "route_count": 1,
+                        "total_osrm_duration_s": 1000.0,
+                        "total_api_duration_s": 1800.0,
+                        "routes": [
+                            {
+                                "route_id": "sample-r1",
+                                "provider": "kakao_navi",
+                                "stop_count": 4,
+                                "osrm_duration_s": 1000.0,
+                                "api_duration_s": 1800.0,
+                                "factor": 1.8,
+                                "route_fingerprint": {
+                                    "cell_count": 2,
+                                    "cells": ["3750:12690", "3751:12691"],
+                                    "corridor_cells": ["3750:12690", "3751:12691"],
+                                },
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            context = planner_core.build_traffic_attribution_context(
+                [{"country": "South Korea", "city": "Gimpo", "address": "School"}],
+                planner_core.PlannerConfig(
+                    service_direction="From School",
+                    traffic_coefficient_mode="attributed",
+                ),
+                sample_dir=sample_dir,
+                now=datetime(2026, 6, 15, 16, 0, tzinfo=ZoneInfo("Asia/Seoul")),
+            )
+
+        self.assertTrue(context["succeeded"])
+        self.assertEqual(context["city"], "SEOUL METRO")
+        self.assertEqual(context["observed_route_sample_count"], 1)
+        self.assertEqual(context["geo_route_sample_count"], 1)
+        self.assertEqual(context["candidates"][0]["provider"], "kakao_navi")
+
 
 if __name__ == "__main__":
     unittest.main()

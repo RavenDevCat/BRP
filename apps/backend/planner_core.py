@@ -152,6 +152,136 @@ TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
     "AM Peak": 1.2,
     "PM Peak": 1.3,
 }
+KOREA_TRAFFIC_METRO_CITY = "SEOUL METRO"
+KOREA_TRAFFIC_METRO_CITY_ALIASES = {
+    "SEOUL",
+    "SEOUL SI",
+    "SEOUL-SI",
+    "SEOUL SPECIAL CITY",
+    "서울",
+    "서울시",
+    "서울특별시",
+    "INCHEON",
+    "INCHON",
+    "INCHEON SI",
+    "INCHEON-SI",
+    "INCHEON METROPOLITAN CITY",
+    "인천",
+    "인천시",
+    "인천광역시",
+    "GYEONGGI",
+    "GYEONGGI DO",
+    "GYEONGGI-DO",
+    "GYEONGGI PROVINCE",
+    "KYONGGI",
+    "경기",
+    "경기도",
+    "SEONGNAM",
+    "SEONGNAM SI",
+    "SEONGNAM-SI",
+    "BUNDANG",
+    "BUNDANG GU",
+    "BUNDANG-GU",
+    "성남",
+    "성남시",
+    "분당",
+    "분당구",
+    "GIMPO",
+    "GIMPO SI",
+    "GIMPO-SI",
+    "김포",
+    "김포시",
+    "SUWON",
+    "SUWON SI",
+    "SUWON-SI",
+    "수원",
+    "수원시",
+    "YONGIN",
+    "YONGIN SI",
+    "YONGIN-SI",
+    "용인",
+    "용인시",
+    "GOYANG",
+    "GOYANG SI",
+    "GOYANG-SI",
+    "고양",
+    "고양시",
+    "BUCHEON",
+    "BUCHEON SI",
+    "BUCHEON-SI",
+    "부천",
+    "부천시",
+    "ANYANG",
+    "ANYANG SI",
+    "ANYANG-SI",
+    "안양",
+    "안양시",
+    "GWACHEON",
+    "GWACHEON SI",
+    "GWACHEON-SI",
+    "과천",
+    "과천시",
+    "GWANGMYEONG",
+    "GWANGMYEONG SI",
+    "GWANGMYEONG-SI",
+    "광명",
+    "광명시",
+    "HANAM",
+    "HANAM SI",
+    "HANAM-SI",
+    "하남",
+    "하남시",
+    "NAMYANGJU",
+    "NAMYANGJU SI",
+    "NAMYANGJU-SI",
+    "남양주",
+    "남양주시",
+    "UIJEONGBU",
+    "UIJEONGBU SI",
+    "UIJEONGBU-SI",
+    "의정부",
+    "의정부시",
+    "PAJU",
+    "PAJU SI",
+    "PAJU-SI",
+    "파주",
+    "파주시",
+    "HWASEONG",
+    "HWASEONG SI",
+    "HWASEONG-SI",
+    "화성",
+    "화성시",
+    "OSAN",
+    "OSAN SI",
+    "OSAN-SI",
+    "오산",
+    "오산시",
+    "SIHEUNG",
+    "SIHEUNG SI",
+    "SIHEUNG-SI",
+    "시흥",
+    "시흥시",
+    "ANSAN",
+    "ANSAN SI",
+    "ANSAN-SI",
+    "안산",
+    "안산시",
+    "GUNPO",
+    "GUNPO SI",
+    "GUNPO-SI",
+    "군포",
+    "군포시",
+    "UIWANG",
+    "UIWANG SI",
+    "UIWANG-SI",
+    "의왕",
+    "의왕시",
+    "GURI",
+    "GURI SI",
+    "GURI-SI",
+    "구리",
+    "구리시",
+}
 TRAFFIC_PROFILE_LOCATION_MULTIPLIERS: dict[tuple[str, str], dict[str, float]] = {
     ("CHINA", ""): {
         "Off-Peak": 1.0,
@@ -179,6 +309,11 @@ TRAFFIC_PROFILE_LOCATION_MULTIPLIERS: dict[tuple[str, str], dict[str, float]] = 
         "PM Peak": 1.56,
     },
     ("SOUTH KOREA", "SEOUL"): {
+        "Off-Peak": 1.0,
+        "AM Peak": 1.2,
+        "PM Peak": 1.32,
+    },
+    ("SOUTH KOREA", KOREA_TRAFFIC_METRO_CITY): {
         "Off-Peak": 1.0,
         "AM Peak": 1.2,
         "PM Peak": 1.32,
@@ -257,21 +392,18 @@ class PlannerConfig:
 
 
 def _normalize_location_value(value: str | None) -> str:
-    return str(value or "").strip().upper()
+    normalized = str(value or "").strip().upper()
+    if normalized in {"KR", "KOREA", "SOUTH KOREA", "REPUBLIC OF KOREA", "KOREA, REPUBLIC OF", "대한민국", "한국"}:
+        return "SOUTH KOREA"
+    return normalized
 
 
 def _normalize_traffic_city(country: str | None, city: str | None) -> str:
     normalized_country = _normalize_location_value(country)
-    normalized_city = _normalize_location_value(city)
-    if normalized_country == "SOUTH KOREA" and normalized_city in {
-        "SEOUL",
-        "SEONGNAM",
-        "SEONGNAM-SI",
-        "SEONGNAM SI",
-        "성남",
-        "성남시",
-    }:
-        return "SEOUL"
+    normalized_city = _normalize_location_value(city).replace("_", " ")
+    normalized_city = " ".join(normalized_city.replace("-", " ").split())
+    if normalized_country == "SOUTH KOREA" and normalized_city in KOREA_TRAFFIC_METRO_CITY_ALIASES:
+        return KOREA_TRAFFIC_METRO_CITY
     if normalized_country in {"BANGKOK", "BK", "THAILAND"} and normalized_city in {
         "BANGKOK",
         "BANGKOK METROPOLIS",
@@ -524,10 +656,11 @@ def _matching_live_traffic_samples(
             continue
         if str(payload.get("period", "")).strip() != period:
             continue
-        if str(payload.get("city", "")).strip().upper() != city:
-            continue
         payload_country = _normalize_location_value(str(payload.get("country") or ""))
         if payload_country and payload_country != country:
+            continue
+        payload_city = _normalize_traffic_city(payload_country or country, payload.get("city"))
+        if payload_city != city:
             continue
         sample_weekday = str(payload.get("sample_weekday") or "").strip().lower()
         if (

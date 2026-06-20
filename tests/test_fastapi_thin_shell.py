@@ -681,6 +681,20 @@ class FastApiThinShellTests(unittest.TestCase):
         run_mock.assert_called_once()
         self.assertEqual(run_mock.call_args.args[0], ["taskkill", "/PID", "1234", "/F"])
 
+    def test_worker_spawn_uses_detached_process_group_on_windows(self) -> None:
+        with mock.patch.object(backend_service.os, "name", "nt"), \
+            mock.patch.object(backend_service.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True), \
+            mock.patch.object(backend_service.subprocess, "DETACHED_PROCESS", 8, create=True):
+            flags = backend_service._worker_creation_flags()
+
+        self.assertEqual(flags, 520)
+
+    def test_worker_spawn_uses_default_creation_flags_on_linux(self) -> None:
+        with mock.patch.object(backend_service.os, "name", "posix"):
+            flags = backend_service._worker_creation_flags()
+
+        self.assertEqual(flags, 0)
+
     def test_worker_termination_falls_back_when_sigkill_is_unavailable(self) -> None:
         calls: list[tuple[int, int]] = []
 

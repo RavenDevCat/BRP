@@ -2503,6 +2503,14 @@ def _process_is_alive(pid: int | None) -> bool:
     return _pid_is_alive(pid)
 
 
+def _worker_creation_flags() -> int:
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0) | int(
+        getattr(subprocess, "DETACHED_PROCESS", 0) or 0
+    )
+
+
 def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
     job_record = JOB_STORE.get_job(job_id)
     if not job_record:
@@ -2523,6 +2531,7 @@ def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             env=env,
+            creationflags=_worker_creation_flags(),
         )
     except Exception:
         JOB_GATE.release(slot_path)

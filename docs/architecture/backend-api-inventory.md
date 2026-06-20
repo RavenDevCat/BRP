@@ -11,8 +11,7 @@ while continuing product work.
   deprecated and is no longer read by the runners.
 - Uvicorn must run as a single process until the file-backed job queue is proven
   multi-worker safe. When the worker count is `1`, the runners intentionally
-  omit `--workers 1`; this is especially important for the KR Windows Scheduled
-  Task, which must keep tracking the uvicorn process directly.
+  omit `--workers 1`; this is especially important for the KR Windows runner.
 - The React API base remains `/api`; FastAPI also exposes non-prefixed paths for
   parity with internal scripts.
 - Business logic remains in existing backend modules; the HTTP layer is the
@@ -82,8 +81,10 @@ prefixed `/api/health` row.
 The backend runner scripts now start FastAPI directly:
 
 - Linux/CN: `ops/scripts/run_backend.sh` starts `uvicorn api_app:app`.
-- Windows/KR: `ops/scripts/run_backend.ps1` starts `uvicorn api_app:app` under
-  the `BRP Backend` Scheduled Task.
+- Windows/KR: `ops/scripts/run_backend.ps1` is launched by the `BRP Backend`
+  Scheduled Task. It starts a detached single-process uvicorn instance, writes
+  stdout/stderr under `logs/`, verifies the process did not exit immediately,
+  and then lets the task return to `Ready`.
 - Keep `BRP_BACKEND_UVICORN_WORKERS=1` unless the file-backed job queue is
   explicitly hardened and retested for multiple workers.
 - `python apps/backend/backend_service.py` no longer starts an HTTP server and
@@ -116,7 +117,9 @@ Before and after production deployment, verify at least:
   scope above
 - create/cancel/delete of a queued job
 - frontend version marker matches the deployed git head
-- KR `BRP Backend` Scheduled Task is running and has exactly one uvicorn process
+- KR `BRP Backend` Scheduled Task can be `Ready` after launch, but there must be
+  exactly one uvicorn process on port `8001`, no `backend_service.py` process,
+  and `GET /api/health` must return `ok`
 
 No current React `/api` route is intentionally legacy-only. Remaining backend
 work is operational hardening and multi-worker safety, not missing HTTP route

@@ -77,8 +77,13 @@ $process = Start-Process `
     -RedirectStandardError $stderrLog `
     -PassThru
 Write-Host "BRP FastAPI uvicorn pid $($process.Id); stdout=$stdoutLog stderr=$stderrLog"
-Wait-Process -Id $process.Id
+Start-Sleep -Seconds 3
 $process.Refresh()
-if ($null -ne $process.ExitCode) {
-    exit $process.ExitCode
+if ($process.HasExited) {
+    Write-Error "BRP FastAPI uvicorn exited early with code $($process.ExitCode). See $stdoutLog and $stderrLog."
+    if ($null -ne $process.ExitCode) {
+        exit $process.ExitCode
+    }
+    exit 1
 }
+exit 0

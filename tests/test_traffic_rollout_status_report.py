@@ -225,7 +225,7 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
     def test_build_status_includes_budget_when_requested(self) -> None:
         original = report_traffic_rollout_status.collect_budget_status
         try:
-            report_traffic_rollout_status.collect_budget_status = lambda: {
+            report_traffic_rollout_status.collect_budget_status = lambda _profile_names=None: {
                 "available": True,
                 "problem": True,
                 "total_estimated_api_call_count": 1001,
@@ -257,7 +257,7 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
                 "stale_lock_count": 0,
                 "running_region_count": 0,
             }
-            report_traffic_rollout_status.collect_budget_status = lambda: {
+            report_traffic_rollout_status.collect_budget_status = lambda _profile_names=None: {
                 "available": True,
                 "problem": False,
                 "provider_api_called": False,
@@ -387,6 +387,104 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
 
         self.assertEqual(deployment_tier, "production")
         self.assertEqual(market_scope, {"KR"})
+
+    def test_required_profiles_follow_staging_market_scope(self) -> None:
+        with mock.patch.dict(os.environ, {"BRP_DEPLOYMENT_TIER": "staging"}, clear=False):
+            os.environ.pop("BRP_TRAFFIC_STATUS_MARKETS", None)
+            profiles = report_traffic_rollout_status.required_profiles_for_current_environment()
+            budget_profiles = report_traffic_rollout_status.budget_profile_names_for_current_environment()
+
+        self.assertEqual(
+            profiles,
+            [
+                ("CN", "Shanghai", "am_peak"),
+                ("CN", "Shanghai", "pm_peak"),
+                ("CN", "Suzhou", "am_peak"),
+                ("CN", "Suzhou", "pm_peak"),
+                ("KR", "Seoul Metro", "am_peak"),
+                ("KR", "Seoul Metro", "pm_peak"),
+                ("KR", "Seoul Metro", "off_peak"),
+            ],
+        )
+        self.assertEqual(
+            budget_profiles,
+            [
+                "shanghai_am_peak",
+                "shanghai_pm_peak",
+                "suzhou_am_peak",
+                "suzhou_pm_peak",
+                "kr_am_peak",
+                "kr_pm_peak",
+                "kr_off_peak",
+            ],
+        )
+
+    def test_required_profiles_exclude_kr_on_cn_production(self) -> None:
+        with mock.patch.dict(os.environ, {"BRP_DEPLOYMENT_TIER": "production"}, clear=False):
+            os.environ.pop("BRP_TRAFFIC_STATUS_MARKETS", None)
+            profiles = report_traffic_rollout_status.required_profiles_for_current_environment()
+            budget_profiles = report_traffic_rollout_status.budget_profile_names_for_current_environment()
+
+        self.assertEqual(
+            profiles,
+            [
+                ("CN", "Shanghai", "am_peak"),
+                ("CN", "Shanghai", "pm_peak"),
+                ("CN", "Suzhou", "am_peak"),
+                ("CN", "Suzhou", "pm_peak"),
+            ],
+        )
+        self.assertEqual(
+            budget_profiles,
+            [
+                "shanghai_am_peak",
+                "shanghai_pm_peak",
+                "suzhou_am_peak",
+                "suzhou_pm_peak",
+            ],
+        )
+
+    def test_required_profiles_default_windows_to_kr_only(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(report_traffic_rollout_status.os, "name", "nt"):
+                with mock.patch.object(
+                    report_traffic_rollout_status.Path,
+                    "resolve",
+                    return_value=PureWindowsPath("C:/Users/Bus.EIM/BRP/ops/scripts/report_traffic_rollout_status.py"),
+                ):
+                    profiles = report_traffic_rollout_status.required_profiles_for_current_environment()
+                    budget_profiles = report_traffic_rollout_status.budget_profile_names_for_current_environment()
+
+        self.assertEqual(
+            profiles,
+            [
+                ("KR", "Seoul Metro", "am_peak"),
+                ("KR", "Seoul Metro", "pm_peak"),
+                ("KR", "Seoul Metro", "off_peak"),
+            ],
+        )
+        self.assertEqual(budget_profiles, ["kr_am_peak", "kr_pm_peak", "kr_off_peak"])
+
+    def test_collect_budget_status_passes_scoped_profile_names(self) -> None:
+        calls: list[list[str]] = []
+        original = report_traffic_rollout_status.report_live_traffic_budget.build_report
+        try:
+            def fake_build_report(args):
+                calls.append(list(args.profile))
+                return {
+                    "provider_api_called": False,
+                    "osrm_started": False,
+                    "missing_profiles": [],
+                    "profiles": [],
+                }
+
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = fake_build_report
+            status = report_traffic_rollout_status.collect_budget_status(["kr_am_peak", "kr_pm_peak"])
+        finally:
+            report_traffic_rollout_status.report_live_traffic_budget.build_report = original
+
+        self.assertTrue(status["available"])
+        self.assertEqual(calls, [["kr_am_peak", "kr_pm_peak"]])
 
     def test_problem_services_are_summarized(self) -> None:
         rows = [

@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,16 +41,21 @@ class TrafficRolloutStatusApiTests(unittest.TestCase):
         original_loader = backend_service._load_traffic_rollout_status_module
         try:
             backend_service._load_traffic_rollout_status_module = lambda: StubReportModule
-            payload = backend_service._traffic_rollout_status_payload(
-                {
-                    "include_timers": "0",
-                    "include_osrm": "false",
-                    "include_budget": "yes",
-                    "min_geo_ratio": "0.75",
-                    "min_measured_at": "2026-06-18T00:00:00+08:00",
-                    "local_timezone": "Asia/Shanghai",
-                }
-            )
+            with mock.patch.dict(
+                backend_service.os.environ,
+                {"BRP_LIVE_TRAFFIC_SAMPLE_DIR": ""},
+                clear=False,
+            ):
+                payload = backend_service._traffic_rollout_status_payload(
+                    {
+                        "include_timers": "0",
+                        "include_osrm": "false",
+                        "include_budget": "yes",
+                        "min_geo_ratio": "0.75",
+                        "min_measured_at": "2026-06-18T00:00:00+08:00",
+                        "local_timezone": "Asia/Shanghai",
+                    }
+                )
         finally:
             backend_service._load_traffic_rollout_status_module = original_loader
 

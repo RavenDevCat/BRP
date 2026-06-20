@@ -52,20 +52,16 @@ New-Item -ItemType Directory -Force $env:BRP_LIVE_TRAFFIC_SAMPLE_DIR | Out-Null
 New-Item -ItemType Directory -Force $env:BRP_LIVE_TRAFFIC_BASELINE_DIR | Out-Null
 
 Set-Location (Join-Path $RootDir "apps\backend")
-$framework = $env:BRP_BACKEND_FRAMEWORK
-if (-not $framework) {
-    $framework = "legacy"
+if (-not $env:BRP_BACKEND_UVICORN_WORKERS) {
+    $env:BRP_BACKEND_UVICORN_WORKERS = "1"
 }
-$framework = $framework.Trim().ToLowerInvariant()
-if ($framework -eq "legacy") {
-    Write-Host "Starting BRP legacy backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT)"
-    & $env:BACKEND_PYTHON backend_service.py
-} elseif ($framework -eq "fastapi") {
-    if (-not $env:BRP_BACKEND_UVICORN_WORKERS) {
-        $env:BRP_BACKEND_UVICORN_WORKERS = "1"
-    }
-    Write-Host "Starting BRP FastAPI backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT) with $($env:BRP_BACKEND_UVICORN_WORKERS) worker(s)"
-    & $env:BACKEND_PYTHON -m uvicorn api_app:app --host $env:BRP_BACKEND_HOST --port $env:BRP_BACKEND_PORT --workers $env:BRP_BACKEND_UVICORN_WORKERS
-} else {
-    throw "Unsupported BRP_BACKEND_FRAMEWORK: $framework"
+Write-Host "Starting BRP FastAPI backend on http://$($env:BRP_BACKEND_HOST):$($env:BRP_BACKEND_PORT) with $($env:BRP_BACKEND_UVICORN_WORKERS) worker(s)"
+$uvicornArgs = @(
+    "-m", "uvicorn", "api_app:app",
+    "--host", $env:BRP_BACKEND_HOST,
+    "--port", $env:BRP_BACKEND_PORT
+)
+if ($env:BRP_BACKEND_UVICORN_WORKERS -ne "1") {
+    $uvicornArgs += @("--workers", $env:BRP_BACKEND_UVICORN_WORKERS)
 }
+& $env:BACKEND_PYTHON @uvicornArgs

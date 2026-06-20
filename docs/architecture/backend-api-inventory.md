@@ -1,19 +1,22 @@
 # Backend API Inventory
 
-This inventory tracks the legacy `backend_service.py` route surface while the
-backend HTTP layer is migrated to FastAPI. Keep existing paths and JSON payloads
-stable during the migration.
+This inventory tracks the FastAPI backend HTTP surface. The old hand-rolled
+`backend_service.py` HTTP server has been removed; `backend_service.py` now
+holds shared business logic only. Keep existing paths and JSON payloads stable
+while continuing product work.
 
 ## Migration Guardrails
 
-- Default runtime remains `BRP_BACKEND_FRAMEWORK=legacy`.
-- FastAPI runtime is opt-in with `BRP_BACKEND_FRAMEWORK=fastapi`.
-- Uvicorn must run with one worker until the file-backed job queue is proven
-  multi-worker safe.
+- The backend runner scripts are FastAPI-only. `BRP_BACKEND_FRAMEWORK` is
+  deprecated and is no longer read by the runners.
+- Uvicorn must run as a single process until the file-backed job queue is proven
+  multi-worker safe. When the worker count is `1`, the runners intentionally
+  omit `--workers 1`; this is especially important for the KR Windows Scheduled
+  Task, which must keep tracking the uvicorn process directly.
 - The React API base remains `/api`; FastAPI also exposes non-prefixed paths for
-  parity with the legacy backend and internal scripts.
-- Business logic remains in existing backend modules during the thin-shell
-  phase.
+  parity with internal scripts.
+- Business logic remains in existing backend modules; the HTTP layer is the
+  FastAPI shell.
 
 ## Day 1-8 FastAPI Coverage
 
@@ -74,34 +77,47 @@ stable during the migration.
 All paths above are also registered with `/api` prefix except the already
 prefixed `/api/health` row.
 
-## Day 8 Runtime Switch
+## FastAPI Runtime
 
-The backend runner scripts support the FastAPI HTTP layer without changing the
-React API base or the legacy business modules:
+The backend runner scripts now start FastAPI directly:
 
-- Linux: set `BRP_BACKEND_FRAMEWORK=fastapi` in `ops/env/local.env` and restart
-  the backend service.
-- Windows/KR: set `BRP_BACKEND_FRAMEWORK=fastapi` in `ops\env\local.env` and
-  restart the `BRP Backend` Scheduled Task.
-- Keep `BRP_BACKEND_UVICORN_WORKERS=1` until the file-backed job queue is proven
-  safe for multiple workers.
-- Rollback is removing or setting `BRP_BACKEND_FRAMEWORK=legacy`, then restarting
-  the same service/task.
+- Linux/CN: `ops/scripts/run_backend.sh` starts `uvicorn api_app:app`.
+- Windows/KR: `ops/scripts/run_backend.ps1` starts `uvicorn api_app:app` under
+  the `BRP Backend` Scheduled Task.
+- Keep `BRP_BACKEND_UVICORN_WORKERS=1` unless the file-backed job queue is
+  explicitly hardened and retested for multiple workers.
+- `python apps/backend/backend_service.py` no longer starts an HTTP server and
+  exits with an operator-facing message.
 
-Production deployment can carry the FastAPI code while live traffic remains on
-legacy. Before switching a live environment, run a temporary-port FastAPI smoke
-using production paths or isolated temp paths and verify at least:
+Rollback is code-based, not env-switch based: deploy a previously tested commit
+or revert the FastAPI-only cleanup commit, then restart the same service/task.
+Do not attempt to restore legacy mode by setting `BRP_BACKEND_FRAMEWORK`.
+
+## Ops Status Scope
+
+`GET /traffic-rollout/status` is read-only and scopes rollout status to the
+current environment:
+
+- CN staging shows all tracked markets: CN, KR, and BK.
+- CN production shows CN and BK, excluding KR.
+- KR production shows KR only.
+- `BRP_TRAFFIC_STATUS_MARKETS` can override the market scope for diagnostics.
+- The rollout gate, API-budget preflight, and market overview are all derived
+  from the same scoped market definitions. The status endpoint must not call
+  traffic providers or start OSRM.
+
+## Required Smoke Checks
+
+Before and after production deployment, verify at least:
 
 - `GET /api/health`
 - `GET /api/jobs`
-- `POST /api/compute` with a stub or non-destructive prepared payload when
-  available
-- `POST /api/jobs/{job_id}/ai-audit` against an existing completed job only when
-  AI-provider use is acceptable
-- new-job workbook preview/submit flow in staging before live production switch
+- `GET /api/traffic-rollout/status` as an admin, confirming the environment
+  scope above
+- create/cancel/delete of a queued job
+- frontend version marker matches the deployed git head
+- KR `BRP Backend` Scheduled Task is running and has exactly one uvicorn process
 
-## Remaining Legacy Coverage
-
-No current React `/api` route is intentionally legacy-only after Day 7. The
-remaining work is operational hardening around live FastAPI rollout, observability,
-and multi-worker safety, not missing HTTP route coverage.
+No current React `/api` route is intentionally legacy-only. Remaining backend
+work is operational hardening and multi-worker safety, not missing HTTP route
+coverage.

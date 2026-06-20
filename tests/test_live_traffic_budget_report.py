@@ -132,6 +132,50 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         self.assertEqual(budget._profile_specs(False, ["shanghai_off_peak"]), ())
         self.assertEqual(budget._profile_specs(True, ["shanghai_off_peak"]), (("shanghai_off_peak", "Shanghai", "off_peak"),))
 
+    def test_profile_specs_include_kr_required_profiles_when_selected(self) -> None:
+        specs = budget._profile_specs(False, ["kr_am_peak", "kr_pm_peak", "kr_off_peak"])
+
+        self.assertEqual(
+            specs,
+            (
+                ("kr_am_peak", "Seoul", "am_peak"),
+                ("kr_pm_peak", "Seoul", "pm_peak"),
+                ("kr_off_peak", "Seoul", "off_peak"),
+            ),
+        )
+
+    def test_kr_sampler_args_use_kakao_baseline_defaults(self) -> None:
+        with mock.patch.dict(
+            budget.os.environ,
+            {
+                "BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH": "kr/to_school.json",
+                "BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH": "kr/from_school.json",
+            },
+            clear=False,
+        ):
+            am_args = budget._build_sampler_args(
+                city="Seoul",
+                period="am_peak",
+                max_api_calls_per_run=500,
+                sample_due_routes_only=False,
+                now_local_time="",
+            )
+            off_peak_args = budget._build_sampler_args(
+                city="Seoul",
+                period="off_peak",
+                max_api_calls_per_run=500,
+                sample_due_routes_only=False,
+                now_local_time="",
+            )
+
+        self.assertEqual(am_args.market, "KR")
+        self.assertEqual(am_args.city, "Seoul")
+        self.assertEqual(am_args.provider, "kakao_navi")
+        self.assertEqual(am_args.baseline_path, "kr/to_school.json")
+        self.assertEqual(am_args.target_arrival_local_time, "08:00")
+        self.assertEqual(off_peak_args.baseline_path, "kr/to_school.json")
+        self.assertEqual(off_peak_args.departure_local_time, "11:00")
+
     def test_build_report_records_missing_profile_without_evaluating(self) -> None:
         args = argparse.Namespace(
             include_off_peak=False,

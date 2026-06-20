@@ -43,6 +43,9 @@ DEFAULT_SERVICE_UNITS = (
     "brp-live-traffic-suzhou-pm.service",
     "brp-osrm-cleanup.service",
 )
+DEFAULT_WINDOWS_TIMER_TASKS = (
+    "BRP-KR-Weekly-Traffic-Profile",
+)
 
 DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
 DEFAULT_MARKET_STALE_HOURS = 24 * 7
@@ -94,6 +97,16 @@ MARKET_OVERVIEW_DEFINITIONS = (
         "requires_samples": False,
     },
 )
+
+BUDGET_PROFILE_NAMES_BY_MARKET_CITY_PERIOD = {
+    ("CN", "Shanghai", "am_peak"): "shanghai_am_peak",
+    ("CN", "Shanghai", "pm_peak"): "shanghai_pm_peak",
+    ("CN", "Suzhou", "am_peak"): "suzhou_am_peak",
+    ("CN", "Suzhou", "pm_peak"): "suzhou_pm_peak",
+    ("KR", "Seoul Metro", "am_peak"): "kr_am_peak",
+    ("KR", "Seoul Metro", "pm_peak"): "kr_pm_peak",
+    ("KR", "Seoul Metro", "off_peak"): "kr_off_peak",
+}
 
 
 def _run_command(command: list[str], *, timeout: int = 10) -> subprocess.CompletedProcess[str]:
@@ -194,6 +207,15 @@ def _all_market_codes() -> set[str]:
     }
 
 
+def _default_sample_dir() -> Path:
+    configured = os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "").strip()
+    if configured:
+        return Path(configured)
+    if os.name == "nt":
+        return ROOT_DIR / "state" / "traffic_samples"
+    return report_traffic_rollout_readiness.report_live_traffic_readiness.DEFAULT_SAMPLE_DIR
+
+
 def _deployment_tier() -> str:
     for name in (
         "BRP_DEPLOYMENT_TIER",
@@ -245,6 +267,47 @@ def _market_scope_for_current_environment() -> set[str]:
     if os.name == "nt":
         return {"KR"}
     return {"CN", "BK"}
+
+
+def _market_definitions_for_current_environment() -> list[dict[str, Any]]:
+    market_scope = _market_scope_for_current_environment()
+    return [
+        definition
+        for definition in MARKET_OVERVIEW_DEFINITIONS
+        if _normalize_market_code(definition.get("market")) in market_scope
+    ]
+
+
+def required_profiles_for_current_environment() -> list[tuple[str, str, str]]:
+    profiles: list[tuple[str, str, str]] = []
+    for definition in _market_definitions_for_current_environment():
+        if not bool(definition.get("requires_samples")):
+            continue
+        market = str(definition["market"])
+        city = str(definition["city"])
+        profiles.extend((market, city, str(period)) for period in definition["required_periods"])
+    return profiles
+
+
+def budget_profile_names_for_current_environment() -> list[str]:
+    profile_names: list[str] = []
+    for market, city, period in required_profiles_for_current_environment():
+        profile_name = BUDGET_PROFILE_NAMES_BY_MARKET_CITY_PERIOD.get((market, city, period))
+        if profile_name:
+            profile_names.append(profile_name)
+    return profile_names
+
+
+def _timer_units_for_current_environment() -> list[str]:
+    if os.name == "nt":
+        return []
+    return list(DEFAULT_TIMER_UNITS)
+
+
+def _service_units_for_current_environment() -> list[str]:
+    if os.name == "nt":
+        return []
+    return list(DEFAULT_SERVICE_UNITS)
 
 
 def _period_row(period: str, group: dict[str, Any] | None, *, now: datetime | None) -> dict[str, Any]:
@@ -444,6 +507,96 @@ def collect_timer_status(
     return rows
 
 
+def _parse_windows_task_timestamp(value: Any, local_tz: ZoneInfo, now: datetime | None) -> tuple[str, int | None]:
+    raw = str(value or "").strip()
+    if not raw or raw.startswith("0001-"):
+        return "", None
+    parsed = _parse_iso_timestamp(raw)
+    if parsed is None:
+        return raw, None
+    local_value = parsed.astimezone(local_tz)
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    seconds_until = max(0, int(round((parsed - now_utc).total_seconds())))
+    return local_value.isoformat(timespec="seconds"), seconds_until
+
+
+def collect_windows_timer_status(
+    task_names: list[str],
+    *,
+    local_tz: ZoneInfo | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    local_tz = local_tz or _load_timezone("Asia/Seoul")
+    for task_name in task_names:
+        command = (
+            "$task = Get-ScheduledTask -TaskName "
+            f"'{task_name}' -ErrorAction Stop; "
+            "$info = Get-ScheduledTaskInfo -TaskName "
+            f"'{task_name}' -ErrorAction Stop; "
+            "[pscustomobject]@{"
+            "TaskName=$task.TaskName;"
+            "State=$task.State.ToString();"
+            "LastTaskResult=$info.LastTaskResult;"
+            "LastRunTime=$info.LastRunTime.ToString('o');"
+            "NextRunTime=$info.NextRunTime.ToString('o')"
+            "} | ConvertTo-Json -Compress"
+        )
+        try:
+            result = _run_command(["powershell", "-NoProfile", "-Command", command])
+        except Exception as exc:
+            rows.append({"unit": task_name, "available": False, "error": str(exc)})
+            continue
+        if result.returncode != 0:
+            rows.append(
+                {
+                    "unit": task_name,
+                    "available": False,
+                    "error": (result.stderr or result.stdout or "").strip(),
+                }
+            )
+            continue
+        try:
+            payload = json.loads(result.stdout)
+        except Exception as exc:
+            rows.append({"unit": task_name, "available": False, "error": f"invalid json: {exc}"})
+            continue
+        state = str(payload.get("State") or "")
+        last_result = _status_int(payload.get("LastTaskResult"))
+        next_local, seconds_until = _parse_windows_task_timestamp(payload.get("NextRunTime"), local_tz, now)
+        last_local, _ = _parse_windows_task_timestamp(payload.get("LastRunTime"), local_tz, now)
+        rows.append(
+            {
+                "unit": str(payload.get("TaskName") or task_name),
+                "available": True,
+                "active_state": state,
+                "sub_state": state,
+                "result": str(last_result if last_result is not None else ""),
+                "next_elapse": str(payload.get("NextRunTime") or ""),
+                "next_elapse_local": next_local,
+                "seconds_until_next_elapse": seconds_until,
+                "last_trigger": str(payload.get("LastRunTime") or ""),
+                "last_trigger_local": last_local,
+                "problem": last_result not in (None, 0),
+            }
+        )
+    return rows
+
+
+def collect_environment_timer_status(
+    *,
+    local_tz: ZoneInfo | None = None,
+    now: datetime | None = None,
+) -> list[dict[str, Any]]:
+    if os.name == "nt":
+        return collect_windows_timer_status(
+            list(DEFAULT_WINDOWS_TIMER_TASKS),
+            local_tz=local_tz,
+            now=now,
+        )
+    return collect_timer_status(_timer_units_for_current_environment(), local_tz=local_tz, now=now)
+
+
 def _status_int(value: Any) -> int | None:
     try:
         return int(str(value).strip())
@@ -560,10 +713,23 @@ def collect_osrm_manager_status() -> dict[str, Any]:
     }
 
 
-def collect_budget_status() -> dict[str, Any]:
+def collect_budget_status(profile_names: list[str] | None = None) -> dict[str, Any]:
+    selected_profiles = list(profile_names or [])
+    if profile_names is not None and not selected_profiles:
+        return {
+            "available": True,
+            "skipped": True,
+            "problem": False,
+            "profile_count": 0,
+            "missing_profile_count": 0,
+            "missing_profiles": [],
+            "total_estimated_api_call_count": 0,
+            "max_estimated_api_call_count": 0,
+            "profiles": [],
+        }
     args = argparse.Namespace(
-        include_off_peak=False,
-        profile=[],
+        include_off_peak=True,
+        profile=selected_profiles,
         max_api_calls_per_run=None,
         sample_due_routes_only=False,
         now_local_time="",
@@ -668,8 +834,7 @@ def _next_relevant_timer(timer_status: list[dict[str, Any]]) -> dict[str, Any] |
     candidates = [
         row
         for row in timer_status
-        if str(row.get("unit") or "").startswith("brp-live-traffic-")
-        and row.get("available")
+        if row.get("available")
         and row.get("seconds_until_next_elapse") is not None
     ]
     if not candidates:
@@ -702,7 +867,7 @@ def build_status(
     *,
     sample_dir: Path,
     min_measured_at: str,
-    profiles: list[tuple[str, str, str]],
+    profiles: list[tuple[str, str, str]] | None,
     min_geo_ratio: float,
     include_timers: bool,
     include_osrm: bool,
@@ -711,27 +876,36 @@ def build_status(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     local_tz = _load_timezone(local_timezone)
+    scoped_profiles = list(profiles or required_profiles_for_current_environment())
     gate = report_traffic_rollout_readiness.build_report(
         sample_dir,
         min_measured_at=min_measured_at,
-        profiles=profiles,
+        profiles=scoped_profiles,
         min_geo_ratio=min_geo_ratio,
     )
     rollout_summary = summarize_rollout_gate(gate)
     timer_status = (
-        collect_timer_status(list(DEFAULT_TIMER_UNITS), local_tz=local_tz, now=now)
+        collect_environment_timer_status(local_tz=local_tz, now=now)
         if include_timers
         else []
     )
     service_status = (
-        collect_service_status(list(DEFAULT_SERVICE_UNITS), local_tz=local_tz)
+        collect_service_status(_service_units_for_current_environment(), local_tz=local_tz)
         if include_timers
         else []
     )
     osrm_status = collect_osrm_manager_status() if include_osrm else {"available": False, "skipped": True}
-    budget_status = collect_budget_status() if include_budget else {"available": False, "skipped": True}
+    budget_status = (
+        collect_budget_status(budget_profile_names_for_current_environment())
+        if include_budget
+        else {"available": False, "skipped": True}
+    )
     market_overview = build_market_overview(sample_dir, now=now)
-    timer_problem_count = sum(1 for row in timer_status if not row.get("available") or row.get("active_state") == "failed")
+    timer_problem_count = sum(
+        1
+        for row in timer_status
+        if not row.get("available") or row.get("active_state") == "failed" or bool(row.get("problem"))
+    )
     service_problem_count = sum(1 for row in service_status if bool(row.get("problem")))
     osrm_problem = bool(
         (osrm_status.get("available") is False and not osrm_status.get("skipped"))
@@ -759,6 +933,14 @@ def build_status(
     return {
         "status": status,
         "local_timezone": str(local_tz),
+        "environment": {
+            "deployment_tier": _deployment_tier(),
+            "market_scope": sorted(_market_scope_for_current_environment()),
+            "rollout_profiles": [
+                f"{market}:{city}:{period}" for market, city, period in scoped_profiles
+            ],
+            "budget_profiles": budget_profile_names_for_current_environment(),
+        },
         "rollout_gate": rollout_summary,
         "timers": {
             "problem_count": timer_problem_count,
@@ -832,7 +1014,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample-dir",
         type=Path,
-        default=report_traffic_rollout_readiness.report_live_traffic_readiness.DEFAULT_SAMPLE_DIR,
+        default=_default_sample_dir(),
     )
     parser.add_argument(
         "--min-measured-at",
@@ -845,7 +1027,7 @@ def parse_args() -> argparse.Namespace:
         default=[],
         type=report_traffic_rollout_readiness._parse_profile,
         metavar="MARKET:CITY:PERIOD",
-        help="Profile to require. Defaults to the current CN Shanghai/Suzhou rollout profiles.",
+        help="Profile to require. Defaults to the current environment market scope.",
     )
     parser.add_argument("--min-geo-ratio", type=float, default=1.0)
     parser.add_argument(
@@ -864,7 +1046,7 @@ def main() -> None:
     args = parse_args()
     if not 0.0 <= args.min_geo_ratio <= 1.0:
         raise SystemExit("--min-geo-ratio must be between 0 and 1")
-    profiles = list(args.profile) if args.profile else list(report_traffic_rollout_readiness.DEFAULT_PROFILES)
+    profiles = list(args.profile) if args.profile else required_profiles_for_current_environment()
     report = build_status(
         sample_dir=args.sample_dir,
         min_measured_at=str(args.min_measured_at or "").strip(),

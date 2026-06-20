@@ -54,6 +54,11 @@ OPTIONAL_SPECS: tuple[tuple[str, str, str], ...] = (
     ("shanghai_off_peak", "Shanghai", "off_peak"),
     ("suzhou_off_peak", "Suzhou", "off_peak"),
 )
+KR_TIMER_SPECS: tuple[tuple[str, str, str], ...] = (
+    ("kr_am_peak", "Seoul", "am_peak"),
+    ("kr_pm_peak", "Seoul", "pm_peak"),
+    ("kr_off_peak", "Seoul", "off_peak"),
+)
 
 
 def _env(name: str, default: Any = "") -> str:
@@ -115,7 +120,35 @@ def _build_sampler_args(
     departure_local_time = ""
     route_start_times_path = sampler.DEFAULT_ROUTE_START_TIMES_PATH
 
-    if city_key == "suzhou":
+    if city_key in {"seoul", "seoul metro"}:
+        source = _env("BRP_LIVE_TRAFFIC_KR_SOURCE", "baseline_json")
+        market = _env("BRP_LIVE_TRAFFIC_KR_MARKET", "KR")
+        city = _env("BRP_LIVE_TRAFFIC_KR_CITY", "Seoul")
+        if period == "am_peak":
+            job_id = _env("BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_JOB_ID")
+            run_id = _env("BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_RUN_ID")
+            baseline_path = _env(
+                "BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH",
+                _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_BASELINE_PATH"),
+            )
+            target_arrival_local_time = _env("BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME", "08:00")
+        elif period == "pm_peak":
+            job_id = _env("BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_JOB_ID")
+            run_id = _env("BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_RUN_ID")
+            baseline_path = _env(
+                "BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH",
+                _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_BASELINE_PATH"),
+            )
+            departure_local_time = _env("BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME", "15:40")
+        elif period == "off_peak":
+            job_id = _env("BRP_LIVE_TRAFFIC_KR_OFF_PEAK_JOB_ID", _env("BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_JOB_ID"))
+            run_id = _env("BRP_LIVE_TRAFFIC_KR_OFF_PEAK_RUN_ID")
+            baseline_path = _env(
+                "BRP_LIVE_TRAFFIC_KR_OFF_PEAK_BASELINE_PATH",
+                _env("BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH", _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_BASELINE_PATH")),
+            )
+            departure_local_time = _env("BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME", "11:00")
+    elif city_key == "suzhou":
         source = _env("BRP_LIVE_TRAFFIC_SUZHOU_SOURCE", "baseline_json")
         run_id = _env("BRP_LIVE_TRAFFIC_SUZHOU_RUN_ID", "0048b194830c")
         baseline_path = _env(
@@ -163,11 +196,11 @@ def _build_sampler_args(
         run_id=run_id,
         baseline_path=baseline_path,
         period=period,
-        provider=sampler.DEFAULT_PROVIDER,
+        provider=_env("BRP_LIVE_TRAFFIC_KR_PROVIDER", sampler.KAKAO_NAVI_PROVIDER) if market.upper() == "KR" else sampler.DEFAULT_PROVIDER,
         sample_date=_env("BRP_LIVE_TRAFFIC_SAMPLE_DATE"),
         jobs_dir=sampler.DEFAULT_JOB_DIR,
         side_tools_dir=sampler.DEFAULT_SIDE_TOOLS_DIR,
-        baseline_dir=sampler.DEFAULT_BASELINE_DIR,
+        baseline_dir=Path(_env("BRP_LIVE_TRAFFIC_KR_BASELINE_DIR", str(sampler.DEFAULT_BASELINE_DIR))) if market.upper() == "KR" else sampler.DEFAULT_BASELINE_DIR,
         output_dir=sampler.DEFAULT_OUTPUT_DIR,
         market=market,
         city=city,
@@ -326,7 +359,8 @@ def _profile_specs(include_off_peak: bool, selected_profiles: list[str] | None =
     selected = set(_selected_profile_names(selected_profiles))
     if not selected:
         return specs
-    return tuple(spec for spec in specs if spec[0] in selected)
+    known_specs = specs + KR_TIMER_SPECS
+    return tuple(spec for spec in known_specs if spec[0] in selected)
 
 
 def build_report(args: argparse.Namespace) -> dict[str, Any]:

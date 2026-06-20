@@ -2570,6 +2570,29 @@ def _start_job_scheduler() -> None:
     ).start()
 
 
+def _terminate_worker_process(pid: int) -> None:
+    if pid <= 0 or not _process_is_alive(pid):
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+            return
+        except Exception:
+            pass
+    kill_signal = getattr(signal, "SIGKILL", None) or getattr(signal, "SIGTERM", None)
+    if kill_signal is None:
+        return
+    try:
+        os.kill(pid, kill_signal)
+    except OSError:
+        pass
+
+
 def _cancel_job(job_id: str) -> dict[str, Any] | None:
     job_record = JOB_STORE.get_job(job_id)
     if not job_record:
@@ -2578,11 +2601,7 @@ def _cancel_job(job_id: str) -> dict[str, Any] | None:
     pid = int(job_record.get("worker_pid", 0) or 0)
     if status in {"succeeded", "failed", "canceled"}:
         return job_record
-    if _process_is_alive(pid):
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
+    _terminate_worker_process(pid)
     JOB_GATE.release(job_record.get("job_slot_path"))
     JOB_GATE.cleanup_stale_slots()
     updated = JOB_STORE.update_job(

@@ -672,5 +672,29 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(len(generated), 2)
 
 
+    def test_worker_termination_uses_taskkill_on_windows(self) -> None:
+        with mock.patch.object(backend_service, "_process_is_alive", return_value=True), \
+            mock.patch.object(backend_service.os, "name", "nt"), \
+            mock.patch.object(backend_service.subprocess, "run") as run_mock:
+            backend_service._terminate_worker_process(1234)
+
+        run_mock.assert_called_once()
+        self.assertEqual(run_mock.call_args.args[0], ["taskkill", "/PID", "1234", "/T", "/F"])
+
+    def test_worker_termination_falls_back_when_sigkill_is_unavailable(self) -> None:
+        calls: list[tuple[int, int]] = []
+
+        def fake_kill(pid: int, kill_signal: int) -> None:
+            calls.append((pid, kill_signal))
+
+        with mock.patch.object(backend_service, "_process_is_alive", return_value=True), \
+            mock.patch.object(backend_service.os, "name", "posix"), \
+            mock.patch.object(backend_service.signal, "SIGKILL", None, create=True), \
+            mock.patch.object(backend_service.os, "kill", side_effect=fake_kill):
+            backend_service._terminate_worker_process(4321)
+
+        self.assertEqual(calls, [(4321, backend_service.signal.SIGTERM)])
+
+
 if __name__ == "__main__":
     unittest.main()

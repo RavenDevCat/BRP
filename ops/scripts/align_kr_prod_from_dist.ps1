@@ -10,6 +10,25 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Wait-BrpBackendHealth {
+  param(
+    [string]$Uri = "http://127.0.0.1:8001/health",
+    [int]$Attempts = 15,
+    [int]$DelaySeconds = 2
+  )
+
+  $lastError = $null
+  for ($index = 1; $index -le $Attempts; $index++) {
+    try {
+      return Invoke-RestMethod -Uri $Uri -TimeoutSec 10
+    } catch {
+      $lastError = $_
+      Start-Sleep -Seconds $DelaySeconds
+    }
+  }
+  throw "KR backend health did not become ready after $Attempts attempts: $lastError"
+}
+
 if (-not $ArchivePath) {
   $ArchivePath = Join-Path $Repo "state\brp-web-dist-$TargetHead.tgz"
 }
@@ -70,10 +89,9 @@ if (-not $found) {
 Stop-ScheduledTask -TaskName $BackendTaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
 Start-ScheduledTask -TaskName $BackendTaskName
-Start-Sleep -Seconds 6
 
 $backendTask = Get-ScheduledTask -TaskName $BackendTaskName
-$health = Invoke-RestMethod -Uri "http://127.0.0.1:8001/health" -TimeoutSec 10
+$health = Wait-BrpBackendHealth
 
 Start-ScheduledTask -TaskName $NginxTaskName
 Start-Sleep -Seconds 2

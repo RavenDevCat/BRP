@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections import Counter
@@ -44,6 +45,55 @@ DEFAULT_SERVICE_UNITS = (
 )
 
 DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
+DEFAULT_MARKET_STALE_HOURS = 24 * 7
+BANGKOK_STATIC_FALLBACK_MULTIPLIER = 1.75
+
+MARKET_OVERVIEW_DEFINITIONS = (
+    {
+        "market": "CN",
+        "city": "Shanghai",
+        "label": "CN / Shanghai",
+        "traffic_mode": "attributed",
+        "provider": "amap",
+        "active_source": "route-network live samples",
+        "required_periods": ("am_peak", "pm_peak"),
+        "fallback_multiplier": None,
+        "requires_samples": True,
+    },
+    {
+        "market": "CN",
+        "city": "Suzhou",
+        "label": "CN / Suzhou",
+        "traffic_mode": "attributed",
+        "provider": "amap",
+        "active_source": "route-network live samples",
+        "required_periods": ("am_peak", "pm_peak"),
+        "fallback_multiplier": None,
+        "requires_samples": True,
+    },
+    {
+        "market": "KR",
+        "city": "Seoul Metro",
+        "label": "KR / Seoul Metro",
+        "traffic_mode": "attributed",
+        "provider": "kakao_navi",
+        "active_source": "weekday route-network samples",
+        "required_periods": ("am_peak", "pm_peak", "off_peak"),
+        "fallback_multiplier": None,
+        "requires_samples": True,
+    },
+    {
+        "market": "BK",
+        "city": "Bangkok",
+        "label": "BK / Bangkok",
+        "traffic_mode": "static_fallback",
+        "provider": "static",
+        "active_source": "all-day fallback coefficient",
+        "required_periods": ("all_day",),
+        "fallback_multiplier": BANGKOK_STATIC_FALLBACK_MULTIPLIER,
+        "requires_samples": False,
+    },
+)
 
 
 def _run_command(command: list[str], *, timeout: int = 10) -> subprocess.CompletedProcess[str]:
@@ -86,6 +136,182 @@ def _timestamp_local(value: Any, local_tz: ZoneInfo) -> str:
     if timestamp is None:
         return ""
     return timestamp.astimezone(local_tz).isoformat(timespec="seconds")
+
+
+def _parse_iso_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _age_hours(value: Any, now: datetime | None = None) -> float | None:
+    timestamp = _parse_iso_timestamp(value)
+    if timestamp is None:
+        return None
+    now_utc = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return max(0.0, (now_utc - timestamp).total_seconds() / 3600.0)
+
+
+def _normalize_profile_key(market: Any, city: Any, period: Any) -> tuple[str, str, str]:
+    market_value = str(market or "").strip().casefold()
+    city_value = str(city or "").strip().casefold()
+    period_value = str(period or "").strip().casefold()
+    if market_value in {"south korea", "korea", "kr"}:
+        market_value = "kr"
+    if market_value == "cn":
+        market_value = "cn"
+    if market_value in {"bk", "bangkok", "th", "thailand"}:
+        market_value = "bk"
+    if market_value == "kr" and city_value in {"seoul", "seoul metro", "incheon", "gyeonggi"}:
+        city_value = "seoul metro"
+    return market_value, city_value, period_value
+
+
+def _group_index(groups: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
+    indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for row in groups:
+        if not isinstance(row, dict):
+            continue
+        indexed[_normalize_profile_key(row.get("market"), row.get("city"), row.get("period"))] = row
+    return indexed
+
+
+def _market_required_in_current_environment(market: str) -> bool:
+    normalized = str(market or "").strip().upper()
+    if os.name == "nt":
+        return normalized == "KR"
+    return normalized == "CN"
+
+
+def _period_row(period: str, group: dict[str, Any] | None, *, now: datetime | None) -> dict[str, Any]:
+    if not group:
+        return {
+            "period": period,
+            "status": "missing",
+            "sample_file_count": 0,
+            "route_sample_count": 0,
+            "geo_route_sample_count": 0,
+            "geo_route_sample_ratio": 0.0,
+            "latest_measured_at": "",
+            "latest_sample": "",
+            "providers": [],
+            "weekdays": [],
+            "age_hours": None,
+        }
+    age = _age_hours(group.get("latest_measured_at"), now)
+    return {
+        "period": period,
+        "status": "ok",
+        "sample_file_count": int(group.get("sample_file_count") or 0),
+        "route_sample_count": int(group.get("route_sample_count") or 0),
+        "geo_route_sample_count": int(group.get("geo_route_sample_count") or 0),
+        "geo_route_sample_ratio": float(group.get("geo_route_sample_ratio") or 0.0),
+        "latest_measured_at": group.get("latest_measured_at") or "",
+        "latest_sample": group.get("latest_sample") or "",
+        "providers": list(group.get("providers") or []),
+        "weekdays": list(group.get("weekdays") or []),
+        "age_hours": age,
+    }
+
+
+def build_market_overview(
+    sample_dir: Path,
+    *,
+    stale_after_hours: int = DEFAULT_MARKET_STALE_HOURS,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    summary = report_traffic_rollout_readiness.report_live_traffic_readiness.summarize(sample_dir)
+    groups = _group_index([row for row in summary.get("groups", []) if isinstance(row, dict)])
+    markets: list[dict[str, Any]] = []
+    for definition in MARKET_OVERVIEW_DEFINITIONS:
+        market = str(definition["market"])
+        city = str(definition["city"])
+        required_periods = [str(item) for item in definition["required_periods"]]
+        requires_samples = bool(definition["requires_samples"])
+        required_here = _market_required_in_current_environment(market)
+        period_rows: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        providers: set[str] = set()
+        latest_measured_at = ""
+        latest_sample = ""
+        total_files = 0
+        total_routes = 0
+        total_geo_routes = 0
+        for period in required_periods:
+            group = groups.get(_normalize_profile_key(market, city, period))
+            row = _period_row(period, group, now=now)
+            period_rows.append(row)
+            total_files += int(row["sample_file_count"])
+            total_routes += int(row["route_sample_count"])
+            total_geo_routes += int(row["geo_route_sample_count"])
+            providers.update(str(item) for item in row.get("providers", []) if item)
+            if str(row.get("latest_measured_at") or "") > latest_measured_at:
+                latest_measured_at = str(row.get("latest_measured_at") or "")
+                latest_sample = str(row.get("latest_sample") or "")
+            if requires_samples and row["status"] == "missing":
+                warnings.append(f"missing_{period}")
+            age = row.get("age_hours")
+            if requires_samples and isinstance(age, (int, float)) and age > stale_after_hours:
+                warnings.append(f"stale_{period}")
+            if requires_samples and float(row.get("geo_route_sample_ratio") or 0.0) <= 0.0:
+                warnings.append(f"no_geo_{period}")
+        if not requires_samples:
+            warnings.append("static_fallback")
+        geo_ratio = (total_geo_routes / total_routes) if total_routes else 0.0
+        if required_here and any(item.startswith("missing_") for item in warnings):
+            status = "blocked"
+        elif warnings:
+            status = "warning"
+        else:
+            status = "healthy"
+        markets.append(
+            {
+                "market": market,
+                "city": city,
+                "label": definition["label"],
+                "status": status,
+                "traffic_mode": definition["traffic_mode"],
+                "provider": definition["provider"],
+                "observed_providers": sorted(providers),
+                "active_source": definition["active_source"],
+                "fallback_multiplier": definition["fallback_multiplier"],
+                "requires_samples": requires_samples,
+                "required_in_current_environment": required_here,
+                "required_periods": required_periods,
+                "sample_file_count": total_files,
+                "route_sample_count": total_routes,
+                "geo_route_sample_count": total_geo_routes,
+                "geo_route_sample_ratio": geo_ratio,
+                "latest_measured_at": latest_measured_at,
+                "latest_sample": latest_sample,
+                "stale_after_hours": stale_after_hours,
+                "warnings": sorted(set(warnings)),
+                "periods": period_rows,
+            }
+        )
+    blocked_count = sum(1 for row in markets if row.get("status") == "blocked")
+    warning_count = sum(1 for row in markets if row.get("status") == "warning")
+    return {
+        "status": "blocked" if blocked_count else ("warning" if warning_count else "healthy"),
+        "sample_dir": str(sample_dir),
+        "sample_file_count": summary.get("sample_file_count"),
+        "filtered_file_count": summary.get("filtered_file_count"),
+        "unreadable_file_count": summary.get("unreadable_file_count"),
+        "default_traffic_coefficient_mode": os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy"),
+        "stale_after_hours": stale_after_hours,
+        "blocked_count": blocked_count,
+        "warning_count": warning_count,
+        "markets": markets,
+    }
 
 
 def collect_timer_status(
@@ -264,6 +490,7 @@ def collect_osrm_manager_status() -> dict[str, Any]:
         "max_running_regions": payload.get("max_running_regions"),
         "available_memory_mb": payload.get("available_memory_mb"),
         "lock_count": len(locks),
+        "locked_lock_count": sum(1 for row in locks if row.get("locked")),
         "stale_lock_count": sum(1 for row in locks if row.get("stale")),
         "running_region_count": len(running_regions),
         "running_regions": running_regions,
@@ -440,11 +667,12 @@ def build_status(
     )
     osrm_status = collect_osrm_manager_status() if include_osrm else {"available": False, "skipped": True}
     budget_status = collect_budget_status() if include_budget else {"available": False, "skipped": True}
+    market_overview = build_market_overview(sample_dir, now=now)
     timer_problem_count = sum(1 for row in timer_status if not row.get("available") or row.get("active_state") == "failed")
     service_problem_count = sum(1 for row in service_status if bool(row.get("problem")))
     osrm_problem = bool(
-        osrm_status.get("available")
-        and (int(osrm_status.get("lock_count") or 0) > 0 or int(osrm_status.get("stale_lock_count") or 0) > 0)
+        (osrm_status.get("available") is False and not osrm_status.get("skipped"))
+        or int(osrm_status.get("stale_lock_count") or 0) > 0
     )
     budget_problem = bool(budget_status.get("problem"))
     status = (
@@ -481,6 +709,7 @@ def build_status(
         },
         "api_budget": budget_status,
         "osrm_manager": osrm_status,
+        "market_overview": market_overview,
         "next_step": next_step,
     }
 

@@ -70,6 +70,57 @@ export type TrafficRolloutStatusResponse = {
         running_region_count?: number;
         running_regions?: string[];
     };
+    market_overview?: TrafficMarketOverview;
+};
+
+export type TrafficMarketOverview = {
+    status?: string;
+    sample_dir?: string;
+    sample_file_count?: number;
+    filtered_file_count?: number;
+    unreadable_file_count?: number;
+    default_traffic_coefficient_mode?: string;
+    stale_after_hours?: number;
+    blocked_count?: number;
+    warning_count?: number;
+    markets?: TrafficMarketStatus[];
+};
+
+export type TrafficMarketPeriodStatus = {
+    period: string;
+    status?: string;
+    sample_file_count?: number;
+    route_sample_count?: number;
+    geo_route_sample_count?: number;
+    geo_route_sample_ratio?: number;
+    latest_measured_at?: string;
+    latest_sample?: string;
+    providers?: string[];
+    weekdays?: string[];
+    age_hours?: number | null;
+};
+
+export type TrafficMarketStatus = {
+    market: string;
+    city: string;
+    label: string;
+    status: string;
+    traffic_mode: string;
+    provider: string;
+    observed_providers?: string[];
+    active_source?: string;
+    fallback_multiplier?: number | null;
+    requires_samples?: boolean;
+    required_periods?: string[];
+    sample_file_count?: number;
+    route_sample_count?: number;
+    geo_route_sample_count?: number;
+    geo_route_sample_ratio?: number;
+    latest_measured_at?: string;
+    latest_sample?: string;
+    stale_after_hours?: number;
+    warnings?: string[];
+    periods?: TrafficMarketPeriodStatus[];
 };
 
 export type DeploymentFeatures = {

@@ -37,6 +37,10 @@ const sideToolNavItems = [
     { to: "/distance", labelKey: "Distance & Cost", icon: Ruler },
 ];
 
+const adminNavItems = [
+    { to: "/admin", labelKey: "Ops Status", icon: Gauge },
+];
+
 const mobileNavItems = [
     { to: "/", labelKey: "Home", icon: LayoutDashboard },
     { to: "/new", labelKey: "New Audit", icon: UploadCloud },
@@ -63,10 +67,12 @@ export function AppShell({ children }: { children: ReactNode }) {
         queryFn: getGoogleGeocodeUsage,
         staleTime: 60_000,
     });
+    const isAdmin = userQuery.data?.is_admin === true;
     const isWideWorkspace =
         pathname.startsWith("/jobs") ||
         pathname.startsWith("/fleet") ||
-        pathname.startsWith("/distance");
+        pathname.startsWith("/distance") ||
+        pathname.startsWith("/admin");
     const googleUsage = googleUsageQuery.data;
     const googleUsagePct =
         googleUsage?.enabled &&
@@ -113,6 +119,13 @@ export function AppShell({ children }: { children: ReactNode }) {
                         items={sideToolNavItems}
                         pathname={pathname}
                     />
+                    {isAdmin ? (
+                        <NavGroup
+                            title={t("Admin")}
+                            items={adminNavItems}
+                            pathname={pathname}
+                        />
+                    ) : null}
                 </nav>
 
                 <div className="space-y-3 border-t border-border p-4">

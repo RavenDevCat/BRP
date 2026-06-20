@@ -244,6 +244,98 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(report["api_budget"]["total_estimated_api_call_count"], 1001)
         self.assertEqual(report["status"], "waiting")
 
+    def test_nonstale_osrm_lock_files_do_not_block_rollout_status(self) -> None:
+        original_osrm = report_traffic_rollout_status.collect_osrm_manager_status
+        original_budget = report_traffic_rollout_status.collect_budget_status
+        try:
+            report_traffic_rollout_status.collect_osrm_manager_status = lambda: {
+                "available": True,
+                "lock_count": 2,
+                "locked_lock_count": 0,
+                "stale_lock_count": 0,
+                "running_region_count": 0,
+            }
+            report_traffic_rollout_status.collect_budget_status = lambda: {
+                "available": True,
+                "problem": False,
+                "provider_api_called": False,
+                "osrm_started": False,
+            }
+            with tempfile.TemporaryDirectory() as tmpdir:
+                sample_dir = Path(tmpdir)
+                (sample_dir / "geo.json").write_text(
+                    json.dumps(
+                        {
+                            "market": "CN",
+                            "city": "Shanghai",
+                            "period": "am_peak",
+                            "measured_at": "2026-06-18T07:25:55+08:00",
+                            "routes": [
+                                {
+                                    "route_id": "geo",
+                                    "route_fingerprint": {"cells": ["a"]},
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                report = report_traffic_rollout_status.build_status(
+                    sample_dir=sample_dir,
+                    min_measured_at="2026-06-18T00:00:00+08:00",
+                    profiles=[("CN", "Shanghai", "am_peak")],
+                    min_geo_ratio=1.0,
+                    include_timers=False,
+                    include_osrm=True,
+                    include_budget=True,
+                )
+        finally:
+            report_traffic_rollout_status.collect_osrm_manager_status = original_osrm
+            report_traffic_rollout_status.collect_budget_status = original_budget
+
+        self.assertEqual(report["status"], "ready")
+        self.assertEqual(report["osrm_manager"]["lock_count"], 2)
+        self.assertEqual(report["osrm_manager"]["stale_lock_count"], 0)
+
+    def test_market_overview_summarizes_sampled_and_static_markets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            for period in ("am_peak", "pm_peak"):
+                (sample_dir / f"shanghai_{period}.json").write_text(
+                    json.dumps(
+                        {
+                            "market": "CN",
+                            "city": "Shanghai",
+                            "period": period,
+                            "provider": "amap",
+                            "measured_at": "2026-06-19T07:25:55+08:00",
+                            "routes": [
+                                {
+                                    "route_id": f"{period}-geo",
+                                    "route_fingerprint": {"cells": ["a"]},
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            overview = report_traffic_rollout_status.build_market_overview(
+                sample_dir,
+                now=datetime(2026, 6, 20, 0, 0, tzinfo=timezone.utc),
+            )
+
+        markets = {row["label"]: row for row in overview["markets"]}
+        self.assertEqual(markets["CN / Shanghai"]["status"], "healthy")
+        self.assertEqual(markets["CN / Shanghai"]["provider"], "amap")
+        self.assertTrue(markets["CN / Shanghai"]["required_in_current_environment"])
+        self.assertEqual(markets["CN / Shanghai"]["route_sample_count"], 2)
+        self.assertEqual(markets["KR / Seoul Metro"]["status"], "warning")
+        self.assertFalse(markets["KR / Seoul Metro"]["required_in_current_environment"])
+        self.assertEqual(markets["BK / Bangkok"]["status"], "warning")
+        self.assertEqual(markets["BK / Bangkok"]["warnings"], ["static_fallback"])
+        self.assertEqual(markets["BK / Bangkok"]["fallback_multiplier"], 1.75)
+
     def test_problem_services_are_summarized(self) -> None:
         rows = [
             {

@@ -1,5 +1,6 @@
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { DashboardPage, JobDetailPage, JobsPage, RootLayout } from "@/app/pages";
+import { AdminStatusPage } from "@/features/admin/admin-status-page";
 import { DistanceCheckerPage } from "@/features/distance/distance-checker-page";
 import { FleetPlannerPage } from "@/features/fleet/fleet-planner-page";
 import { NewJobPage } from "@/features/planner/new-job-page";
@@ -38,13 +39,27 @@ const fleetPlannerRoute = createRoute({
   component: FleetPlannerPage,
 });
 
+const adminRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin",
+  component: AdminStatusPage,
+});
+
 const jobDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId",
   component: JobDetailPage,
 });
 
-const routeTree = rootRoute.addChildren([dashboardRoute, newJobRoute, distanceCheckerRoute, fleetPlannerRoute, jobsRoute, jobDetailRoute]);
+const routeTree = rootRoute.addChildren([
+  dashboardRoute,
+  newJobRoute,
+  distanceCheckerRoute,
+  fleetPlannerRoute,
+  adminRoute,
+  jobsRoute,
+  jobDetailRoute,
+]);
 
 export const router = createRouter({ routeTree });
 

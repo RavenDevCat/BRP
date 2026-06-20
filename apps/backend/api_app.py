@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from copy import deepcopy
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -855,3 +856,183 @@ def create_fleet_planner_history(
             _payload_dict(payload), user_email=context.email
         ),
     )
+
+
+@_api_route("POST", "/compute", dependencies=[Depends(require_authorized_request)])
+def compute(payload: Any = Body(default=None)) -> JSONResponse:
+    payload_dict = _payload_dict(payload)
+    config_payload = payload_dict.get("config") or {}
+    prepared_payload = payload_dict.get("prepared_payload") or {}
+    config = backend_service._build_planner_config(config_payload)
+    result = backend_service.run_backend_planner_with_prepared_data(
+        prepared_payload, config=config
+    )
+    return _json_response(200, result)
+
+
+@_api_route(
+    "POST",
+    "/workbooks/preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def workbook_preview(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_workbook_preview(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/workbooks/submit",
+    dependencies=[Depends(require_authorized_request)],
+)
+def workbook_submit(
+    payload: Any = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        202,
+        backend_service._handle_workbook_submit(
+            _payload_dict(payload), user_email=context.email
+        ),
+    )
+
+
+@_api_route("POST", "/jobs", dependencies=[Depends(require_authorized_request)])
+def create_job(
+    payload: Any = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    payload_dict = _payload_dict(payload)
+    config_payload = payload_dict.get("config") or {}
+    prepared_payload = payload_dict.get("prepared_payload") or {}
+    metadata = payload_dict.get("metadata") or {}
+    summary = backend_service.JOB_STORE.create_job(
+        config_payload,
+        prepared_payload,
+        metadata=metadata,
+        owner_email=context.email,
+    )
+    spawned = backend_service._spawn_job_worker(str(summary["job_id"]))
+    if spawned:
+        summary["worker_pid"] = spawned.get("worker_pid")
+    return _json_response(202, summary)
+
+
+@_api_route("POST", "/jobs/{job_id}/cancel")
+def cancel_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    normalized_job_id = str(job_id or "").strip()
+    _job_for_context(normalized_job_id, context)
+    updated = backend_service._cancel_job(normalized_job_id)
+    if not updated:
+        raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
+    return _json_response(200, updated)
+
+
+@_api_route("POST", "/jobs/{job_id}/ai-audit")
+def generate_job_ai_audit(
+    job_id: str,
+    payload: Any = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    normalized_job_id = str(job_id or "").strip()
+    job_record = _job_for_context(normalized_job_id, context)
+    payload_dict = _payload_dict(payload)
+    requested_key, requested_language = backend_service._normalize_ai_audit_language(
+        str(payload_dict.get("language") or "").strip() or None
+    )
+    force_ai_audit = bool(payload_dict.get("force"))
+    required_languages = (
+        ["English", "Korean"]
+        if backend_service._is_korean_ai_audit_job(job_record)
+        else [requested_language]
+    )
+    audit_state, audit_record = backend_service.JOB_STORE.begin_ai_audit(
+        normalized_job_id,
+        force=force_ai_audit,
+        required_languages=required_languages,
+    )
+    if audit_state == "missing" or not audit_record:
+        raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
+
+    reports_by_language = backend_service._ai_audit_report_map(audit_record)
+    selected_report = backend_service._select_ai_audit_report(
+        reports_by_language, requested_key
+    )
+    if audit_state == "cached":
+        return _json_response(
+            200,
+            {
+                "job_id": normalized_job_id,
+                "ai_audit_status": "succeeded",
+                "ai_audit_report": selected_report,
+                "ai_audit_reports": reports_by_language,
+                "cached": True,
+            },
+        )
+    if audit_state == "running":
+        return _json_response(
+            202,
+            {
+                "job_id": normalized_job_id,
+                "ai_audit_status": "running",
+                "ai_audit_report": selected_report,
+                "ai_audit_reports": reports_by_language,
+                "message": "AI audit generation is already running for this job.",
+            },
+        )
+
+    try:
+        for language in required_languages:
+            language_key, language_label = backend_service._normalize_ai_audit_language(
+                language
+            )
+            if not force_ai_audit and language_key in reports_by_language:
+                continue
+            report_source_record = deepcopy(audit_record)
+            report_source_record["ai_audit_report"] = reports_by_language.get(
+                language_key
+            )
+            reports_by_language[language_key] = backend_service.generate_ai_audit_report(
+                report_source_record,
+                force=force_ai_audit,
+                language=language_label,
+            )
+    except Exception as exc:
+        backend_service.JOB_STORE.update_job(
+            normalized_job_id,
+            ai_audit_status="failed",
+            ai_audit_finished_at=backend_service.utc_now_iso(),
+            ai_audit_error=str(exc),
+        )
+        raise
+
+    selected_report = backend_service._select_ai_audit_report(
+        reports_by_language, requested_key
+    )
+    updated = backend_service.JOB_STORE.update_job(
+        normalized_job_id,
+        ai_audit_report=selected_report,
+        ai_audit_reports=reports_by_language,
+        ai_audit_status="succeeded",
+        ai_audit_finished_at=backend_service.utc_now_iso(),
+        ai_audit_error=None,
+    )
+    if updated:
+        updated["config"] = None
+        updated["prepared_payload"] = None
+        return _json_response(
+            200,
+            {
+                "job_id": normalized_job_id,
+                "ai_audit_status": "succeeded",
+                "ai_audit_report": selected_report,
+                "ai_audit_reports": reports_by_language,
+            },
+        )
+    raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})

@@ -15,7 +15,7 @@ stable during the migration.
 - Business logic remains in existing backend modules during the thin-shell
   phase.
 
-## Day 1-6 FastAPI Coverage
+## Day 1-8 FastAPI Coverage
 
 | Method | Path | Scope |
 | --- | --- | --- |
@@ -64,17 +64,44 @@ stable during the migration.
 | POST | `/fleet-planner/route-preview` | fleet route preview |
 | POST | `/fleet-planner/global-plan` | fleet optimized plan |
 | POST | `/fleet-planner/history` | save fleet planner history |
+| POST | `/compute` | synchronous prepared-payload planner run |
+| POST | `/workbooks/preview` | uploaded planning workbook preview |
+| POST | `/workbooks/submit` | uploaded planning workbook submit and queued job spawn |
+| POST | `/jobs` | prepared-payload queued job create and worker spawn |
+| POST | `/jobs/{job_id}/cancel` | cancel queued/running job with existing access checks |
+| POST | `/jobs/{job_id}/ai-audit` | generate/cache AI audit report; KR jobs generate English and Korean reports |
 
 All paths above are also registered with `/api` prefix except the already
 prefixed `/api/health` row.
 
+## Day 8 Runtime Switch
+
+The backend runner scripts support the FastAPI HTTP layer without changing the
+React API base or the legacy business modules:
+
+- Linux: set `BRP_BACKEND_FRAMEWORK=fastapi` in `ops/env/local.env` and restart
+  the backend service.
+- Windows/KR: set `BRP_BACKEND_FRAMEWORK=fastapi` in `ops\env\local.env` and
+  restart the `BRP Backend` Scheduled Task.
+- Keep `BRP_BACKEND_UVICORN_WORKERS=1` until the file-backed job queue is proven
+  safe for multiple workers.
+- Rollback is removing or setting `BRP_BACKEND_FRAMEWORK=legacy`, then restarting
+  the same service/task.
+
+Production deployment can carry the FastAPI code while live traffic remains on
+legacy. Before switching a live environment, run a temporary-port FastAPI smoke
+using production paths or isolated temp paths and verify at least:
+
+- `GET /api/health`
+- `GET /api/jobs`
+- `POST /api/compute` with a stub or non-destructive prepared payload when
+  available
+- `POST /api/jobs/{job_id}/ai-audit` against an existing completed job only when
+  AI-provider use is acceptable
+- new-job workbook preview/submit flow in staging before live production switch
+
 ## Remaining Legacy Coverage
 
-Day 7 targets core job workflows:
-
-- `POST /compute`
-- `POST /workbooks/preview`
-- `POST /workbooks/submit`
-- `POST /jobs`
-- `POST /jobs/{job_id}/cancel`
-- `POST /jobs/{job_id}/ai-audit`
+No current React `/api` route is intentionally legacy-only after Day 7. The
+remaining work is operational hardening around live FastAPI rollout, observability,
+and multi-worker safety, not missing HTTP route coverage.

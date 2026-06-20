@@ -20,6 +20,8 @@ class FakeJobStore:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
         self.deleted: list[str] = []
+        self.created: list[dict[str, Any]] = []
+        self.updated: list[tuple[str, dict[str, Any]]] = []
 
     def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         return [
@@ -43,6 +45,65 @@ class FakeJobStore:
         self.deleted.append(job_id)
         self.records.pop(job_id, None)
         return True
+
+    def create_job(
+        self,
+        config_payload: dict[str, Any],
+        prepared_payload: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+        owner_email: str = "",
+    ) -> dict[str, Any]:
+        job_id = "new-job"
+        record = {
+            "job_id": job_id,
+            "owner_email": owner_email,
+            "status": "queued",
+            "config": dict(config_payload or {}),
+            "prepared_payload": dict(prepared_payload or {}),
+            "metadata": dict(metadata or {}),
+            "prepared_payload_summary": {"stop_count": 0},
+            "error": None,
+        }
+        self.records[job_id] = record
+        self.created.append(record)
+        return {
+            "job_id": job_id,
+            "owner_email": owner_email,
+            "status": "queued",
+            "metadata": dict(metadata or {}),
+            "prepared_payload_summary": {"stop_count": 0},
+            "error": None,
+        }
+
+    def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
+        record = self.records.get(job_id)
+        if not record:
+            return None
+        record.update(changes)
+        self.updated.append((job_id, dict(changes)))
+        return dict(record)
+
+    def begin_ai_audit(
+        self,
+        job_id: str,
+        *,
+        force: bool = False,
+        required_languages: list[str] | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        record = self.records.get(job_id)
+        if not record:
+            return "missing", None
+        required_keys = {
+            backend_service._ai_audit_language_key(language)
+            for language in (required_languages or ["English"])
+        }
+        existing_reports = backend_service._ai_audit_report_map(record)
+        if required_keys and all(key in existing_reports for key in required_keys) and not force:
+            return "cached", dict(record)
+        if str(record.get("ai_audit_status", "")).strip().lower() == "running":
+            return "running", dict(record)
+        record["ai_audit_status"] = "running"
+        return "started", dict(record)
 
 
 class FakeHistoryStore:
@@ -488,6 +549,127 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertTrue(all(response.status_code == 200 for response in responses))
         self.assertEqual(history_response.status_code, 201)
         self.assertEqual(calls[-1], ("fleet-history", {"title": "save"}, "admin@example.com"))
+
+
+    def test_core_job_post_routes_delegate_to_legacy_workflows(self) -> None:
+        calls: list[tuple[str, Any]] = []
+        store = FakeJobStore()
+
+        def build_config(config_payload: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("build-config", config_payload))
+            return {"built": config_payload}
+
+        def run_planner(prepared_payload: dict[str, Any], config: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("compute", {"prepared": prepared_payload, "config": config}))
+            return {"ok": True, "config": config}
+
+        def preview_handler(payload: dict[str, Any]) -> dict[str, Any]:
+            calls.append(("preview", payload))
+            return {"source_label": payload.get("file_name", "upload.xlsx")}
+
+        def submit_handler(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+            calls.append(("submit", {"payload": payload, "user_email": user_email}))
+            return {"job": {"job_id": "submitted"}, "owner_email": user_email}
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=store,
+            _build_planner_config=build_config,
+            run_backend_planner_with_prepared_data=run_planner,
+            _handle_workbook_preview=preview_handler,
+            _handle_workbook_submit=submit_handler,
+            _spawn_job_worker=lambda job_id: {"worker_pid": 321, "job_id": job_id},
+            _cancel_job=lambda job_id: {"job_id": job_id, "status": "canceled"},
+        ):
+            compute_response = self.client.post(
+                "/api/compute",
+                headers=auth_headers(),
+                json={"config": {"target_duration": 60}, "prepared_payload": {"stops": []}},
+            )
+            preview_response = self.client.post(
+                "/api/workbooks/preview",
+                headers=auth_headers(),
+                json={"file_name": "routes.xlsx"},
+            )
+            submit_response = self.client.post(
+                "/api/workbooks/submit",
+                headers=auth_headers(),
+                json={"file_name": "routes.xlsx", "job_custom_name": "June test"},
+            )
+            job_response = self.client.post(
+                "/api/jobs",
+                headers=auth_headers(),
+                json={
+                    "config": {"market": "CN"},
+                    "prepared_payload": {"stop_count": 2},
+                    "metadata": {"job_name": "Direct job"},
+                },
+            )
+            cancel_response = self.client.post(
+                "/api/jobs/new-job/cancel", headers=auth_headers()
+            )
+
+        self.assertEqual(compute_response.status_code, 200)
+        self.assertEqual(compute_response.json()["config"], {"built": {"target_duration": 60}})
+        self.assertEqual(preview_response.status_code, 200)
+        self.assertEqual(preview_response.json()["source_label"], "routes.xlsx")
+        self.assertEqual(submit_response.status_code, 202)
+        self.assertEqual(submit_response.json()["owner_email"], "admin@example.com")
+        self.assertEqual(job_response.status_code, 202)
+        self.assertEqual(job_response.json()["job_id"], "new-job")
+        self.assertEqual(job_response.json()["worker_pid"], 321)
+        self.assertEqual(store.created[0]["owner_email"], "admin@example.com")
+        self.assertEqual(cancel_response.status_code, 200)
+        self.assertEqual(cancel_response.json(), {"job_id": "new-job", "status": "canceled"})
+        self.assertEqual(calls[0], ("build-config", {"target_duration": 60}))
+
+    def test_ai_audit_generates_dual_language_reports_for_kr_jobs_and_uses_cache(self) -> None:
+        store = FakeJobStore()
+        store.records["kr-job"] = {
+            "job_id": "kr-job",
+            "owner_email": "admin@example.com",
+            "status": "succeeded",
+            "metadata": {"country": "KR"},
+            "result": {},
+        }
+        generated: list[tuple[str, bool, dict[str, Any] | None]] = []
+
+        def generate_report(
+            record: dict[str, Any], *, force: bool = False, language: str = "English"
+        ) -> dict[str, Any]:
+            prior_report = record.get("ai_audit_report")
+            generated.append((language, force, prior_report if isinstance(prior_report, dict) else None))
+            return {"language": language, "summary": f"{language} report"}
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=store,
+            generate_ai_audit_report=generate_report,
+            utc_now_iso=lambda: "2026-06-21T00:00:00Z",
+        ):
+            response = self.client.post(
+                "/api/jobs/kr-job/ai-audit",
+                headers=auth_headers(),
+                json={"language": "ko"},
+            )
+            cached_response = self.client.post(
+                "/api/jobs/kr-job/ai-audit",
+                headers=auth_headers(),
+                json={"language": "en"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["ai_audit_status"], "succeeded")
+        self.assertEqual(payload["ai_audit_report"]["language"], "Korean")
+        self.assertEqual(set(payload["ai_audit_reports"].keys()), {"en", "ko"})
+        self.assertEqual([item[0] for item in generated], ["English", "Korean"])
+        self.assertEqual(store.records["kr-job"]["ai_audit_status"], "succeeded")
+        self.assertEqual(cached_response.status_code, 200)
+        self.assertTrue(cached_response.json()["cached"])
+        self.assertEqual(len(generated), 2)
 
 
 if __name__ == "__main__":

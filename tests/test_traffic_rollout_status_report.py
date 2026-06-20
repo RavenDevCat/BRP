@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 from zoneinfo import ZoneInfo
 
 
@@ -321,42 +322,57 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
                     encoding="utf-8",
                 )
 
-            overview = report_traffic_rollout_status.build_market_overview(
-                sample_dir,
-                now=datetime(2026, 6, 20, 0, 0, tzinfo=timezone.utc),
-            )
+            with mock.patch.dict(os.environ, {"BRP_DEPLOYMENT_TIER": "staging"}, clear=False):
+                os.environ.pop("BRP_TRAFFIC_STATUS_MARKETS", None)
+                overview = report_traffic_rollout_status.build_market_overview(
+                    sample_dir,
+                    now=datetime(2026, 6, 20, 0, 0, tzinfo=timezone.utc),
+                )
 
         markets = {row["label"]: row for row in overview["markets"]}
-        self.assertEqual(overview["market_scope"], ["BK", "CN"])
-        self.assertNotIn("KR / Seoul Metro", markets)
+        self.assertEqual(overview["deployment_tier"], "staging")
+        self.assertEqual(overview["market_scope"], ["BK", "CN", "KR"])
+        self.assertIn("KR / Seoul Metro", markets)
         self.assertEqual(markets["CN / Shanghai"]["status"], "healthy")
         self.assertEqual(markets["CN / Shanghai"]["provider"], "amap")
-        self.assertTrue(markets["CN / Shanghai"]["required_in_current_environment"])
+        self.assertFalse(markets["CN / Shanghai"]["required_in_current_environment"])
         self.assertEqual(markets["CN / Shanghai"]["route_sample_count"], 2)
+        self.assertEqual(markets["KR / Seoul Metro"]["status"], "warning")
+        self.assertFalse(markets["KR / Seoul Metro"]["required_in_current_environment"])
         self.assertEqual(markets["BK / Bangkok"]["status"], "warning")
         self.assertEqual(markets["BK / Bangkok"]["warnings"], ["static_fallback"])
         self.assertEqual(markets["BK / Bangkok"]["fallback_multiplier"], 1.75)
 
     def test_market_overview_can_be_scoped_to_kr_only(self) -> None:
-        original_scope = os.environ.get("BRP_TRAFFIC_STATUS_MARKETS")
-        os.environ["BRP_TRAFFIC_STATUS_MARKETS"] = "KR"
-        try:
+        with mock.patch.dict(os.environ, {"BRP_TRAFFIC_STATUS_MARKETS": "KR"}, clear=False):
             with tempfile.TemporaryDirectory() as tmpdir:
                 overview = report_traffic_rollout_status.build_market_overview(
                     Path(tmpdir),
                     now=datetime(2026, 6, 20, 0, 0, tzinfo=timezone.utc),
                 )
-        finally:
-            if original_scope is None:
-                os.environ.pop("BRP_TRAFFIC_STATUS_MARKETS", None)
-            else:
-                os.environ["BRP_TRAFFIC_STATUS_MARKETS"] = original_scope
 
         markets = {row["label"]: row for row in overview["markets"]}
         self.assertEqual(overview["market_scope"], ["KR"])
         self.assertEqual(list(markets), ["KR / Seoul Metro"])
         self.assertEqual(markets["KR / Seoul Metro"]["status"], "blocked")
         self.assertTrue(markets["KR / Seoul Metro"]["required_in_current_environment"])
+
+    def test_market_overview_defaults_cn_production_to_cn_and_bangkok(self) -> None:
+        with mock.patch.dict(os.environ, {"BRP_DEPLOYMENT_TIER": "production"}, clear=False):
+            os.environ.pop("BRP_TRAFFIC_STATUS_MARKETS", None)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                overview = report_traffic_rollout_status.build_market_overview(
+                    Path(tmpdir),
+                    now=datetime(2026, 6, 20, 0, 0, tzinfo=timezone.utc),
+                )
+
+        markets = {row["label"]: row for row in overview["markets"]}
+        self.assertEqual(overview["deployment_tier"], "production")
+        self.assertEqual(overview["market_scope"], ["BK", "CN"])
+        self.assertNotIn("KR / Seoul Metro", markets)
+        self.assertEqual(list(markets), ["CN / Shanghai", "CN / Suzhou", "BK / Bangkok"])
+        self.assertTrue(markets["CN / Shanghai"]["required_in_current_environment"])
+        self.assertEqual(markets["CN / Shanghai"]["status"], "blocked")
 
     def test_problem_services_are_summarized(self) -> None:
         rows = [

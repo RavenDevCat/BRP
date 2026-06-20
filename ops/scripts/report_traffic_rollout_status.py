@@ -187,6 +187,40 @@ def _normalize_market_code(value: Any) -> str:
     return normalized.upper()
 
 
+def _all_market_codes() -> set[str]:
+    return {
+        _normalize_market_code(definition.get("market"))
+        for definition in MARKET_OVERVIEW_DEFINITIONS
+    }
+
+
+def _deployment_tier() -> str:
+    for name in (
+        "BRP_DEPLOYMENT_TIER",
+        "BRP_DEPLOYMENT_ENV",
+        "BRP_ENV",
+        "APP_ENV",
+        "ENVIRONMENT",
+    ):
+        value = str(os.environ.get(name, "")).strip().casefold()
+        if value:
+            if value in {"prod", "production"}:
+                return "production"
+            if value in {"stage", "staging"}:
+                return "staging"
+            return value
+
+    try:
+        path_parts = {part.casefold() for part in Path(__file__).resolve().parts}
+    except Exception:
+        path_parts = set()
+    if "staging" in path_parts:
+        return "staging"
+    if "prod" in path_parts or "production" in path_parts:
+        return "production"
+    return "staging"
+
+
 def _group_index(groups: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
     indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in groups:
@@ -204,6 +238,8 @@ def _market_scope_for_current_environment() -> set[str]:
             for market in (_normalize_market_code(item) for item in configured.split(","))
             if market
         }
+    if _deployment_tier() != "production":
+        return _all_market_codes()
     if os.name == "nt":
         return {"KR"}
     return {"CN", "BK"}
@@ -249,6 +285,9 @@ def build_market_overview(
     summary = report_traffic_rollout_readiness.report_live_traffic_readiness.summarize(sample_dir)
     groups = _group_index([row for row in summary.get("groups", []) if isinstance(row, dict)])
     market_scope = _market_scope_for_current_environment()
+    deployment_tier = _deployment_tier()
+    explicit_market_scope = bool(os.environ.get("BRP_TRAFFIC_STATUS_MARKETS", "").strip())
+    samples_required_in_scope = explicit_market_scope or deployment_tier == "production"
     markets: list[dict[str, Any]] = []
     for definition in MARKET_OVERVIEW_DEFINITIONS:
         market = str(definition["market"])
@@ -257,7 +296,7 @@ def build_market_overview(
         city = str(definition["city"])
         required_periods = [str(item) for item in definition["required_periods"]]
         requires_samples = bool(definition["requires_samples"])
-        required_here = requires_samples
+        required_here = requires_samples and samples_required_in_scope
         period_rows: list[dict[str, Any]] = []
         warnings: list[str] = []
         providers: set[str] = set()
@@ -328,6 +367,7 @@ def build_market_overview(
         "unreadable_file_count": summary.get("unreadable_file_count"),
         "default_traffic_coefficient_mode": os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy"),
         "stale_after_hours": stale_after_hours,
+        "deployment_tier": deployment_tier,
         "market_scope": sorted(market_scope),
         "blocked_count": blocked_count,
         "warning_count": warning_count,

@@ -81,6 +81,7 @@ export type TrafficMarketOverview = {
     unreadable_file_count?: number;
     default_traffic_coefficient_mode?: string;
     stale_after_hours?: number;
+    deployment_tier?: string;
     market_scope?: string[];
     blocked_count?: number;
     warning_count?: number;

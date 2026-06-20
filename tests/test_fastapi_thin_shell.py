@@ -672,14 +672,15 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(len(generated), 2)
 
 
-    def test_worker_termination_uses_taskkill_on_windows(self) -> None:
+    def test_worker_termination_uses_os_kill_on_windows(self) -> None:
         with mock.patch.object(backend_service, "_process_is_alive", return_value=True), \
             mock.patch.object(backend_service.os, "name", "nt"), \
+            mock.patch.object(backend_service.os, "kill") as kill_mock, \
             mock.patch.object(backend_service.subprocess, "run") as run_mock:
             backend_service._terminate_worker_process(1234)
 
-        run_mock.assert_called_once()
-        self.assertEqual(run_mock.call_args.args[0], ["taskkill", "/PID", "1234", "/F"])
+        kill_mock.assert_called_once_with(1234, backend_service.signal.SIGTERM)
+        run_mock.assert_not_called()
 
     def test_worker_spawn_uses_detached_process_group_on_windows(self) -> None:
         with mock.patch.object(backend_service.os, "name", "nt"), \

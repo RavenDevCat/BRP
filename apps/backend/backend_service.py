@@ -2589,6 +2589,13 @@ def _terminate_worker_process(pid: int) -> None:
         return
     if os.name == "nt":
         try:
+            os.kill(pid, signal.SIGTERM)
+            return
+        except OSError:
+            return
+        except Exception:
+            pass
+        try:
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F"],
                 stdout=subprocess.DEVNULL,

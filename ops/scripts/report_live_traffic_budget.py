@@ -163,18 +163,24 @@ def _build_sampler_args(
             departure_local_time = _env("BRP_LIVE_TRAFFIC_SUZHOU_PM_DEPARTURE_LOCAL_TIME", "15:40")
     elif period == "am_peak":
         job_id = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_JOB_ID")
-        source = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_SOURCE", "route_audit_job")
+        source = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_SOURCE", "baseline_json")
         run_id = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_RUN_ID")
-        baseline_path = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_BASELINE_PATH")
+        baseline_path = _env(
+            "BRP_LIVE_TRAFFIC_TO_SCHOOL_BASELINE_PATH",
+            "demh/shanghai_demh_to_school_current_plan.json",
+        )
         market = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_MARKET", "CN")
         city = _env("BRP_LIVE_TRAFFIC_TO_SCHOOL_CITY", "Shanghai")
         target_arrival_local_time = _env("BRP_LIVE_TRAFFIC_AM_TARGET_ARRIVAL_LOCAL_TIME", "08:00")
         route_start_times_path = _env("BRP_LIVE_TRAFFIC_AM_ROUTE_START_TIMES_PATH", route_start_times_path)
     elif period == "pm_peak":
         job_id = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_JOB_ID")
-        source = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_SOURCE", "route_audit_job")
+        source = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_SOURCE", "baseline_json")
         run_id = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_RUN_ID")
-        baseline_path = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_BASELINE_PATH")
+        baseline_path = _env(
+            "BRP_LIVE_TRAFFIC_FROM_SCHOOL_BASELINE_PATH",
+            "demh/shanghai_demh_from_school_current_plan.json",
+        )
         market = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_MARKET", "CN")
         city = _env("BRP_LIVE_TRAFFIC_FROM_SCHOOL_CITY", "Shanghai")
         departure_local_time = _env("BRP_LIVE_TRAFFIC_PM_DEPARTURE_LOCAL_TIME", "15:40")

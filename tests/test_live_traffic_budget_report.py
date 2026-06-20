@@ -123,6 +123,28 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         self.assertEqual(row["max_api_calls_per_run"], 1)
         self.assertEqual(row["status"], "over_cap")
 
+    def test_shanghai_sampler_args_default_to_baseline_json_profiles(self) -> None:
+        with mock.patch.dict(budget.os.environ, {}, clear=True):
+            am_args = budget._build_sampler_args(
+                city="Shanghai",
+                period="am_peak",
+                max_api_calls_per_run=1000,
+                sample_due_routes_only=False,
+                now_local_time="",
+            )
+            pm_args = budget._build_sampler_args(
+                city="Shanghai",
+                period="pm_peak",
+                max_api_calls_per_run=1000,
+                sample_due_routes_only=False,
+                now_local_time="",
+            )
+
+        self.assertEqual(am_args.source, "baseline_json")
+        self.assertEqual(am_args.baseline_path, "demh/shanghai_demh_to_school_current_plan.json")
+        self.assertEqual(pm_args.source, "baseline_json")
+        self.assertEqual(pm_args.baseline_path, "demh/shanghai_demh_from_school_current_plan.json")
+
     def test_profile_specs_can_filter_single_active_profile(self) -> None:
         specs = budget._profile_specs(False, [" shanghai_pm_peak "])
 

@@ -218,6 +218,8 @@ def _deployment_tier() -> str:
         return "staging"
     if "prod" in path_parts or "production" in path_parts:
         return "production"
+    if os.name == "nt":
+        return "production"
     return "staging"
 
 

@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 from zoneinfo import ZoneInfo
 
@@ -373,6 +373,20 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(list(markets), ["CN / Shanghai", "CN / Suzhou", "BK / Bangkok"])
         self.assertTrue(markets["CN / Shanghai"]["required_in_current_environment"])
         self.assertEqual(markets["CN / Shanghai"]["status"], "blocked")
+
+    def test_market_overview_defaults_windows_to_kr_production(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.object(report_traffic_rollout_status.os, "name", "nt"):
+                with mock.patch.object(
+                    report_traffic_rollout_status.Path,
+                    "resolve",
+                    return_value=PureWindowsPath("C:/Users/Bus.EIM/BRP/ops/scripts/report_traffic_rollout_status.py"),
+                ):
+                    deployment_tier = report_traffic_rollout_status._deployment_tier()
+                    market_scope = report_traffic_rollout_status._market_scope_for_current_environment()
+
+        self.assertEqual(deployment_tier, "production")
+        self.assertEqual(market_scope, {"KR"})
 
     def test_problem_services_are_summarized(self) -> None:
         rows = [

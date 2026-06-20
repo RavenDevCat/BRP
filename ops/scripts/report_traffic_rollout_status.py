@@ -176,6 +176,17 @@ def _normalize_profile_key(market: Any, city: Any, period: Any) -> tuple[str, st
     return market_value, city_value, period_value
 
 
+def _normalize_market_code(value: Any) -> str:
+    normalized = str(value or "").strip().casefold()
+    if normalized in {"cn", "china", "shanghai", "suzhou"}:
+        return "CN"
+    if normalized in {"kr", "korea", "south korea", "seoul", "seoul metro"}:
+        return "KR"
+    if normalized in {"bk", "bangkok", "th", "thailand"}:
+        return "BK"
+    return normalized.upper()
+
+
 def _group_index(groups: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
     indexed: dict[tuple[str, str, str], dict[str, Any]] = {}
     for row in groups:
@@ -185,11 +196,17 @@ def _group_index(groups: list[dict[str, Any]]) -> dict[tuple[str, str, str], dic
     return indexed
 
 
-def _market_required_in_current_environment(market: str) -> bool:
-    normalized = str(market or "").strip().upper()
+def _market_scope_for_current_environment() -> set[str]:
+    configured = os.environ.get("BRP_TRAFFIC_STATUS_MARKETS", "").strip()
+    if configured:
+        return {
+            market
+            for market in (_normalize_market_code(item) for item in configured.split(","))
+            if market
+        }
     if os.name == "nt":
-        return normalized == "KR"
-    return normalized == "CN"
+        return {"KR"}
+    return {"CN", "BK"}
 
 
 def _period_row(period: str, group: dict[str, Any] | None, *, now: datetime | None) -> dict[str, Any]:
@@ -231,13 +248,16 @@ def build_market_overview(
 ) -> dict[str, Any]:
     summary = report_traffic_rollout_readiness.report_live_traffic_readiness.summarize(sample_dir)
     groups = _group_index([row for row in summary.get("groups", []) if isinstance(row, dict)])
+    market_scope = _market_scope_for_current_environment()
     markets: list[dict[str, Any]] = []
     for definition in MARKET_OVERVIEW_DEFINITIONS:
         market = str(definition["market"])
+        if _normalize_market_code(market) not in market_scope:
+            continue
         city = str(definition["city"])
         required_periods = [str(item) for item in definition["required_periods"]]
         requires_samples = bool(definition["requires_samples"])
-        required_here = _market_required_in_current_environment(market)
+        required_here = requires_samples
         period_rows: list[dict[str, Any]] = []
         warnings: list[str] = []
         providers: set[str] = set()
@@ -308,6 +328,7 @@ def build_market_overview(
         "unreadable_file_count": summary.get("unreadable_file_count"),
         "default_traffic_coefficient_mode": os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy"),
         "stale_after_hours": stale_after_hours,
+        "market_scope": sorted(market_scope),
         "blocked_count": blocked_count,
         "warning_count": warning_count,
         "markets": markets,

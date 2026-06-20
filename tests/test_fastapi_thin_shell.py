@@ -5,6 +5,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
@@ -13,6 +14,64 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import api_app  # noqa: E402
 import backend_service  # noqa: E402
+
+
+class FakeJobStore:
+    def __init__(self) -> None:
+        self.records: dict[str, dict[str, Any]] = {}
+        self.deleted: list[str] = []
+
+    def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
+        return [
+            {
+                "job_id": job_id,
+                "owner_email": record.get("owner_email"),
+                "shared_with_all": bool(record.get("shared_with_all")),
+                "status": record.get("status", "succeeded"),
+            }
+            for job_id, record in self.records.items()
+            if include_all
+            or record.get("owner_email") == user_email
+            or bool(record.get("shared_with_all"))
+        ]
+
+    def get_job(self, job_id: str) -> dict[str, Any] | None:
+        record = self.records.get(job_id)
+        return dict(record) if record else None
+
+    def delete_job(self, job_id: str) -> bool:
+        self.deleted.append(job_id)
+        self.records.pop(job_id, None)
+        return True
+
+
+class FakeHistoryStore:
+    def __init__(self, records: dict[str, dict[str, Any]] | None = None) -> None:
+        self.records = dict(records or {})
+        self.deleted: list[str] = []
+
+    def list(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
+        return [
+            {
+                "run_id": run_id,
+                "owner_email": record.get("owner_email"),
+                "shared_with_all": bool(record.get("shared_with_all")),
+                "summary": dict(record.get("summary") or {}),
+            }
+            for run_id, record in self.records.items()
+            if include_all
+            or record.get("owner_email") == user_email
+            or bool(record.get("shared_with_all"))
+        ]
+
+    def get(self, run_id: str) -> dict[str, Any] | None:
+        record = self.records.get(run_id)
+        return dict(record) if record else None
+
+    def delete(self, run_id: str) -> bool:
+        self.deleted.append(run_id)
+        self.records.pop(run_id, None)
+        return True
 
 
 @contextmanager
@@ -189,6 +248,246 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["market"], "KR")
         self.assertGreaterEqual(payload["summary"]["vehicle_count"], 1)
         self.assertIsInstance(payload["catalog"], list)
+
+    def test_jobs_history_read_and_delete_keep_access_rules(self) -> None:
+        store = FakeJobStore()
+        store.records["owned"] = {
+            "job_id": "owned",
+            "owner_email": "admin@example.com",
+            "status": "succeeded",
+        }
+        store.records["other"] = {
+            "job_id": "other",
+            "owner_email": "other@example.com",
+            "status": "succeeded",
+        }
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS=set(),
+            JOB_STORE=store,
+            _cancel_job=lambda job_id: {"job_id": job_id, "status": "canceled"},
+        ):
+            list_response = self.client.get("/api/jobs", headers=auth_headers())
+            owned_response = self.client.get("/api/jobs/owned", headers=auth_headers())
+            forbidden_response = self.client.get("/api/jobs/other", headers=auth_headers())
+            delete_response = self.client.delete("/api/jobs/owned", headers=auth_headers())
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual([row["job_id"] for row in list_response.json()["jobs"]], ["owned"])
+        self.assertEqual(owned_response.status_code, 200)
+        self.assertEqual(owned_response.json()["job_id"], "owned")
+        self.assertEqual(forbidden_response.status_code, 403)
+        self.assertEqual(delete_response.json(), {"deleted": True, "job_id": "owned"})
+        self.assertEqual(store.deleted, ["owned"])
+
+    def test_distance_history_read_create_and_delete_keep_legacy_store_selection(self) -> None:
+        route_store = FakeHistoryStore(
+            {
+                "route-run": {
+                    "run_id": "route-run",
+                    "owner_email": "admin@example.com",
+                    "summary": {"tool_mode": "route_cost"},
+                    "route_cost_result": {"ok": True},
+                }
+            }
+        )
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            ROUTE_COST_HISTORY_STORE=route_store,
+            REFERENCE_DISTANCE_HISTORY_STORE=FakeHistoryStore(),
+            DISTANCE_CHECKER_HISTORY_STORE=FakeHistoryStore(),
+            _handle_distance_checker_history_create=lambda payload, user_email: {
+                "run_id": "new-run",
+                "owner_email": user_email,
+                "summary": {"tool_mode": payload.get("tool_mode")},
+            },
+        ):
+            list_response = self.client.get(
+                "/api/distance-checker/route-cost-history", headers=auth_headers()
+            )
+            get_response = self.client.get(
+                "/api/distance-checker/route-cost-history/route-run",
+                headers=auth_headers(),
+            )
+            create_response = self.client.post(
+                "/api/distance-checker/history",
+                headers=auth_headers(),
+                json={"tool_mode": "route_cost"},
+            )
+            delete_response = self.client.delete(
+                "/api/distance-checker/route-cost-history/route-run",
+                headers=auth_headers(),
+            )
+
+        self.assertEqual(list_response.status_code, 200)
+        self.assertEqual(list_response.json()["jobs"][0]["run_id"], "route-run")
+        self.assertEqual(get_response.json()["route_cost_result"], {"ok": True})
+        self.assertEqual(create_response.status_code, 201)
+        self.assertEqual(create_response.json()["summary"]["tool_mode"], "route_cost")
+        self.assertEqual(delete_response.json(), {"deleted": True, "run_id": "route-run"})
+        self.assertEqual(route_store.deleted, ["route-run"])
+
+    def test_fleet_history_hydrates_and_protects_shared_seed_delete(self) -> None:
+        fleet_store = FakeHistoryStore(
+            {
+                "seed": {
+                    "run_id": "seed",
+                    "owner_email": "seed@example.com",
+                    "shared_with_all": True,
+                    "global_plan_result": {"summary": {}, "routes": []},
+                }
+            }
+        )
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS=set(),
+            FLEET_PLANNER_HISTORY_STORE=fleet_store,
+            _hydrate_fleet_planner_history_record=lambda record: {
+                **record,
+                "hydrated": True,
+            },
+        ):
+            get_response = self.client.get(
+                "/api/fleet-planner/history/seed",
+                headers=auth_headers("user@example.com"),
+            )
+            delete_response = self.client.delete(
+                "/api/fleet-planner/history/seed",
+                headers=auth_headers("user@example.com"),
+            )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertTrue(get_response.json()["hydrated"])
+        self.assertEqual(delete_response.status_code, 403)
+        self.assertEqual(fleet_store.deleted, [])
+
+    def test_job_map_export_artifact_and_traffic_routes_use_existing_builders(self) -> None:
+        job_store = FakeJobStore()
+        job_store.records["job-1"] = {
+            "job_id": "job-1",
+            "owner_email": "admin@example.com",
+            "result": {},
+        }
+        artifact_path = ROOT / "tests" / "_tmp_map_artifact.html"
+        artifact_path.write_text("<html>map</html>", encoding="utf-8")
+
+        try:
+            with patched_backend(
+                SERVICE_TOKEN="secret",
+                ADMIN_EMAILS={"admin@example.com"},
+                JOB_STORE=job_store,
+                _build_job_map_data=lambda record, scenario: (
+                    {"scenario": scenario, "job_id": record["job_id"]},
+                    None,
+                ),
+                _resolve_job_map_artifact=lambda record, key: (artifact_path, None),
+                _build_time_impact_workbook_export=lambda record, scenario: (
+                    b"PKworkbook",
+                    None,
+                ),
+                _job_traffic_attribution_payload=lambda record, **kwargs: {
+                    "job_id": record["job_id"],
+                    **kwargs,
+                },
+            ):
+                map_response = self.client.get(
+                    "/api/jobs/job-1/map-data/original", headers=auth_headers()
+                )
+                artifact_response = self.client.get(
+                    "/api/jobs/job-1/artifacts/current_plan?download=1",
+                    headers=auth_headers(),
+                )
+                export_response = self.client.get(
+                    "/api/jobs/job-1/exports/time-impact-original",
+                    headers=auth_headers(),
+                )
+                traffic_response = self.client.get(
+                    "/api/jobs/job-1/traffic-attribution?route_evidence=true&top_matches=yes",
+                    headers=auth_headers(),
+                )
+        finally:
+            artifact_path.unlink(missing_ok=True)
+
+        self.assertEqual(map_response.json(), {"scenario": "original", "job_id": "job-1"})
+        self.assertIn("attachment;", artifact_response.headers["content-disposition"])
+        self.assertEqual(artifact_response.text, "<html>map</html>")
+        self.assertEqual(export_response.content, b"PKworkbook")
+        self.assertIn("attachment;", export_response.headers["content-disposition"])
+        self.assertEqual(
+            traffic_response.json(),
+            {
+                "job_id": "job-1",
+                "include_route_evidence": True,
+                "include_top_matches": True,
+            },
+        )
+
+    def test_map_tile_route_uses_tile_loader_and_cache_headers(self) -> None:
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            _load_or_fetch_map_tile=lambda z, x, y: (
+                f"{z}/{x}/{y}".encode("utf-8"),
+                True,
+            ),
+        ):
+            response = self.client.get(
+                "/api/map-tiles/1/2/3.png", headers=auth_headers()
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content, b"1/2/3")
+        self.assertEqual(response.headers["content-type"], "image/png")
+        self.assertIn("immutable", response.headers["cache-control"])
+
+    def test_side_tool_post_routes_delegate_to_existing_handlers(self) -> None:
+        calls: list[tuple[str, dict[str, Any], str]] = []
+
+        def make_handler(name: str):
+            def handler(payload: dict[str, Any], user_email: str = "") -> dict[str, Any]:
+                calls.append((name, payload, user_email))
+                return {"handler": name, "payload": payload, "user_email": user_email}
+
+            return handler
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            _handle_distance_workbook_preview=make_handler("distance-preview"),
+            _handle_reference_distance_check=make_handler("reference"),
+            _handle_current_plan_route_cost=make_handler("route-cost"),
+            _handle_fleet_planner_preview=make_handler("fleet-preview"),
+            _handle_fleet_planner_geocode=make_handler("fleet-geocode"),
+            _handle_fleet_planner_clusters=make_handler("fleet-clusters"),
+            _handle_fleet_planner_route_preview=make_handler("fleet-route-preview"),
+            _handle_fleet_planner_global_plan=make_handler("fleet-global-plan"),
+            _handle_fleet_planner_history_create=make_handler("fleet-history"),
+        ):
+            endpoints = [
+                "/api/distance-checker/workbook-preview",
+                "/api/distance-checker/reference",
+                "/api/distance-checker/route-cost",
+                "/api/fleet-planner/preview",
+                "/api/fleet-planner/geocode",
+                "/api/fleet-planner/clusters",
+                "/api/fleet-planner/route-preview",
+                "/api/fleet-planner/global-plan",
+            ]
+            responses = [
+                self.client.post(endpoint, headers=auth_headers(), json={"x": endpoint})
+                for endpoint in endpoints
+            ]
+            history_response = self.client.post(
+                "/api/fleet-planner/history",
+                headers=auth_headers(),
+                json={"title": "save"},
+            )
+
+        self.assertTrue(all(response.status_code == 200 for response in responses))
+        self.assertEqual(history_response.status_code, 201)
+        self.assertEqual(calls[-1], ("fleet-history", {"title": "save"}, "admin@example.com"))
 
 
 if __name__ == "__main__":

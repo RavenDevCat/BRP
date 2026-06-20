@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Header, Request
+from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 try:
@@ -85,6 +85,14 @@ def _redirect_response(location: str, status_code: int = 302) -> RedirectRespons
     return response
 
 
+def _payload_dict(payload: Any) -> dict[str, Any]:
+    return payload if isinstance(payload, dict) else {}
+
+
+def _query_dict(request: Request) -> dict[str, str]:
+    return {str(key): str(value) for key, value in request.query_params.items()}
+
+
 def _current_user_email_from_request(request: Request) -> str:
     headers = request.headers
     if backend_service.AUTH_PROVIDER == "local":
@@ -129,6 +137,86 @@ def require_admin_context(
             {"error": "This backend endpoint is only available to admins."},
         )
     return context
+
+
+def _job_for_context(job_id: str, context: UserContext) -> dict[str, Any]:
+    normalized_job_id = str(job_id or "").strip()
+    job_record = backend_service.JOB_STORE.get_job(normalized_job_id)
+    if not job_record:
+        raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
+    if not backend_service._can_access_job(
+        job_record, context.email, include_all=context.is_admin
+    ):
+        raise BackendHttpError(
+            403, {"error": f"Job is not available for user: {context.email}"}
+        )
+    return job_record
+
+
+def _distance_history_not_found_error(tool_mode: str, run_id: str) -> str:
+    if tool_mode == "reference":
+        return f"Reference Distance history run not found: {run_id}"
+    if tool_mode == "route_cost":
+        return f"Route Cost history run not found: {run_id}"
+    return f"Distance & Cost history run not found: {run_id}"
+
+
+def _distance_history_unavailable_error(
+    tool_mode: str, run_id: str, user_email: str
+) -> str:
+    _ = run_id
+    if tool_mode == "reference":
+        return f"Reference Distance history run is not available for user: {user_email}"
+    if tool_mode == "route_cost":
+        return f"Route Cost history run is not available for user: {user_email}"
+    return f"Distance & Cost history run is not available for user: {user_email}"
+
+
+def _distance_history_for_context(
+    run_id: str, tool_mode: str, context: UserContext
+) -> tuple[dict[str, Any], Any]:
+    normalized_run_id = str(run_id or "").strip()
+    record, store = backend_service._get_distance_history_record(
+        normalized_run_id, tool_mode
+    )
+    if not record or not store:
+        raise BackendHttpError(
+            404,
+            {"error": _distance_history_not_found_error(tool_mode, normalized_run_id)},
+        )
+    if not backend_service._can_access_job(
+        record, context.email, include_all=context.is_admin
+    ):
+        raise BackendHttpError(
+            403,
+            {
+                "error": _distance_history_unavailable_error(
+                    tool_mode, normalized_run_id, context.email
+                )
+            },
+        )
+    return record, store
+
+
+def _fleet_history_for_context(
+    run_id: str, context: UserContext
+) -> dict[str, Any]:
+    normalized_run_id = str(run_id or "").strip()
+    record = backend_service.FLEET_PLANNER_HISTORY_STORE.get(normalized_run_id)
+    if not record:
+        raise BackendHttpError(
+            404, {"error": f"Fleet Planner history run not found: {normalized_run_id}"}
+        )
+    if not backend_service._can_access_job(
+        record, context.email, include_all=context.is_admin
+    ):
+        raise BackendHttpError(
+            403,
+            {
+                "error": f"Fleet Planner history run is not available for user: {context.email}"
+            },
+        )
+    return record
 
 
 def _api_route(method: str, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -270,4 +358,500 @@ def fleet_planner_vehicle_catalog(request: Request) -> JSONResponse:
     return _json_response(
         200,
         backend_service._handle_fleet_planner_vehicle_catalog(dict(request.query_params)),
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/reference-history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_reference_distance_history(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service._list_distance_history(
+                "reference", user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/reference-history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_reference_distance_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    record, _store = _distance_history_for_context(run_id, "reference", context)
+    return _json_response(200, record)
+
+
+@_api_route(
+    "DELETE",
+    "/distance-checker/reference-history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_reference_distance_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    _record, store = _distance_history_for_context(run_id, "reference", context)
+    store.delete(str(run_id or "").strip())
+    return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/route-cost-history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_route_cost_history(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service._list_distance_history(
+                "route_cost", user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/route-cost-history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_route_cost_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    record, _store = _distance_history_for_context(run_id, "route_cost", context)
+    return _json_response(200, record)
+
+
+@_api_route(
+    "DELETE",
+    "/distance-checker/route-cost-history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_route_cost_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    _record, store = _distance_history_for_context(run_id, "route_cost", context)
+    store.delete(str(run_id or "").strip())
+    return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_distance_history(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service._list_distance_history(
+                "", user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_distance_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    record, _store = _distance_history_for_context(run_id, "", context)
+    return _json_response(200, record)
+
+
+@_api_route(
+    "DELETE",
+    "/distance-checker/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_distance_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    _record, store = _distance_history_for_context(run_id, "", context)
+    store.delete(str(run_id or "").strip())
+    return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
+
+
+@_api_route(
+    "GET",
+    "/fleet-planner/history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_fleet_planner_history(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service.FLEET_PLANNER_HISTORY_STORE.list(
+                user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/fleet-planner/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_fleet_planner_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    record = _fleet_history_for_context(run_id, context)
+    return _json_response(200, backend_service._hydrate_fleet_planner_history_record(record))
+
+
+@_api_route(
+    "DELETE",
+    "/fleet-planner/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_fleet_planner_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    record = _fleet_history_for_context(run_id, context)
+    if bool(record.get("shared_with_all")) and not context.is_admin:
+        raise BackendHttpError(
+            403,
+            {"error": "Shared Fleet Planner seed runs can only be deleted by an admin."},
+        )
+    normalized_run_id = str(run_id or "").strip()
+    backend_service.FLEET_PLANNER_HISTORY_STORE.delete(normalized_run_id)
+    return _json_response(200, {"deleted": True, "run_id": normalized_run_id})
+
+
+@_api_route("GET", "/jobs", dependencies=[Depends(require_authorized_request)])
+def list_jobs(context: UserContext = Depends(current_user_context)) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service.JOB_STORE.list_jobs(
+                user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route("GET", "/jobs/{job_id}/exports/{export_key}")
+def get_job_export(
+    job_id: str,
+    export_key: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> Response:
+    job_record = _job_for_context(job_id, context)
+    normalized_export_key = str(export_key or "").strip().lower()
+    if normalized_export_key == "free-optimization-template":
+        workbook_bytes, export_error = (
+            backend_service._build_free_baseline_template_export(job_record)
+        )
+        filename = f"free_optimization_baseline_{job_id}.xlsx"
+    elif normalized_export_key == "time-impact" or normalized_export_key.startswith(
+        "time-impact-"
+    ):
+        scenario_key = (
+            normalized_export_key[len("time-impact-") :]
+            if normalized_export_key.startswith("time-impact-")
+            else "original"
+        )
+        workbook_bytes, export_error = backend_service._build_time_impact_workbook_export(
+            job_record, scenario_key
+        )
+        filename = f"time_impact_{scenario_key}_{job_id}.xlsx"
+    else:
+        raise BackendHttpError(404, {"error": f"Unknown export: {normalized_export_key}"})
+    if export_error or not workbook_bytes:
+        raise BackendHttpError(
+            404, {"error": export_error or "Export is not available."}
+        )
+    return _bytes_response(
+        200,
+        workbook_bytes,
+        content_type=backend_service.WORKBOOK_CONTENT_TYPE,
+        filename=filename,
+        inline=False,
+    )
+
+
+@_api_route("GET", "/jobs/{job_id}/artifacts/{artifact_key}")
+def get_job_artifact(
+    request: Request,
+    job_id: str,
+    artifact_key: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> Response:
+    job_record = _job_for_context(job_id, context)
+    query_params = _query_dict(request)
+    if query_params.get("refresh") in {"1", "true", "yes"}:
+        job_record = backend_service._rerender_job_map_artifacts(job_id, job_record)
+    artifact_path, artifact_error = backend_service._resolve_job_map_artifact(
+        job_record, str(artifact_key or "").strip()
+    )
+    if artifact_error and "file is missing" in artifact_error:
+        job_record = backend_service._rerender_job_map_artifacts(job_id, job_record)
+        artifact_path, artifact_error = backend_service._resolve_job_map_artifact(
+            job_record, str(artifact_key or "").strip()
+        )
+    if artifact_error or not artifact_path:
+        raise BackendHttpError(
+            404,
+            {"error": artifact_error or f"Artifact not found: {artifact_key}"},
+        )
+    inline = query_params.get("download") not in {"1", "true", "yes"}
+    return _bytes_response(
+        200,
+        artifact_path.read_bytes(),
+        content_type="text/html; charset=utf-8",
+        filename=artifact_path.name,
+        inline=inline,
+    )
+
+
+@_api_route("GET", "/jobs/{job_id}/map-data/{scenario_key}")
+def get_job_map_data(
+    job_id: str,
+    scenario_key: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    job_record = _job_for_context(job_id, context)
+    map_data, map_data_error = backend_service._build_job_map_data(
+        job_record, str(scenario_key or "").strip()
+    )
+    if map_data_error or not map_data:
+        raise BackendHttpError(
+            404,
+            {"error": map_data_error or f"Map data not found: {scenario_key}"},
+        )
+    return _json_response(200, map_data)
+
+
+@_api_route("GET", "/jobs/{job_id}/traffic-attribution")
+def get_job_traffic_attribution(
+    request: Request,
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    job_record = _job_for_context(job_id, context)
+    query_params = _query_dict(request)
+    include_route_evidence = query_params.get("route_evidence") in {
+        "1",
+        "true",
+        "yes",
+    }
+    include_top_matches = query_params.get("top_matches") in {
+        "1",
+        "true",
+        "yes",
+    }
+    return _json_response(
+        200,
+        backend_service._job_traffic_attribution_payload(
+            job_record,
+            include_route_evidence=include_route_evidence,
+            include_top_matches=include_top_matches,
+        ),
+    )
+
+
+@_api_route("GET", "/jobs/{job_id}")
+def get_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    return _json_response(200, _job_for_context(job_id, context))
+
+
+@_api_route("DELETE", "/jobs/{job_id}")
+def delete_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    job_record = _job_for_context(job_id, context)
+    _ = job_record
+    normalized_job_id = str(job_id or "").strip()
+    backend_service._cancel_job(normalized_job_id)
+    backend_service.JOB_STORE.delete_job(normalized_job_id)
+    return _json_response(200, {"deleted": True, "job_id": normalized_job_id})
+
+
+@_api_route("GET", "/map-tiles/{z}/{x}/{tile_name}")
+def get_map_tile(
+    z: int,
+    x: int,
+    tile_name: str,
+    _authorized: None = Depends(require_authorized_request),
+) -> Response:
+    if not str(tile_name or "").endswith(".png"):
+        raise BackendHttpError(404, {"error": f"Unknown map tile: {tile_name}"})
+    raw_y = str(tile_name)[: -len(".png")]
+    try:
+        y = int(raw_y)
+    except ValueError as exc:
+        raise BackendHttpError(404, {"error": f"Unknown map tile: {tile_name}"}) from exc
+    tile_body, from_cache = backend_service._load_or_fetch_map_tile(z, x, y)
+    return _bytes_response(
+        200,
+        tile_body,
+        content_type="image/png",
+        cache_control=(
+            "public, max-age=604800, immutable"
+            if from_cache
+            else "public, max-age=86400"
+        ),
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/workbook-preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def distance_workbook_preview(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_distance_workbook_preview(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/reference",
+    dependencies=[Depends(require_authorized_request)],
+)
+def reference_distance_check(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_reference_distance_check(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/route-cost",
+    dependencies=[Depends(require_authorized_request)],
+)
+def current_plan_route_cost(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_current_plan_route_cost(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/history",
+    dependencies=[Depends(require_authorized_request)],
+)
+@_api_route(
+    "POST",
+    "/distance-checker/reference-history",
+    dependencies=[Depends(require_authorized_request)],
+)
+@_api_route(
+    "POST",
+    "/distance-checker/route-cost-history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def create_distance_history(
+    payload: Any = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        201,
+        backend_service._handle_distance_checker_history_create(
+            _payload_dict(payload), user_email=context.email
+        ),
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def fleet_planner_preview(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_fleet_planner_preview(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/geocode",
+    dependencies=[Depends(require_authorized_request)],
+)
+def fleet_planner_geocode(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_fleet_planner_geocode(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/clusters",
+    dependencies=[Depends(require_authorized_request)],
+)
+def fleet_planner_clusters(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_fleet_planner_clusters(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/route-preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def fleet_planner_route_preview(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_fleet_planner_route_preview(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/global-plan",
+    dependencies=[Depends(require_authorized_request)],
+)
+def fleet_planner_global_plan(payload: Any = Body(default=None)) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_fleet_planner_global_plan(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/fleet-planner/history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def create_fleet_planner_history(
+    payload: Any = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        201,
+        backend_service._handle_fleet_planner_history_create(
+            _payload_dict(payload), user_email=context.email
+        ),
     )

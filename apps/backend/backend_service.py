@@ -2576,7 +2576,7 @@ def _terminate_worker_process(pid: int) -> None:
     if os.name == "nt":
         try:
             subprocess.run(
-                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                ["taskkill", "/PID", str(pid), "/F"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 check=False,

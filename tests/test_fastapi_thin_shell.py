@@ -679,7 +679,7 @@ class FastApiThinShellTests(unittest.TestCase):
             backend_service._terminate_worker_process(1234)
 
         run_mock.assert_called_once()
-        self.assertEqual(run_mock.call_args.args[0], ["taskkill", "/PID", "1234", "/T", "/F"])
+        self.assertEqual(run_mock.call_args.args[0], ["taskkill", "/PID", "1234", "/F"])
 
     def test_worker_termination_falls_back_when_sigkill_is_unavailable(self) -> None:
         calls: list[tuple[int, int]] = []

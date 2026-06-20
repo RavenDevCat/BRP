@@ -64,4 +64,21 @@ $uvicornArgs = @(
 if ($env:BRP_BACKEND_UVICORN_WORKERS -ne "1") {
     $uvicornArgs += @("--workers", $env:BRP_BACKEND_UVICORN_WORKERS)
 }
-& $env:BACKEND_PYTHON @uvicornArgs
+$logDir = Join-Path $RootDir "logs"
+New-Item -ItemType Directory -Force $logDir | Out-Null
+$stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+$stdoutLog = Join-Path $logDir "backend-uvicorn-$stamp.out.log"
+$stderrLog = Join-Path $logDir "backend-uvicorn-$stamp.err.log"
+$process = Start-Process `
+    -FilePath $env:BACKEND_PYTHON `
+    -ArgumentList $uvicornArgs `
+    -WorkingDirectory (Get-Location).Path `
+    -RedirectStandardOutput $stdoutLog `
+    -RedirectStandardError $stderrLog `
+    -PassThru
+Write-Host "BRP FastAPI uvicorn pid $($process.Id); stdout=$stdoutLog stderr=$stderrLog"
+Wait-Process -Id $process.Id
+$process.Refresh()
+if ($null -ne $process.ExitCode) {
+    exit $process.ExitCode
+}

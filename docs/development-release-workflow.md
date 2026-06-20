@@ -528,6 +528,42 @@ Check OSRM containers:
 sudo docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
 ```
 
+Check OSRM manager state on on-demand environments:
+
+```bash
+python ops/scripts/report_osrm_manager.py status
+python ops/scripts/report_osrm_manager.py locks
+```
+
+Safe recovery notes:
+
+- Missing dataset: the status output shows `dataset no` and the backend returns
+  the missing `.osrm` path. Restore or rebuild the dataset under
+  `OSRM_LOCAL_DATA_DIR` before rerunning the job.
+- Memory waterline block: the backend reports available memory below
+  `BRP_OSRM_MIN_AVAILABLE_MB`. Inspect active workers and resident containers;
+  do not lower the threshold unless it is a deliberate maintenance-window
+  decision.
+- Running-region capacity block: if `BRP_OSRM_MAX_RUNNING_REGIONS` is set, the
+  manager first stops expired idle containers, then may reclaim the oldest
+  manager-owned running region that is not locked and has no active use lease.
+  If all running regions are active or locked, wait for workers to finish or
+  raise the limit temporarily during maintenance.
+- Stale lock: use `python ops/scripts/report_osrm_manager.py locks` first. Then
+  run `python ops/scripts/report_osrm_manager.py cleanup-stale-locks`; locked
+  files are skipped.
+- Idle cleanup: `python ops/scripts/report_osrm_manager.py cleanup-idle` stops
+  only manager-owned regions past `BRP_OSRM_IDLE_TTL_SECONDS`. It skips cleanup
+  when BRP worker processes are active. Use `--force` only after verifying a
+  maintenance window.
+
+The CN staging timer `brp-osrm-cleanup.timer` runs the safe idle cleanup command
+periodically. Check it with:
+
+```bash
+systemctl list-timers --all | grep -i osrm
+```
+
 ## Runtime Data Sync Notes
 
 Runtime data is intentionally outside git. When moving to a fresh server or replacing a server, remember these paths:

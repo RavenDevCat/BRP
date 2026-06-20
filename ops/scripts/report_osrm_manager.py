@@ -128,7 +128,7 @@ def _print_status(report: dict[str, object]) -> None:
         print(f"available_memory_mb={available:.0f}")
     else:
         print("available_memory_mb=unknown")
-    print("region          port dataset managed state          container      idle_expired last_seen_age_s")
+    print("region          port dataset managed active lock reclaim state          container      idle_expired last_seen_age_s")
     for row in report.get("regions", []):
         if not isinstance(row, dict):
             continue
@@ -144,6 +144,9 @@ def _print_status(report: dict[str, object]) -> None:
             f"{str(row.get('port', '')):>4} "
             f"{'yes' if row.get('dataset_exists') else 'no ':>7} "
             f"{'yes' if row.get('managed') else 'no ':>7} "
+            f"{'yes' if row.get('active_use') else 'no ':>6} "
+            f"{'yes' if row.get('region_lock_held') else 'no ':>4} "
+            f"{'yes' if row.get('capacity_reclaimable') else str(row.get('capacity_reclaim_blocker') or 'no')[:7]:>7} "
             f"{str(row.get('state_status') or '-'):<14} "
             f"{str(container):<14} "
             f"{'yes' if row.get('idle_expired') else 'no ':>12} "

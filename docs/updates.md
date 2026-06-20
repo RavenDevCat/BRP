@@ -22,6 +22,16 @@ It is not a code changelog. Record changes here when users or operators should k
 - Existing completed jobs keep their stored results; rerun a job to regenerate
   route timings with the new KR attribution behavior.
 
+### OSRM Manager Capacity Policy Hardened
+
+- On-demand OSRM startup now has an explicit running-region capacity policy.
+- Before a cold start, the manager cleans expired idle regions and, when
+  `BRP_OSRM_MAX_RUNNING_REGIONS` is set, may reclaim the oldest manager-owned
+  running region that has no active worker lease and no region lock.
+- OSRM manager diagnostics now show active-use, region-lock, and capacity
+  reclaimability status so operators can tell why cleanup did or did not stop a
+  region.
+
 ### KR Windows Backend Compatibility Hardened
 
 - The OSRM manager module is now import-safe on Windows as well as Linux.

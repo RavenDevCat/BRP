@@ -456,21 +456,118 @@ def _running_managed_regions(*, exclude_region: str | None = None) -> list[str]:
     return sorted(running)
 
 
-def _assert_running_region_capacity(config: RegionConfig) -> None:
-    if OSRM_MAX_RUNNING_REGIONS <= 0:
-        return
-    running_regions = _running_managed_regions(exclude_region=config.region)
-    if len(running_regions) < OSRM_MAX_RUNNING_REGIONS:
-        return
-    message = (
-        f"Routing engine unavailable for {config.region}: OSRM manager already has "
-        f"{len(running_regions)} running managed region(s), meeting "
-        f"BRP_OSRM_MAX_RUNNING_REGIONS={OSRM_MAX_RUNNING_REGIONS}. "
-        f"Active managed regions: {', '.join(running_regions) or '-'}. "
-        "Try again after idle cleanup or raise the limit during a maintenance window."
+def _reclaim_blocker(
+    region: str,
+    raw: dict[str, object],
+    *,
+    container_status: dict[str, object] | None = None,
+) -> str | None:
+    if not raw.get("managed"):
+        return "unmanaged"
+    config = REGIONS.get(region)
+    if config is None:
+        return "unknown_region"
+    if _region_lock_is_held(region):
+        return "region_lock_held"
+    if _region_use_is_active(region):
+        return "active_use"
+    status = container_status if container_status is not None else _container_runtime_status(config)
+    if not status.get("running"):
+        return "not_running"
+    return None
+
+
+def _reclaimable_running_region_candidates(
+    *,
+    exclude_region: str | None = None,
+) -> list[tuple[float, str, RegionConfig]]:
+    state = _load_state()
+    regions = state.get("regions")
+    if not isinstance(regions, dict):
+        return []
+    candidates: list[tuple[float, str, RegionConfig]] = []
+    for region, raw in regions.items():
+        if region == exclude_region or not isinstance(raw, dict):
+            continue
+        config = REGIONS.get(region)
+        if config is None:
+            continue
+        if _reclaim_blocker(region, raw, container_status=_container_runtime_status(config)) is not None:
+            continue
+        last_seen = float(raw.get("last_seen_at") or 0)
+        candidates.append((last_seen, region, config))
+    return sorted(candidates, key=lambda item: (item[0], item[1]))
+
+
+def _mark_region_stopped(region: str, config: RegionConfig, status: str, reason: str) -> None:
+    state = _load_state()
+    regions = state.setdefault("regions", {})
+    if not isinstance(regions, dict):
+        regions = {}
+        state["regions"] = regions
+    raw = regions.get(region)
+    entry = raw if isinstance(raw, dict) else {}
+    entry.update(
+        {
+            "region": config.region,
+            "container": config.container,
+            "port": config.port,
+            "status": status,
+            "managed": True,
+            "base_url": f"http://127.0.0.1:{config.port}",
+            "last_seen_at": time.time(),
+            "last_stop_reason": reason,
+        }
     )
-    _record_region_status(config, "error", error=message, managed=False)
-    raise OsrmManagerError(message)
+    regions[region] = entry
+    _save_state(state)
+
+
+def _stop_managed_region(region: str, config: RegionConfig, *, status: str, reason: str) -> None:
+    subprocess.run(
+        ["docker", "rm", "-f", config.container],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    _mark_region_stopped(region, config, status, reason)
+
+
+def _reclaim_running_region_capacity(config: RegionConfig) -> list[str]:
+    reclaimed = _cleanup_idle_regions(exclude_region=config.region)
+    if OSRM_MAX_RUNNING_REGIONS <= 0:
+        return reclaimed
+
+    while len(_running_managed_regions(exclude_region=config.region)) >= OSRM_MAX_RUNNING_REGIONS:
+        candidates = _reclaimable_running_region_candidates(exclude_region=config.region)
+        if not candidates:
+            running_regions = _running_managed_regions(exclude_region=config.region)
+            message = (
+                f"Routing engine unavailable for {config.region}: OSRM manager already has "
+                f"{len(running_regions)} running managed region(s), meeting "
+                f"BRP_OSRM_MAX_RUNNING_REGIONS={OSRM_MAX_RUNNING_REGIONS}, and none can be safely reclaimed. "
+                f"Active managed regions: {', '.join(running_regions) or '-'}. "
+                "Wait for active workers to finish, inspect OSRM manager status, or raise the limit during "
+                "a maintenance window."
+            )
+            _record_region_status(config, "error", error=message, managed=False)
+            raise OsrmManagerError(message)
+        _last_seen, region, candidate_config = candidates[0]
+        _log(f"reclaiming idle {region} OSRM container for {config.region} capacity")
+        _stop_managed_region(
+            region,
+            candidate_config,
+            status="stopped_capacity_reclaim",
+            reason=f"capacity_reclaim_for_{config.region}",
+        )
+        reclaimed.append(region)
+    return reclaimed
+
+
+def _assert_running_region_capacity(config: RegionConfig) -> None:
+    reclaimed = _reclaim_running_region_capacity(config)
+    if reclaimed:
+        _log(f"reclaimed OSRM capacity before starting {config.region}: {', '.join(reclaimed)}")
 
 
 def manager_status() -> dict[str, object]:
@@ -486,10 +583,14 @@ def manager_status() -> dict[str, object]:
         last_seen = float(state_entry.get("last_seen_at") or 0)
         last_seen_age_s = (now - last_seen) if last_seen > 0 else None
         managed = bool(state_entry.get("managed"))
+        container_status = _container_runtime_status(config)
+        reclaim_blocker = _reclaim_blocker(region, state_entry, container_status=container_status)
         regions.append(
             {
                 "region": region,
                 "container": config.container,
+                "region_lock_held": _region_lock_is_held(region),
+                "active_use": _region_use_is_active(region),
                 "port": config.port,
                 "base_url": state_entry.get("base_url") or f"http://127.0.0.1:{config.port}",
                 "dataset_path": str(config.dataset_dir / config.dataset_file),
@@ -505,8 +606,9 @@ def manager_status() -> dict[str, object]:
                     and last_seen_age_s >= OSRM_IDLE_TTL_SECONDS
                 ),
                 "last_error": state_entry.get("last_error"),
-                "active_use": _region_use_is_active(region),
-                "container_status": _container_runtime_status(config),
+                "capacity_reclaimable": reclaim_blocker is None,
+                "capacity_reclaim_blocker": reclaim_blocker,
+                "container_status": container_status,
             }
         )
     return {

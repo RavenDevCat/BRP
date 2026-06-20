@@ -354,12 +354,15 @@ def test_manager_status_reports_state_dataset_and_container(monkeypatch, tmp_pat
     assert bangkok["managed"] is True
     assert bangkok["state_status"] == "ready"
     assert bangkok["idle_expired"] is True
+    assert bangkok["active_use"] is False
+    assert bangkok["region_lock_held"] is False
+    assert bangkok["capacity_reclaimable"] is True
     assert bangkok["container_status"]["status"] == "running"
     assert report["max_running_regions"] == manager.OSRM_MAX_RUNNING_REGIONS
     assert report["running_managed_regions"] == ["bangkok"]
 
 
-def test_ensure_region_refuses_when_running_region_limit_is_reached(monkeypatch, tmp_path):
+def test_ensure_region_reclaims_oldest_idle_region_when_running_limit_is_reached(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_MAX_RUNNING_REGIONS", "1")
     manager = load_manager(monkeypatch, tmp_path)
     bangkok = manager.REGIONS["bangkok"]
@@ -388,21 +391,101 @@ def test_ensure_region_refuses_when_running_region_limit_is_reached(monkeypatch,
     def fake_ready(_config, _base_url):
         return False
 
+    stopped = []
+
+    def fake_container_status(config):
+        if config.region in stopped:
+            return {"present": False, "running": False}
+        if config.region == "suzhou":
+            return {"present": True, "running": True, "status": "running"}
+        return {"present": False}
+
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["docker", "rm", "-f"] and command[3] == "osrm-suzhou":
+            stopped.append("suzhou")
+
+        class Result:
+            returncode = 0
+            stdout = "container"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(manager, "_is_osrm_ready", fake_ready)
+    monkeypatch.setattr(manager, "_container_runtime_status", fake_container_status)
+    monkeypatch.setattr(manager, "_wait_until_ready", lambda _config, _base_url: None)
+    monkeypatch.setattr(manager.subprocess, "run", fake_run)
+
+    manager.ensure_region("bangkok")
+
+    assert stopped == ["suzhou"]
+    state = manager._load_state()
+    suzhou_state = state["regions"]["suzhou"]
+    bangkok_state = state["regions"]["bangkok"]
+    assert suzhou_state["status"] == "stopped_capacity_reclaim"
+    assert suzhou_state["last_stop_reason"] == "capacity_reclaim_for_bangkok"
+    assert bangkok_state["status"] == "ready"
+    assert bangkok_state["managed"] is True
+
+
+def test_ensure_region_refuses_when_running_region_limit_has_no_safe_reclaim(monkeypatch, tmp_path):
+    monkeypatch.setenv("BRP_OSRM_MAX_RUNNING_REGIONS", "1")
+    manager = load_manager(monkeypatch, tmp_path)
+    bangkok = manager.REGIONS["bangkok"]
+    bangkok.dataset_dir.mkdir(parents=True, exist_ok=True)
+    (bangkok.dataset_dir / bangkok.dataset_file).write_text("stub", encoding="utf-8")
+    state_path = Path(manager.OSRM_STATE_PATH)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        """
+{
+  "regions": {
+    "suzhou": {
+      "region": "suzhou",
+      "container": "osrm-suzhou",
+      "port": 5004,
+      "status": "ready",
+      "managed": true,
+      "last_seen_at": REPLACE_NOW
+    }
+  }
+}
+""".replace("REPLACE_NOW", str(time.time())),
+        encoding="utf-8",
+    )
+
+    def fake_ready(_config, _base_url):
+        return False
+
+    stopped = []
+
     def fake_container_status(config):
         if config.region == "suzhou":
             return {"present": True, "running": True, "status": "running"}
         return {"present": False}
 
+    def fake_run(command, **_kwargs):
+        if command[:3] == ["docker", "rm", "-f"]:
+            stopped.append(command[3])
+
+        class Result:
+            returncode = 0
+
+        return Result()
+
     monkeypatch.setattr(manager, "_is_osrm_ready", fake_ready)
     monkeypatch.setattr(manager, "_container_runtime_status", fake_container_status)
+    monkeypatch.setattr(manager.subprocess, "run", fake_run)
 
-    with pytest.raises(manager.OsrmManagerError, match="BRP_OSRM_MAX_RUNNING_REGIONS=1"):
-        manager.ensure_region("bangkok")
+    with manager._region_use_lease("suzhou"):
+        with pytest.raises(manager.OsrmManagerError, match="none can be safely reclaimed"):
+            manager.ensure_region("bangkok")
 
     state = manager._load_state()
     bangkok_state = state["regions"]["bangkok"]
     assert bangkok_state["status"] == "error"
-    assert "Active managed regions: suzhou" in bangkok_state["last_error"]
+    assert "none can be safely reclaimed" in bangkok_state["last_error"]
+    assert stopped == []
 
 
 def test_file_lock_times_out_instead_of_waiting_forever(monkeypatch, tmp_path):

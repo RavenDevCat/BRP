@@ -244,6 +244,16 @@ explicit `OSRM_BASE_URL_*` environment variables that point at local loopback
 ports. This avoids sending routing matrices through the public access layer and
 keeps the routing surface smaller for security review.
 
+On-demand OSRM environments use the OSRM manager instead of keeping every
+regional container resident. Cold starts are serialized by a global start lock.
+Before starting a new region, the manager first stops expired idle containers.
+If `BRP_OSRM_MAX_RUNNING_REGIONS` is set and the host is still at capacity, it
+may reclaim the oldest manager-owned running region that is not locked and has
+no active use lease. Resident or manually managed OSRM containers are not
+eligible for manager cleanup. If no region can be safely reclaimed, the backend
+returns an operator-readable routing-engine error instead of stopping a busy
+container.
+
 ## Public Access
 
 The domestic server runs Cloudflare Tunnel through `cloudflared.service`. KR has

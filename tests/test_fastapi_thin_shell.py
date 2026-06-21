@@ -196,6 +196,24 @@ class FastApiThinShellTests(unittest.TestCase):
             features_response.json(), backend_service._deployment_features_payload()
         )
 
+    def test_openapi_exposes_typed_job_request_body(self) -> None:
+        response = self.client.get("/api/openapi.json")
+
+        self.assertEqual(response.status_code, 200)
+        request_body = response.json()["paths"]["/api/jobs"]["post"]["requestBody"]
+        schema_ref = request_body["content"]["application/json"]["schema"]["anyOf"][0][
+            "$ref"
+        ]
+        self.assertEqual(schema_ref, "#/components/schemas/CreateJobRequest")
+
+    def test_typed_job_request_rejects_non_object_body(self) -> None:
+        with patched_backend(SERVICE_TOKEN="secret"):
+            response = self.client.post(
+                "/api/jobs", headers=auth_headers(), json=["not", "an", "object"]
+            )
+
+        self.assertEqual(response.status_code, 422)
+
     def test_admin_status_routes_require_admin(self) -> None:
         with patched_backend(
             SERVICE_TOKEN="secret",

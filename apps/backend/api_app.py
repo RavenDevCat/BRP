@@ -11,8 +11,22 @@ from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
 try:
+    from .api_models import (
+        AiAuditRequest,
+        ComputeRequest,
+        CreateJobRequest,
+        FlexiblePayload,
+        payload_to_dict,
+    )
     from . import backend_service
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from api_models import (  # type: ignore
+        AiAuditRequest,
+        ComputeRequest,
+        CreateJobRequest,
+        FlexiblePayload,
+        payload_to_dict,
+    )
     import backend_service  # type: ignore
 
 
@@ -87,7 +101,7 @@ def _redirect_response(location: str, status_code: int = 302) -> RedirectRespons
 
 
 def _payload_dict(payload: Any) -> dict[str, Any]:
-    return payload if isinstance(payload, dict) else {}
+    return payload_to_dict(payload)
 
 
 def _query_dict(request: Request) -> dict[str, str]:
@@ -731,7 +745,9 @@ def get_map_tile(
     "/distance-checker/workbook-preview",
     dependencies=[Depends(require_authorized_request)],
 )
-def distance_workbook_preview(payload: Any = Body(default=None)) -> JSONResponse:
+def distance_workbook_preview(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_distance_workbook_preview(_payload_dict(payload))
     )
@@ -742,7 +758,9 @@ def distance_workbook_preview(payload: Any = Body(default=None)) -> JSONResponse
     "/distance-checker/reference",
     dependencies=[Depends(require_authorized_request)],
 )
-def reference_distance_check(payload: Any = Body(default=None)) -> JSONResponse:
+def reference_distance_check(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_reference_distance_check(_payload_dict(payload))
     )
@@ -753,7 +771,9 @@ def reference_distance_check(payload: Any = Body(default=None)) -> JSONResponse:
     "/distance-checker/route-cost",
     dependencies=[Depends(require_authorized_request)],
 )
-def current_plan_route_cost(payload: Any = Body(default=None)) -> JSONResponse:
+def current_plan_route_cost(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_current_plan_route_cost(_payload_dict(payload))
     )
@@ -775,7 +795,7 @@ def current_plan_route_cost(payload: Any = Body(default=None)) -> JSONResponse:
     dependencies=[Depends(require_authorized_request)],
 )
 def create_distance_history(
-    payload: Any = Body(default=None),
+    payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     return _json_response(
@@ -791,7 +811,9 @@ def create_distance_history(
     "/fleet-planner/preview",
     dependencies=[Depends(require_authorized_request)],
 )
-def fleet_planner_preview(payload: Any = Body(default=None)) -> JSONResponse:
+def fleet_planner_preview(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_fleet_planner_preview(_payload_dict(payload))
     )
@@ -802,7 +824,9 @@ def fleet_planner_preview(payload: Any = Body(default=None)) -> JSONResponse:
     "/fleet-planner/geocode",
     dependencies=[Depends(require_authorized_request)],
 )
-def fleet_planner_geocode(payload: Any = Body(default=None)) -> JSONResponse:
+def fleet_planner_geocode(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_fleet_planner_geocode(_payload_dict(payload))
     )
@@ -813,7 +837,9 @@ def fleet_planner_geocode(payload: Any = Body(default=None)) -> JSONResponse:
     "/fleet-planner/clusters",
     dependencies=[Depends(require_authorized_request)],
 )
-def fleet_planner_clusters(payload: Any = Body(default=None)) -> JSONResponse:
+def fleet_planner_clusters(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_fleet_planner_clusters(_payload_dict(payload))
     )
@@ -824,7 +850,9 @@ def fleet_planner_clusters(payload: Any = Body(default=None)) -> JSONResponse:
     "/fleet-planner/route-preview",
     dependencies=[Depends(require_authorized_request)],
 )
-def fleet_planner_route_preview(payload: Any = Body(default=None)) -> JSONResponse:
+def fleet_planner_route_preview(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_fleet_planner_route_preview(_payload_dict(payload))
     )
@@ -835,7 +863,9 @@ def fleet_planner_route_preview(payload: Any = Body(default=None)) -> JSONRespon
     "/fleet-planner/global-plan",
     dependencies=[Depends(require_authorized_request)],
 )
-def fleet_planner_global_plan(payload: Any = Body(default=None)) -> JSONResponse:
+def fleet_planner_global_plan(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_fleet_planner_global_plan(_payload_dict(payload))
     )
@@ -847,7 +877,7 @@ def fleet_planner_global_plan(payload: Any = Body(default=None)) -> JSONResponse
     dependencies=[Depends(require_authorized_request)],
 )
 def create_fleet_planner_history(
-    payload: Any = Body(default=None),
+    payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     return _json_response(
@@ -859,7 +889,7 @@ def create_fleet_planner_history(
 
 
 @_api_route("POST", "/compute", dependencies=[Depends(require_authorized_request)])
-def compute(payload: Any = Body(default=None)) -> JSONResponse:
+def compute(payload: ComputeRequest | None = Body(default=None)) -> JSONResponse:
     payload_dict = _payload_dict(payload)
     config_payload = payload_dict.get("config") or {}
     prepared_payload = payload_dict.get("prepared_payload") or {}
@@ -875,7 +905,9 @@ def compute(payload: Any = Body(default=None)) -> JSONResponse:
     "/workbooks/preview",
     dependencies=[Depends(require_authorized_request)],
 )
-def workbook_preview(payload: Any = Body(default=None)) -> JSONResponse:
+def workbook_preview(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_workbook_preview(_payload_dict(payload))
     )
@@ -887,7 +919,7 @@ def workbook_preview(payload: Any = Body(default=None)) -> JSONResponse:
     dependencies=[Depends(require_authorized_request)],
 )
 def workbook_submit(
-    payload: Any = Body(default=None),
+    payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     return _json_response(
@@ -900,7 +932,7 @@ def workbook_submit(
 
 @_api_route("POST", "/jobs", dependencies=[Depends(require_authorized_request)])
 def create_job(
-    payload: Any = Body(default=None),
+    payload: CreateJobRequest | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     payload_dict = _payload_dict(payload)
@@ -936,7 +968,7 @@ def cancel_job(
 @_api_route("POST", "/jobs/{job_id}/ai-audit")
 def generate_job_ai_audit(
     job_id: str,
-    payload: Any = Body(default=None),
+    payload: AiAuditRequest | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
     _authorized: None = Depends(require_authorized_request),
 ) -> JSONResponse:

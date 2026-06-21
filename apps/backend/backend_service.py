@@ -33,7 +33,7 @@ try:
     )
     from .json_cache_store import load_json_object, save_json_object
     from . import osrm_manager
-    from .ai_audit import generate_ai_audit_report
+    from .ai_audit import generate_ai_audit_report as _generate_ai_audit_report
     from .quota_store_sqlite import SqliteQuotaStore
     from .runtime_store_sqlite import SqliteRuntimeStore
     from .planner_core import (
@@ -55,7 +55,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     )
     from json_cache_store import load_json_object, save_json_object
     import osrm_manager
-    from ai_audit import generate_ai_audit_report
+    from ai_audit import generate_ai_audit_report as _generate_ai_audit_report
     from quota_store_sqlite import SqliteQuotaStore
     from runtime_store_sqlite import SqliteRuntimeStore
     from planner_core import (
@@ -1846,6 +1846,51 @@ def _ai_audit_report_map(record: dict[str, Any] | None) -> dict[str, dict[str, A
         legacy_key = _ai_audit_language_key(legacy_report.get("language") or "English")
         reports_by_language.setdefault(legacy_key, dict(legacy_report))
     return reports_by_language
+
+
+def _ai_audit_record_with_decision_context(job_record: dict[str, Any]) -> dict[str, Any]:
+    enriched = deepcopy(job_record)
+    result = dict(enriched.get("result") or {})
+    if not result:
+        return enriched
+
+    time_constrained = dict(result.get("time_constrained_optimization") or {})
+    existing_summary = (
+        dict(time_constrained.get("time_impact") or {})
+        or dict(dict(time_constrained.get("summary") or {}).get("time_impact") or {})
+    )
+    if existing_summary:
+        return enriched
+
+    payload, _error = _build_job_map_payload(
+        enriched,
+        "time_constrained",
+        "time_constrained",
+        attach_impact=True,
+    )
+    time_impact = dict(dict(payload or {}).get("summary") or {}).get("time_impact")
+    if not isinstance(time_impact, dict) or not time_impact:
+        return enriched
+
+    time_constrained["time_impact"] = time_impact
+    result["time_constrained_optimization"] = time_constrained
+    structured = dict(result.get("structured_results") or {})
+    structured_time_constrained = dict(structured.get("time_constrained") or {})
+    structured_time_constrained["time_impact"] = time_impact
+    structured["time_constrained"] = structured_time_constrained
+    result["structured_results"] = structured
+    enriched["result"] = result
+    return enriched
+
+
+def generate_ai_audit_report(
+    job_record: dict[str, Any], *, force: bool = False, language: str | None = None
+) -> dict[str, Any]:
+    return _generate_ai_audit_report(
+        _ai_audit_record_with_decision_context(job_record),
+        force=force,
+        language=language,
+    )
 
 
 def _select_ai_audit_report(

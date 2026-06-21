@@ -134,6 +134,171 @@ def _compact_move(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ratio_pct(value: Any) -> float:
+    return round(float(value or 0.0) * 100.0, 1)
+
+
+def _compact_time_impact(summary: dict[str, Any]) -> dict[str, Any]:
+    if not summary:
+        return {"available": False, "decision": "incomplete"}
+    available = bool(summary.get("available"))
+    if not available:
+        return {
+            "available": False,
+            "decision": "incomplete",
+            "service_stop_count": summary.get("service_stop_count"),
+            "unavailable_stop_count": summary.get("unavailable_stop_count"),
+        }
+
+    over_stop_count = int(summary.get("over_acceptance_stop_count", 0) or 0)
+    over_rider_count = int(summary.get("over_acceptance_rider_count", 0) or 0)
+    high_risk_stop_count = int(summary.get("high_risk_stop_count", 0) or 0)
+    high_risk_rider_count = int(summary.get("high_risk_rider_count", 0) or 0)
+    decision = "acceptable"
+    if high_risk_stop_count or high_risk_rider_count:
+        decision = "high_risk"
+    elif over_stop_count or over_rider_count:
+        decision = "review_needed"
+
+    return {
+        "available": True,
+        "decision": decision,
+        "acceptance_threshold_minutes": summary.get("acceptance_threshold_minutes"),
+        "compared_stop_count": summary.get("compared_stop_count"),
+        "compared_rider_count": summary.get("compared_rider_count"),
+        "acceptance_rider_pct": _ratio_pct(summary.get("acceptance_rider_ratio")),
+        "over_acceptance_stop_count": over_stop_count,
+        "over_acceptance_rider_count": over_rider_count,
+        "high_risk_stop_count": high_risk_stop_count,
+        "high_risk_rider_count": high_risk_rider_count,
+        "max_adverse_delta_minutes": round(float(summary.get("max_adverse_delta_minutes", 0.0) or 0.0), 1),
+        "max_over_acceptance_delta_minutes": round(float(summary.get("max_over_acceptance_delta_minutes", 0.0) or 0.0), 1),
+        "weighted_avg_adverse_delta_minutes": round(float(summary.get("weighted_avg_adverse_delta_minutes", 0.0) or 0.0), 1),
+        "worse_rider_count": summary.get("worse_rider_count"),
+        "better_rider_count": summary.get("better_rider_count"),
+        "route_changed_rider_count": summary.get("route_changed_rider_count"),
+        "top_impacted_stops": [
+            {
+                "route_id": item.get("new_route_id") or item.get("route_id"),
+                "affected_rider_count": item.get("affected_rider_count"),
+                "adverse_delta_minutes": item.get("adverse_delta_minutes"),
+                "impact_direction": item.get("impact_direction"),
+                "acceptance_status": item.get("acceptance_status"),
+            }
+            for item in _take(summary.get("top_impacted_stops"), 5)
+        ],
+    }
+
+
+def _input_address_review_summary(review: dict[str, Any]) -> dict[str, Any]:
+    summary = dict(review.get("summary") or {})
+    warnings = [dict(item) for item in list(review.get("warnings") or [])]
+    return {
+        "warning_count": int(summary.get("warning_count", len(warnings)) or 0),
+        "school_distance_warning_count": int(summary.get("school_distance_warning_count", 0) or 0),
+        "region_mismatch_warning_count": int(summary.get("region_mismatch_warning_count", 0) or 0),
+        "route_context_warning_count": int(summary.get("route_context_warning_count", 0) or 0),
+        "top_warnings": [
+            {
+                "type": item.get("type"),
+                "route_id": item.get("route_id"),
+                "status": item.get("status"),
+                "accepted": item.get("accepted"),
+                "distance_from_school_km": item.get("distance_from_school_km"),
+                "expected_city": item.get("expected_city"),
+                "resolved_city": item.get("resolved_city"),
+                "detour_ratio": item.get("detour_ratio"),
+            }
+            for item in _take(warnings, 6)
+        ],
+    }
+
+
+def _collect_traffic_estimates(result: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    structured = dict(result.get("structured_results") or {})
+    attribution = dict(result.get("traffic_attribution") or structured.get("traffic_attribution") or {})
+    estimates_by_scenario = dict(attribution.get("scenario_route_estimates") or {})
+    estimates: list[dict[str, Any]] = []
+    for scenario_name, scenario_payload in estimates_by_scenario.items():
+        for item in list(dict(scenario_payload or {}).get("route_estimates") or []):
+            estimate = dict(item)
+            estimates.append(
+                {
+                    "scenario": estimate.get("scenario") or scenario_name,
+                    "route_id": estimate.get("route_id"),
+                    "method": estimate.get("method"),
+                    "quality_reason": estimate.get("quality_reason") or estimate.get("reason"),
+                    "factor": round(float(estimate.get("factor", 0.0) or 0.0), 3),
+                    "matched_sample_count": estimate.get("matched_sample_count"),
+                    "avg_similarity": round(float(estimate.get("avg_similarity", 0.0) or 0.0), 3),
+                }
+            )
+            if len(estimates) >= limit:
+                return estimates
+    return estimates
+
+
+def _traffic_confidence_summary(result: dict[str, Any]) -> dict[str, Any]:
+    structured = dict(result.get("structured_results") or {})
+    attribution = dict(result.get("traffic_attribution") or structured.get("traffic_attribution") or {})
+    scenario_payloads = [dict(item) for item in dict(attribution.get("scenario_route_estimates") or {}).values()]
+    method_counts: dict[str, int] = {}
+    fallback_route_count = 0
+    route_estimate_count = 0
+    for payload in scenario_payloads:
+        for estimate in list(payload.get("route_estimates") or []):
+            method = str(dict(estimate).get("method") or "unknown")
+            method_counts[method] = method_counts.get(method, 0) + 1
+            route_estimate_count += 1
+            if method == "fallback":
+                fallback_route_count += 1
+
+    return {
+        "traffic_profile_name": result.get("traffic_profile_name") or structured.get("traffic_profile_name"),
+        "traffic_time_multiplier": result.get("traffic_time_multiplier") or structured.get("traffic_time_multiplier"),
+        "traffic_profile_context": result.get("traffic_profile_context") or structured.get("traffic_profile_context"),
+        "attribution_enabled": bool(attribution.get("enabled")),
+        "attribution_succeeded": bool(attribution.get("succeeded")),
+        "mode": attribution.get("mode"),
+        "confidence": attribution.get("confidence"),
+        "route_level_applied": bool(attribution.get("route_level_applied")),
+        "observed_route_sample_count": attribution.get("observed_route_sample_count"),
+        "geo_route_sample_count": attribution.get("geo_route_sample_count"),
+        "route_estimate_count": route_estimate_count,
+        "fallback_route_count": fallback_route_count,
+        "method_counts": method_counts,
+        "sample_route_estimates": _collect_traffic_estimates(result),
+    }
+
+
+def _demand_batch_summary(result: dict[str, Any]) -> dict[str, Any]:
+    structured = dict(result.get("structured_results") or {})
+    scenarios = [
+        dict(result.get("free_optimization_baseline") or {}),
+        dict(result.get("time_constrained_optimization") or {}),
+        dict(structured.get("free_optimization_baseline") or {}),
+        dict(structured.get("time_constrained_optimization") or {}),
+    ]
+    batch_points = []
+    for scenario in scenarios:
+        for point in list(scenario.get("points") or []):
+            point_data = dict(point)
+            batch_count = _finite_int(point_data.get("demand_batch_count"))
+            if batch_count and batch_count > 1:
+                batch_points.append(
+                    {
+                        "passenger_count": point_data.get("passenger_count"),
+                        "batch_index": point_data.get("demand_batch_index"),
+                        "batch_count": batch_count,
+                    }
+                )
+    return {
+        "has_split_stop_batches": bool(batch_points),
+        "split_stop_batch_count": len(batch_points),
+        "sample_batches": _take(batch_points, 6),
+    }
+
+
 def _clean_report_markdown(markdown: str) -> str:
     cleaned_lines: list[str] = []
     previous_blank = False
@@ -162,6 +327,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     reallocation_summary = dict(route_reallocation.get("summary") or {})
     free_baseline = dict(result.get("free_optimization_baseline") or {})
     time_constrained = dict(result.get("time_constrained_optimization") or {})
+    structured = dict(result.get("structured_results") or {})
     current_vs_free = dict(result.get("current_plan_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
     route_summaries = list(current_plan.get("route_summaries") or [])
@@ -231,9 +397,22 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "nearby": dict(result.get("nearby_private_access_analysis") or {}).get("summary"),
             "further_most": dict(result.get("further_most_private_access_analysis") or {}).get("summary"),
         },
+        "decision_review": {
+            "time_impact": _compact_time_impact(
+                dict(time_constrained.get("time_impact") or {})
+                or dict(dict(time_constrained.get("summary") or {}).get("time_impact") or {})
+                or dict(dict(structured.get("time_constrained_optimization") or {}).get("time_impact") or {})
+            ),
+            "input_address_review": _input_address_review_summary(
+                dict(result.get("input_address_review") or structured.get("input_address_review") or {})
+            ),
+            "traffic_confidence": _traffic_confidence_summary(result),
+            "aggregated_stop_batches": _demand_batch_summary(result),
+        },
         "constraints": {
             "no_full_address_list": True,
             "source": "Derived from BRP deterministic route audit outputs only.",
+            "input_policy": "Aggregated metrics and review summaries only; full address list excluded.",
         },
     }
 
@@ -251,9 +430,10 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
     report_language = (language or AI_AUDIT_LANGUAGE or "English").strip()
     system_prompt = (
         "You are a school bus operations audit analyst. Use only the supplied JSON facts. "
-        "Do not invent addresses, route metrics, savings, or decisions. "
+        "Do not invent addresses, route metrics, savings, timing changes, or decisions. "
         "Write a clean management briefing for operators. "
         "Prefer readable business language over template language. "
+        "Treat decision_review as deterministic evidence, not optional decoration. "
         "Keep recommendations practical and clearly separate measured facts from interpretation."
     )
     user_prompt = (
@@ -267,6 +447,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "- Use route IDs only when present in the facts.\n"
         "- Make recommendations specific but do not repeat every candidate action.\n"
         "- Do not mention student names or full addresses.\n"
+        "- Cover input address review, time impact, and traffic confidence when facts are available.\n"
         "- If evidence is insufficient, state the validation question plainly.\n\n"
         f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
     )
@@ -303,7 +484,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "model": DEEPSEEK_MODEL,
         "language": report_language,
         "report_markdown": report_markdown[:6000],
-        "input_policy": "Aggregated route metrics only; full address list excluded.",
+        "input_policy": "Aggregated route metrics and review summaries only; full address list excluded.",
     }
 
 
@@ -312,19 +493,21 @@ def _ai_audit_section_headings(language: str) -> str:
     if "korean" in normalized or "한국" in normalized or "한글" in normalized:
         return "\n".join(
             [
-                "## 종합 판단",
-                "## 현행 계획 사실",
-                "## 기준선 비교",
-                "## 우선 조치",
-                "## 검증 메모",
+                "## 종합 결정",
+                "## 입력 품질 검토",
+                "## 현행 계획 상태",
+                "## 최적화 영향",
+                "## 시간 신뢰도",
+                "## 운영 조치",
             ],
         )
     return "\n".join(
         [
-            "## Executive Verdict",
-            "## Current Scheme Facts",
-            "## Baseline Comparison",
-            "## Priority Actions",
-            "## Validation Notes",
+            "## Executive Decision",
+            "## Input Quality Review",
+            "## Current Plan Health",
+            "## Optimization Impact",
+            "## Timing Confidence",
+            "## Operator Actions",
         ],
     )

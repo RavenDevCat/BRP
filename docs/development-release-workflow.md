@@ -350,13 +350,13 @@ npm run lint
 npm run build
 ```
 
-Static server requirements:
+Nginx React origin requirements:
 
 - serve `apps/web/dist/assets/*` as static files
 - serve `apps/web/dist/index.html` for unknown non-API paths
 - proxy `/api/*` to the staging backend on `127.0.0.1:8001`
 - if `BRP_BACKEND_SERVICE_TOKEN` is set for the backend, inject that token
-  server-side in the static/proxy process; never expose it to the browser
+  server-side in Nginx; never expose it to the browser
 
 Linux preview and production hosts should use the managed Nginx installer:
 
@@ -369,7 +369,7 @@ sudo SITE_NAME=brp-staging \
   ops/scripts/install_nginx_react_site.sh
 ```
 
-React static/proxy smoke:
+Nginx React origin smoke:
 
 ```bash
 curl -I "https://${DOMESTIC_REACT_PREVIEW_HOST}/"
@@ -389,7 +389,8 @@ repoint `$CN_PROD_HOST` as part of staging setup. Production hostnames move only
 during an explicit release window.
 
 KR is already in the post-cutover shape. Its public React service uses local
-Nginx on the KR server's `8501` origin, and its preview uses local `4173`.
+Nginx on the KR server's `8501` origin. The old Python static/proxy preview on
+`4173` is retired and should not be restarted.
 Because KR does not currently have Node/npm in PATH, reuse the CN-staging-built
 `apps/web/dist` artifact when frontend assets change.
 

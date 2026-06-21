@@ -351,8 +351,8 @@ Set it to `true` only on servers where the toggle should stay hidden:
 export BRP_DISABLE_LANGUAGE_SWITCH=true
 ```
 
-For public React static/proxy hosts behind Cloudflare Access, the managed Nginx
-site should reject requests that reach the origin without the
+For public React hosts behind Cloudflare Access, the managed Nginx site should
+reject requests that reach the origin without the
 `Cf-Access-Authenticated-User-Email` header. Install the site with:
 
 ```bash
@@ -377,7 +377,7 @@ Access application.
 | CN production backend | `8000` | Domestic production job API and health endpoint |
 | Client Streamlit | chosen legacy port | Legacy/operator UI where still used |
 | React Vite dev | `5173` | Local development |
-| React static/proxy | `4173`, `8500`, `8501`, or chosen static port | Serve `apps/web/dist` with SPA fallback and `/api/*` proxy; production-style deployments should use Nginx |
+| KR production frontend | `8501` | KR React frontend served by local Nginx |
 | OSRM Shanghai | `5002` | Docker container |
 | OSRM Beijing | `5003` | Docker container |
 | OSRM Suzhou | `5004` | Docker container |
@@ -390,7 +390,7 @@ Start services in this order:
 
 1. OSRM containers
 2. Backend service
-3. Frontend service, usually Nginx for React or a legacy frontend where still used
+3. Frontend service, Nginx for React production-style environments
 4. Cloudflare Tunnel or the chosen public access layer
 
 See `docs/development-release-workflow.md` for concrete commands and health checks.
@@ -416,11 +416,14 @@ needs it. Do not publish OSRM hostnames through Cloudflare Tunnel or DNS.
 Application services should call local OSRM endpoints directly; local
 diagnostics should use the operator-provided diagnostic loopback mapping when
 needed.
+Do not relay the KR frontend through the CN host or a KR `4173` preview port.
+KR production should use the KR server's own Cloudflare Tunnel connector and
+local Nginx `8501` origin.
 
 South Korea server hostnames:
 
 - `kr-brp.example.com` -> React frontend behind access control, served by local Nginx on the KR host
-- `kr-react-brp.example.com` -> optional React preview hostname
+- optional preview hostnames should also terminate at an Nginx React origin
 
 For staging work, React should use the staging hostname, serve `apps/web/dist`
 as static assets, and route API calls to the staging backend. Production

@@ -6,6 +6,19 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-21
 
+### React Static Proxy Retired
+
+- Removed the legacy Python React static/proxy helper from the supported
+  deployment path.
+- CN staging, CN production, and KR production should serve React through Nginx
+  origins with SPA fallback and same-origin `/api/*` proxying.
+- KR deploy alignment now removes old `BRP-React-Public` and
+  `BRP-React-Preview` Scheduled Tasks if they still exist, so they cannot
+  restart the retired `4173`/Python proxy path.
+- CN Nginx no longer relays `brp-kr.eimglobal.com` to the retired KR `4173`
+  preview port; that alias now redirects to the KR Raven hostname.
+- Existing jobs do not need to be rerun.
+
 ### Runtime Coordination Standardized
 
 - Provider QPS limits and provider usage counters now use a shared SQLite quota
@@ -411,7 +424,7 @@ It is not a code changelog. Record changes here when users or operators should k
 ### KR Public Frontend Standardized On Nginx
 
 - Replaced the KR public React origin process with local Nginx on port `8501`.
-- The old public Python static/proxy task is disabled; KR public traffic now
+- The old public Python static/proxy task is retired; KR public traffic now
   reaches React and same-origin `/api/*` through Nginx.
 - Existing jobs do not need to be rerun.
 
@@ -425,7 +438,7 @@ It is not a code changelog. Record changes here when users or operators should k
 ### CN Production React Promotion
 
 - Promoted CN production to the current GitHub `main` revision and switched the
-  production frontend origin to the React static/proxy service.
+  production frontend origin to the React Nginx service.
 - `$CN_PROD_HOST` now serves the React frontend from the production origin
   while keeping production jobs, caches, outputs, and environment files separate
   from staging.
@@ -445,10 +458,10 @@ It is not a code changelog. Record changes here when users or operators should k
   tunnel ingress, environment variables, and operator-maintained deployment records rather than
   hard-coded application behavior.
 
-### React Static Proxy Access Guard
+### React Origin Access Guard
 
 - Added an optional `BRP_REQUIRE_CLOUDFLARE_ACCESS` guard for public React
-  static/proxy hosts.
+  origins.
 - When enabled, requests that reach the origin without the Cloudflare Access
   user header return 401 instead of serving the app or API.
 - Existing jobs do not need to be rerun.
@@ -505,7 +518,7 @@ It is not a code changelog. Record changes here when users or operators should k
 ### KR React Preview Deployment
 
 - Deployed the React preview stack to the KR server for QA.
-- KR React preview serves the static React build and proxies `/api/*` to the KR backend from the same host.
+- KR React preview served the static React build and proxied `/api/*` to the KR backend from the same host. This historical Python preview path is now retired; use Nginx origins for production-style checks.
 - This is a preview/operator deployment only; existing user jobs do not need to be rerun.
 
 ### Backend Job History Persistence Hardened

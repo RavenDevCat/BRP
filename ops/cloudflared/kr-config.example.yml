@@ -2,13 +2,8 @@ tunnel: YOUR_KR_TUNNEL_ID
 credentials-file: /etc/cloudflared/YOUR_KR_TUNNEL_ID.json
 
 ingress:
-  # KR public frontend. This currently serves the React static/proxy service.
+  # KR public frontend. This serves the local Nginx origin.
   - hostname: kr-brp.example.com
     service: http://127.0.0.1:8501
-
-  # React preview/static frontend for KR.
-  # This hostname must be added in Cloudflare Zero Trust/DNS before it works.
-  - hostname: kr-react-brp.example.com
-    service: http://127.0.0.1:4173
 
   - service: http_status:404

@@ -6,6 +6,7 @@ param(
   [string]$ArchivePath = "",
   [string]$BackendTaskName = "BRP Backend",
   [string]$NginxTaskName = "BRP-Nginx-Public",
+  [string[]]$LegacyReactTaskNames = @("BRP-React-Public", "BRP-React-Preview"),
   [int]$BackendPort = 8001
 )
 
@@ -61,6 +62,28 @@ function Stop-BrpBackendListener {
   throw "KR backend port $Port is still occupied after stopping Scheduled Task and listener process."
 }
 
+function Remove-LegacyReactStaticTasks {
+  param(
+    [string[]]$TaskNames
+  )
+
+  foreach ($taskName in $TaskNames) {
+    $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -eq $task) {
+      continue
+    }
+
+    try {
+      Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    } catch {
+      # Best-effort cleanup: a stopped/missing task should not block deployment.
+    }
+
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Write-Output "KR_LEGACY_REACT_TASK_REMOVED=$taskName"
+  }
+}
+
 if (-not $ArchivePath) {
   $ArchivePath = Join-Path $Repo "state\brp-web-dist-$TargetHead.tgz"
 }
@@ -79,6 +102,8 @@ $after = (git rev-parse --short HEAD).Trim()
 if ($after -ne $TargetHead) {
   throw "KR head $after does not match target $TargetHead"
 }
+
+Remove-LegacyReactStaticTasks -TaskNames $LegacyReactTaskNames
 
 $webDir = Join-Path $Repo "apps\web"
 $dist = Join-Path $webDir "dist"

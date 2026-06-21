@@ -82,7 +82,7 @@ Current status:
   - Fleet Planner
 - production-style serving uses Nginx with static files from `apps/web/dist`, SPA fallback, and a same-origin `/api/*` proxy to the backend
 - KR public frontend serves React through local Nginx from the KR server's local `8501` origin
-- KR internal preview can serve the same static/proxy stack from local `4173`
+- the retired Python static/proxy server and KR `4173` preview path are no longer supported
 - CN staging uses Nginx for active React testing
 - CN production and KR production are separate public production endpoints
 
@@ -276,6 +276,8 @@ should use the operator-provided diagnostic loopback mapping.
 
 The KR app hostname is access-protected and currently serves the React frontend
 from the KR server's local Nginx `8501` origin.
+Do not proxy KR production through the CN host or a KR `4173` preview port; KR
+has its own Cloudflare Tunnel connector and Nginx origin.
 
 The public domain is replaceable. Domain-specific values should stay in
 Cloudflare DNS, Cloudflare Access applications, tunnel ingress, environment

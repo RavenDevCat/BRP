@@ -29,7 +29,13 @@ def default_sqlite_path() -> Path:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Verify JSON runtime records and SQLite sidecar parity.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Verify pre-switch JSON archive records against SQLite migration results. "
+            "After the SQLite-authoritative cutover, new runtime records are expected "
+            "to exist only in SQLite; use report_runtime_store_status.py for ongoing health checks."
+        )
+    )
     parser.add_argument("--jobs-dir", type=Path, default=default_jobs_dir())
     parser.add_argument("--side-tools-dir", type=Path, default=default_side_tools_dir())
     parser.add_argument("--sqlite-path", type=Path, default=default_sqlite_path())

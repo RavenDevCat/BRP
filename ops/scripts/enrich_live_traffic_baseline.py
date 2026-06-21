@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import copy
 import json
+import os
 import shutil
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -11,10 +13,37 @@ from typing import Any
 
 DEFAULT_JOBS_DIR = Path("/opt/brp/shared/runtime/jobs")
 DEFAULT_BASELINE_DIR = Path("/opt/brp/shared/runtime/traffic_baselines")
+ROOT_DIR = Path(__file__).resolve().parents[2]
+BACKEND_DIR = ROOT_DIR / "apps" / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
+
+
+def _default_runtime_db_path() -> Path:
+    configured = str(os.environ.get("BRP_RUNTIME_DB_PATH", "")).strip()
+    if configured:
+        return Path(configured).expanduser()
+    if os.name == "nt":
+        return ROOT_DIR / "state" / "brp_runtime.sqlite"
+    return Path("/opt/brp/shared/runtime/brp_runtime.sqlite")
+
+
+DEFAULT_RUNTIME_DB_PATH = _default_runtime_db_path()
 
 
 def _load_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _load_runtime_job(job_id: str, jobs_dir: Path, sqlite_path: Path) -> dict[str, Any]:
+    db_path = sqlite_path.expanduser()
+    if db_path.exists():
+        payload = SqliteRuntimeStore(db_path).get_job(job_id)
+        if payload:
+            return payload
+    return _load_json(jobs_dir / f"{job_id}.json")
 
 
 def _sorted_stops(route: dict[str, Any]) -> list[dict[str, Any]]:
@@ -155,6 +184,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR)
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOBS_DIR)
+    parser.add_argument("--sqlite-path", type=Path, default=DEFAULT_RUNTIME_DB_PATH)
     parser.add_argument("--write", action="store_true", help="Write the enriched baseline in place after creating a backup.")
     parser.add_argument("--output-path", type=Path, default=None, help="Optional output path for dry-run or alternate write.")
     return parser.parse_args()
@@ -165,9 +195,8 @@ def main() -> None:
     baseline_path = Path(args.baseline_path)
     if not baseline_path.is_absolute():
         baseline_path = args.baseline_dir / baseline_path
-    job_path = args.jobs_dir / f"{args.job_id}.json"
     baseline = _load_json(baseline_path)
-    job = _load_json(job_path)
+    job = _load_runtime_job(args.job_id, args.jobs_dir, args.sqlite_path)
     enriched, stats = enrich_baseline_from_job(baseline, job, job_id=args.job_id)
 
     output_path = args.output_path

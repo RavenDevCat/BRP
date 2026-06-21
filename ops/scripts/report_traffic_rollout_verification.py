@@ -34,6 +34,7 @@ def _as_list(value: Any) -> list[Any]:
 def _job_check(
     *,
     job_dir: Path,
+    sqlite_path: Path | None,
     service_direction: str,
     required_scenarios: list[str],
     min_geo_route_ratio: float,
@@ -54,6 +55,7 @@ def _job_check(
     try:
         job_id, selection = report_job_traffic_attribution.find_latest_job(
             job_dir,
+            sqlite_path,
             status="succeeded",
             service_direction=service_direction,
             traffic_coefficient_mode="attributed",
@@ -72,6 +74,7 @@ def _job_check(
     summary = report_job_traffic_attribution.summarize_job(
         job_id,
         job_dir,
+        sqlite_path,
         include_route_evidence=include_route_evidence,
         include_top_matches=include_top_matches,
     )
@@ -131,6 +134,7 @@ def build_verification(args: argparse.Namespace) -> dict[str, Any]:
     job_checks = [
         _job_check(
             job_dir=args.job_dir,
+            sqlite_path=args.sqlite_path,
             service_direction=direction,
             required_scenarios=required_scenarios,
             min_geo_route_ratio=float(args.min_geo_route_ratio),
@@ -198,6 +202,7 @@ def parse_args() -> argparse.Namespace:
         default=report_traffic_rollout_status.report_traffic_rollout_readiness.report_live_traffic_readiness.DEFAULT_SAMPLE_DIR,
     )
     parser.add_argument("--job-dir", type=Path, default=report_job_traffic_attribution.DEFAULT_JOB_DIR)
+    parser.add_argument("--sqlite-path", type=Path, default=report_job_traffic_attribution.DEFAULT_RUNTIME_DB_PATH)
     parser.add_argument(
         "--min-measured-at",
         default=report_traffic_rollout_status.report_traffic_rollout_readiness.DEFAULT_CUTOFF,

@@ -9,11 +9,54 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ops" / "scripts"))
+sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import report_job_traffic_attribution  # noqa: E402
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 
 class JobTrafficAttributionReportTests(unittest.TestCase):
+    def test_reads_sqlite_job_without_legacy_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            job_dir = root / "jobs"
+            job_dir.mkdir()
+            sqlite_path = root / "runtime.sqlite"
+            SqliteRuntimeStore(sqlite_path).upsert_job(
+                {
+                    "job_id": "sqlite_job",
+                    "status": "succeeded",
+                    "created_at": "2026-06-21T01:00:00+00:00",
+                    "result": {
+                        "structured_results": {
+                            "service_direction": "To School",
+                            "traffic_profile_name": "AM Peak",
+                            "traffic_time_multiplier": 1.75,
+                            "traffic_coefficient_mode": "attributed",
+                        }
+                    },
+                }
+            )
+
+            summary = report_job_traffic_attribution.summarize_job(
+                "sqlite_job",
+                job_dir,
+                sqlite_path,
+            )
+            job_id, selection = report_job_traffic_attribution.find_latest_job(
+                job_dir,
+                sqlite_path,
+                status="succeeded",
+                service_direction="To School",
+                traffic_coefficient_mode="attributed",
+            )
+
+        self.assertEqual(summary["job_id"], "sqlite_job")
+        self.assertTrue(summary["path"].startswith("sqlite:"))
+        self.assertEqual(job_id, "sqlite_job")
+        self.assertEqual(selection["selected_job_id"], "sqlite_job")
+        self.assertFalse((job_dir / "sqlite_job.json").exists())
+
     def test_reports_missing_attribution_on_legacy_job(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             job_dir = Path(tmpdir)

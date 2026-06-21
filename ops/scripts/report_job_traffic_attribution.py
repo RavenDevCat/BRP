@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections import Counter
 from datetime import datetime, timezone
@@ -18,6 +19,24 @@ from typing import Any
 
 
 DEFAULT_JOB_DIR = Path("/opt/brp/shared/runtime/jobs")
+ROOT_DIR = Path(__file__).resolve().parents[2]
+BACKEND_DIR = ROOT_DIR / "apps" / "backend"
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
+
+
+def _default_runtime_db_path() -> Path:
+    configured = str(os.environ.get("BRP_RUNTIME_DB_PATH", "")).strip()
+    if configured:
+        return Path(configured).expanduser()
+    if os.name == "nt":
+        return ROOT_DIR / "state" / "brp_runtime.sqlite"
+    return Path("/opt/brp/shared/runtime/brp_runtime.sqlite")
+
+
+DEFAULT_RUNTIME_DB_PATH = _default_runtime_db_path()
 DEFAULT_LATEST_SCAN_LIMIT = 200
 
 
@@ -40,13 +59,37 @@ def _job_path(job: str, job_dir: Path) -> Path:
     return job_dir / candidate
 
 
-def _load_job(job: str, job_dir: Path) -> dict[str, Any]:
+def _load_job_json(job: str, job_dir: Path) -> dict[str, Any]:
     path = _job_path(job, job_dir)
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"{path} did not contain a JSON object")
     payload["_resolved_path"] = str(path)
     return payload
+
+
+def _sqlite_store(sqlite_path: Path | None) -> SqliteRuntimeStore | None:
+    if sqlite_path is None:
+        return None
+    path = sqlite_path.expanduser()
+    if not path.exists():
+        return None
+    return SqliteRuntimeStore(path)
+
+
+def _load_job(job: str, job_dir: Path, sqlite_path: Path | None = None) -> dict[str, Any]:
+    candidate = Path(job)
+    if candidate.exists() or candidate.suffix == ".json":
+        return _load_job_json(job, job_dir)
+
+    store = _sqlite_store(sqlite_path)
+    if store is not None:
+        payload = store.get_job(str(job))
+        if payload:
+            payload["_resolved_path"] = f"sqlite:{store.db_path}:{job}"
+            return payload
+
+    return _load_job_json(job, job_dir)
 
 
 def _normal_key(value: Any) -> str:
@@ -95,7 +138,19 @@ def _job_sort_key(entry: dict[str, Any]) -> str:
     )
 
 
-def _job_index_candidates(job_dir: Path, *, limit: int) -> list[dict[str, Any]]:
+def _job_index_candidates(
+    job_dir: Path,
+    *,
+    limit: int,
+    sqlite_path: Path | None = None,
+) -> list[dict[str, Any]]:
+    store = _sqlite_store(sqlite_path)
+    if store is not None:
+        entries = [_as_dict(entry) for entry in store.list_jobs(include_all=True)]
+        entries = [entry for entry in entries if str(entry.get("job_id") or "").strip()]
+        entries.sort(key=_job_sort_key, reverse=True)
+        return entries[: max(1, limit)]
+
     index_path = job_dir / "index.json"
     entries: list[dict[str, Any]] = []
     if index_path.exists():
@@ -267,11 +322,12 @@ def _summarize_scenario(
 def summarize_job(
     job: str,
     job_dir: Path = DEFAULT_JOB_DIR,
+    sqlite_path: Path | None = None,
     *,
     include_route_evidence: bool = False,
     include_top_matches: bool = False,
 ) -> dict[str, Any]:
-    payload = _load_job(job, job_dir)
+    payload = _load_job(job, job_dir, sqlite_path)
     result, structured = _result_sections(payload)
     metadata = _as_dict(payload.get("metadata"))
     traffic = _traffic_attribution(result, structured)
@@ -340,6 +396,7 @@ def summarize_job(
 
 def find_latest_job(
     job_dir: Path = DEFAULT_JOB_DIR,
+    sqlite_path: Path | None = None,
     *,
     status: str = "",
     service_direction: str = "",
@@ -370,13 +427,13 @@ def find_latest_job(
             "limit": limit,
         },
     }
-    for entry in _job_index_candidates(job_dir, limit=limit):
+    for entry in _job_index_candidates(job_dir, limit=limit, sqlite_path=sqlite_path):
         job_id = str(entry.get("job_id") or "").strip()
         if not job_id:
             continue
         diagnostics["scanned_job_count"] += 1
         try:
-            summary = summarize_job(job_id, job_dir)
+            summary = summarize_job(job_id, job_dir, sqlite_path)
         except Exception:
             diagnostics["skipped_job_count"] += 1
             continue
@@ -410,7 +467,7 @@ def find_latest_job(
         return job_id, diagnostics
     raise LookupError(
         "No matching job found in latest job history. "
-        f"Scanned {diagnostics['scanned_job_count']} job(s) from {job_dir}."
+        f"Scanned {diagnostics['scanned_job_count']} job(s) from {sqlite_path or job_dir}."
     )
 
 
@@ -557,6 +614,12 @@ def main() -> None:
         help="Inspect the latest job matching the optional filters instead of passing --job manually.",
     )
     parser.add_argument("--job-dir", type=Path, default=DEFAULT_JOB_DIR)
+    parser.add_argument(
+        "--sqlite-path",
+        type=Path,
+        default=DEFAULT_RUNTIME_DB_PATH,
+        help="SQLite runtime DB path. Used first for job lookup; JSON job-dir is archive fallback.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     parser.add_argument(
         "--include-route-evidence",
@@ -650,6 +713,7 @@ def main() -> None:
         try:
             job, selection = find_latest_job(
                 args.job_dir,
+                args.sqlite_path,
                 status=str(args.latest_status or ""),
                 service_direction=str(args.service_direction or ""),
                 traffic_coefficient_mode=str(args.traffic_coefficient_mode or ""),
@@ -666,6 +730,7 @@ def main() -> None:
     summary = summarize_job(
         job,
         args.job_dir,
+        args.sqlite_path,
         include_route_evidence=include_route_evidence,
         include_top_matches=include_top_matches,
     )

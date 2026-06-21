@@ -25,6 +25,7 @@ def _args(tmpdir: str, **overrides: object) -> argparse.Namespace:
     values: dict[str, object] = {
         "sample_dir": Path(tmpdir) / "samples",
         "job_dir": Path(tmpdir) / "jobs",
+        "sqlite_path": None,
         "min_measured_at": "2026-06-18T00:00:00+08:00",
         "profile": [],
         "service_direction": [],

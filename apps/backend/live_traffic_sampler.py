@@ -15,6 +15,7 @@ import requests
 
 import BusingProblem as planner
 import planner_core
+from runtime_store_sqlite import SqliteRuntimeStore
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -37,6 +38,7 @@ def _default_runtime_path(*parts: str) -> str:
 
 
 DEFAULT_JOB_DIR = Path(os.environ.get("BRP_BACKEND_JOBS_DIR", _default_runtime_path("jobs")))
+DEFAULT_RUNTIME_DB_PATH = Path(os.environ.get("BRP_RUNTIME_DB_PATH", _default_runtime_path("brp_runtime.sqlite")))
 DEFAULT_OUTPUT_DIR = Path(os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", _default_runtime_path("traffic_samples")))
 DEFAULT_SLEEP_SECONDS = float(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_SLEEP_SECONDS", "0.45") or 0.45)
 DEFAULT_TIMEOUT_SECONDS = int(os.environ.get("BRP_LIVE_TRAFFIC_REQUEST_TIMEOUT_SECONDS", "20") or 20)
@@ -413,7 +415,22 @@ def _route_schedule_key(route: dict[str, Any]) -> str:
     return _normalize_route_schedule_key(route.get("vehicle_id"))
 
 
-def _load_job(job_id: str, jobs_dir: Path) -> dict[str, Any]:
+def _runtime_store(sqlite_path: Path = DEFAULT_RUNTIME_DB_PATH) -> SqliteRuntimeStore | None:
+    path = sqlite_path.expanduser()
+    if not path.exists():
+        return None
+    return SqliteRuntimeStore(path)
+
+
+def _load_job(job_id: str, jobs_dir: Path, sqlite_path: Path = DEFAULT_RUNTIME_DB_PATH) -> dict[str, Any]:
+    store = _runtime_store(sqlite_path)
+    if store is not None:
+        payload = store.get_job(job_id)
+        if payload:
+            if payload.get("status") != "succeeded":
+                raise ValueError(f"Job {job_id} is not succeeded: {payload.get('status')}")
+            return payload
+
     path = jobs_dir / f"{job_id}.json"
     if not path.exists():
         raise FileNotFoundError(f"Job file not found: {path}")
@@ -423,7 +440,17 @@ def _load_job(job_id: str, jobs_dir: Path) -> dict[str, Any]:
     return payload
 
 
-def _load_fleet_planner_run(run_id: str, side_tools_dir: Path) -> dict[str, Any]:
+def _load_fleet_planner_run(
+    run_id: str,
+    side_tools_dir: Path,
+    sqlite_path: Path = DEFAULT_RUNTIME_DB_PATH,
+) -> dict[str, Any]:
+    store = _runtime_store(sqlite_path)
+    if store is not None:
+        payload = store.get_side_tool_run("fleet_planner", run_id)
+        if payload:
+            return payload
+
     path = side_tools_dir / "fleet_planner" / f"{run_id}.json"
     if not path.exists():
         raise FileNotFoundError(f"Fleet Planner run file not found: {path}")
@@ -655,7 +682,7 @@ def _route_points(points: list[dict[str, Any]], route: dict[str, Any]) -> list[d
 
 
 def _scenario_from_route_audit_job(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    job = _load_job(args.job_id, args.jobs_dir)
+    job = _load_job(args.job_id, args.jobs_dir, args.runtime_db_path)
     result = dict(job.get("result") or {})
     scenario = dict(result.get("current_plan_scenario") or {})
     points = list(scenario.get("points") or [])
@@ -669,7 +696,7 @@ def _scenario_from_route_audit_job(args: argparse.Namespace) -> tuple[dict[str, 
 
 
 def _scenario_from_fleet_planner(args: argparse.Namespace) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    run = _load_fleet_planner_run(args.run_id, args.side_tools_dir)
+    run = _load_fleet_planner_run(args.run_id, args.side_tools_dir, args.runtime_db_path)
     result = dict(run.get("global_plan_result") or {})
     raw_routes = list(result.get("routes") or [])
     points: list[dict[str, Any]] = []
@@ -1299,6 +1326,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-date", default=os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DATE", ""))
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--side-tools-dir", type=Path, default=DEFAULT_SIDE_TOOLS_DIR)
+    parser.add_argument("--runtime-db-path", type=Path, default=DEFAULT_RUNTIME_DB_PATH)
     parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--market", default=os.environ.get("BRP_LIVE_TRAFFIC_MARKET", "CN"))

@@ -7,9 +7,6 @@ import io
 import json
 import math
 import os
-import shutil
-import signal
-import subprocess
 import sys
 import tempfile
 import threading
@@ -29,6 +26,11 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from .job_queue import (
+        JobQueueManager,
+        terminate_worker_process,
+        worker_creation_flags,
+    )
     from . import osrm_manager
     from .ai_audit import generate_ai_audit_report
     from .quota_store_sqlite import SqliteQuotaStore
@@ -45,6 +47,11 @@ try:
         summarize_live_traffic_samples,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from job_queue import (
+        JobQueueManager,
+        terminate_worker_process,
+        worker_creation_flags,
+    )
     import osrm_manager
     from ai_audit import generate_ai_audit_report
     from quota_store_sqlite import SqliteQuotaStore
@@ -1805,135 +1812,6 @@ def _resolve_staleness_seconds(timestamp: datetime | None) -> float | None:
     ).total_seconds()
 
 
-def _pid_is_alive(pid: int | None) -> bool:
-    if not pid or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def _safe_int(value: object, default: int = 0) -> int:
-    try:
-        return int(value or default)
-    except Exception:
-        return default
-
-
-def _seconds_since_iso(value: object) -> float | None:
-    try:
-        timestamp = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
-    except Exception:
-        return None
-    if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    return (
-        datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
-    ).total_seconds()
-
-
-class JobConcurrencyGate:
-    def __init__(self, limit: int, slot_dir: Path) -> None:
-        self.limit = max(0, int(limit or 0))
-        self.slot_dir = slot_dir
-
-    @property
-    def enabled(self) -> bool:
-        return self.limit > 0
-
-    def acquire(self, job_id: str) -> Path | None:
-        if not self.enabled:
-            return None
-        self.slot_dir.mkdir(parents=True, exist_ok=True)
-        self.cleanup_stale_slots()
-        for slot_number in range(1, self.limit + 1):
-            slot_path = self.slot_dir / f"slot-{slot_number}"
-            try:
-                slot_path.mkdir()
-            except FileExistsError:
-                continue
-            metadata = {
-                "job_id": job_id,
-                "acquired_at": utc_now_iso(),
-                "launcher_pid": os.getpid(),
-                "worker_pid": None,
-            }
-            self._write_metadata(slot_path, metadata)
-            return slot_path
-        return None
-
-    def attach_worker(self, slot_path: Path | None, worker_pid: int) -> None:
-        if not slot_path:
-            return
-        if not slot_path.exists():
-            return
-        metadata = self._read_metadata(slot_path)
-        metadata["worker_pid"] = int(worker_pid)
-        metadata["attached_at"] = utc_now_iso()
-        try:
-            self._write_metadata(slot_path, metadata)
-        except FileNotFoundError:
-            return
-
-    def release(self, slot_path: str | Path | None) -> None:
-        if not slot_path:
-            return
-        try:
-            resolved_slot = Path(slot_path).resolve()
-            resolved_root = self.slot_dir.resolve()
-            resolved_slot.relative_to(resolved_root)
-            if resolved_slot.name.startswith("slot-"):
-                shutil.rmtree(resolved_slot, ignore_errors=True)
-        except Exception:
-            return
-
-    def cleanup_stale_slots(self) -> None:
-        if not self.slot_dir.exists():
-            return
-        for slot_path in self.slot_dir.glob("slot-*"):
-            if not slot_path.is_dir():
-                continue
-            metadata = self._read_metadata(slot_path)
-            worker_pid = _safe_int(metadata.get("worker_pid"))
-            if worker_pid and not _pid_is_alive(worker_pid):
-                self.release(slot_path)
-                continue
-            slot_age = _seconds_since_iso(metadata.get("acquired_at"))
-            if slot_age is None:
-                try:
-                    slot_age = time.time() - slot_path.stat().st_mtime
-                except OSError:
-                    slot_age = None
-            if (
-                not worker_pid
-                and slot_age is not None
-                and slot_age > JOB_SLOT_ATTACH_STALE_SECONDS
-            ):
-                self.release(slot_path)
-
-    def _metadata_path(self, slot_path: Path) -> Path:
-        return slot_path / "metadata.json"
-
-    def _read_metadata(self, slot_path: Path) -> dict[str, Any]:
-        try:
-            payload = json.loads(
-                self._metadata_path(slot_path).read_text(encoding="utf-8")
-            )
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
-            return {}
-
-    def _write_metadata(self, slot_path: Path, metadata: dict[str, Any]) -> None:
-        self._metadata_path(slot_path).write_text(
-            json.dumps(
-                _json_safe(metadata), ensure_ascii=False, indent=2, allow_nan=False
-            ),
-            encoding="utf-8",
-        )
-
-
 def _normalize_ai_audit_language(language: Any) -> tuple[str, str]:
     raw = str(language or "").strip()
     normalized = raw.lower()
@@ -2120,6 +1998,25 @@ class JobStore:
             record.update(changes)
             self._save_job_unlocked(job_id, record)
             return deepcopy(record)
+
+    def claim_queued_job(
+        self,
+        job_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self.lock:
+            try:
+                record = _runtime_sqlite_store().claim_queued_job(
+                    job_id,
+                    worker_pid=worker_pid,
+                    job_slot_path=job_slot_path,
+                )
+            except Exception:
+                traceback.print_exc()
+                return None
+            return deepcopy(record) if record else None
 
     def begin_ai_audit(
         self,
@@ -2312,9 +2209,17 @@ REFERENCE_DISTANCE_HISTORY_STORE = SideToolHistoryStore(
 )
 ROUTE_COST_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "route_cost")
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
-JOB_GATE = JobConcurrencyGate(MAX_CONCURRENT_JOBS, JOB_CONCURRENCY_DIR)
-_SCHEDULER_LOCK = threading.Lock()
-_SCHEDULER_STARTED = False
+JOB_QUEUE = JobQueueManager(
+    job_store=JOB_STORE,
+    runner_path=JOB_RUNNER_PATH,
+    base_dir=BASE_DIR,
+    python_executable=sys.executable,
+    max_concurrent_jobs=MAX_CONCURRENT_JOBS,
+    concurrency_dir=JOB_CONCURRENCY_DIR,
+    poll_seconds=JOB_QUEUE_POLL_SECONDS,
+    slot_attach_stale_seconds=JOB_SLOT_ATTACH_STALE_SECONDS,
+)
+JOB_GATE = JOB_QUEUE.gate
 
 
 def _normalize_distance_history_mode(value: Any) -> str:
@@ -2402,143 +2307,31 @@ def _get_distance_history_record(
 
 
 def _process_is_alive(pid: int | None) -> bool:
-    return _pid_is_alive(pid)
+    return JOB_QUEUE.process_is_alive(pid)
 
 
 def _worker_creation_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return int(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) or 0) | int(
-        getattr(subprocess, "DETACHED_PROCESS", 0) or 0
-    )
+    return worker_creation_flags()
 
 
 def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
-    job_record = JOB_STORE.get_job(job_id)
-    if not job_record:
-        return None
-    if str(job_record.get("status", "")).strip().lower() != "queued":
-        return None
-    slot_path = JOB_GATE.acquire(job_id)
-    if JOB_GATE.enabled and slot_path is None:
-        return None
-    env = os.environ.copy()
-    if slot_path:
-        env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
-        env["BRP_JOB_CONCURRENCY_ROOT"] = str(JOB_CONCURRENCY_DIR)
-    try:
-        process = subprocess.Popen(
-            [sys.executable, str(JOB_RUNNER_PATH), str(job_id)],
-            cwd=str(BASE_DIR),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            creationflags=_worker_creation_flags(),
-        )
-    except Exception:
-        JOB_GATE.release(slot_path)
-        raise
-    JOB_GATE.attach_worker(slot_path, int(process.pid))
-    latest_record = JOB_STORE.get_job(job_id)
-    if not latest_record:
-        return None
-    if str(latest_record.get("status", "")).strip().lower() not in {
-        "queued",
-        "running",
-    }:
-        return latest_record
-    return JOB_STORE.update_job(
-        job_id,
-        worker_pid=int(process.pid),
-        job_slot_path=str(slot_path) if slot_path else None,
-    )
+    return JOB_QUEUE.spawn_job_worker(job_id)
 
 
 def _schedule_queued_jobs() -> None:
-    if not _SCHEDULER_LOCK.acquire(blocking=False):
-        return
-    try:
-        JOB_GATE.cleanup_stale_slots()
-        for job_record in JOB_STORE.list_queued_jobs():
-            spawned = _spawn_job_worker(str(job_record.get("job_id", "")))
-            if spawned is None and JOB_GATE.enabled:
-                break
-    finally:
-        _SCHEDULER_LOCK.release()
-
-
-def _job_scheduler_loop() -> None:
-    while True:
-        try:
-            _schedule_queued_jobs()
-        except Exception:
-            traceback.print_exc()
-        time.sleep(JOB_QUEUE_POLL_SECONDS)
+    JOB_QUEUE.schedule_queued_jobs()
 
 
 def _start_job_scheduler() -> None:
-    global _SCHEDULER_STARTED
-    if _SCHEDULER_STARTED:
-        return
-    _SCHEDULER_STARTED = True
-    threading.Thread(
-        target=_job_scheduler_loop, name="brp-job-scheduler", daemon=True
-    ).start()
+    JOB_QUEUE.start()
 
 
 def _terminate_worker_process(pid: int) -> None:
-    if pid <= 0 or not _process_is_alive(pid):
-        return
-    if os.name == "nt":
-        try:
-            os.kill(pid, signal.SIGTERM)
-            return
-        except OSError:
-            return
-        except Exception:
-            pass
-        try:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-            return
-        except Exception:
-            pass
-    kill_signal = getattr(signal, "SIGKILL", None) or getattr(signal, "SIGTERM", None)
-    if kill_signal is None:
-        return
-    try:
-        os.kill(pid, kill_signal)
-    except OSError:
-        pass
+    terminate_worker_process(pid)
 
 
 def _cancel_job(job_id: str) -> dict[str, Any] | None:
-    job_record = JOB_STORE.get_job(job_id)
-    if not job_record:
-        return None
-    status = str(job_record.get("status", "")).strip().lower()
-    pid = int(job_record.get("worker_pid", 0) or 0)
-    if status in {"succeeded", "failed", "canceled"}:
-        return job_record
-    _terminate_worker_process(pid)
-    JOB_GATE.release(job_record.get("job_slot_path"))
-    JOB_GATE.cleanup_stale_slots()
-    updated = JOB_STORE.update_job(
-        job_id,
-        status="canceled",
-        finished_at=utc_now_iso(),
-        error="Job was canceled by the user.",
-        traceback=None,
-        worker_pid=None,
-        job_slot_path=None,
-        result=None,
-    )
-    _schedule_queued_jobs()
-    return updated
+    return JOB_QUEUE.cancel_job(job_id)
 
 
 def _can_access_job(

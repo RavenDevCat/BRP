@@ -69,6 +69,29 @@ def test_sqlite_job_store_filters_and_deletes(tmp_path: Path) -> None:
     assert [item["job_id"] for item in store.list_jobs(include_all=True)] == ["job2"]
 
 
+def test_sqlite_job_claim_transitions_queued_job_once(tmp_path: Path) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    queued = job_record("job1", "alice@example.com")
+    queued["status"] = "queued"
+    store.upsert_job(queued)
+
+    claimed = store.claim_queued_job(
+        "job1", worker_pid=123, job_slot_path=str(tmp_path / "slot-1")
+    )
+
+    assert claimed is not None
+    assert claimed["status"] == "running"
+    assert claimed["started_at"]
+    assert claimed["worker_pid"] == 123
+    assert claimed["job_slot_path"] == str(tmp_path / "slot-1")
+    assert store.get_job("job1")["status"] == "running"
+
+    assert store.claim_queued_job("job1", worker_pid=456) is None
+    stored = store.get_job("job1")
+    assert stored["worker_pid"] == 123
+    assert stored["job_slot_path"] == str(tmp_path / "slot-1")
+
+
 def test_sqlite_side_tool_store_filters_and_deletes(tmp_path: Path) -> None:
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
     store.upsert_side_tool_run("fleet_planner", side_tool_record("run1", "alice@example.com"))

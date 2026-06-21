@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import api_app  # noqa: E402
 import backend_service  # noqa: E402
+import job_queue  # noqa: E402
 
 
 class FakeJobStore:
@@ -673,25 +674,25 @@ class FastApiThinShellTests(unittest.TestCase):
 
 
     def test_worker_termination_uses_os_kill_on_windows(self) -> None:
-        with mock.patch.object(backend_service, "_process_is_alive", return_value=True), \
-            mock.patch.object(backend_service.os, "name", "nt"), \
-            mock.patch.object(backend_service.os, "kill") as kill_mock, \
-            mock.patch.object(backend_service.subprocess, "run") as run_mock:
+        with mock.patch.object(job_queue, "pid_is_alive", return_value=True), \
+            mock.patch.object(job_queue.os, "name", "nt"), \
+            mock.patch.object(job_queue.os, "kill") as kill_mock, \
+            mock.patch.object(job_queue.subprocess, "run") as run_mock:
             backend_service._terminate_worker_process(1234)
 
-        kill_mock.assert_called_once_with(1234, backend_service.signal.SIGTERM)
+        kill_mock.assert_called_once_with(1234, job_queue.signal.SIGTERM)
         run_mock.assert_not_called()
 
     def test_worker_spawn_uses_detached_process_group_on_windows(self) -> None:
-        with mock.patch.object(backend_service.os, "name", "nt"), \
-            mock.patch.object(backend_service.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True), \
-            mock.patch.object(backend_service.subprocess, "DETACHED_PROCESS", 8, create=True):
+        with mock.patch.object(job_queue.os, "name", "nt"), \
+            mock.patch.object(job_queue.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True), \
+            mock.patch.object(job_queue.subprocess, "DETACHED_PROCESS", 8, create=True):
             flags = backend_service._worker_creation_flags()
 
         self.assertEqual(flags, 520)
 
     def test_worker_spawn_uses_default_creation_flags_on_linux(self) -> None:
-        with mock.patch.object(backend_service.os, "name", "posix"):
+        with mock.patch.object(job_queue.os, "name", "posix"):
             flags = backend_service._worker_creation_flags()
 
         self.assertEqual(flags, 0)
@@ -702,13 +703,13 @@ class FastApiThinShellTests(unittest.TestCase):
         def fake_kill(pid: int, kill_signal: int) -> None:
             calls.append((pid, kill_signal))
 
-        with mock.patch.object(backend_service, "_process_is_alive", return_value=True), \
-            mock.patch.object(backend_service.os, "name", "posix"), \
-            mock.patch.object(backend_service.signal, "SIGKILL", None, create=True), \
-            mock.patch.object(backend_service.os, "kill", side_effect=fake_kill):
+        with mock.patch.object(job_queue, "pid_is_alive", return_value=True), \
+            mock.patch.object(job_queue.os, "name", "posix"), \
+            mock.patch.object(job_queue.signal, "SIGKILL", None, create=True), \
+            mock.patch.object(job_queue.os, "kill", side_effect=fake_kill):
             backend_service._terminate_worker_process(4321)
 
-        self.assertEqual(calls, [(4321, backend_service.signal.SIGTERM)])
+        self.assertEqual(calls, [(4321, job_queue.signal.SIGTERM)])
 
 
 if __name__ == "__main__":

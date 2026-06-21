@@ -198,6 +198,76 @@ class SqliteRuntimeStore:
                 ),
             )
 
+    def claim_queued_job(
+        self,
+        job_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_job_id = str(job_id or "").strip()
+        if not normalized_job_id:
+            return None
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT status, record_json FROM jobs WHERE job_id = ?",
+                    (normalized_job_id,),
+                ).fetchone()
+                if not row:
+                    conn.rollback()
+                    return None
+                stored_status = str(row["status"] or "").strip().lower()
+                record = json_loads(row["record_json"], {})
+                if not isinstance(record, dict):
+                    conn.rollback()
+                    return None
+                record_status = str(record.get("status", "")).strip().lower()
+                if stored_status != "queued" or record_status != "queued":
+                    conn.rollback()
+                    return None
+
+                started_at = record.get("started_at") or utc_now_iso()
+                record["status"] = "running"
+                record["started_at"] = started_at
+                record["finished_at"] = None
+                record["worker_pid"] = worker_pid
+                record["job_slot_path"] = job_slot_path
+                record["error"] = None
+                record["traceback"] = None
+                summary = job_summary(record)
+                cursor = conn.execute(
+                    """
+                    UPDATE jobs SET
+                        status = ?,
+                        started_at = ?,
+                        finished_at = ?,
+                        error = ?,
+                        record_json = ?,
+                        updated_at = ?
+                    WHERE job_id = ? AND status = 'queued'
+                    """,
+                    (
+                        summary["status"],
+                        summary.get("started_at"),
+                        summary.get("finished_at"),
+                        summary.get("error"),
+                        json_dumps(record),
+                        utc_now_iso(),
+                        normalized_job_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    return None
+                conn.commit()
+                return record
+            except Exception:
+                conn.rollback()
+                raise
+
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as conn:

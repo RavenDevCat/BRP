@@ -117,3 +117,73 @@ def test_parity_reports_missing_sqlite_records(tmp_path: Path) -> None:
 
     assert parity["passed"] is False
     assert parity["missing_jobs"] == ["job1"]
+
+
+
+def test_backend_service_job_store_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "dual")
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+
+    job_store = backend_service.JobStore(tmp_path / "jobs")
+    created = job_store.create_job(
+        {"service_direction": "To School"},
+        {"rows": []},
+        metadata={"job_name": "dual write"},
+        owner_email="alice@example.com",
+    )
+
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    mirrored = sqlite_store.get_job(created["job_id"])
+    assert mirrored is not None
+    assert mirrored["owner_email"] == "alice@example.com"
+    assert mirrored["metadata"] == {"job_name": "dual write"}
+
+    job_store.delete_job(created["job_id"])
+    assert sqlite_store.get_job(created["job_id"]) is None
+
+
+def test_backend_service_side_tool_store_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "dual")
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+
+    history_store = backend_service.SideToolHistoryStore(tmp_path / "side_tools", "fleet_planner")
+    summary = history_store.create(
+        {
+            "title": "Fleet test",
+            "scenario": {"market": "KR"},
+            "summary": {"route_count": 1},
+        },
+        owner_email="alice@example.com",
+    )
+
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    mirrored = sqlite_store.get_side_tool_run("fleet_planner", summary["run_id"])
+    assert mirrored is not None
+    assert mirrored["title"] == "Fleet test"
+
+    history_store.delete(summary["run_id"])
+    assert sqlite_store.get_side_tool_run("fleet_planner", summary["run_id"]) is None
+
+
+def test_backend_job_runner_save_job_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
+    import backend_job_runner  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    job_path = tmp_path / "jobs" / "job1.json"
+    monkeypatch.setenv("BRP_RUNTIME_STORE", "dual")
+    monkeypatch.setenv("BRP_RUNTIME_DB_PATH", str(sqlite_path))
+
+    payload = job_record("job1", "alice@example.com")
+    job_path.parent.mkdir(parents=True, exist_ok=True)
+    backend_job_runner._save_job(job_path, payload)
+
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    assert sqlite_store.get_job("job1")["owner_email"] == "alice@example.com"

@@ -31,6 +31,7 @@ from openpyxl import Workbook
 try:
     from . import osrm_manager
     from .ai_audit import generate_ai_audit_report
+    from .runtime_store_sqlite import SqliteRuntimeStore
     from .planner_core import (
         PlannerConfig,
         build_baseline_template_workbook_bytes,
@@ -45,6 +46,7 @@ try:
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     import osrm_manager
     from ai_audit import generate_ai_audit_report
+    from runtime_store_sqlite import SqliteRuntimeStore
     from planner_core import (
         PlannerConfig,
         build_baseline_template_workbook_bytes,
@@ -67,6 +69,11 @@ JOBS_DIR = Path(RAW_JOBS_DIR or str(DEFAULT_JOBS_DIR)).expanduser()
 DEFAULT_SIDE_TOOLS_DIR = REPO_ROOT / "state" / "side_tools"
 RAW_SIDE_TOOLS_DIR = os.environ.get("BRP_SIDE_TOOLS_DIR", "").strip()
 SIDE_TOOLS_DIR = Path(RAW_SIDE_TOOLS_DIR or str(DEFAULT_SIDE_TOOLS_DIR)).expanduser()
+RAW_RUNTIME_DB_PATH = os.environ.get("BRP_RUNTIME_DB_PATH", "").strip()
+RUNTIME_DB_PATH = Path(RAW_RUNTIME_DB_PATH or str(JOBS_DIR.parent / "brp_runtime.sqlite")).expanduser()
+RUNTIME_STORE_MODE = (os.environ.get("BRP_RUNTIME_STORE", "json").strip().lower() or "json")
+if RUNTIME_STORE_MODE not in {"json", "dual", "sqlite"}:
+    RUNTIME_STORE_MODE = "json"
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
@@ -225,6 +232,65 @@ def _amap_display_api_key() -> str:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+_RUNTIME_SQLITE_STORE: SqliteRuntimeStore | None = None
+_RUNTIME_SQLITE_STORE_LOCK = threading.Lock()
+
+
+def _runtime_store_mirror_enabled() -> bool:
+    return RUNTIME_STORE_MODE in {"dual", "sqlite"}
+
+
+def _runtime_sqlite_store() -> SqliteRuntimeStore | None:
+    global _RUNTIME_SQLITE_STORE
+    if not _runtime_store_mirror_enabled():
+        return None
+    with _RUNTIME_SQLITE_STORE_LOCK:
+        if _RUNTIME_SQLITE_STORE is None:
+            _RUNTIME_SQLITE_STORE = SqliteRuntimeStore(RUNTIME_DB_PATH)
+            _RUNTIME_SQLITE_STORE.initialize()
+        return _RUNTIME_SQLITE_STORE
+
+
+def _mirror_runtime_job(record: dict[str, Any]) -> None:
+    store = _runtime_sqlite_store()
+    if store is None:
+        return
+    try:
+        store.upsert_job(record)
+    except Exception:
+        traceback.print_exc()
+
+
+def _mirror_runtime_delete_job(job_id: str) -> None:
+    store = _runtime_sqlite_store()
+    if store is None:
+        return
+    try:
+        store.delete_job(job_id)
+    except Exception:
+        traceback.print_exc()
+
+
+def _mirror_runtime_side_tool(tool_key: str, record: dict[str, Any]) -> None:
+    store = _runtime_sqlite_store()
+    if store is None:
+        return
+    try:
+        store.upsert_side_tool_run(tool_key, record)
+    except Exception:
+        traceback.print_exc()
+
+
+def _mirror_runtime_delete_side_tool(tool_key: str, run_id: str) -> None:
+    store = _runtime_sqlite_store()
+    if store is None:
+        return
+    try:
+        store.delete_side_tool_run(tool_key, run_id)
+    except Exception:
+        traceback.print_exc()
 
 
 def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
@@ -2113,6 +2179,7 @@ class JobStore:
         with self.lock:
             self._save_job_unlocked(job_id, record)
             self._upsert_index_entry_unlocked(record)
+            _mirror_runtime_job(record)
         return {
             "job_id": job_id,
             "owner_email": normalized_owner_email,
@@ -2133,6 +2200,7 @@ class JobStore:
             record.update(changes)
             self._save_job_unlocked(job_id, record)
             self._upsert_index_entry_unlocked(record)
+            _mirror_runtime_job(record)
             return deepcopy(record)
 
     def begin_ai_audit(
@@ -2165,6 +2233,7 @@ class JobStore:
             record["ai_audit_error"] = None
             self._save_job_unlocked(job_id, record)
             self._upsert_index_entry_unlocked(record)
+            _mirror_runtime_job(record)
             return "started", deepcopy(record)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -2224,6 +2293,7 @@ class JobStore:
                 if str(entry.get("job_id", "")).strip() != job_id
             ]
             self._save_index_unlocked(index_entries)
+            _mirror_runtime_delete_job(job_id)
             return True
 
     def reconcile_running_jobs(self) -> None:
@@ -2241,6 +2311,7 @@ class JobStore:
                     record["worker_pid"] = None
                     record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
+                    _mirror_runtime_job(record)
                     continue
                 if status == "running":
                     record["status"] = "failed"
@@ -2252,6 +2323,7 @@ class JobStore:
                     record["worker_pid"] = None
                     record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
+                    _mirror_runtime_job(record)
             refreshed_entries = []
             for entry in self._load_index_unlocked():
                 job_id = str(entry.get("job_id", "")).strip()
@@ -2358,6 +2430,7 @@ class SideToolHistoryStore:
             ]
             entries.insert(0, summary)
             self._save_index_unlocked(entries[:100])
+            _mirror_runtime_side_tool(self.tool_key, record)
         return summary
 
     def get(self, run_id: str) -> dict[str, Any] | None:
@@ -2398,6 +2471,7 @@ class SideToolHistoryStore:
                 if str(entry.get("run_id") or "").strip() != run_id
             ]
             self._save_index_unlocked(entries)
+            _mirror_runtime_delete_side_tool(self.tool_key, run_id)
             return True
 
 

@@ -12,8 +12,10 @@ from typing import Any
 
 try:
     from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
     from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from runtime_store_sqlite import SqliteRuntimeStore
 
 
 def utc_now_iso() -> str:
@@ -27,6 +29,28 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _save_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _runtime_store_mode() -> str:
+    mode = (os.environ.get("BRP_RUNTIME_STORE", "json").strip().lower() or "json")
+    return mode if mode in {"json", "dual", "sqlite"} else "json"
+
+
+def _runtime_db_path(job_path: Path) -> Path:
+    configured = os.environ.get("BRP_RUNTIME_DB_PATH", "").strip()
+    if configured:
+        return Path(configured).expanduser()
+    return job_path.parent.parent / "brp_runtime.sqlite"
+
+
+def _mirror_runtime_job(job_path: Path, payload: dict[str, Any]) -> None:
+    if _runtime_store_mode() not in {"dual", "sqlite"}:
+        return
+    try:
+        store = SqliteRuntimeStore(_runtime_db_path(job_path))
+        store.upsert_job(payload)
+    except Exception:
+        traceback.print_exc()
 
 
 def _index_summary(record: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +92,7 @@ def _upsert_index(job_path: Path, record: dict[str, Any]) -> None:
 def _save_job(job_path: Path, payload: dict[str, Any]) -> None:
     _save_json(job_path, payload)
     _upsert_index(job_path, payload)
+    _mirror_runtime_job(job_path, payload)
 
 
 def _release_concurrency_slot() -> None:

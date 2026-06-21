@@ -22,7 +22,9 @@ geocode, and demand routing flows.
 - Provider coordination: share Kakao, Google, AMap, and DeepSeek rate-limit
   state across worker processes.
 - Runtime continuity: preserve job history, caches, generated outputs, usage
-  counters, and server-local env files outside normal Git sync.
+  counters, and server-local env files outside normal Git sync. Job queue
+  claims, API request validation, and JSON cache writes use standard shared
+  runtime helpers rather than per-endpoint handwritten file handling.
 
 ## Repository Layout
 

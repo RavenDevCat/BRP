@@ -6,6 +6,23 @@ It is not a code changelog. Record changes here when users or operators should k
 
 ## 2026-06-21
 
+### Backend Runtime Standardization
+
+- Job dispatch now lives in a dedicated queue module. Queued jobs are claimed
+  atomically in the SQLite runtime store before a worker subprocess is launched,
+  reducing duplicate-start risk while preserving the CN Linux and KR Windows
+  subprocess worker model.
+- FastAPI POST request bodies now use Pydantic request models instead of
+  untyped `Any` bodies. Existing object-shaped payloads remain compatible;
+  invalid non-object request bodies now fail with FastAPI validation.
+- Shared JSON caches now write through a common atomic cache helper on both
+  backend and client sides. This covers geocode/subway caches, planner result
+  cache, route metrics/geometry caches, traffic calibration cache, and AMap
+  display geometry cache.
+- CN staging, CN production, and KR production were promoted to `07e6a87`.
+  Parity checks passed with 0 fails and 0 warnings on all three environments.
+- Existing completed jobs do not need to be rerun.
+
 ### React Static Proxy Retired
 
 - Removed the legacy Python React static/proxy helper from the supported

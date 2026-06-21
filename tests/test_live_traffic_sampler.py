@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import live_traffic_sampler  # noqa: E402
+from quota_store_sqlite import SqliteQuotaStore  # noqa: E402
 
 
 class LiveTrafficSamplerTests(unittest.TestCase):
@@ -65,6 +66,105 @@ class LiveTrafficSamplerTests(unittest.TestCase):
         args = argparse.Namespace(max_api_calls_per_run=0)
 
         live_traffic_sampler._enforce_api_call_budget("amap", 5000, args)
+
+    def test_google_routes_usage_migrates_legacy_json_to_sqlite(self) -> None:
+        now = datetime(2026, 6, 21, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            usage_path = Path(tmpdir) / "google_routes_usage.json"
+            usage_path.write_text(
+                json.dumps(
+                    {
+                        "2026-06": {
+                            "attempted": 2,
+                            "succeeded": 1,
+                            "provider": live_traffic_sampler.GOOGLE_ROUTES_PROVIDER,
+                            "sku_estimate": "routes_compute_routes_pro",
+                        },
+                        "2026-06-21": {"attempted": 1},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            quota_db_path = Path(tmpdir) / "quota.sqlite"
+            args = argparse.Namespace(
+                dry_run=False,
+                google_routes_usage_path=usage_path,
+                google_routes_monthly_safety_cap=5,
+                google_routes_daily_cap=5,
+                quota_db_path=quota_db_path,
+            )
+
+            live_traffic_sampler._reserve_google_routes_usage(args, 2, now=now)
+            live_traffic_sampler._mark_google_routes_usage_result(args, now=now, succeeded=True)
+
+            store = SqliteQuotaStore(quota_db_path)
+            month_usage = store.get_usage(
+                live_traffic_sampler.GOOGLE_ROUTES_PROVIDER,
+                live_traffic_sampler.GOOGLE_ROUTES_USAGE_COUNTER,
+                "month",
+                "2026-06",
+            )
+            day_usage = store.get_usage(
+                live_traffic_sampler.GOOGLE_ROUTES_PROVIDER,
+                live_traffic_sampler.GOOGLE_ROUTES_USAGE_COUNTER,
+                "day",
+                "2026-06-21",
+            )
+            self.assertEqual(month_usage["attempted"], 4)
+            self.assertEqual(month_usage["succeeded"], 2)
+            self.assertEqual(day_usage["attempted"], 3)
+            self.assertEqual(day_usage["succeeded"], 1)
+
+            with self.assertRaisesRegex(RuntimeError, "Google Routes monthly safety cap would be exceeded"):
+                live_traffic_sampler._reserve_google_routes_usage(args, 2, now=now)
+
+    def test_kakao_navi_usage_migrates_legacy_json_to_sqlite(self) -> None:
+        now = datetime(2026, 6, 21, 10, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+        with tempfile.TemporaryDirectory() as tmpdir:
+            usage_path = Path(tmpdir) / "kakao_navi_usage.json"
+            usage_path.write_text(
+                json.dumps(
+                    {
+                        "2026-06": {
+                            "attempted": 3,
+                            "failed": 1,
+                            "provider": live_traffic_sampler.KAKAO_NAVI_PROVIDER,
+                            "sku_estimate": "kakao_navi_future_directions",
+                        },
+                        "2026-06-21": {"attempted": 1},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            quota_db_path = Path(tmpdir) / "quota.sqlite"
+            args = argparse.Namespace(
+                dry_run=False,
+                kakao_navi_usage_path=usage_path,
+                kakao_navi_monthly_safety_cap=6,
+                kakao_navi_daily_cap=6,
+                quota_db_path=quota_db_path,
+            )
+
+            live_traffic_sampler._reserve_kakao_navi_usage(args, 2, now=now)
+            live_traffic_sampler._mark_kakao_navi_usage_result(args, now=now, succeeded=False)
+
+            store = SqliteQuotaStore(quota_db_path)
+            month_usage = store.get_usage(
+                live_traffic_sampler.KAKAO_NAVI_PROVIDER,
+                live_traffic_sampler.KAKAO_NAVI_USAGE_COUNTER,
+                "month",
+                "2026-06",
+            )
+            day_usage = store.get_usage(
+                live_traffic_sampler.KAKAO_NAVI_PROVIDER,
+                live_traffic_sampler.KAKAO_NAVI_USAGE_COUNTER,
+                "day",
+                "2026-06-21",
+            )
+            self.assertEqual(month_usage["attempted"], 5)
+            self.assertEqual(month_usage["failed"], 2)
+            self.assertEqual(day_usage["attempted"], 3)
+            self.assertEqual(day_usage["failed"], 1)
 
     def test_raw_osrm_seconds_accepts_current_route_audit_fields(self) -> None:
         self.assertEqual(

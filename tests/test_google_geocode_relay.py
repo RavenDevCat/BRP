@@ -6,10 +6,9 @@ import os
 from pathlib import Path
 import sys
 import tempfile
-import threading
 import unittest
-import urllib.error
-import urllib.request
+
+from fastapi.testclient import TestClient
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,38 +135,25 @@ class GoogleGeocodeRelayServerTests(unittest.TestCase):
             GOOGLE_GEOCODE_API_KEY="test-key",
             BRP_GOOGLE_GEOCODE_RELAY_TOKEN="secret",
             BRP_GOOGLE_GEOCODE_RELAY_USAGE_PATH=str(Path(temp_dir) / "usage.json"),
+            BRP_QUOTA_DB_PATH=str(Path(temp_dir) / "quota.sqlite"),
         ):
             config = relay.RelayConfig()
-            server = relay.RelayServer(("127.0.0.1", 0), config)
-            thread = threading.Thread(target=server.serve_forever, daemon=True)
-            thread.start()
-            url = f"http://127.0.0.1:{server.server_address[1]}/geocode"
-            try:
-                missing_token_request = urllib.request.Request(
-                    url,
-                    data=json.dumps({"country": "Thailand", "params": {"address": "Sukhumvit 53"}}).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with self.assertRaises(urllib.error.HTTPError) as missing_token_error:
-                    urllib.request.urlopen(missing_token_request, timeout=5)
-                self.assertEqual(missing_token_error.exception.code, 403)
+            client = TestClient(relay.create_app(config))
 
-                non_bangkok_request = urllib.request.Request(
-                    url,
-                    data=json.dumps({"country": "China", "params": {"address": "Shanghai"}}).encode("utf-8"),
-                    headers={
-                        "Content-Type": "application/json",
-                        "Authorization": "Bearer secret",
-                    },
-                    method="POST",
-                )
-                with self.assertRaises(urllib.error.HTTPError) as non_bangkok_error:
-                    urllib.request.urlopen(non_bangkok_request, timeout=5)
-                self.assertEqual(non_bangkok_error.exception.code, 400)
-            finally:
-                server.shutdown()
-                server.server_close()
+            missing_token_response = client.post(
+                "/geocode",
+                json={"country": "Thailand", "params": {"address": "Sukhumvit 53"}},
+            )
+            self.assertEqual(missing_token_response.status_code, 403)
+            self.assertEqual(missing_token_response.json()["error"], "invalid bearer token")
+
+            non_bangkok_response = client.post(
+                "/geocode",
+                json={"country": "China", "params": {"address": "Shanghai"}},
+                headers={"Authorization": "Bearer secret"},
+            )
+            self.assertEqual(non_bangkok_response.status_code, 400)
+            self.assertIn("Bangkok/Thailand", non_bangkok_response.json()["error"])
 
     def test_relay_passes_allowed_bangkok_request_to_google_adapter(self) -> None:
         calls: list[dict] = []
@@ -183,36 +169,25 @@ class GoogleGeocodeRelayServerTests(unittest.TestCase):
                 GOOGLE_GEOCODE_API_KEY="test-key",
                 BRP_GOOGLE_GEOCODE_RELAY_TOKEN="secret",
                 BRP_GOOGLE_GEOCODE_RELAY_USAGE_PATH=str(Path(temp_dir) / "usage.json"),
+                BRP_QUOTA_DB_PATH=str(Path(temp_dir) / "quota.sqlite"),
             ):
                 config = relay.RelayConfig()
-                server = relay.RelayServer(("127.0.0.1", 0), config)
-                thread = threading.Thread(target=server.serve_forever, daemon=True)
-                thread.start()
-                url = f"http://127.0.0.1:{server.server_address[1]}/geocode"
-                try:
-                    request = urllib.request.Request(
-                        url,
-                        data=json.dumps(
-                            {
-                                "country": "Thailand",
-                                "params": {
-                                    "address": "Sukhumvit 53",
-                                    "components": "country:TH",
-                                    "extra": "ignored",
-                                },
-                            }
-                        ).encode("utf-8"),
-                        headers={
-                            "Content-Type": "application/json",
-                            "Authorization": "Bearer secret",
+                client = TestClient(relay.create_app(config))
+
+                response = client.post(
+                    "/geocode",
+                    json={
+                        "country": "Thailand",
+                        "params": {
+                            "address": "Sukhumvit 53",
+                            "components": "country:TH",
+                            "extra": "ignored",
                         },
-                        method="POST",
-                    )
-                    with urllib.request.urlopen(request, timeout=5) as response:
-                        payload = json.loads(response.read().decode("utf-8"))
-                finally:
-                    server.shutdown()
-                    server.server_close()
+                    },
+                    headers={"Authorization": "Bearer secret"},
+                )
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
         finally:
             relay.call_google = original_call_google
 

@@ -167,8 +167,9 @@ rate limiter:
 
 - client implementation: `apps/client/api_rate_limit.py`
 - backend implementation: `apps/backend/api_rate_limit.py`
-- default state directory: `state/api_rate_limits`
-- override: `BRP_API_RATE_LIMIT_DIR`
+- authoritative store: SQLite via `apps/*/quota_store_sqlite.py`
+- default store path: `BRP_QUOTA_DB_PATH`, then `BRP_RUNTIME_DB_PATH`, then
+  `state/brp_runtime.sqlite`
 
 The limiter protects only the short provider request gate. It does not serialize
 whole jobs. Multiple jobs can still run concurrently, but requests for the same
@@ -183,6 +184,7 @@ Current provider gates:
 - `kakao-geocode`
 - `kakao-places`
 - `google-geocode`
+- `google-geocode-relay-upstream`
 - `deepseek-chat-completions`
 
 Current market geocoding roles:
@@ -205,14 +207,15 @@ BRP_DEEPSEEK_MAX_QPS=1.0
 Google geocode usage is tracked separately from QPS because it protects monthly
 quota and billing rather than instantaneous request rate.
 
-- usage file: `apps/client/cache/google_geocode_usage.json`
+- authoritative store: the same SQLite quota store used for provider QPS
+- legacy migration source: `apps/client/cache/google_geocode_usage.json`
 - month key timezone: `America/Los_Angeles`
 - monthly display limit: `10,000`
 - visibility flag: `BRP_SHOW_GOOGLE_GEOCODE_USAGE`
 
 Before sending a Google geocode request, BRP atomically reserves one usage slot
-with a cross-process lock. This prevents concurrent workers from reading the same
-old value, losing increments, or overshooting the monthly cap near the limit.
+in SQLite. This prevents concurrent workers from reading the same old value,
+losing increments, or overshooting the monthly cap near the limit.
 
 Cache hits do not increment usage. Every actual Google request that is sent may
 reserve usage, including requests that later return no results or provider
@@ -285,27 +288,28 @@ Do not commit runtime data or secrets.
 Runtime data to preserve during server moves:
 
 ```text
-/opt/brp/staging/app/state/api_rate_limits
+/opt/brp/staging/app/state/brp_runtime.sqlite
 /opt/brp/job-concurrency
 /opt/brp/osrm-data
 /opt/brp/staging/data/jobs
 /opt/brp/staging/app/apps/backend/cache
 /opt/brp/staging/app/apps/client/cache
-/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json
+/opt/brp/staging/app/apps/client/cache/google_geocode_usage.json  # legacy migration source if present
 /opt/brp/staging/app/apps/backend/outputs
 /opt/brp/staging/app/apps/client/demodata
-/opt/brp/prod/app/state/api_rate_limits
+/opt/brp/prod/app/state/brp_runtime.sqlite
 /opt/brp/prod/data/jobs
 /opt/brp/prod/app/apps/backend/cache
 /opt/brp/prod/app/apps/client/cache
-/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json
+/opt/brp/prod/app/apps/client/cache/google_geocode_usage.json  # legacy migration source if present
 /opt/brp/prod/app/apps/backend/outputs
 /opt/brp/prod/app/apps/client/demodata
 ```
 
 Lightweight deployments may keep job history under repository-level
-`state/jobs` and provider coordination under `state/api_rate_limits`. Preserve
-both alongside caches, generated outputs, and server-local `ops/env/local.env`.
+`state/jobs` and provider coordination in `state/brp_runtime.sqlite` or the
+configured `BRP_QUOTA_DB_PATH`. Preserve both alongside caches, generated
+outputs, and server-local `ops/env/local.env`.
 
 ## Separation Of Concerns
 

@@ -13,54 +13,7 @@ from urllib.parse import urlparse
 
 import requests
 
-try:  # Linux/macOS file locks.
-    import fcntl
-except ModuleNotFoundError:  # pragma: no cover - exercised on Windows.
-    fcntl = None  # type: ignore[assignment]
-
-try:  # Windows does not ship fcntl; keep the module importable on KR prod.
-    import msvcrt
-except ModuleNotFoundError:  # pragma: no cover - exercised on POSIX.
-    msvcrt = None  # type: ignore[assignment]
-
-
-def _lock_file_exclusive(handle, *, nonblocking: bool = False) -> None:
-    if fcntl is not None:
-        flags = fcntl.LOCK_EX | (fcntl.LOCK_NB if nonblocking else 0)
-        fcntl.flock(handle.fileno(), flags)
-        return
-    if msvcrt is not None:
-        handle.seek(0)
-        mode = msvcrt.LK_NBLCK if nonblocking else msvcrt.LK_LOCK
-        try:
-            msvcrt.locking(handle.fileno(), mode, 1)
-        except OSError as exc:
-            if nonblocking:
-                raise BlockingIOError(str(exc)) from exc
-            raise
-
-
-def _lock_file_shared(handle) -> None:
-    if fcntl is not None:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
-        return
-    if msvcrt is not None:
-        # Windows msvcrt does not expose a shared advisory lock. KR runs OSRM
-        # on-demand disabled, so an exclusive byte lock is sufficient fallback.
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-
-
-def _unlock_file(handle) -> None:
-    if fcntl is not None:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        return
-    if msvcrt is not None:
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        except OSError:
-            pass
+from osrm_manager_store import OsrmManagerStore
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -88,11 +41,26 @@ OSRM_READY_CACHE_SECONDS = float(os.environ.get("BRP_OSRM_READY_CACHE_SECONDS", 
 OSRM_LOCK_DIR = Path(os.environ.get("BRP_OSRM_LOCK_DIR", "/tmp/brp-osrm-locks")).expanduser()
 OSRM_USAGE_DIR = Path(os.environ.get("BRP_OSRM_USAGE_DIR", str(OSRM_LOCK_DIR / "usage"))).expanduser()
 OSRM_STATE_PATH = Path(os.environ.get("BRP_OSRM_MANAGER_STATE_PATH", str(_default_state_path()))).expanduser()
+OSRM_MANAGER_DB_PATH = Path(
+    os.environ.get(
+        "BRP_OSRM_MANAGER_DB_PATH",
+        os.environ.get("BRP_RUNTIME_DB_PATH", str(OSRM_STATE_PATH.with_suffix(".sqlite"))),
+    )
+).expanduser()
 OSRM_MIN_AVAILABLE_MB = int(os.environ.get("BRP_OSRM_MIN_AVAILABLE_MB", "1024") or 1024)
 OSRM_IDLE_TTL_SECONDS = float(os.environ.get("BRP_OSRM_IDLE_TTL_SECONDS", "3600") or 3600)
 OSRM_STALE_LOCK_TTL_SECONDS = float(os.environ.get("BRP_OSRM_STALE_LOCK_TTL_SECONDS", "3600") or 3600)
 OSRM_LOCK_WAIT_SECONDS = float(os.environ.get("BRP_OSRM_LOCK_WAIT_SECONDS", "120") or 120)
 OSRM_MAX_RUNNING_REGIONS = int(os.environ.get("BRP_OSRM_MAX_RUNNING_REGIONS", "0") or 0)
+OSRM_LOCK_LEASE_SECONDS = max(
+    300.0,
+    OSRM_STALE_LOCK_TTL_SECONDS,
+    OSRM_START_TIMEOUT_SECONDS + max(0.0, OSRM_LOCK_WAIT_SECONDS),
+)
+OSRM_USE_LEASE_SECONDS = float(
+    os.environ.get("BRP_OSRM_USE_LEASE_SECONDS", str(max(3600.0, OSRM_IDLE_TTL_SECONDS))) or 3600
+)
+OSRM_STORE = OsrmManagerStore(OSRM_MANAGER_DB_PATH)
 
 
 @dataclass(frozen=True)
@@ -266,26 +234,19 @@ def ensure_region(region: str, *, base_url: str | None = None) -> None:
 
 @contextmanager
 def _file_lock(path: Path) -> Iterator[None]:
-    with path.open("w") as handle:
-        if OSRM_LOCK_WAIT_SECONDS < 0:
-            _lock_file_exclusive(handle)
-        else:
-            deadline = time.monotonic() + OSRM_LOCK_WAIT_SECONDS
-            while True:
-                try:
-                    _lock_file_exclusive(handle, nonblocking=True)
-                    break
-                except BlockingIOError as exc:
-                    if time.monotonic() >= deadline:
-                        raise OsrmManagerError(
-                            f"Routing engine startup is queued behind {path.name} for more than "
-                            f"{OSRM_LOCK_WAIT_SECONDS:.0f}s. Try again shortly or inspect OSRM manager locks."
-                        ) from exc
-                    time.sleep(min(0.25, max(0.01, deadline - time.monotonic())))
-        try:
+    try:
+        with OSRM_STORE.acquire_lock(
+            name=path.name,
+            path=path,
+            wait_seconds=OSRM_LOCK_WAIT_SECONDS,
+            ttl_seconds=OSRM_LOCK_LEASE_SECONDS,
+        ):
             yield
-        finally:
-            _unlock_file(handle)
+    except TimeoutError as exc:
+        raise OsrmManagerError(
+            f"Routing engine startup is queued behind {path.name} for more than "
+            f"{OSRM_LOCK_WAIT_SECONDS:.0f}s. Try again shortly or inspect OSRM manager locks."
+        ) from exc
 
 
 def _is_osrm_ready(config: RegionConfig, base_url: str) -> bool:
@@ -614,6 +575,7 @@ def manager_status() -> dict[str, object]:
     return {
         "on_demand_enabled": ON_DEMAND_ENABLED,
         "state_path": str(OSRM_STATE_PATH),
+        "store_path": str(OSRM_MANAGER_DB_PATH),
         "lock_dir": str(OSRM_LOCK_DIR),
         "usage_dir": str(OSRM_USAGE_DIR),
         "idle_ttl_seconds": OSRM_IDLE_TTL_SECONDS,
@@ -630,73 +592,34 @@ def manager_status() -> dict[str, object]:
 
 
 def _load_state() -> dict[str, object]:
-    try:
-        if not OSRM_STATE_PATH.exists():
-            return {"regions": {}}
-        payload = json.loads(OSRM_STATE_PATH.read_text(encoding="utf-8"))
-        if isinstance(payload, dict) and isinstance(payload.get("regions"), dict):
-            return payload
-    except Exception:
-        pass
-    return {"regions": {}}
+    return OSRM_STORE.load_state(OSRM_STATE_PATH)
 
 
 def _region_lock_is_held(region: str) -> bool:
-    path = OSRM_LOCK_DIR / f"{region}.lock"
-    try:
-        if not path.exists():
-            return False
-        with path.open("a") as handle:
-            try:
-                _lock_file_exclusive(handle, nonblocking=True)
-            except BlockingIOError:
-                return True
-            else:
-                _unlock_file(handle)
-                return False
-    except Exception:
-        return True
+    return OSRM_STORE.is_lock_held(f"{region}.lock")
 
 
 @contextmanager
 def _region_use_lease(region: str) -> Iterator[None]:
-    OSRM_USAGE_DIR.mkdir(parents=True, exist_ok=True)
-    path = OSRM_USAGE_DIR / f"{region}.use"
-    with path.open("a") as handle:
-        _lock_file_shared(handle)
-        try:
-            yield
-        finally:
-            _unlock_file(handle)
+    with OSRM_STORE.use_lease(
+        region=region,
+        path=OSRM_USAGE_DIR / f"{region}.use",
+        ttl_seconds=OSRM_USE_LEASE_SECONDS,
+    ):
+        yield
 
 
 def _region_use_is_active(region: str) -> bool:
-    path = OSRM_USAGE_DIR / f"{region}.use"
-    try:
-        if not path.exists():
-            return False
-        with path.open("a") as handle:
-            try:
-                _lock_file_exclusive(handle, nonblocking=True)
-            except BlockingIOError:
-                return True
-            else:
-                _unlock_file(handle)
-                return False
-    except Exception:
-        return True
+    return OSRM_STORE.use_is_active(region)
 
 
 def active_use_regions() -> list[str]:
-    return sorted(region for region in REGIONS if _region_use_is_active(region))
+    return OSRM_STORE.active_use_regions(list(REGIONS))
 
 
 def _save_state(state: dict[str, object]) -> None:
     try:
-        OSRM_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp = OSRM_STATE_PATH.with_suffix(OSRM_STATE_PATH.suffix + ".tmp")
-        tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(OSRM_STATE_PATH)
+        OSRM_STORE.save_state(state)
     except Exception as exc:
         _log(f"failed to write state: {exc}")
 
@@ -778,77 +701,11 @@ def cleanup_idle_regions(*, exclude_region: str | None = None) -> list[str]:
     return _cleanup_idle_regions(exclude_region=exclude_region)
 
 
-def _lock_file_status(path: Path, now: float) -> dict[str, object]:
-    try:
-        stat = path.stat()
-    except FileNotFoundError:
-        return {
-            "path": str(path),
-            "name": path.name,
-            "present": False,
-            "locked": False,
-            "age_s": None,
-            "stale": False,
-        }
-    locked = False
-    try:
-        with path.open("a") as handle:
-            try:
-                _lock_file_exclusive(handle, nonblocking=True)
-            except BlockingIOError:
-                locked = True
-            else:
-                _unlock_file(handle)
-    except Exception:
-        locked = True
-    age_s = max(0.0, now - float(stat.st_mtime))
-    stale = bool(
-        not locked
-        and OSRM_STALE_LOCK_TTL_SECONDS > 0
-        and age_s >= OSRM_STALE_LOCK_TTL_SECONDS
-    )
-    return {
-        "path": str(path),
-        "name": path.name,
-        "present": True,
-        "locked": locked,
-        "age_s": age_s,
-        "stale": stale,
-    }
-
-
 def lock_status() -> list[dict[str, object]]:
-    if not OSRM_LOCK_DIR.exists():
-        return []
-    now = time.time()
-    locks: list[dict[str, object]] = []
-    for path in sorted(OSRM_LOCK_DIR.glob("*.lock")):
-        if path.is_file():
-            locks.append(_lock_file_status(path, now))
-    return locks
+    return OSRM_STORE.lock_status(OSRM_LOCK_DIR, OSRM_STALE_LOCK_TTL_SECONDS)
 
 
 def cleanup_stale_locks() -> list[str]:
-    removed: list[str] = []
-    if OSRM_STALE_LOCK_TTL_SECONDS <= 0 or not OSRM_LOCK_DIR.exists():
-        return removed
-    for item in lock_status():
-        if not item.get("stale"):
-            continue
-        path = Path(str(item.get("path") or ""))
-        try:
-            with path.open("a") as handle:
-                try:
-                    _lock_file_exclusive(handle, nonblocking=True)
-                except BlockingIOError:
-                    continue
-                try:
-                    path.unlink(missing_ok=True)
-                    removed.append(str(path))
-                finally:
-                    _unlock_file(handle)
-        except FileNotFoundError:
-            continue
-        except Exception as exc:
-            _log(f"failed to remove stale lock {path}: {exc}")
-    return removed
+    if OSRM_STALE_LOCK_TTL_SECONDS <= 0:
+        return []
+    return OSRM_STORE.cleanup_stale_locks(OSRM_LOCK_DIR, OSRM_STALE_LOCK_TTL_SECONDS)

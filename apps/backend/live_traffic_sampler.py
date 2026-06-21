@@ -15,6 +15,7 @@ import requests
 
 import BusingProblem as planner
 import planner_core
+from quota_store_sqlite import SqliteQuotaStore
 from runtime_store_sqlite import SqliteRuntimeStore
 
 
@@ -24,11 +25,13 @@ AMAP_DIRECTION_URL = "https://restapi.amap.com/v3/direction/driving"
 GOOGLE_ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 GOOGLE_ROUTES_FIELD_MASK = "routes.duration,routes.distanceMeters,routes.legs.duration,routes.legs.distanceMeters"
 GOOGLE_ROUTES_PROVIDER = "google_routes"
+GOOGLE_ROUTES_USAGE_COUNTER = "directions"
 KAKAO_NAVI_FUTURE_DIRECTIONS_URL = os.environ.get(
     "BRP_KAKAO_NAVI_FUTURE_DIRECTIONS_URL",
     "https://apis-navi.kakaomobility.com/v1/future/directions",
 ).strip()
 KAKAO_NAVI_PROVIDER = "kakao_navi"
+KAKAO_NAVI_USAGE_COUNTER = "future_directions"
 
 
 def _default_runtime_path(*parts: str) -> str:
@@ -188,22 +191,6 @@ def _kakao_navi_departure_time(value: datetime | None) -> str:
     return departure.astimezone(DEFAULT_TZ).strftime("%Y%m%d%H%M")
 
 
-def _load_json_object(path: Path) -> dict[str, Any]:
-    try:
-        if path.exists():
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
-    except Exception:
-        return {}
-    return {}
-
-
-def _save_json_object(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
-
-
 def _google_routes_usage_keys(now: datetime) -> tuple[str, str]:
     local_now = now.astimezone(DEFAULT_TZ)
     return local_now.strftime("%Y-%m"), local_now.date().isoformat()
@@ -214,16 +201,32 @@ def _kakao_navi_usage_keys(now: datetime) -> tuple[str, str]:
     return local_now.strftime("%Y-%m"), local_now.date().isoformat()
 
 
-def _usage_bucket(payload: dict[str, Any], key: str) -> dict[str, Any]:
-    bucket = payload.setdefault(key, {})
-    if not isinstance(bucket, dict):
-        bucket = {}
-        payload[key] = bucket
-    return bucket
+def _quota_store(args: argparse.Namespace) -> SqliteQuotaStore:
+    quota_db_path = getattr(args, "quota_db_path", None)
+    return SqliteQuotaStore(quota_db_path) if quota_db_path else SqliteQuotaStore()
 
 
-def _usage_count(bucket: dict[str, Any]) -> int:
-    return int(bucket.get("attempted", bucket.get("used", 0)) or 0)
+def _migrate_usage_source(
+    store: SqliteQuotaStore,
+    *,
+    source_path: Path,
+    provider: str,
+    counter: str,
+    provider_label: str,
+    sku_estimate: str,
+) -> None:
+    store.migrate_bucket_usage(
+        source_path=source_path,
+        provider=provider,
+        counter=counter,
+        provider_label=provider_label,
+        sku_estimate=sku_estimate,
+    )
+
+
+def _period_usage_count(store: SqliteQuotaStore, provider: str, counter: str, period_type: str, period_key: str) -> int:
+    usage = store.get_usage(provider, counter, period_type, period_key)
+    return int(usage.get("attempted", usage.get("used", 0)) or 0)
 
 
 def _reserve_google_routes_usage(args: argparse.Namespace, count: int, *, now: datetime) -> None:
@@ -234,12 +237,18 @@ def _reserve_google_routes_usage(args: argparse.Namespace, count: int, *, now: d
     if monthly_cap <= 0 or daily_cap <= 0:
         raise RuntimeError("Google Routes usage cap is disabled; refusing live API call")
     path = Path(getattr(args, "google_routes_usage_path", DEFAULT_GOOGLE_ROUTES_USAGE_PATH)).expanduser()
-    payload = _load_json_object(path)
     month_key, day_key = _google_routes_usage_keys(now)
-    month_bucket = _usage_bucket(payload, month_key)
-    day_bucket = _usage_bucket(payload, day_key)
-    month_used = _usage_count(month_bucket)
-    day_used = _usage_count(day_bucket)
+    store = _quota_store(args)
+    _migrate_usage_source(
+        store,
+        source_path=path,
+        provider=GOOGLE_ROUTES_PROVIDER,
+        counter=GOOGLE_ROUTES_USAGE_COUNTER,
+        provider_label=GOOGLE_ROUTES_PROVIDER,
+        sku_estimate="routes_compute_routes_pro",
+    )
+    month_used = _period_usage_count(store, GOOGLE_ROUTES_PROVIDER, GOOGLE_ROUTES_USAGE_COUNTER, "month", month_key)
+    day_used = _period_usage_count(store, GOOGLE_ROUTES_PROVIDER, GOOGLE_ROUTES_USAGE_COUNTER, "day", day_key)
     if month_used + count > monthly_cap:
         raise RuntimeError(
             f"Google Routes monthly safety cap would be exceeded: {month_used}+{count}>{monthly_cap}"
@@ -248,26 +257,38 @@ def _reserve_google_routes_usage(args: argparse.Namespace, count: int, *, now: d
         raise RuntimeError(
             f"Google Routes daily cap would be exceeded: {day_used}+{count}>{daily_cap}"
         )
-    for bucket in (month_bucket, day_bucket):
-        bucket["attempted"] = _usage_count(bucket) + count
-        bucket["provider"] = GOOGLE_ROUTES_PROVIDER
-        bucket["sku_estimate"] = "routes_compute_routes_pro"
-        bucket["updated_at"] = now.isoformat(timespec="seconds")
-    _save_json_object(path, payload)
+    store.reserve_usage(
+        GOOGLE_ROUTES_PROVIDER,
+        GOOGLE_ROUTES_USAGE_COUNTER,
+        [("month", month_key, monthly_cap), ("day", day_key, daily_cap)],
+        count=count,
+        provider_label=GOOGLE_ROUTES_PROVIDER,
+        sku_estimate="routes_compute_routes_pro",
+    )
 
 
 def _mark_google_routes_usage_result(args: argparse.Namespace, *, now: datetime, succeeded: bool) -> None:
     if bool(getattr(args, "dry_run", False)):
         return
     path = Path(getattr(args, "google_routes_usage_path", DEFAULT_GOOGLE_ROUTES_USAGE_PATH)).expanduser()
-    payload = _load_json_object(path)
     month_key, day_key = _google_routes_usage_keys(now)
-    for key in (month_key, day_key):
-        bucket = _usage_bucket(payload, key)
-        result_key = "succeeded" if succeeded else "failed"
-        bucket[result_key] = int(bucket.get(result_key, 0) or 0) + 1
-        bucket["updated_at"] = now.isoformat(timespec="seconds")
-    _save_json_object(path, payload)
+    store = _quota_store(args)
+    _migrate_usage_source(
+        store,
+        source_path=path,
+        provider=GOOGLE_ROUTES_PROVIDER,
+        counter=GOOGLE_ROUTES_USAGE_COUNTER,
+        provider_label=GOOGLE_ROUTES_PROVIDER,
+        sku_estimate="routes_compute_routes_pro",
+    )
+    store.mark_usage_result(
+        GOOGLE_ROUTES_PROVIDER,
+        GOOGLE_ROUTES_USAGE_COUNTER,
+        [("month", month_key), ("day", day_key)],
+        succeeded=succeeded,
+        provider_label=GOOGLE_ROUTES_PROVIDER,
+        sku_estimate="routes_compute_routes_pro",
+    )
 
 
 def _reserve_kakao_navi_usage(args: argparse.Namespace, count: int, *, now: datetime) -> None:
@@ -278,12 +299,18 @@ def _reserve_kakao_navi_usage(args: argparse.Namespace, count: int, *, now: date
     if monthly_cap <= 0 or daily_cap <= 0:
         raise RuntimeError("Kakao Navi usage cap is disabled; refusing live API call")
     path = Path(getattr(args, "kakao_navi_usage_path", DEFAULT_KAKAO_NAVI_USAGE_PATH)).expanduser()
-    payload = _load_json_object(path)
     month_key, day_key = _kakao_navi_usage_keys(now)
-    month_bucket = _usage_bucket(payload, month_key)
-    day_bucket = _usage_bucket(payload, day_key)
-    month_used = _usage_count(month_bucket)
-    day_used = _usage_count(day_bucket)
+    store = _quota_store(args)
+    _migrate_usage_source(
+        store,
+        source_path=path,
+        provider=KAKAO_NAVI_PROVIDER,
+        counter=KAKAO_NAVI_USAGE_COUNTER,
+        provider_label=KAKAO_NAVI_PROVIDER,
+        sku_estimate="kakao_navi_future_directions",
+    )
+    month_used = _period_usage_count(store, KAKAO_NAVI_PROVIDER, KAKAO_NAVI_USAGE_COUNTER, "month", month_key)
+    day_used = _period_usage_count(store, KAKAO_NAVI_PROVIDER, KAKAO_NAVI_USAGE_COUNTER, "day", day_key)
     if month_used + count > monthly_cap:
         raise RuntimeError(
             f"Kakao Navi monthly safety cap would be exceeded: {month_used}+{count}>{monthly_cap}"
@@ -292,26 +319,38 @@ def _reserve_kakao_navi_usage(args: argparse.Namespace, count: int, *, now: date
         raise RuntimeError(
             f"Kakao Navi daily cap would be exceeded: {day_used}+{count}>{daily_cap}"
         )
-    for bucket in (month_bucket, day_bucket):
-        bucket["attempted"] = _usage_count(bucket) + count
-        bucket["provider"] = KAKAO_NAVI_PROVIDER
-        bucket["sku_estimate"] = "kakao_navi_future_directions"
-        bucket["updated_at"] = now.isoformat(timespec="seconds")
-    _save_json_object(path, payload)
+    store.reserve_usage(
+        KAKAO_NAVI_PROVIDER,
+        KAKAO_NAVI_USAGE_COUNTER,
+        [("month", month_key, monthly_cap), ("day", day_key, daily_cap)],
+        count=count,
+        provider_label=KAKAO_NAVI_PROVIDER,
+        sku_estimate="kakao_navi_future_directions",
+    )
 
 
 def _mark_kakao_navi_usage_result(args: argparse.Namespace, *, now: datetime, succeeded: bool) -> None:
     if bool(getattr(args, "dry_run", False)):
         return
     path = Path(getattr(args, "kakao_navi_usage_path", DEFAULT_KAKAO_NAVI_USAGE_PATH)).expanduser()
-    payload = _load_json_object(path)
     month_key, day_key = _kakao_navi_usage_keys(now)
-    for key in (month_key, day_key):
-        bucket = _usage_bucket(payload, key)
-        result_key = "succeeded" if succeeded else "failed"
-        bucket[result_key] = int(bucket.get(result_key, 0) or 0) + 1
-        bucket["updated_at"] = now.isoformat(timespec="seconds")
-    _save_json_object(path, payload)
+    store = _quota_store(args)
+    _migrate_usage_source(
+        store,
+        source_path=path,
+        provider=KAKAO_NAVI_PROVIDER,
+        counter=KAKAO_NAVI_USAGE_COUNTER,
+        provider_label=KAKAO_NAVI_PROVIDER,
+        sku_estimate="kakao_navi_future_directions",
+    )
+    store.mark_usage_result(
+        KAKAO_NAVI_PROVIDER,
+        KAKAO_NAVI_USAGE_COUNTER,
+        [("month", month_key), ("day", day_key)],
+        succeeded=succeeded,
+        provider_label=KAKAO_NAVI_PROVIDER,
+        sku_estimate="kakao_navi_future_directions",
+    )
 
 
 def _google_routes_chunk_points(route_points: list[dict[str, Any]], max_intermediates: int) -> list[list[dict[str, Any]]]:
@@ -1327,6 +1366,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--jobs-dir", type=Path, default=DEFAULT_JOB_DIR)
     parser.add_argument("--side-tools-dir", type=Path, default=DEFAULT_SIDE_TOOLS_DIR)
     parser.add_argument("--runtime-db-path", type=Path, default=DEFAULT_RUNTIME_DB_PATH)
+    parser.add_argument("--quota-db-path", type=Path, default=None)
     parser.add_argument("--baseline-dir", type=Path, default=DEFAULT_BASELINE_DIR)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--market", default=os.environ.get("BRP_LIVE_TRAFFIC_MARKET", "CN"))

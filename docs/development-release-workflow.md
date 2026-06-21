@@ -77,19 +77,21 @@ app services for ordinary development. Rare diagnostics can reach OSRM through
 the operator-provided loopback mapping.
 The React Google geocode usage counter is shown only when
 `BRP_SHOW_GOOGLE_GEOCODE_USAGE=true`, which should be set on the South Korea
-deployment only. That counter is persistent runtime state. Preserve the current
-`apps/client/cache/google_geocode_usage.json` file during deploys; do not reset
-it to an old verified value.
+deployment only. That counter is persistent runtime state in the SQLite quota
+store. Preserve `BRP_QUOTA_DB_PATH` or `BRP_RUNTIME_DB_PATH` during deploys; if
+`apps/client/cache/google_geocode_usage.json` exists, keep it as a legacy
+migration source and do not reset it to an old verified value.
 KR traffic profile refresh uses Kakao Navi future weekday samples and a
-separate persistent usage counter controlled by `BRP_KAKAO_NAVI_USAGE_PATH`.
-This is not the same as the Google geocode counter. Preserve it during KR
-deploys and use the checked-in KR traffic profile wrappers instead of adapting
-the CN AMap live-timer scripts. Do not use Google Routes for Seoul driving
-profiles unless a future verified probe proves coverage has changed.
+separate persistent usage counter in the same SQLite quota store. The
+`BRP_KAKAO_NAVI_USAGE_PATH` JSON path is retained only as a legacy migration
+source. Preserve the quota/runtime SQLite DB during KR deploys and use the
+checked-in KR traffic profile wrappers instead of adapting the CN AMap
+live-timer scripts. Do not use Google Routes for Seoul driving profiles unless a
+future verified probe proves coverage has changed.
 
 External API QPS is also persistent runtime coordination state. Kakao, Google,
-AMap, and DeepSeek calls use cross-process limiter files under
-`state/api_rate_limits` by default, or `BRP_API_RATE_LIMIT_DIR` when set.
+AMap, DeepSeek, and the Google geocode relay use the SQLite quota store at
+`BRP_QUOTA_DB_PATH`, or `BRP_RUNTIME_DB_PATH` when no dedicated quota DB is set.
 
 CN staging and CN production intentionally share runtime history and caches
 through server-local env paths. Keep these variables pointed at the same shared
@@ -100,7 +102,9 @@ BRP_BACKEND_JOBS_DIR
 BRP_SIDE_TOOLS_DIR
 BRP_CLIENT_CACHE_DIR
 BRP_BACKEND_CACHE_DIR
-BRP_API_RATE_LIMIT_DIR
+BRP_RUNTIME_DB_PATH
+BRP_QUOTA_DB_PATH
+BRP_OSRM_MANAGER_DB_PATH
 ```
 
 Use separate checkouts, ports, service names, and `ops/env/local.env` files for
@@ -190,11 +194,11 @@ Invoke-RestMethod 'http://127.0.0.1:5002/nearest/v1/driving/121.4737,31.2304?num
 Provider safety checks:
 
 - Do not bypass `CrossProcessRateLimiter` for Kakao, Google, AMap, or DeepSeek calls.
-- Do not write `apps/client/cache/google_geocode_usage.json` directly; use the atomic reservation helpers.
-- Keep `state/api_rate_limits` as runtime coordination state, or set `BRP_API_RATE_LIMIT_DIR` to an equivalent server-local runtime path.
-- Kakao Navi traffic profile sampling has its own reservation file and caps:
-  keep `BRP_KAKAO_NAVI_USAGE_PATH`, `BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP`,
-  `BRP_KAKAO_NAVI_DAILY_CAP`, and
+- Do not write usage JSON files directly; use the atomic reservation helpers.
+- Preserve the SQLite quota store as runtime coordination state; set
+  `BRP_QUOTA_DB_PATH` to an equivalent server-local runtime path when needed.
+- Kakao Navi traffic profile sampling has provider caps in SQLite:
+  keep `BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP`, `BRP_KAKAO_NAVI_DAILY_CAP`, and
   `BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH` configured on KR. Full weekly KR
   AM/PM/off-peak refreshes currently need the Kakao daily and per-refresh caps
   set to at least 500 calls.
@@ -395,7 +399,8 @@ KR is a separate production deployment that follows the intended Git revision
 after CN production unless the user explicitly excludes KR. Preserve its runtime
 data: `state/jobs`, `state/side_tools`, `apps/client/cache`,
 `apps/backend/cache`, generated outputs, `ops/env/local.env`,
-`apps/client/cache/google_geocode_usage.json`, and `state/api_rate_limits`.
+legacy Google/Kakao usage JSON files if present, and the quota/runtime SQLite
+stores.
 
 High-level KR deploy flow:
 
@@ -570,18 +575,18 @@ Runtime data is intentionally outside git. When moving to a fresh server or repl
 
 ```text
 $BRP_OSRM_DATA_ROOT
-$BRP_STAGING_APP_ROOT/state/api_rate_limits
+$BRP_STAGING_APP_ROOT/state/brp_runtime.sqlite
 $BRP_STAGING_JOBS_ROOT
 $BRP_STAGING_APP_ROOT/apps/backend/cache
 $BRP_STAGING_APP_ROOT/apps/client/cache
-$BRP_STAGING_APP_ROOT/apps/client/cache/google_geocode_usage.json
+$BRP_STAGING_APP_ROOT/apps/client/cache/google_geocode_usage.json  # legacy migration source if present
 $BRP_STAGING_APP_ROOT/apps/backend/outputs
 $BRP_STAGING_APP_ROOT/apps/client/demodata
-$BRP_PROD_APP_ROOT/state/api_rate_limits
+$BRP_PROD_APP_ROOT/state/brp_runtime.sqlite
 $BRP_PROD_JOBS_ROOT
 $BRP_PROD_APP_ROOT/apps/backend/cache
 $BRP_PROD_APP_ROOT/apps/client/cache
-$BRP_PROD_APP_ROOT/apps/client/cache/google_geocode_usage.json
+$BRP_PROD_APP_ROOT/apps/client/cache/google_geocode_usage.json  # legacy migration source if present
 $BRP_PROD_APP_ROOT/apps/backend/outputs
 $BRP_PROD_APP_ROOT/apps/client/demodata
 ```
@@ -597,8 +602,8 @@ Job JSON files may contain absolute paths to generated outputs. If jobs are copi
   an explicit deployment decision.
 - Keep real secrets in `ops/env/local.env` for each environment, never in git.
 - Preserve `state/jobs` or `BRP_BACKEND_JOBS_DIR`, `state/side_tools` or
-  `BRP_SIDE_TOOLS_DIR`, `state/api_rate_limits` or
-  `BRP_API_RATE_LIMIT_DIR`, `BRP_CLIENT_CACHE_DIR`, `BRP_BACKEND_CACHE_DIR`,
+  `BRP_SIDE_TOOLS_DIR`, `BRP_RUNTIME_DB_PATH`, `BRP_QUOTA_DB_PATH`,
+  `BRP_OSRM_MANAGER_DB_PATH`, `BRP_CLIENT_CACHE_DIR`, `BRP_BACKEND_CACHE_DIR`,
   legacy cache folders, and generated outputs across pulls and directory moves.
 - Keep Cloudflare Tunnel and OSRM long-running on the server that owns each
   deployment, but do not expose OSRM through public hostnames.

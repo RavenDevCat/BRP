@@ -56,10 +56,13 @@ http://127.0.0.1:8501
 Preserve these across server moves and deployments:
 
 - `apps/client/cache`
-- `apps/client/cache/google_geocode_usage.json`
+- the runtime SQLite quota store (`BRP_QUOTA_DB_PATH`, or `BRP_RUNTIME_DB_PATH`
+  when no dedicated quota DB is configured)
+- `apps/client/cache/google_geocode_usage.json` if present; it is a legacy
+  migration source, not the authoritative counter after startup
 - `apps/client/outputs`
 - server-local env files
 
-Do not write the Google usage JSON directly. Use the reservation helpers in
+Do not write usage counters directly. Use the reservation helpers in
 `client_runtime.py` so concurrent processes do not lose increments or overshoot
 the monthly cap.

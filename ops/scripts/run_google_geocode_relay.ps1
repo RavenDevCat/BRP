@@ -39,5 +39,12 @@ if ($StateDir) {
 }
 
 Set-Location $RootDir
-Write-Host "Starting BRP Google geocode relay on http://$($env:BRP_GOOGLE_GEOCODE_RELAY_HOST):$($env:BRP_GOOGLE_GEOCODE_RELAY_PORT)"
-& $env:RELAY_PYTHON (Join-Path $RootDir "ops\relay\google_geocode_relay.py")
+$RelayAppDir = Join-Path $RootDir "ops\relay"
+$UvicornArgs = @(
+    "-m", "uvicorn", "google_geocode_relay:app",
+    "--app-dir", $RelayAppDir,
+    "--host", $env:BRP_GOOGLE_GEOCODE_RELAY_HOST,
+    "--port", $env:BRP_GOOGLE_GEOCODE_RELAY_PORT
+)
+Write-Host "Starting BRP Google geocode FastAPI relay on http://$($env:BRP_GOOGLE_GEOCODE_RELAY_HOST):$($env:BRP_GOOGLE_GEOCODE_RELAY_PORT)"
+& $env:RELAY_PYTHON @UvicornArgs

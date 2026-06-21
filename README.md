@@ -134,7 +134,8 @@ Do not commit:
 - provider keys, passwords, tunnel tokens, or service credentials
 - `state/jobs` or a server's `BRP_BACKEND_JOBS_DIR`
 - `state/side_tools` or a server's `BRP_SIDE_TOOLS_DIR`
-- `state/api_rate_limits` or a server's `BRP_API_RATE_LIMIT_DIR`
+- runtime SQLite stores such as `BRP_RUNTIME_DB_PATH`, `BRP_QUOTA_DB_PATH`,
+  or `BRP_OSRM_MANAGER_DB_PATH`
 - `apps/client/cache` and `apps/backend/cache`
 - generated outputs under `apps/client/outputs` or `apps/backend/outputs`
 - OSRM datasets and generated `.osrm*` files
@@ -145,9 +146,9 @@ Important runtime files to preserve during server moves:
 - client/backend caches
 - generated map/report outputs
 - server-local env files
-- Google geocode usage counter
-- Kakao Navi traffic-profile usage counter
-- provider rate-limit state
+- quota/runtime SQLite stores for provider rate limits and Google/Kakao usage
+- legacy Google/Kakao usage JSON files if present, so first startup can migrate
+  them into SQLite
 
 ## OSRM Data
 

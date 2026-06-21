@@ -140,9 +140,10 @@ The Google geocode usage counter is KR-only by policy. Leave it hidden on
 domestic, staging, production, and local development servers unless that server
 is the South Korea deployment:
 
-The counter file is persistent runtime state. Deployments should preserve the
-current `apps/client/cache/google_geocode_usage.json` value and verify
-continuity; they should not reset the count to a historical baseline.
+The counter is persistent runtime state in the SQLite quota store. Deployments
+should preserve `BRP_QUOTA_DB_PATH` or `BRP_RUNTIME_DB_PATH`; if an older
+`apps/client/cache/google_geocode_usage.json` file exists, keep it as a legacy
+migration source and do not reset it to a historical baseline.
 
 ```bash
 export BRP_SHOW_GOOGLE_GEOCODE_USAGE=false
@@ -154,13 +155,12 @@ For the South Korea deployment only:
 export BRP_SHOW_GOOGLE_GEOCODE_USAGE=true
 ```
 
-External API throttling is shared across backend workers and client-side helper
-processes through a cross-process limiter. By default it stores state under
-`state/api_rate_limits` in the checkout. Set this only if a deployment needs a
-separate runtime data mount:
+External API throttling is shared across backend workers, client-side helper
+processes, and the Google geocode relay through the SQLite quota store. Set a
+dedicated path only if a deployment needs a separate runtime data mount:
 
 ```bash
-export BRP_API_RATE_LIMIT_DIR="/srv/brp/runtime/api_rate_limits"
+export BRP_QUOTA_DB_PATH="/srv/brp/runtime/brp_quota.sqlite"
 ```
 
 AI Audit calls use the same limiter family:
@@ -194,7 +194,8 @@ export BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH="..."
 export BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME="08:00"
 export BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME="15:40"
 export BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME="11:00"
-export BRP_KAKAO_NAVI_USAGE_PATH="/srv/brp/runtime/kakao_navi_usage.json"
+export BRP_KAKAO_NAVI_USAGE_PATH="/srv/brp/runtime/kakao_navi_usage.json"  # legacy migration source
+export BRP_QUOTA_DB_PATH="/srv/brp/runtime/brp_quota.sqlite"
 export BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP="4000"
 export BRP_KAKAO_NAVI_DAILY_CAP="500"
 export BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH="500"

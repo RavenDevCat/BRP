@@ -31,6 +31,7 @@ from openpyxl import Workbook
 try:
     from . import osrm_manager
     from .ai_audit import generate_ai_audit_report
+    from .quota_store_sqlite import SqliteQuotaStore
     from .runtime_store_sqlite import SqliteRuntimeStore
     from .planner_core import (
         PlannerConfig,
@@ -46,6 +47,7 @@ try:
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     import osrm_manager
     from ai_audit import generate_ai_audit_report
+    from quota_store_sqlite import SqliteQuotaStore
     from runtime_store_sqlite import SqliteRuntimeStore
     from planner_core import (
         PlannerConfig,
@@ -161,6 +163,10 @@ MAP_TILE_CACHE_DIR = Path(
 ).expanduser()
 DISTANCE_CHECKER_JOBS_PATH = CLIENT_CACHE_DIR / "distance_checker_jobs.json"
 GOOGLE_GEOCODE_USAGE_PATH = CLIENT_CACHE_DIR / "google_geocode_usage.json"
+GOOGLE_GEOCODE_USAGE_PROVIDER = "google_geocode"
+GOOGLE_GEOCODE_USAGE_COUNTER = "geocode"
+GOOGLE_GEOCODE_USAGE_PROVIDER_LABEL = "Google Geocoding"
+GOOGLE_GEOCODE_USAGE_SKU_ESTIMATE = "geocoding"
 MAP_TILE_UPSTREAM_TEMPLATE = os.environ.get(
     "BRP_MAP_TILE_UPSTREAM_TEMPLATE",
     "https://tile.openstreetmap.de/{z}/{x}/{y}.png",
@@ -1624,16 +1630,22 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
     if not GOOGLE_GEOCODE_USAGE_VISIBLE:
         return {"enabled": False}
     month_key = _google_geocode_usage_month_key()
+    store = SqliteQuotaStore()
+    store.migrate_flat_month_usage(
+        source_path=GOOGLE_GEOCODE_USAGE_PATH,
+        provider=GOOGLE_GEOCODE_USAGE_PROVIDER,
+        counter=GOOGLE_GEOCODE_USAGE_COUNTER,
+        provider_label=GOOGLE_GEOCODE_USAGE_PROVIDER_LABEL,
+        sku_estimate=GOOGLE_GEOCODE_USAGE_SKU_ESTIMATE,
+    )
+    usage = store.get_usage(
+        GOOGLE_GEOCODE_USAGE_PROVIDER,
+        GOOGLE_GEOCODE_USAGE_COUNTER,
+        "month",
+        month_key,
+    )
     try:
-        payload = (
-            json.loads(GOOGLE_GEOCODE_USAGE_PATH.read_text(encoding="utf-8"))
-            if GOOGLE_GEOCODE_USAGE_PATH.exists()
-            else {}
-        )
-    except Exception:
-        payload = {}
-    try:
-        used = max(0, int(dict(payload).get(month_key, 0) or 0))
+        used = max(0, int(usage.get("attempted", 0) or 0))
     except Exception:
         used = 0
     return {

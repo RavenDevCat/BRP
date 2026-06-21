@@ -15,6 +15,7 @@ def load_manager(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_LOCK_DIR", str(tmp_path / "locks"))
     monkeypatch.setenv("BRP_OSRM_USAGE_DIR", str(tmp_path / "usage"))
     monkeypatch.setenv("BRP_OSRM_MANAGER_STATE_PATH", str(tmp_path / "state.json"))
+    monkeypatch.setenv("BRP_OSRM_MANAGER_DB_PATH", str(tmp_path / "osrm_manager.sqlite"))
     monkeypatch.setenv("BRP_OSRM_IDLE_TTL_SECONDS", "10")
     monkeypatch.setenv("BRP_OSRM_STALE_LOCK_TTL_SECONDS", "10")
     monkeypatch.setenv("BRP_OSRM_MIN_AVAILABLE_MB", "0")
@@ -26,6 +27,7 @@ def test_default_state_path_uses_shared_runtime_on_linux(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_OSRM_ON_DEMAND_ENABLED", "true")
     monkeypatch.setenv("OSRM_LOCAL_DATA_DIR", str(tmp_path / "osrm-data"))
     monkeypatch.setenv("BRP_OSRM_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setenv("BRP_OSRM_MANAGER_DB_PATH", str(tmp_path / "osrm_manager.sqlite"))
     monkeypatch.delenv("BRP_OSRM_MANAGER_STATE_PATH", raising=False)
     sys.modules.pop("osrm_manager", None)
 
@@ -37,15 +39,14 @@ def test_default_state_path_uses_shared_runtime_on_linux(monkeypatch, tmp_path):
         assert str(manager.OSRM_STATE_PATH) == "/opt/brp/shared/runtime/osrm_manager/state.json"
 
 
-def test_lock_helpers_are_safe_without_platform_lock_modules(monkeypatch, tmp_path):
+def test_lock_helpers_use_sqlite_leases(monkeypatch, tmp_path):
     manager = load_manager(monkeypatch, tmp_path)
-    monkeypatch.setattr(manager, "fcntl", None)
-    monkeypatch.setattr(manager, "msvcrt", None)
     lock_path = tmp_path / "noop.lock"
 
     with manager._file_lock(lock_path):
-        assert lock_path.exists()
+        assert manager.OSRM_STORE.is_lock_held("noop.lock") is True
 
+    assert manager.OSRM_STORE.is_lock_held("noop.lock") is False
     assert manager._region_lock_is_held("missing") is False
 
 
@@ -138,10 +139,6 @@ def test_cleanup_idle_regions_only_stops_managed_expired_entries(monkeypatch, tm
 
 
 def test_cleanup_idle_regions_skips_regions_with_active_locks(monkeypatch, tmp_path):
-    if os.name == "nt":
-        return
-    import fcntl
-
     manager = load_manager(monkeypatch, tmp_path)
     state_path = Path(manager.OSRM_STATE_PATH)
     state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,9 +160,6 @@ def test_cleanup_idle_regions_skips_regions_with_active_locks(monkeypatch, tmp_p
         encoding="utf-8",
     )
     lock_path = Path(manager.OSRM_LOCK_DIR) / "shanghai.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("w")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     stopped = []
 
@@ -178,11 +172,9 @@ def test_cleanup_idle_regions_skips_regions_with_active_locks(monkeypatch, tmp_p
         return Result()
 
     monkeypatch.setattr(manager.subprocess, "run", fake_run)
-    try:
+
+    with manager._file_lock(lock_path):
         stopped_regions = manager._cleanup_idle_regions(exclude_region="suzhou")
-    finally:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
 
     assert stopped_regions == []
     assert stopped == []
@@ -272,10 +264,6 @@ def test_lock_status_reports_unlocked_stale_lock(monkeypatch, tmp_path):
 
 
 def test_cleanup_stale_locks_skips_locked_files(monkeypatch, tmp_path):
-    if os.name == "nt":
-        return
-    import fcntl
-
     manager = load_manager(monkeypatch, tmp_path)
     lock_dir = Path(manager.OSRM_LOCK_DIR)
     lock_dir.mkdir(parents=True, exist_ok=True)
@@ -285,19 +273,13 @@ def test_cleanup_stale_locks_skips_locked_files(monkeypatch, tmp_path):
     locked_lock.write_text("", encoding="utf-8")
     old = time.time() - 30
     os.utime(stale_lock, (old, old))
-    os.utime(locked_lock, (old, old))
 
-    handle = locked_lock.open("a")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+    with manager._file_lock(locked_lock):
         removed = manager.cleanup_stale_locks()
-    finally:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()
 
     assert removed == [str(stale_lock)]
     assert not stale_lock.exists()
-    assert locked_lock.exists()
+    assert manager.OSRM_STORE.is_lock_held("shanghai.lock") is False
 
 
 def test_manager_status_reports_state_dataset_and_container(monkeypatch, tmp_path):
@@ -489,20 +471,11 @@ def test_ensure_region_refuses_when_running_region_limit_has_no_safe_reclaim(mon
 
 
 def test_file_lock_times_out_instead_of_waiting_forever(monkeypatch, tmp_path):
-    if os.name == "nt":
-        return
-    import fcntl
-
     monkeypatch.setenv("BRP_OSRM_LOCK_WAIT_SECONDS", "0.01")
     manager = load_manager(monkeypatch, tmp_path)
     lock_path = Path(manager.OSRM_LOCK_DIR) / "global-start.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("w")
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    try:
+
+    with manager._file_lock(lock_path):
         with pytest.raises(manager.OsrmManagerError, match="queued behind global-start.lock"):
             with manager._file_lock(lock_path):
                 pass
-    finally:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        handle.close()

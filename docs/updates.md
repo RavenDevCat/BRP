@@ -4,6 +4,34 @@ This document tracks major user-facing product and operations updates.
 
 It is not a code changelog. Record changes here when users or operators should know that behavior, available tools, service providers, or recommended rerun guidance changed.
 
+## 2026-06-21
+
+### Runtime Coordination Standardized
+
+- Provider QPS limits and provider usage counters now use a shared SQLite quota
+  store instead of per-provider JSON files plus ad-hoc file locks.
+- Google geocode, Google Routes, Kakao Navi, DeepSeek, AMap, and the Bangkok
+  Google geocode relay all reserve usage or request slots through the same
+  SQLite-backed coordination layer.
+- Existing Google/Kakao usage JSON files are treated as legacy migration
+  sources on first read, so deployments should preserve them if present but
+  should not edit them directly.
+
+### Google Geocode Relay Moved To FastAPI
+
+- The Bangkok-only Google geocode relay now runs as a FastAPI/uvicorn ASGI app.
+- The relay keeps the same `/health` and `/geocode` API shape, bearer-token
+  check, Bangkok/BK request restriction, and daily/monthly quota caps.
+- The KR relay runner now starts the ASGI app with `python -m uvicorn`.
+
+### OSRM Manager State And Locks Moved To SQLite
+
+- OSRM manager state, startup locks, stale-lock reporting, and active-use leases
+  now use a SQLite store instead of handwritten JSON state plus platform file
+  locks.
+- Legacy `state.json` and old `.lock` files are still read or cleaned when
+  present, so existing deployments can upgrade without manual cleanup.
+
 ## 2026-06-20
 
 ### Korea Route-Level Traffic Attribution Verified

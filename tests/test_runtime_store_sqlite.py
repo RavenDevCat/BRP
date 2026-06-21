@@ -187,3 +187,15 @@ def test_backend_job_runner_save_job_dual_writes_sqlite(tmp_path: Path, monkeypa
 
     sqlite_store = SqliteRuntimeStore(sqlite_path)
     assert sqlite_store.get_job("job1")["owner_email"] == "alice@example.com"
+
+
+
+def test_sqlite_runtime_store_mode_is_not_exposed_before_read_switch(monkeypatch) -> None:
+    import backend_job_runner  # noqa: WPS433
+    import backend_service  # noqa: WPS433
+
+    monkeypatch.setenv("BRP_RUNTIME_STORE", "sqlite")
+    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "sqlite")
+
+    assert backend_job_runner._runtime_store_mode() == "json"
+    assert backend_service._runtime_store_mirror_enabled() is False

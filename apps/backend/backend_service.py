@@ -72,7 +72,7 @@ SIDE_TOOLS_DIR = Path(RAW_SIDE_TOOLS_DIR or str(DEFAULT_SIDE_TOOLS_DIR)).expandu
 RAW_RUNTIME_DB_PATH = os.environ.get("BRP_RUNTIME_DB_PATH", "").strip()
 RUNTIME_DB_PATH = Path(RAW_RUNTIME_DB_PATH or str(JOBS_DIR.parent / "brp_runtime.sqlite")).expanduser()
 RUNTIME_STORE_MODE = (os.environ.get("BRP_RUNTIME_STORE", "json").strip().lower() or "json")
-if RUNTIME_STORE_MODE not in {"json", "dual", "sqlite"}:
+if RUNTIME_STORE_MODE not in {"json", "dual"}:
     RUNTIME_STORE_MODE = "json"
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
@@ -239,7 +239,7 @@ _RUNTIME_SQLITE_STORE_LOCK = threading.Lock()
 
 
 def _runtime_store_mirror_enabled() -> bool:
-    return RUNTIME_STORE_MODE in {"dual", "sqlite"}
+    return RUNTIME_STORE_MODE == "dual"
 
 
 def _runtime_sqlite_store() -> SqliteRuntimeStore | None:

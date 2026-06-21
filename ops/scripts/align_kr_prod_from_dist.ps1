@@ -5,7 +5,8 @@ param(
   [string]$Repo = "C:\Users\Bus.EIM\BRP",
   [string]$ArchivePath = "",
   [string]$BackendTaskName = "BRP Backend",
-  [string]$NginxTaskName = "BRP-Nginx-Public"
+  [string]$NginxTaskName = "BRP-Nginx-Public",
+  [int]$BackendPort = 8001
 )
 
 $ErrorActionPreference = "Stop"
@@ -27,6 +28,37 @@ function Wait-BrpBackendHealth {
     }
   }
   throw "KR backend health did not become ready after $Attempts attempts: $lastError"
+}
+
+function Stop-BrpBackendListener {
+  param(
+    [int]$Port = 8001,
+    [int]$Attempts = 15,
+    [int]$DelaySeconds = 1
+  )
+
+  $connections = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+  $processIds = @($connections | ForEach-Object { $_.OwningProcess } | Sort-Object -Unique)
+  foreach ($processId in $processIds) {
+    if (-not $processId) {
+      continue
+    }
+    $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
+    if ($null -eq $process) {
+      continue
+    }
+    Write-Output "Stopping existing KR backend listener pid=$processId process=$($process.ProcessName) port=$Port"
+    Stop-Process -Id $processId -Force -ErrorAction Stop
+  }
+
+  for ($index = 1; $index -le $Attempts; $index++) {
+    $stillListening = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if (-not $stillListening) {
+      return
+    }
+    Start-Sleep -Seconds $DelaySeconds
+  }
+  throw "KR backend port $Port is still occupied after stopping Scheduled Task and listener process."
 }
 
 if (-not $ArchivePath) {
@@ -88,10 +120,11 @@ if (-not $found) {
 
 Stop-ScheduledTask -TaskName $BackendTaskName -ErrorAction SilentlyContinue
 Start-Sleep -Seconds 2
+Stop-BrpBackendListener -Port $BackendPort
 Start-ScheduledTask -TaskName $BackendTaskName
 
 $backendTask = Get-ScheduledTask -TaskName $BackendTaskName
-$health = Wait-BrpBackendHealth
+$health = Wait-BrpBackendHealth -Uri "http://127.0.0.1:$BackendPort/health"
 
 Start-ScheduledTask -TaskName $NginxTaskName
 Start-Sleep -Seconds 2

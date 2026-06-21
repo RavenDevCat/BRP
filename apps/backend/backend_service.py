@@ -31,6 +31,7 @@ try:
         terminate_worker_process,
         worker_creation_flags,
     )
+    from .json_cache_store import load_json_object, save_json_object
     from . import osrm_manager
     from .ai_audit import generate_ai_audit_report
     from .quota_store_sqlite import SqliteQuotaStore
@@ -52,6 +53,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         terminate_worker_process,
         worker_creation_flags,
     )
+    from json_cache_store import load_json_object, save_json_object
     import osrm_manager
     from ai_audit import generate_ai_audit_report
     from quota_store_sqlite import SqliteQuotaStore
@@ -2645,20 +2647,11 @@ def _amap_request_coordinates_for_point(point: dict[str, Any]) -> tuple[float, f
 
 
 def _load_amap_display_cache_unlocked() -> dict[str, Any]:
-    try:
-        payload = json.loads(AMAP_DISPLAY_GEOMETRY_CACHE_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return payload if isinstance(payload, dict) else {}
+    return load_json_object(AMAP_DISPLAY_GEOMETRY_CACHE_PATH)
 
 
 def _save_amap_display_cache_unlocked(cache: dict[str, Any]) -> None:
-    AMAP_DISPLAY_GEOMETRY_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = AMAP_DISPLAY_GEOMETRY_CACHE_PATH.with_suffix(
-        AMAP_DISPLAY_GEOMETRY_CACHE_PATH.suffix + ".tmp"
-    )
-    tmp_path.write_text(json.dumps(cache, ensure_ascii=False), encoding="utf-8")
-    tmp_path.replace(AMAP_DISPLAY_GEOMETRY_CACHE_PATH)
+    save_json_object(AMAP_DISPLAY_GEOMETRY_CACHE_PATH, cache, indent=None)
 
 
 def _dedupe_line_coordinates(coordinates: list[list[float]]) -> list[list[float]]:

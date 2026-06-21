@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 
 import client_runtime as runtime
+from json_cache_store import clear_json_object
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -109,7 +110,7 @@ def clear_route_caches() -> None:
         runtime.GEOCODE_CACHE_PATH,
         runtime.SUBWAY_CACHE_PATH,
     ):
-        cache_path.write_text("{}", encoding="utf-8")
+        clear_json_object(cache_path)
 
 
 def get_excel_sheet_names(excel_path: str | Path) -> list[str]:

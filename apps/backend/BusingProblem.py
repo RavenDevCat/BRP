@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import colorsys
 import html
-import json
 import math
 import os
-import threading
 import time
 from contextlib import contextmanager
 from collections import Counter
@@ -18,6 +16,7 @@ from folium import Element
 from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from api_rate_limit import CrossProcessRateLimiter
+from json_cache_store import load_json_object, save_json_object
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -166,7 +165,6 @@ AMAP_PLACES_LIMITER = RateLimiter("amap-places", AMAP_PLACES_MAX_QPS)
 AMAP_ROUTING_LIMITER = RateLimiter("amap-routing", AMAP_ROUTING_MAX_QPS)
 AMAP_MATRIX_LIMITER = RateLimiter("amap-matrix", AMAP_MATRIX_MAX_QPS)
 GOOGLE_GEOCODE_LIMITER = RateLimiter("google-geocode", GOOGLE_GEOCODE_MAX_QPS)
-CACHE_FILE_LOCKS: dict[Path, threading.Lock] = {}
 
 
 def use_google_geocode_relay(country: str) -> bool:
@@ -207,22 +205,12 @@ def stop_display_text(point: dict[str, Any]) -> str:
 
 def load_json_cache(path: Path) -> dict[str, Any]:
     ensure_cache_dir()
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_json_object(path)
 
 
 def save_json_cache(path: Path, payload: dict[str, Any]) -> None:
     ensure_cache_dir()
-    lock = CACHE_FILE_LOCKS.setdefault(path, threading.Lock())
-    body = json.dumps(payload, ensure_ascii=False, indent=2)
-    temp_path = path.with_suffix(f"{path.suffix}.tmp")
-    with lock:
-        temp_path.write_text(body, encoding="utf-8")
-        temp_path.replace(path)
+    save_json_object(path, payload)
 
 
 GEOCODE_CACHE = load_json_cache(GEOCODE_CACHE_PATH)

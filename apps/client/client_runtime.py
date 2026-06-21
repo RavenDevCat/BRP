@@ -3,11 +3,9 @@ from __future__ import annotations
 import colorsys
 from datetime import datetime
 import html
-import json
 import math
 import os
 import re
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -18,6 +16,7 @@ import requests
 from folium import Element
 
 from api_rate_limit import CrossProcessRateLimiter
+from json_cache_store import load_json_object, save_json_object
 from quota_store_sqlite import SqliteQuotaStore
 
 
@@ -72,7 +71,6 @@ AMAP_PLACES_LIMITER = RateLimiter("amap-places", AMAP_PLACES_MAX_QPS)
 KAKAO_GEOCODE_LIMITER = RateLimiter("kakao-geocode", KAKAO_GEOCODE_MAX_QPS)
 KAKAO_PLACES_LIMITER = RateLimiter("kakao-places", KAKAO_PLACES_MAX_QPS)
 GOOGLE_GEOCODE_LIMITER = RateLimiter("google-geocode", GOOGLE_GEOCODE_MAX_QPS)
-CACHE_FILE_LOCKS: dict[Path, threading.Lock] = {}
 
 
 def ensure_cache_dir() -> None:
@@ -81,22 +79,12 @@ def ensure_cache_dir() -> None:
 
 def load_json_cache(path: Path) -> dict[str, Any]:
     ensure_cache_dir()
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_json_object(path)
 
 
 def save_json_cache(path: Path, payload: dict[str, Any]) -> None:
     ensure_cache_dir()
-    lock = CACHE_FILE_LOCKS.setdefault(path, threading.Lock())
-    body = json.dumps(payload, ensure_ascii=False, indent=2)
-    temp_path = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-    with lock:
-        temp_path.write_text(body, encoding="utf-8")
-        temp_path.replace(path)
+    save_json_object(path, payload)
 
 
 def _load_google_geocode_usage_payload() -> dict[str, Any]:

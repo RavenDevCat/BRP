@@ -23,8 +23,10 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 try:
     from .BusingProblem import transpose_matrix
+    from .json_cache_store import clear_json_object, load_json_object, save_json_object
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from BusingProblem import transpose_matrix
+    from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
 
 
@@ -766,22 +768,6 @@ def summarize_live_traffic_samples(
         "sample_weekday": str(latest.get("sample_weekday") or ""),
         "sample_paths": [str(item.get("_path", "")) for item in selected],
     }
-
-
-def _load_json_object(path: Path) -> dict[str, Any]:
-    try:
-        if path.exists():
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            if isinstance(payload, dict):
-                return payload
-    except Exception:
-        return {}
-    return {}
-
-
-def _save_json_object(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _next_local_timestamp(hour: int, minute: int = 0) -> int:
@@ -1861,7 +1847,7 @@ def calibrate_peak_traffic_multiplier(
         for route_id, points in route_points_by_id.items()
     }
 
-    cache = _load_json_object(TRAFFIC_CALIBRATION_CACHE_PATH)
+    cache = load_json_object(TRAFFIC_CALIBRATION_CACHE_PATH)
     cache_changed = False
     period_samples: dict[str, list[dict[str, float]]] = {str(period["key"]): [] for period in periods}
     route_period_samples: dict[str, dict[str, dict[str, float]]] = {
@@ -1930,7 +1916,7 @@ def calibrate_peak_traffic_multiplier(
         planner.OSRM_BASE_URL = previous_osrm_base_url
 
     if cache_changed:
-        _save_json_object(TRAFFIC_CALIBRATION_CACHE_PATH, cache)
+        save_json_object(TRAFFIC_CALIBRATION_CACHE_PATH, cache, sort_keys=True)
 
     period_summaries: dict[str, dict[str, Any]] = {}
     route_periods = _summarize_route_period_stats(route_period_samples, route_edge_counts)
@@ -2040,20 +2026,12 @@ def ensure_cache_dir() -> None:
 
 def load_planner_result_cache() -> dict[str, Any]:
     ensure_cache_dir()
-    if not PLANNER_RESULT_CACHE_PATH.exists():
-        return {}
-    try:
-        return json.loads(PLANNER_RESULT_CACHE_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+    return load_json_object(PLANNER_RESULT_CACHE_PATH)
 
 
 def save_planner_result_cache(cache_data: dict[str, Any]) -> None:
     ensure_cache_dir()
-    PLANNER_RESULT_CACHE_PATH.write_text(
-        json.dumps(cache_data, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    save_json_object(PLANNER_RESULT_CACHE_PATH, cache_data)
 
 
 PLANNER_RESULT_CACHE = load_planner_result_cache()
@@ -2092,7 +2070,7 @@ def clear_route_caches() -> None:
     save_planner_result_cache(PLANNER_RESULT_CACHE)
 
     for cache_path in (ROUTE_METRICS_CACHE_PATH, ROUTE_GEOMETRY_CACHE_PATH):
-        cache_path.write_text("{}", encoding="utf-8")
+        clear_json_object(cache_path)
 
 
 def get_excel_sheet_names(excel_path: str | Path) -> list[str]:

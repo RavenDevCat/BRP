@@ -71,9 +71,6 @@ RAW_SIDE_TOOLS_DIR = os.environ.get("BRP_SIDE_TOOLS_DIR", "").strip()
 SIDE_TOOLS_DIR = Path(RAW_SIDE_TOOLS_DIR or str(DEFAULT_SIDE_TOOLS_DIR)).expanduser()
 RAW_RUNTIME_DB_PATH = os.environ.get("BRP_RUNTIME_DB_PATH", "").strip()
 RUNTIME_DB_PATH = Path(RAW_RUNTIME_DB_PATH or str(JOBS_DIR.parent / "brp_runtime.sqlite")).expanduser()
-RUNTIME_STORE_MODE = (os.environ.get("BRP_RUNTIME_STORE", "json").strip().lower() or "json")
-if RUNTIME_STORE_MODE not in {"json", "dual", "sqlite"}:
-    RUNTIME_STORE_MODE = "json"
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
@@ -238,18 +235,8 @@ _RUNTIME_SQLITE_STORE: SqliteRuntimeStore | None = None
 _RUNTIME_SQLITE_STORE_LOCK = threading.Lock()
 
 
-def _runtime_store_mirror_enabled() -> bool:
-    return RUNTIME_STORE_MODE in {"dual", "sqlite"}
-
-
-def _runtime_store_read_enabled() -> bool:
-    return RUNTIME_STORE_MODE == "sqlite"
-
-
-def _runtime_sqlite_store() -> SqliteRuntimeStore | None:
+def _runtime_sqlite_store() -> SqliteRuntimeStore:
     global _RUNTIME_SQLITE_STORE
-    if not _runtime_store_mirror_enabled() and not _runtime_store_read_enabled():
-        return None
     with _RUNTIME_SQLITE_STORE_LOCK:
         if _RUNTIME_SQLITE_STORE is None:
             _RUNTIME_SQLITE_STORE = SqliteRuntimeStore(RUNTIME_DB_PATH)
@@ -257,20 +244,16 @@ def _runtime_sqlite_store() -> SqliteRuntimeStore | None:
         return _RUNTIME_SQLITE_STORE
 
 
-def _mirror_runtime_job(record: dict[str, Any]) -> None:
+def _save_runtime_job(record: dict[str, Any]) -> None:
     store = _runtime_sqlite_store()
-    if store is None:
-        return
     try:
         store.upsert_job(record)
     except Exception:
         traceback.print_exc()
 
 
-def _mirror_runtime_delete_job(job_id: str) -> bool:
+def _delete_runtime_job(job_id: str) -> bool:
     store = _runtime_sqlite_store()
-    if store is None:
-        return False
     try:
         return bool(store.delete_job(job_id))
     except Exception:
@@ -278,20 +261,16 @@ def _mirror_runtime_delete_job(job_id: str) -> bool:
         return False
 
 
-def _mirror_runtime_side_tool(tool_key: str, record: dict[str, Any]) -> None:
+def _save_runtime_side_tool(tool_key: str, record: dict[str, Any]) -> None:
     store = _runtime_sqlite_store()
-    if store is None:
-        return
     try:
         store.upsert_side_tool_run(tool_key, record)
     except Exception:
         traceback.print_exc()
 
 
-def _mirror_runtime_delete_side_tool(tool_key: str, run_id: str) -> bool:
+def _delete_runtime_side_tool(tool_key: str, run_id: str) -> bool:
     store = _runtime_sqlite_store()
-    if store is None:
-        return False
     try:
         return bool(store.delete_side_tool_run(tool_key, run_id))
     except Exception:
@@ -2052,138 +2031,31 @@ def _is_korean_ai_audit_job(record: dict[str, Any]) -> bool:
 class JobStore:
     def __init__(self, jobs_dir: Path) -> None:
         self.jobs_dir = jobs_dir
-        self.index_path = jobs_dir / "index.json"
         self.lock = threading.Lock()
-        self.jobs_dir.mkdir(parents=True, exist_ok=True)
-        if not self.index_path.exists():
-            self.index_path.write_text("[]", encoding="utf-8")
-        self.rebuild_index_from_jobs_if_needed()
+        _runtime_sqlite_store().initialize()
         self.reconcile_running_jobs()
 
-    def _job_path(self, job_id: str) -> Path:
-        return self.jobs_dir / f"{job_id}.json"
-
-    def _load_index_unlocked(self) -> list[dict[str, Any]]:
-        try:
-            payload = json.loads(self.index_path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                return payload
-        except Exception:
-            pass
-        return []
-
-    def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
-        self.index_path.write_text(
-            json.dumps(
-                _json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False
-            ),
-            encoding="utf-8",
-        )
-
     def _load_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
-        job_path = self._job_path(job_id)
-        if not job_path.exists():
-            return None
         try:
-            payload = json.loads(job_path.read_text(encoding="utf-8"))
-            return payload if isinstance(payload, dict) else None
-        except Exception:
-            return None
-
-    def _load_sqlite_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
-        if not _runtime_store_read_enabled():
-            return None
-        store = _runtime_sqlite_store()
-        if store is None:
-            return None
-        try:
-            return store.get_job(str(job_id or "").strip())
+            return _runtime_sqlite_store().get_job(str(job_id or "").strip())
         except Exception:
             traceback.print_exc()
             return None
 
-    def _load_job_for_update_unlocked(self, job_id: str) -> dict[str, Any] | None:
-        record = self._load_sqlite_job_unlocked(job_id)
-        if record:
-            return record
-        return self._load_job_unlocked(job_id)
-
-    def _list_sqlite_jobs_unlocked(
+    def _list_jobs_unlocked(
         self, user_email: str = "", include_all: bool = False
-    ) -> list[dict[str, Any]] | None:
-        if not _runtime_store_read_enabled():
-            return None
-        store = _runtime_sqlite_store()
-        if store is None:
-            return None
+    ) -> list[dict[str, Any]]:
         try:
-            return store.list_jobs(user_email=user_email, include_all=include_all)
+            return _runtime_sqlite_store().list_jobs(
+                user_email=user_email, include_all=include_all
+            )
         except Exception:
             traceback.print_exc()
-            return None
+            return []
 
     def _save_job_unlocked(self, job_id: str, record: dict[str, Any]) -> None:
-        self._job_path(job_id).write_text(
-            json.dumps(
-                _json_safe(record), ensure_ascii=False, indent=2, allow_nan=False
-            ),
-            encoding="utf-8",
-        )
-
-    def _upsert_index_entry_unlocked(self, record: dict[str, Any]) -> None:
-        job_id = str(record.get("job_id", "")).strip()
-        index_entries = self._load_index_unlocked()
-        summary = {
-            "job_id": job_id,
-            "owner_email": _normalize_email(record.get("owner_email")),
-            "shared_with_all": bool(record.get("shared_with_all")),
-            "status": str(record.get("status", "queued")),
-            "created_at": record.get("created_at"),
-            "started_at": record.get("started_at"),
-            "finished_at": record.get("finished_at"),
-            "metadata": deepcopy(record.get("metadata") or {}),
-            "prepared_payload_summary": deepcopy(
-                record.get("prepared_payload_summary") or {}
-            ),
-            "error": record.get("error"),
-        }
-        updated = False
-        for idx, entry in enumerate(index_entries):
-            if str(entry.get("job_id", "")).strip() == job_id:
-                index_entries[idx] = summary
-                updated = True
-                break
-        if not updated:
-            index_entries.insert(0, summary)
-        self._save_index_unlocked(index_entries)
-
-    def rebuild_index_from_jobs_if_needed(self) -> None:
-        with self.lock:
-            if self._load_index_unlocked():
-                return
-            records: list[dict[str, Any]] = []
-            for job_path in self.jobs_dir.glob("*.json"):
-                if job_path.name == self.index_path.name:
-                    continue
-                try:
-                    payload = json.loads(job_path.read_text(encoding="utf-8"))
-                except Exception:
-                    continue
-                if isinstance(payload, dict) and str(payload.get("job_id", "")).strip():
-                    records.append(payload)
-            if not records:
-                return
-            records.sort(
-                key=lambda item: str(
-                    item.get("created_at")
-                    or item.get("started_at")
-                    or item.get("finished_at")
-                    or ""
-                ),
-                reverse=True,
-            )
-            for record in records:
-                self._upsert_index_entry_unlocked(record)
+        record["job_id"] = str(record.get("job_id") or job_id).strip()
+        _save_runtime_job(record)
 
     def create_job(
         self,
@@ -2216,8 +2088,6 @@ class JobStore:
         }
         with self.lock:
             self._save_job_unlocked(job_id, record)
-            self._upsert_index_entry_unlocked(record)
-            _mirror_runtime_job(record)
         return {
             "job_id": job_id,
             "owner_email": normalized_owner_email,
@@ -2232,13 +2102,11 @@ class JobStore:
 
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
         with self.lock:
-            record = self._load_job_for_update_unlocked(job_id)
+            record = self._load_job_unlocked(job_id)
             if not record:
                 return None
             record.update(changes)
             self._save_job_unlocked(job_id, record)
-            self._upsert_index_entry_unlocked(record)
-            _mirror_runtime_job(record)
             return deepcopy(record)
 
     def begin_ai_audit(
@@ -2249,7 +2117,7 @@ class JobStore:
         required_languages: list[str] | None = None,
     ) -> tuple[str, dict[str, Any] | None]:
         with self.lock:
-            record = self._load_job_for_update_unlocked(job_id)
+            record = self._load_job_unlocked(job_id)
             if not record:
                 return "missing", None
             required_keys = {
@@ -2270,15 +2138,10 @@ class JobStore:
             record["ai_audit_finished_at"] = None
             record["ai_audit_error"] = None
             self._save_job_unlocked(job_id, record)
-            self._upsert_index_entry_unlocked(record)
-            _mirror_runtime_job(record)
             return "started", deepcopy(record)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.lock:
-            record = self._load_sqlite_job_unlocked(job_id)
-            if record:
-                return deepcopy(record)
             record = self._load_job_unlocked(job_id)
             return deepcopy(record) if record else None
 
@@ -2286,57 +2149,21 @@ class JobStore:
         self, user_email: str = "", include_all: bool = False
     ) -> list[dict[str, Any]]:
         with self.lock:
-            sqlite_entries = self._list_sqlite_jobs_unlocked(
-                user_email=user_email, include_all=include_all
+            return deepcopy(
+                self._list_jobs_unlocked(
+                    user_email=user_email, include_all=include_all
+                )
             )
-            if sqlite_entries is not None:
-                return deepcopy(sqlite_entries)
-            entries = self._load_index_unlocked()
-            if include_all:
-                return deepcopy(entries)
-            normalized_user_email = _normalize_email(user_email)
-            return [
-                deepcopy(entry)
-                for entry in entries
-                if bool(entry.get("shared_with_all"))
-                or _normalize_email(entry.get("owner_email")) == normalized_user_email
-            ]
 
     def list_queued_jobs(self) -> list[dict[str, Any]]:
         with self.lock:
-            sqlite_entries = self._list_sqlite_jobs_unlocked(include_all=True)
-            if sqlite_entries is not None:
-                records: list[dict[str, Any]] = []
-                for entry in sqlite_entries:
-                    if str(entry.get("status", "")).strip().lower() != "queued":
-                        continue
-                    job_id = str(entry.get("job_id", "")).strip()
-                    if not job_id:
-                        continue
-                    record = (
-                        self._load_sqlite_job_unlocked(job_id)
-                        or self._load_job_unlocked(job_id)
-                    )
-                    if record and str(record.get("status", "")).strip().lower() == "queued":
-                        records.append(deepcopy(record))
-                records.sort(key=lambda item: str(item.get("created_at") or ""))
-                return records
+            entries = self._list_jobs_unlocked(include_all=True)
             records: list[dict[str, Any]] = []
-            seen_job_ids: set[str] = set()
-            index_entries = self._load_index_unlocked()
-            for entry in index_entries:
+            for entry in entries:
+                if str(entry.get("status", "")).strip().lower() != "queued":
+                    continue
                 job_id = str(entry.get("job_id", "")).strip()
-                if not job_id or job_id in seen_job_ids:
-                    continue
-                seen_job_ids.add(job_id)
-                record = self._load_job_unlocked(job_id)
-                if record and str(record.get("status", "")).strip().lower() == "queued":
-                    records.append(deepcopy(record))
-            for job_path in self.jobs_dir.glob("*.json"):
-                if job_path.name == self.index_path.name:
-                    continue
-                job_id = job_path.stem
-                if job_id in seen_job_ids:
+                if not job_id:
                     continue
                 record = self._load_job_unlocked(job_id)
                 if record and str(record.get("status", "")).strip().lower() == "queued":
@@ -2346,33 +2173,16 @@ class JobStore:
 
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
-            job_path = self._job_path(job_id)
-            deleted_json = job_path.exists()
-            if deleted_json:
-                job_path.unlink(missing_ok=True)
-            index_entries = [
-                entry
-                for entry in self._load_index_unlocked()
-                if str(entry.get("job_id", "")).strip() != job_id
-            ]
-            self._save_index_unlocked(index_entries)
-            deleted_sqlite = _mirror_runtime_delete_job(job_id)
-            return deleted_json or deleted_sqlite
+            return _delete_runtime_job(job_id)
 
     def reconcile_running_jobs(self) -> None:
         with self.lock:
-            index_entries = (
-                self._list_sqlite_jobs_unlocked(include_all=True)
-                if _runtime_store_read_enabled()
-                else None
-            )
-            if index_entries is None:
-                index_entries = self._load_index_unlocked()
+            index_entries = self._list_jobs_unlocked(include_all=True)
             for entry in index_entries:
                 job_id = str(entry.get("job_id", "")).strip()
                 if not job_id:
                     continue
-                record = self._load_job_for_update_unlocked(job_id)
+                record = self._load_job_unlocked(job_id)
                 if not record:
                     continue
                 status = str(record.get("status", "")).strip().lower()
@@ -2380,7 +2190,6 @@ class JobStore:
                     record["worker_pid"] = None
                     record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
-                    _mirror_runtime_job(record)
                     continue
                 if status == "running":
                     record["status"] = "failed"
@@ -2392,88 +2201,33 @@ class JobStore:
                     record["worker_pid"] = None
                     record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
-                    _mirror_runtime_job(record)
-            refreshed_entries = []
-            for entry in self._load_index_unlocked():
-                job_id = str(entry.get("job_id", "")).strip()
-                record = self._load_job_unlocked(job_id) if job_id else None
-                if record:
-                    refreshed_entries.append(
-                        {
-                            "job_id": job_id,
-                            "owner_email": _normalize_email(record.get("owner_email")),
-                            "shared_with_all": bool(record.get("shared_with_all")),
-                            "status": str(record.get("status", "queued")),
-                            "created_at": record.get("created_at"),
-                            "started_at": record.get("started_at"),
-                            "finished_at": record.get("finished_at"),
-                            "metadata": deepcopy(record.get("metadata") or {}),
-                            "prepared_payload_summary": deepcopy(
-                                record.get("prepared_payload_summary") or {}
-                            ),
-                            "error": record.get("error"),
-                        }
-                    )
-            self._save_index_unlocked(refreshed_entries)
 
 
 class SideToolHistoryStore:
     def __init__(self, root_dir: Path, tool_key: str) -> None:
         self.tool_key = tool_key
-        self.tool_dir = root_dir / tool_key
-        self.index_path = self.tool_dir / "index.json"
         self.lock = threading.Lock()
-        self.tool_dir.mkdir(parents=True, exist_ok=True)
-        if not self.index_path.exists():
-            self.index_path.write_text("[]", encoding="utf-8")
+        _runtime_sqlite_store().initialize()
 
-    def _record_path(self, run_id: str) -> Path:
-        return self.tool_dir / f"{run_id}.json"
-
-    def _load_index_unlocked(self) -> list[dict[str, Any]]:
+    def _load_record_unlocked(self, run_id: str) -> dict[str, Any] | None:
         try:
-            payload = json.loads(self.index_path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                return payload
-        except Exception:
-            pass
-        return []
-
-    def _load_sqlite_record_unlocked(self, run_id: str) -> dict[str, Any] | None:
-        if not _runtime_store_read_enabled():
-            return None
-        store = _runtime_sqlite_store()
-        if store is None:
-            return None
-        try:
-            return store.get_side_tool_run(self.tool_key, str(run_id or "").strip())
-        except Exception:
-            traceback.print_exc()
-            return None
-
-    def _list_sqlite_summaries_unlocked(
-        self, user_email: str = "", include_all: bool = False
-    ) -> list[dict[str, Any]] | None:
-        if not _runtime_store_read_enabled():
-            return None
-        store = _runtime_sqlite_store()
-        if store is None:
-            return None
-        try:
-            return store.list_side_tool_runs(
-                self.tool_key, user_email=user_email, include_all=include_all
+            return _runtime_sqlite_store().get_side_tool_run(
+                self.tool_key, str(run_id or "").strip()
             )
         except Exception:
             traceback.print_exc()
             return None
 
-    def _save_index_unlocked(self, entries: list[dict[str, Any]]) -> None:
-        self.index_path.write_text(
-            json.dumps(
-                _json_safe(entries), ensure_ascii=False, indent=2, allow_nan=False
-            ),
-            encoding="utf-8",
-        )
+    def _list_summaries_unlocked(
+        self, user_email: str = "", include_all: bool = False
+    ) -> list[dict[str, Any]]:
+        try:
+            return _runtime_sqlite_store().list_side_tool_runs(
+                self.tool_key, user_email=user_email, include_all=include_all
+            )
+        except Exception:
+            traceback.print_exc()
+            return []
 
     def _summary_for_record(self, record: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -2514,70 +2268,27 @@ class SideToolHistoryStore:
         }
         summary = self._summary_for_record(record)
         with self.lock:
-            self._record_path(run_id).write_text(
-                json.dumps(
-                    _json_safe(record), ensure_ascii=False, indent=2, allow_nan=False
-                ),
-                encoding="utf-8",
-            )
-            entries = [
-                entry
-                for entry in self._load_index_unlocked()
-                if str(entry.get("run_id") or "") != run_id
-            ]
-            entries.insert(0, summary)
-            self._save_index_unlocked(entries[:100])
-            _mirror_runtime_side_tool(self.tool_key, record)
+            _save_runtime_side_tool(self.tool_key, record)
         return summary
 
     def get(self, run_id: str) -> dict[str, Any] | None:
         with self.lock:
-            sqlite_record = self._load_sqlite_record_unlocked(run_id)
-            if sqlite_record:
-                return deepcopy(sqlite_record)
-            record_path = self._record_path(run_id)
-            if not record_path.exists():
-                return None
-            try:
-                payload = json.loads(record_path.read_text(encoding="utf-8"))
-                return deepcopy(payload) if isinstance(payload, dict) else None
-            except Exception:
-                return None
+            record = self._load_record_unlocked(run_id)
+            return deepcopy(record) if record else None
 
     def list(
         self, user_email: str = "", include_all: bool = False
     ) -> list[dict[str, Any]]:
         with self.lock:
-            sqlite_entries = self._list_sqlite_summaries_unlocked(
-                user_email=user_email, include_all=include_all
+            return deepcopy(
+                self._list_summaries_unlocked(
+                    user_email=user_email, include_all=include_all
+                )
             )
-            if sqlite_entries is not None:
-                return deepcopy(sqlite_entries)
-            entries = self._load_index_unlocked()
-            if include_all:
-                return deepcopy(entries)
-            normalized_user_email = _normalize_email(user_email)
-            return [
-                deepcopy(entry)
-                for entry in entries
-                if _normalize_email(entry.get("owner_email")) == normalized_user_email
-                or bool(entry.get("shared_with_all"))
-            ]
 
     def delete(self, run_id: str) -> bool:
         with self.lock:
-            record_path = self._record_path(run_id)
-            deleted_json = record_path.exists()
-            if deleted_json:
-                record_path.unlink(missing_ok=True)
-            entries = [
-                entry
-                for entry in self._load_index_unlocked()
-                if str(entry.get("run_id") or "").strip() != run_id
-            ]
-            self._save_index_unlocked(entries)
-            deleted_sqlite = _mirror_runtime_delete_side_tool(self.tool_key, run_id)
-            return deleted_json or deleted_sqlite
+            return _delete_runtime_side_tool(self.tool_key, run_id)
 
 
 JOB_STORE = JobStore(JOBS_DIR)
@@ -2705,7 +2416,7 @@ def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
         env["BRP_JOB_CONCURRENCY_ROOT"] = str(JOB_CONCURRENCY_DIR)
     try:
         process = subprocess.Popen(
-            [sys.executable, str(JOB_RUNNER_PATH), str(JOBS_DIR / f"{job_id}.json")],
+            [sys.executable, str(JOB_RUNNER_PATH), str(job_id)],
             cwd=str(BASE_DIR),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

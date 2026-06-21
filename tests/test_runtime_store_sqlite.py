@@ -120,11 +120,12 @@ def test_parity_reports_missing_sqlite_records(tmp_path: Path) -> None:
 
 
 
-def test_backend_service_job_store_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
+def test_backend_service_job_store_uses_sqlite_as_source_of_truth(
+    tmp_path: Path, monkeypatch
+) -> None:
     import backend_service  # noqa: WPS433
 
     sqlite_path = tmp_path / "runtime.sqlite"
-    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "dual")
     monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
     monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
 
@@ -132,25 +133,40 @@ def test_backend_service_job_store_dual_writes_sqlite(tmp_path: Path, monkeypatc
     created = job_store.create_job(
         {"service_direction": "To School"},
         {"rows": []},
-        metadata={"job_name": "dual write"},
+        metadata={"job_name": "sqlite only"},
         owner_email="alice@example.com",
     )
 
     sqlite_store = SqliteRuntimeStore(sqlite_path)
-    mirrored = sqlite_store.get_job(created["job_id"])
-    assert mirrored is not None
-    assert mirrored["owner_email"] == "alice@example.com"
-    assert mirrored["metadata"] == {"job_name": "dual write"}
+    stored = sqlite_store.get_job(created["job_id"])
+    assert stored is not None
+    assert stored["owner_email"] == "alice@example.com"
+    assert stored["metadata"] == {"job_name": "sqlite only"}
+    assert not (tmp_path / "jobs" / f"{created['job_id']}.json").exists()
+    assert not (tmp_path / "jobs" / "index.json").exists()
+
+    assert [entry["job_id"] for entry in job_store.list_jobs(include_all=True)] == [
+        created["job_id"]
+    ]
+    assert [entry["job_id"] for entry in job_store.list_queued_jobs()] == [
+        created["job_id"]
+    ]
+
+    updated = job_store.update_job(created["job_id"], status="failed", error="boom")
+    assert updated is not None
+    assert updated["status"] == "failed"
+    assert sqlite_store.get_job(created["job_id"])["error"] == "boom"
 
     job_store.delete_job(created["job_id"])
     assert sqlite_store.get_job(created["job_id"]) is None
 
 
-def test_backend_service_side_tool_store_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
+def test_backend_service_side_tool_store_uses_sqlite_as_source_of_truth(
+    tmp_path: Path, monkeypatch
+) -> None:
     import backend_service  # noqa: WPS433
 
     sqlite_path = tmp_path / "runtime.sqlite"
-    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "dual")
     monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
     monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
 
@@ -165,108 +181,47 @@ def test_backend_service_side_tool_store_dual_writes_sqlite(tmp_path: Path, monk
     )
 
     sqlite_store = SqliteRuntimeStore(sqlite_path)
-    mirrored = sqlite_store.get_side_tool_run("fleet_planner", summary["run_id"])
-    assert mirrored is not None
-    assert mirrored["title"] == "Fleet test"
+    stored = sqlite_store.get_side_tool_run("fleet_planner", summary["run_id"])
+    assert stored is not None
+    assert stored["title"] == "Fleet test"
+    assert not (
+        tmp_path / "side_tools" / "fleet_planner" / f"{summary['run_id']}.json"
+    ).exists()
+    assert not (tmp_path / "side_tools" / "fleet_planner" / "index.json").exists()
+    assert [entry["run_id"] for entry in history_store.list(include_all=True)] == [
+        summary["run_id"]
+    ]
 
     history_store.delete(summary["run_id"])
     assert sqlite_store.get_side_tool_run("fleet_planner", summary["run_id"]) is None
 
 
-def test_backend_job_runner_save_job_dual_writes_sqlite(tmp_path: Path, monkeypatch) -> None:
-    import backend_job_runner  # noqa: WPS433
-
-    sqlite_path = tmp_path / "runtime.sqlite"
-    job_path = tmp_path / "jobs" / "job1.json"
-    monkeypatch.setenv("BRP_RUNTIME_STORE", "dual")
-    monkeypatch.setenv("BRP_RUNTIME_DB_PATH", str(sqlite_path))
-
-    payload = job_record("job1", "alice@example.com")
-    job_path.parent.mkdir(parents=True, exist_ok=True)
-    backend_job_runner._save_job(job_path, payload)
-
-    sqlite_store = SqliteRuntimeStore(sqlite_path)
-    assert sqlite_store.get_job("job1")["owner_email"] == "alice@example.com"
-
-
-
-def test_backend_service_job_store_sqlite_read_prefers_sqlite(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import backend_service  # noqa: WPS433
-
-    sqlite_path = tmp_path / "runtime.sqlite"
-    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "sqlite")
-    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
-    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
-
-    sqlite_store = SqliteRuntimeStore(sqlite_path)
-    sqlite_store.upsert_job(job_record("job1", "sqlite@example.com"))
-    write_json(tmp_path / "jobs" / "job1.json", job_record("job1", "json@example.com"))
-    write_json(tmp_path / "jobs" / "job2.json", job_record("job2", "json@example.com"))
-
-    job_store = backend_service.JobStore(tmp_path / "jobs")
-
-    assert job_store.get_job("job1")["owner_email"] == "sqlite@example.com"
-    assert job_store.get_job("job2")["owner_email"] == "json@example.com"
-    assert [entry["job_id"] for entry in job_store.list_jobs(include_all=True)] == ["job1"]
-
-    updated = job_store.update_job("job1", status="failed", error="sqlite read update")
-    assert updated is not None
-    assert updated["owner_email"] == "sqlite@example.com"
-    assert sqlite_store.get_job("job1")["status"] == "failed"
-    assert json.loads((tmp_path / "jobs" / "job1.json").read_text(encoding="utf-8"))[
-        "owner_email"
-    ] == "sqlite@example.com"
-
-    assert job_store.delete_job("job1") is True
-    assert sqlite_store.get_job("job1") is None
-
-
-def test_backend_service_side_tool_store_sqlite_read_prefers_sqlite(
-    tmp_path: Path, monkeypatch
-) -> None:
-    import backend_service  # noqa: WPS433
-
-    sqlite_path = tmp_path / "runtime.sqlite"
-    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "sqlite")
-    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
-    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
-
-    sqlite_store = SqliteRuntimeStore(sqlite_path)
-    sqlite_store.upsert_side_tool_run(
-        "fleet_planner", side_tool_record("run1", "sqlite@example.com")
-    )
-    write_json(
-        tmp_path / "side_tools" / "fleet_planner" / "run1.json",
-        side_tool_record("run1", "json@example.com"),
-    )
-
-    history_store = backend_service.SideToolHistoryStore(
-        tmp_path / "side_tools", "fleet_planner"
-    )
-
-    assert history_store.get("run1")["owner_email"] == "sqlite@example.com"
-    assert [entry["run_id"] for entry in history_store.list(include_all=True)] == ["run1"]
-
-    assert history_store.delete("run1") is True
-    assert sqlite_store.get_side_tool_run("fleet_planner", "run1") is None
-
-
-def test_backend_job_runner_save_job_sqlite_mode_mirrors_sqlite(
+def test_backend_job_runner_reads_and_writes_sqlite_job(
     tmp_path: Path, monkeypatch
 ) -> None:
     import backend_job_runner  # noqa: WPS433
+    import sys
 
     sqlite_path = tmp_path / "runtime.sqlite"
-    job_path = tmp_path / "jobs" / "job1.json"
-    monkeypatch.setenv("BRP_RUNTIME_STORE", "sqlite")
     monkeypatch.setenv("BRP_RUNTIME_DB_PATH", str(sqlite_path))
+    monkeypatch.setattr(
+        backend_job_runner,
+        "run_backend_planner_with_prepared_data",
+        lambda prepared_payload, config: {"ok": True, "rows": prepared_payload["rows"]},
+    )
+    monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "job1"])
 
     payload = job_record("job1", "alice@example.com")
-    job_path.parent.mkdir(parents=True, exist_ok=True)
-    backend_job_runner._save_job(job_path, payload)
+    payload["status"] = "queued"
+    payload["prepared_payload"] = {"rows": [{"address": "A"}]}
+    SqliteRuntimeStore(sqlite_path).upsert_job(payload)
+
+    assert backend_job_runner.main() == 0
 
     sqlite_store = SqliteRuntimeStore(sqlite_path)
-    assert backend_job_runner._runtime_store_mode() == "sqlite"
-    assert sqlite_store.get_job("job1")["owner_email"] == "alice@example.com"
+    stored = sqlite_store.get_job("job1")
+    assert stored["status"] == "succeeded"
+    assert stored["result"] == {"ok": True, "rows": [{"address": "A"}]}
+    assert stored["worker_pid"] is None
+    assert stored["job_slot_path"] is None
+    assert not (tmp_path / "jobs" / "job1.json").exists()

@@ -21,6 +21,13 @@ Run on the CN server after CN staging has the final commit and verified dist:
 The script fast-forwards `/opt/brp/prod/app`, switches prod to the staging-built
 dist, restarts `brp-prod-backend.service`, and checks backend health.
 
+After deployment, run the parity checker on CN prod:
+
+```bash
+cd /opt/brp/prod/app
+python3 ops/scripts/report_environment_parity.py --environment cn-prod --expected-head <target-head>
+```
+
 ## KR prod
 
 First create a tarball from CN staging dist and copy it to the KR repo state
@@ -46,3 +53,14 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\Users\Bus.EIM\BRP\ops
 The script fast-forwards the KR repo, switches to the supplied dist archive,
 restarts `BRP Backend`, starts/checks `BRP-Nginx-Public`, and checks backend
 health.
+
+After deployment, run the parity checker on KR:
+
+```powershell
+python ops\scripts\report_environment_parity.py --environment kr-prod --expected-head <target-head>
+```
+
+The checker verifies the active git head, dist marker, backend health, Nginx
+frontend origin, expected market scope, and retired React static proxy state.
+On KR it also verifies the old `BRP-React-*` tasks are absent and port `4173`
+is closed.

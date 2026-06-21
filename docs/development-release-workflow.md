@@ -53,6 +53,19 @@ $KR_PROD_HOST     -> KR production frontend 127.0.0.1:8501 on KR
 KR production backend -> 127.0.0.1:8001 on KR
 ```
 
+Use `ops/scripts/report_environment_parity.py` after deployments or handoff
+audits to verify the expected head, frontend dist marker, backend health,
+frontend origin, market scope, and retired static-proxy state:
+
+```bash
+python3 ops/scripts/report_environment_parity.py --environment cn-staging --expected-head <target-head>
+python3 ops/scripts/report_environment_parity.py --environment cn-prod --expected-head <target-head>
+```
+
+```powershell
+python ops\scripts\report_environment_parity.py --environment kr-prod --expected-head <target-head>
+```
+
 Staging is the only place for active development and test traffic. Do not point
 `$CN_PROD_HOST` or `$KR_PROD_HOST` at staging ports as part of preview work. CN
 production and KR production should be pull-and-restart

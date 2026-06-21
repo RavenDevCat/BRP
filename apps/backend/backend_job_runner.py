@@ -33,7 +33,7 @@ def _save_json(path: Path, payload: dict[str, Any]) -> None:
 
 def _runtime_store_mode() -> str:
     mode = (os.environ.get("BRP_RUNTIME_STORE", "json").strip().lower() or "json")
-    return mode if mode in {"json", "dual"} else "json"
+    return mode if mode in {"json", "dual", "sqlite"} else "json"
 
 
 def _runtime_db_path(job_path: Path) -> Path:
@@ -44,7 +44,7 @@ def _runtime_db_path(job_path: Path) -> Path:
 
 
 def _mirror_runtime_job(job_path: Path, payload: dict[str, Any]) -> None:
-    if _runtime_store_mode() != "dual":
+    if _runtime_store_mode() not in {"dual", "sqlite"}:
         return
     try:
         store = SqliteRuntimeStore(_runtime_db_path(job_path))

@@ -190,12 +190,83 @@ def test_backend_job_runner_save_job_dual_writes_sqlite(tmp_path: Path, monkeypa
 
 
 
-def test_sqlite_runtime_store_mode_is_not_exposed_before_read_switch(monkeypatch) -> None:
-    import backend_job_runner  # noqa: WPS433
+def test_backend_service_job_store_sqlite_read_prefers_sqlite(
+    tmp_path: Path, monkeypatch
+) -> None:
     import backend_service  # noqa: WPS433
 
-    monkeypatch.setenv("BRP_RUNTIME_STORE", "sqlite")
+    sqlite_path = tmp_path / "runtime.sqlite"
     monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "sqlite")
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
 
-    assert backend_job_runner._runtime_store_mode() == "json"
-    assert backend_service._runtime_store_mirror_enabled() is False
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    sqlite_store.upsert_job(job_record("job1", "sqlite@example.com"))
+    write_json(tmp_path / "jobs" / "job1.json", job_record("job1", "json@example.com"))
+    write_json(tmp_path / "jobs" / "job2.json", job_record("job2", "json@example.com"))
+
+    job_store = backend_service.JobStore(tmp_path / "jobs")
+
+    assert job_store.get_job("job1")["owner_email"] == "sqlite@example.com"
+    assert job_store.get_job("job2")["owner_email"] == "json@example.com"
+    assert [entry["job_id"] for entry in job_store.list_jobs(include_all=True)] == ["job1"]
+
+    updated = job_store.update_job("job1", status="failed", error="sqlite read update")
+    assert updated is not None
+    assert updated["owner_email"] == "sqlite@example.com"
+    assert sqlite_store.get_job("job1")["status"] == "failed"
+    assert json.loads((tmp_path / "jobs" / "job1.json").read_text(encoding="utf-8"))[
+        "owner_email"
+    ] == "sqlite@example.com"
+
+    assert job_store.delete_job("job1") is True
+    assert sqlite_store.get_job("job1") is None
+
+
+def test_backend_service_side_tool_store_sqlite_read_prefers_sqlite(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    monkeypatch.setattr(backend_service, "RUNTIME_STORE_MODE", "sqlite")
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    sqlite_store.upsert_side_tool_run(
+        "fleet_planner", side_tool_record("run1", "sqlite@example.com")
+    )
+    write_json(
+        tmp_path / "side_tools" / "fleet_planner" / "run1.json",
+        side_tool_record("run1", "json@example.com"),
+    )
+
+    history_store = backend_service.SideToolHistoryStore(
+        tmp_path / "side_tools", "fleet_planner"
+    )
+
+    assert history_store.get("run1")["owner_email"] == "sqlite@example.com"
+    assert [entry["run_id"] for entry in history_store.list(include_all=True)] == ["run1"]
+
+    assert history_store.delete("run1") is True
+    assert sqlite_store.get_side_tool_run("fleet_planner", "run1") is None
+
+
+def test_backend_job_runner_save_job_sqlite_mode_mirrors_sqlite(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_job_runner  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    job_path = tmp_path / "jobs" / "job1.json"
+    monkeypatch.setenv("BRP_RUNTIME_STORE", "sqlite")
+    monkeypatch.setenv("BRP_RUNTIME_DB_PATH", str(sqlite_path))
+
+    payload = job_record("job1", "alice@example.com")
+    job_path.parent.mkdir(parents=True, exist_ok=True)
+    backend_job_runner._save_job(job_path, payload)
+
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    assert backend_job_runner._runtime_store_mode() == "sqlite"
+    assert sqlite_store.get_job("job1")["owner_email"] == "alice@example.com"

@@ -46,6 +46,7 @@ GOOGLE_GEOCODE_BASE_URL = os.environ.get(
 GOOGLE_GEOCODE_TIMEOUT_SECONDS = float(os.environ.get("GOOGLE_GEOCODE_TIMEOUT_SECONDS", "8") or 8)
 BK_GEOCODE_MODE = os.environ.get("BRP_BK_GEOCODE_MODE", "").strip().lower()
 GOOGLE_GEOCODE_RELAY_URL = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_URL", "").strip()
+GOOGLE_GEOCODE_RELAY_FALLBACK_URL = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_FALLBACK_URL", "").strip()
 GOOGLE_GEOCODE_RELAY_TOKEN = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TOKEN", "").strip()
 GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS = float(os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS", "8") or 8)
 REQUEST_TIMEOUT = 20
@@ -714,31 +715,50 @@ def kakao_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimit
 
 
 def google_geocode_relay_request_json(country: str, params: dict[str, Any]) -> dict[str, Any]:
-    if not GOOGLE_GEOCODE_RELAY_URL:
+    relay_urls = google_geocode_relay_urls()
+    if not relay_urls:
         raise RuntimeError("Google geocode relay URL is not configured. Set BRP_GOOGLE_GEOCODE_RELAY_URL.")
     if not GOOGLE_GEOCODE_RELAY_TOKEN:
         raise RuntimeError("Google geocode relay token is not configured. Set BRP_GOOGLE_GEOCODE_RELAY_TOKEN.")
-    GOOGLE_GEOCODE_LIMITER.wait()
-    response = requests.post(
-        GOOGLE_GEOCODE_RELAY_URL,
-        json={"country": country, "params": params},
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {GOOGLE_GEOCODE_RELAY_TOKEN}",
-        },
-        timeout=GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS,
-    )
-    try:
-        payload = response.json()
-    except Exception:
-        payload = {"error": response.text[:200]}
-    if response.status_code >= 400:
-        error_message = payload.get("error") if isinstance(payload, dict) else ""
-        details = f": {error_message}" if error_message else ""
-        raise RuntimeError(f"Google geocode relay request failed: HTTP {response.status_code}{details}")
-    if not isinstance(payload, dict):
-        raise RuntimeError("Google geocode relay returned a non-object payload.")
-    return payload
+    last_error = ""
+    for relay_url in relay_urls:
+        GOOGLE_GEOCODE_LIMITER.wait()
+        try:
+            response = requests.post(
+                relay_url,
+                json={"country": country, "params": params},
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {GOOGLE_GEOCODE_RELAY_TOKEN}",
+                },
+                timeout=GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS,
+            )
+        except requests.exceptions.RequestException as exc:
+            last_error = exc.__class__.__name__
+            continue
+        try:
+            payload = response.json()
+        except Exception:
+            payload = {"error": response.text[:200]}
+        if response.status_code >= 400:
+            error_message = payload.get("error") if isinstance(payload, dict) else ""
+            details = f": {error_message}" if error_message else ""
+            last_error = f"HTTP {response.status_code}{details}"
+            continue
+        if not isinstance(payload, dict):
+            last_error = "non-object payload"
+            continue
+        return payload
+    details = f": {last_error}" if last_error else ""
+    raise RuntimeError(f"Google geocode relay request failed for all configured relays{details}")
+
+
+def google_geocode_relay_urls() -> list[str]:
+    urls: list[str] = []
+    for relay_url in (GOOGLE_GEOCODE_RELAY_URL, GOOGLE_GEOCODE_RELAY_FALLBACK_URL):
+        if relay_url and relay_url not in urls:
+            urls.append(relay_url)
+    return urls
 
 
 def google_geocode_request_json(params: dict[str, Any], country: str = "") -> dict[str, Any]:

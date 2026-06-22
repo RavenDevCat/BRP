@@ -62,6 +62,7 @@ class BangkokGoogleRelayAdapterTests(unittest.TestCase):
                 client_runtime,
                 BK_GEOCODE_MODE="google_relay",
                 GOOGLE_GEOCODE_RELAY_URL="http://relay.local/geocode",
+                GOOGLE_GEOCODE_RELAY_FALLBACK_URL="",
                 GOOGLE_GEOCODE_RELAY_TOKEN="secret",
                 GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS=3,
             ):
@@ -94,6 +95,7 @@ class BangkokGoogleRelayAdapterTests(unittest.TestCase):
                 planner,
                 BK_GEOCODE_MODE="relay",
                 GOOGLE_GEOCODE_RELAY_URL="http://relay.local/geocode",
+                GOOGLE_GEOCODE_RELAY_FALLBACK_URL="",
                 GOOGLE_GEOCODE_RELAY_TOKEN="secret",
                 GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS=4,
             ):
@@ -109,6 +111,66 @@ class BangkokGoogleRelayAdapterTests(unittest.TestCase):
         self.assertEqual(calls[0]["json"]["country"], "BK")
         self.assertEqual(calls[0]["headers"]["Authorization"], "Bearer secret")
         self.assertEqual(calls[0]["timeout"], 4)
+
+    def test_client_runtime_falls_back_when_primary_relay_fails(self) -> None:
+        calls: list[str] = []
+        original_post = client_runtime.requests.post
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append(url)
+            if url == "http://primary.local/geocode":
+                return MockResponse({"error": "primary unavailable"}, status_code=502)
+            return MockResponse({"status": "OK", "results": []})
+
+        try:
+            client_runtime.requests.post = fake_post
+            with patched_module_attrs(
+                client_runtime,
+                BK_GEOCODE_MODE="google_relay",
+                GOOGLE_GEOCODE_RELAY_URL="http://primary.local/geocode",
+                GOOGLE_GEOCODE_RELAY_FALLBACK_URL="http://fallback.local/geocode",
+                GOOGLE_GEOCODE_RELAY_TOKEN="secret",
+                GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS=3,
+            ):
+                payload = client_runtime.google_geocode_request_json(
+                    {"address": "Sukhumvit 53", "components": "country:TH"},
+                    country="Thailand",
+                )
+        finally:
+            client_runtime.requests.post = original_post
+
+        self.assertEqual(payload["status"], "OK")
+        self.assertEqual(calls, ["http://primary.local/geocode", "http://fallback.local/geocode"])
+
+    def test_backend_runtime_falls_back_when_primary_relay_fails(self) -> None:
+        calls: list[str] = []
+        original_post = planner.requests.post
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append(url)
+            if url == "http://primary.local/geocode":
+                return MockResponse({"error": "primary unavailable"}, status_code=502)
+            return MockResponse({"status": "OK", "results": []})
+
+        try:
+            planner.requests.post = fake_post
+            with patched_module_attrs(
+                planner,
+                BK_GEOCODE_MODE="relay",
+                GOOGLE_GEOCODE_RELAY_URL="http://primary.local/geocode",
+                GOOGLE_GEOCODE_RELAY_FALLBACK_URL="http://fallback.local/geocode",
+                GOOGLE_GEOCODE_RELAY_TOKEN="secret",
+                GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS=4,
+            ):
+                payload = planner.google_geocode_request_json(
+                    {"address": "Bangkok Prep", "components": "country:TH"},
+                    country="BK",
+                )
+        finally:
+            planner.requests.post = original_post
+
+        self.assertEqual(payload["status"], "OK")
+        self.assertEqual(calls, ["http://primary.local/geocode", "http://fallback.local/geocode"])
 
 
 @contextmanager

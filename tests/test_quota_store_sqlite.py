@@ -125,6 +125,15 @@ class SqliteQuotaStoreTests(unittest.TestCase):
             self.assertEqual(day_usage["attempted"], 2)
             self.assertEqual(month_usage["attempted"], 9)
 
+    def test_sums_google_usage_across_counters(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = SqliteQuotaStore(Path(tmpdir) / "quota.sqlite")
+            store.reserve_usage("google_geocode", "geocode", [("month", "2026-06", 0)], count=7)
+            store.reserve_usage("google_geocode_relay", "geocode", [("month", "2026-06", 0)], count=9)
+            store.reserve_usage("kakao_navi", "directions", [("month", "2026-06", 0)], count=4)
+
+            self.assertEqual(store.sum_usage(period_type="month", period_key="2026-06", contains="google"), 16)
+
 
 if __name__ == "__main__":
     unittest.main()

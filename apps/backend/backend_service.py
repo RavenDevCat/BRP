@@ -1647,14 +1647,8 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
         provider_label=GOOGLE_GEOCODE_USAGE_PROVIDER_LABEL,
         sku_estimate=GOOGLE_GEOCODE_USAGE_SKU_ESTIMATE,
     )
-    usage = store.get_usage(
-        GOOGLE_GEOCODE_USAGE_PROVIDER,
-        GOOGLE_GEOCODE_USAGE_COUNTER,
-        "month",
-        month_key,
-    )
     try:
-        used = max(0, int(usage.get("attempted", 0) or 0))
+        used = max(0, int(store.sum_usage(period_type="month", period_key=month_key, contains="google")))
     except Exception:
         used = 0
     return {
@@ -1662,7 +1656,7 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
         "month_key": month_key,
         "used": used,
         "limit": GOOGLE_GEOCODE_MONTHLY_LIMIT,
-        "label": f"Google geocode usage this month: {used:,} / {GOOGLE_GEOCODE_MONTHLY_LIMIT:,}",
+        "label": f"Google API usage this month: {used:,} / {GOOGLE_GEOCODE_MONTHLY_LIMIT:,}",
     }
 
 

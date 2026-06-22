@@ -182,6 +182,23 @@ class SqliteQuotaStore:
             ).fetchone()
         return self._row_to_usage(row)
 
+    def sum_usage(self, *, period_type: str, period_key: str, contains: str = "") -> int:
+        self.initialize()
+        normalized_period_type = safe_name(period_type)
+        params: list[Any] = [normalized_period_type, str(period_key)]
+        where = "period_type = ? AND period_key = ?"
+        if contains:
+            raw_like = f"%{str(contains).strip().lower()}%"
+            safe_like = f"%{safe_name(contains)}%"
+            where += (
+                " AND (provider LIKE ? OR counter LIKE ? OR lower(provider_label) LIKE ? OR lower(sku_estimate) LIKE ? "
+                "OR provider LIKE ? OR counter LIKE ? OR lower(provider_label) LIKE ? OR lower(sku_estimate) LIKE ?)"
+            )
+            params.extend([safe_like, safe_like, safe_like, safe_like, raw_like, raw_like, raw_like, raw_like])
+        with self.connect() as conn:
+            row = conn.execute(f"SELECT COALESCE(SUM(attempted), 0) AS total FROM usage_counters WHERE {where}", params).fetchone()
+        return int(row["total"] or 0) if row else 0
+
     def reserve_usage(
         self,
         provider: str,

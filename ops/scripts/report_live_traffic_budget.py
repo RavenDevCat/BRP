@@ -206,6 +206,8 @@ def _build_sampler_args(
         sample_date=_env("BRP_LIVE_TRAFFIC_SAMPLE_DATE"),
         jobs_dir=sampler.DEFAULT_JOB_DIR,
         side_tools_dir=sampler.DEFAULT_SIDE_TOOLS_DIR,
+        runtime_db_path=sampler.DEFAULT_RUNTIME_DB_PATH,
+        quota_db_path=None,
         baseline_dir=Path(_env("BRP_LIVE_TRAFFIC_KR_BASELINE_DIR", str(sampler.DEFAULT_BASELINE_DIR))) if market.upper() == "KR" else sampler.DEFAULT_BASELINE_DIR,
         output_dir=sampler.DEFAULT_OUTPUT_DIR,
         market=market,

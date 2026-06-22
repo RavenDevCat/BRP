@@ -195,6 +195,7 @@ class LiveTrafficBudgetReportTests(unittest.TestCase):
         self.assertEqual(am_args.provider, "kakao_navi")
         self.assertEqual(am_args.baseline_path, "kr/to_school.json")
         self.assertEqual(am_args.target_arrival_local_time, "08:00")
+        self.assertEqual(am_args.runtime_db_path, budget.sampler.DEFAULT_RUNTIME_DB_PATH)
         self.assertEqual(off_peak_args.baseline_path, "kr/to_school.json")
         self.assertEqual(off_peak_args.departure_local_time, "11:00")
 

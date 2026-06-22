@@ -12,6 +12,9 @@ import json
 import os
 import subprocess
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,6 +53,7 @@ DEFAULT_WINDOWS_TIMER_TASKS = (
 DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
 DEFAULT_MARKET_STALE_HOURS = 24 * 7
 BANGKOK_STATIC_FALLBACK_MULTIPLIER = 1.75
+DEFAULT_REMOTE_STATUS_TIMEOUT_SECONDS = 8.0
 
 MARKET_OVERVIEW_DEFINITIONS = (
     {
@@ -269,6 +273,89 @@ def _market_scope_for_current_environment() -> set[str]:
     return {"CN", "BK"}
 
 
+def _remote_status_enabled() -> bool:
+    raw = os.environ.get("BRP_TRAFFIC_ROLLOUT_REMOTE_STATUS_ENABLED", "").strip()
+    if raw:
+        return raw.lower() in {"1", "true", "yes", "on"}
+    return _deployment_tier() != "production"
+
+
+def _append_query(url: str, params: dict[str, str]) -> str:
+    parts = urllib.parse.urlsplit(url)
+    existing = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+    existing.update(params)
+    return urllib.parse.urlunsplit(
+        parts._replace(query=urllib.parse.urlencode(existing))
+    )
+
+
+def _infer_remote_status_urls() -> list[str]:
+    configured = os.environ.get("BRP_TRAFFIC_ROLLOUT_REMOTE_STATUS_URLS", "").strip()
+    if configured:
+        return [
+            item.strip()
+            for item in configured.replace(";", ",").split(",")
+            if item.strip()
+        ]
+    relay_url = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_URL", "").strip()
+    if not relay_url or "KR" not in _market_scope_for_current_environment():
+        return []
+    parts = urllib.parse.urlsplit(relay_url)
+    return [
+        urllib.parse.urlunsplit(
+            parts._replace(path="/traffic-rollout/status", query="")
+        )
+    ]
+
+
+def fetch_remote_rollout_statuses(
+    *,
+    min_measured_at: str,
+    min_geo_ratio: float,
+    include_remote: bool,
+) -> list[dict[str, Any]]:
+    if not include_remote or not _remote_status_enabled():
+        return []
+    token = os.environ.get("BRP_TRAFFIC_ROLLOUT_REMOTE_STATUS_TOKEN", "").strip()
+    if not token:
+        token = os.environ.get("BRP_GOOGLE_GEOCODE_RELAY_TOKEN", "").strip()
+    timeout = float(
+        os.environ.get(
+            "BRP_TRAFFIC_ROLLOUT_REMOTE_STATUS_TIMEOUT_SECONDS",
+            str(DEFAULT_REMOTE_STATUS_TIMEOUT_SECONDS),
+        )
+        or DEFAULT_REMOTE_STATUS_TIMEOUT_SECONDS
+    )
+    rows: list[dict[str, Any]] = []
+    for url in _infer_remote_status_urls():
+        request_url = _append_query(
+            url,
+            {
+                "include_timers": "false",
+                "include_osrm": "false",
+                "include_budget": "false",
+                "include_remote": "false",
+                "min_measured_at": min_measured_at,
+                "min_geo_ratio": str(min_geo_ratio),
+            },
+        )
+        headers = {"Accept": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        try:
+            request = urllib.request.Request(request_url, headers=headers)
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            if isinstance(payload, dict):
+                payload.setdefault("remote_status_url", url)
+                rows.append(payload)
+            else:
+                rows.append({"status": "error", "remote_status_url": url, "error": "non-object payload"})
+        except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            rows.append({"status": "error", "remote_status_url": url, "error": str(exc)})
+    return rows
+
+
 def _market_definitions_for_current_environment() -> list[dict[str, Any]]:
     market_scope = _market_scope_for_current_environment()
     return [
@@ -438,6 +525,86 @@ def build_market_overview(
         "warning_count": warning_count,
         "markets": markets,
     }
+
+
+def _profile_key_from_row(row: dict[str, Any]) -> tuple[str, str, str]:
+    return _normalize_profile_key(row.get("market"), row.get("city"), row.get("period"))
+
+
+def merge_remote_rollout_gate(
+    rollout_summary: dict[str, Any],
+    remote_statuses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    remote_requirements: dict[tuple[str, str, str], dict[str, Any]] = {}
+    remote_sample_count = 0
+    remote_filtered_count = 0
+    for status in remote_statuses:
+        gate = status.get("rollout_gate")
+        if not isinstance(gate, dict):
+            continue
+        remote_sample_count += int(gate.get("sample_file_count") or 0)
+        remote_filtered_count += int(gate.get("filtered_file_count") or 0)
+        for row in gate.get("requirements") or []:
+            if isinstance(row, dict):
+                replacement = dict(row)
+                replacement["source"] = "remote"
+                remote_requirements[_profile_key_from_row(replacement)] = replacement
+    if not remote_requirements:
+        return rollout_summary
+
+    merged_requirements = []
+    for row in rollout_summary.get("requirements") or []:
+        if not isinstance(row, dict):
+            continue
+        merged_requirements.append(remote_requirements.get(_profile_key_from_row(row), row))
+    gate = {
+        "status": "ok" if all(row.get("passed") for row in merged_requirements) else "failed",
+        "readiness": {
+            "requirements": merged_requirements,
+            "sample_file_count": int(rollout_summary.get("sample_file_count") or 0) + remote_sample_count,
+            "filtered_file_count": int(rollout_summary.get("filtered_file_count") or 0) + remote_filtered_count,
+        },
+    }
+    return summarize_rollout_gate(gate)
+
+
+def merge_remote_market_overview(
+    market_overview: dict[str, Any],
+    remote_statuses: list[dict[str, Any]],
+) -> dict[str, Any]:
+    remote_markets: dict[tuple[str, str], dict[str, Any]] = {}
+    for status in remote_statuses:
+        overview = status.get("market_overview")
+        if not isinstance(overview, dict):
+            continue
+        for row in overview.get("markets") or []:
+            if isinstance(row, dict):
+                key = (_normalize_market_code(row.get("market")), str(row.get("city") or ""))
+                replacement = dict(row)
+                replacement["source"] = "remote"
+                remote_markets[key] = replacement
+    if not remote_markets:
+        return market_overview
+
+    merged = dict(market_overview)
+    markets = []
+    for row in market_overview.get("markets") or []:
+        if not isinstance(row, dict):
+            continue
+        key = (_normalize_market_code(row.get("market")), str(row.get("city") or ""))
+        markets.append(remote_markets.get(key, row))
+    blocked_count = sum(1 for row in markets if row.get("status") == "blocked")
+    warning_count = sum(1 for row in markets if row.get("status") == "warning")
+    merged.update(
+        {
+            "status": "blocked" if blocked_count else ("warning" if warning_count else "healthy"),
+            "blocked_count": blocked_count,
+            "warning_count": warning_count,
+            "sample_file_count": sum(int(row.get("sample_file_count") or 0) for row in markets),
+            "markets": markets,
+        }
+    )
+    return merged
 
 
 def collect_timer_status(
@@ -872,6 +1039,7 @@ def build_status(
     include_timers: bool,
     include_osrm: bool,
     include_budget: bool = False,
+    include_remote: bool = True,
     local_timezone: str = DEFAULT_LOCAL_TIMEZONE,
     now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -884,6 +1052,12 @@ def build_status(
         min_geo_ratio=min_geo_ratio,
     )
     rollout_summary = summarize_rollout_gate(gate)
+    remote_statuses = fetch_remote_rollout_statuses(
+        min_measured_at=min_measured_at,
+        min_geo_ratio=min_geo_ratio,
+        include_remote=include_remote,
+    )
+    rollout_summary = merge_remote_rollout_gate(rollout_summary, remote_statuses)
     timer_status = (
         collect_environment_timer_status(local_tz=local_tz, now=now)
         if include_timers
@@ -900,7 +1074,10 @@ def build_status(
         if include_budget
         else {"available": False, "skipped": True}
     )
-    market_overview = build_market_overview(sample_dir, now=now)
+    market_overview = merge_remote_market_overview(
+        build_market_overview(sample_dir, now=now),
+        remote_statuses,
+    )
     timer_problem_count = sum(
         1
         for row in timer_status
@@ -914,7 +1091,7 @@ def build_status(
     budget_problem = bool(budget_status.get("problem"))
     status = (
         "ready"
-        if gate.get("status") == "ok"
+        if rollout_summary.get("status") == "ok"
         and timer_problem_count == 0
         and service_problem_count == 0
         and not osrm_problem
@@ -955,6 +1132,15 @@ def build_status(
         "api_budget": budget_status,
         "osrm_manager": osrm_status,
         "market_overview": market_overview,
+        "remote_statuses": [
+            {
+                "remote_status_url": row.get("remote_status_url", ""),
+                "status": row.get("status", ""),
+                "error": row.get("error", ""),
+                "market_scope": (row.get("environment") or {}).get("market_scope", []),
+            }
+            for row in remote_statuses
+        ],
         "next_step": next_step,
     }
 
@@ -1038,6 +1224,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-timers", action="store_true", help="Skip systemd timer status collection.")
     parser.add_argument("--no-osrm", action="store_true", help="Skip OSRM manager status collection.")
     parser.add_argument("--no-budget", action="store_true", help="Skip API budget / baseline fast-path preflight.")
+    parser.add_argument("--no-remote", action="store_true", help="Skip remote rollout status relays.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     return parser.parse_args()
 
@@ -1055,6 +1242,7 @@ def main() -> None:
         include_timers=not args.no_timers,
         include_osrm=not args.no_osrm,
         include_budget=not args.no_budget,
+        include_remote=not args.no_remote,
         local_timezone=str(args.local_timezone or DEFAULT_LOCAL_TIMEZONE),
     )
     if args.json:

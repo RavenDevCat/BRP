@@ -78,6 +78,79 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(report["rollout_gate"]["passed_requirement_count"], 1)
         self.assertIn("representative route audits", report["next_step"])
 
+    def test_remote_status_replaces_missing_kr_requirement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_dir = Path(tmpdir)
+            (sample_dir / "cn.json").write_text(
+                json.dumps(
+                    {
+                        "market": "CN",
+                        "city": "Shanghai",
+                        "period": "am_peak",
+                        "measured_at": "2026-06-18T07:25:55+08:00",
+                        "routes": [
+                            {
+                                "route_id": "cn",
+                                "route_fingerprint": {"cell_count": 2, "cells": ["a", "b"]},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            remote = [
+                {
+                    "status": "ready",
+                    "environment": {"market_scope": ["KR"]},
+                    "rollout_gate": {
+                        "sample_file_count": 3,
+                        "filtered_file_count": 0,
+                        "requirements": [
+                            {
+                                "market": "KR",
+                                "city": "Seoul Metro",
+                                "period": "am_peak",
+                                "passed": True,
+                                "reason": "ok",
+                                "route_sample_count": 9,
+                                "geo_route_sample_count": 9,
+                            }
+                        ],
+                    },
+                    "market_overview": {
+                        "markets": [
+                            {
+                                "market": "KR",
+                                "city": "Seoul Metro",
+                                "status": "healthy",
+                                "sample_file_count": 3,
+                                "route_sample_count": 9,
+                                "geo_route_sample_count": 9,
+                            }
+                        ]
+                    },
+                }
+            ]
+            with mock.patch.object(
+                report_traffic_rollout_status,
+                "fetch_remote_rollout_statuses",
+                return_value=remote,
+            ):
+                report = report_traffic_rollout_status.build_status(
+                    sample_dir=sample_dir,
+                    min_measured_at="2026-06-18T00:00:00+08:00",
+                    profiles=[("CN", "Shanghai", "am_peak"), ("KR", "Seoul Metro", "am_peak")],
+                    min_geo_ratio=1.0,
+                    include_timers=False,
+                    include_osrm=False,
+                    include_remote=True,
+                )
+
+        self.assertEqual(report["status"], "ready")
+        self.assertEqual(report["rollout_gate"]["passed_requirement_count"], 2)
+        self.assertEqual(report["rollout_gate"]["failed_requirement_count"], 0)
+        self.assertEqual(report["rollout_gate"]["requirements"][1]["source"], "remote")
+
     def test_parse_systemctl_show_properties(self) -> None:
         parsed = report_traffic_rollout_status._parse_show_properties(
             "ActiveState=active\nSubState=waiting\nNoEquals\nResult=success\n"

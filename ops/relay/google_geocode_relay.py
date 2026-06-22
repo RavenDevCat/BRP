@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -22,6 +23,7 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT_DIR / "apps" / "backend"
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
+SCRIPTS_DIR = ROOT_DIR / "ops" / "scripts"
 
 from quota_store_sqlite import SqliteQuotaStore  # noqa: E402
 
@@ -249,6 +251,34 @@ def config_for_request(request: Request) -> RelayConfig:
     return config
 
 
+_TRAFFIC_STATUS_MODULE: Any | None = None
+
+
+def traffic_status_module() -> Any:
+    global _TRAFFIC_STATUS_MODULE
+    if _TRAFFIC_STATUS_MODULE is not None:
+        return _TRAFFIC_STATUS_MODULE
+    script_path = SCRIPTS_DIR / "report_traffic_rollout_status.py"
+    spec = importlib.util.spec_from_file_location(
+        "brp_relay_traffic_rollout_status",
+        script_path,
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not load traffic rollout status script: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _TRAFFIC_STATUS_MODULE = module
+    return module
+
+
+def relay_authorized(config: RelayConfig, authorization: str) -> JSONResponse | None:
+    if not config.token:
+        return error_response(HTTPStatus.BAD_REQUEST, "Relay token is not configured.")
+    if authorization != f"Bearer {config.token}":
+        return error_response(HTTPStatus.FORBIDDEN, "invalid bearer token")
+    return None
+
+
 def create_app(config: RelayConfig | None = None) -> FastAPI:
     api = FastAPI(title="BRP Google Geocode Relay", version="2.0")
     if config is not None:
@@ -257,6 +287,48 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
     @api.get("/health")
     def health(request: Request) -> dict[str, Any]:
         return config_for_request(request).health_payload()
+
+    @api.get("/traffic-rollout/status", response_model=None)
+    def traffic_rollout_status(
+        request: Request,
+        authorization: str = Header(default="", alias="Authorization"),
+    ) -> Any:
+        config = config_for_request(request)
+        denied = relay_authorized(config, authorization)
+        if denied is not None:
+            return denied
+        try:
+            module = traffic_status_module()
+            query = dict(request.query_params)
+            min_geo_ratio = min(1.0, max(0.0, float(query.get("min_geo_ratio") or 1.0)))
+            sample_dir = Path(
+                query.get("sample_dir")
+                or os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "")
+                or module._default_sample_dir()
+            )
+            min_measured_at = (
+                str(query.get("min_measured_at") or "").strip()
+                or os.environ.get("BRP_TRAFFIC_ROLLOUT_MIN_MEASURED_AT", "")
+                or module.report_traffic_rollout_readiness.DEFAULT_CUTOFF
+            )
+            local_timezone = (
+                str(query.get("local_timezone") or "").strip()
+                or os.environ.get("BRP_LIVE_TRAFFIC_KR_TIMEZONE", "")
+                or "Asia/Seoul"
+            )
+            return module.build_status(
+                sample_dir=sample_dir,
+                min_measured_at=min_measured_at,
+                profiles=module.required_profiles_for_current_environment(),
+                min_geo_ratio=min_geo_ratio,
+                include_timers=parse_bool(str(query.get("include_timers", "false"))),
+                include_osrm=parse_bool(str(query.get("include_osrm", "false"))),
+                include_budget=parse_bool(str(query.get("include_budget", "false"))),
+                include_remote=False,
+                local_timezone=local_timezone,
+            )
+        except Exception as exc:
+            return error_response(HTTPStatus.BAD_GATEWAY, f"traffic rollout status failed: {exc}")
 
     @api.post("/geocode", response_model=None)
     def geocode(
@@ -267,10 +339,9 @@ def create_app(config: RelayConfig | None = None) -> FastAPI:
         config = config_for_request(request)
         if not config.api_key:
             return error_response(HTTPStatus.BAD_REQUEST, "Google geocoding API key is not configured.")
-        if not config.token:
-            return error_response(HTTPStatus.BAD_REQUEST, "Relay token is not configured.")
-        if authorization != f"Bearer {config.token}":
-            return error_response(HTTPStatus.FORBIDDEN, "invalid bearer token")
+        denied = relay_authorized(config, authorization)
+        if denied is not None:
+            return denied
         country = str(payload.country or "").strip()
         if not config.allow_non_bangkok and not is_bangkok_market_country(country):
             return error_response(HTTPStatus.BAD_REQUEST, "relay is restricted to Bangkok/Thailand geocoding requests.")

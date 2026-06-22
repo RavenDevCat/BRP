@@ -1,10 +1,7 @@
-streamlit
 fastapi
 uvicorn
-httpx
 pandas
 openpyxl
 folium
 requests
 ortools
-branca

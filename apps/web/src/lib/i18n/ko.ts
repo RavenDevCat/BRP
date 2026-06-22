@@ -249,6 +249,8 @@ const ko: Translations = {
         "교통 계수 롤아웃 상태를 불러오지 못했습니다",
     "Missing profiles": "누락 프로필",
     "API budget": "API 예산",
+    "Total est.": "총 예상",
+    "Max profile": "최대 프로필",
     "OSRM manager": "OSRM 매니저",
     "Next timer": "다음 타이머",
     "No active timer": "활성 타이머 없음",

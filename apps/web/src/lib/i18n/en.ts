@@ -255,6 +255,8 @@ const en: Translations = {
         "Traffic rollout status could not load",
     "Missing profiles": "Missing profiles",
     "API budget": "API budget",
+    "Total est.": "Total est.",
+    "Max profile": "Max profile",
     "OSRM manager": "OSRM manager",
     "Next timer": "Next timer",
     "No active timer": "No active timer",

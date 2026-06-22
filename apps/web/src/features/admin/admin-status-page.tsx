@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
     getCurrentUser,
+    getHealth,
     getTrafficRolloutStatus,
     type TrafficMarketStatus,
     type TrafficRolloutStatusResponse,
@@ -37,6 +38,13 @@ export function AdminStatusPage() {
         staleTime: 60_000,
     });
     const isAdmin = userQuery.data?.is_admin === true;
+    const healthQuery = useQuery({
+        queryKey: ["health"],
+        queryFn: getHealth,
+        enabled: isAdmin,
+        staleTime: 30_000,
+        refetchInterval: 60_000,
+    });
     const statusQuery = useQuery({
         queryKey: ["traffic-rollout-status", "admin-page"],
         queryFn: getTrafficRolloutStatus,
@@ -154,7 +162,13 @@ export function AdminStatusPage() {
                 <LoadingPanel label={t("Loading traffic diagnostics")} />
             ) : (
                 <>
-                    <StatusSummary status={status} />
+                    <StatusSummary
+                        status={status}
+                        healthStatus={
+                            healthQuery.data?.status ||
+                            (healthQuery.isLoading ? "checking" : "unknown")
+                        }
+                    />
                     <MarketOverview status={status} />
                     <OpsDetails status={status} />
                 </>
@@ -163,11 +177,24 @@ export function AdminStatusPage() {
     );
 }
 
-function StatusSummary({ status }: { status?: TrafficRolloutStatusResponse }) {
+function StatusSummary({
+    status,
+    healthStatus,
+}: {
+    status?: TrafficRolloutStatusResponse;
+    healthStatus: string;
+}) {
     const t = useT();
     const marketOverview = status?.market_overview;
     return (
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <OpsMetric
+                label={t("Backend")}
+                value={t(healthStatus)}
+                detail={t("Service health")}
+                icon={<CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+                tone={statusTone(healthStatus)}
+            />
             <OpsMetric
                 label={t("Traffic gate")}
                 value={t(status?.status || "unknown")}
@@ -184,11 +211,13 @@ function StatusSummary({ status }: { status?: TrafficRolloutStatusResponse }) {
             />
             <OpsMetric
                 label={t("API budget")}
-                value={formatApiBudget(status)}
+                value={`${t("Total est.")} ${formatApiBudgetTotal(status)}`}
                 detail={
-                    status?.api_budget?.problem
-                        ? t("problem")
-                        : t("under cap")
+                    `${t("Max profile")} ${formatApiBudgetMax(status)} · ${
+                        status?.api_budget?.problem
+                            ? t("problem")
+                            : t("under cap")
+                    }`
                 }
                 icon={<Database className="h-4 w-4" aria-hidden="true" />}
                 tone={status?.api_budget?.problem ? "danger" : "success"}
@@ -516,13 +545,14 @@ function statusTone(status?: string): BadgeTone {
     return "neutral";
 }
 
-function formatApiBudget(status?: TrafficRolloutStatusResponse) {
+function formatApiBudgetTotal(status?: TrafficRolloutStatusResponse) {
     const total = status?.api_budget?.total_estimated_api_call_count;
+    return typeof total === "number" ? formatNumber(total) : "--";
+}
+
+function formatApiBudgetMax(status?: TrafficRolloutStatusResponse) {
     const max = status?.api_budget?.max_estimated_api_call_count;
-    if (typeof total !== "number" && typeof max !== "number") {
-        return "--";
-    }
-    return `${formatNumber(total ?? 0)} / ${formatNumber(max ?? 0)}`;
+    return typeof max === "number" ? formatNumber(max) : "--";
 }
 
 function formatOsrm(status?: TrafficRolloutStatusResponse) {

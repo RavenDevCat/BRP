@@ -3881,18 +3881,23 @@ def _rerender_job_map_artifacts(
     return rerendered
 
 
-def _build_free_baseline_template_export(
+def _build_scenario_template_export(
     job_record: dict[str, Any],
+    scenario_key: str,
 ) -> tuple[bytes | None, str | None]:
+    normalized_key = str(scenario_key or "").strip().lower() or "original"
+    scenario_key = MAP_ARTIFACT_KEYS.get(normalized_key, normalized_key)
+    scenario_label = MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
-    scenario = (
-        dict(result.get("free_optimization_baseline") or {})
-        or dict(structured.get("free_optimization_baseline") or {})
-        or dict(structured.get("original") or {})
-    )
+    scenario = dict(structured.get(scenario_key) or {})
+    if scenario_key == "original" and not scenario:
+        scenario = (
+            dict(result.get("free_optimization_baseline") or {})
+            or dict(structured.get("free_optimization_baseline") or {})
+        )
     if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
-        return None, "Free optimization baseline has no route table to export."
+        return None, f"{scenario_label} has no route table to export."
     planner_config = dict(
         result.get("planner_config") or job_record.get("config") or {}
     )
@@ -3903,8 +3908,8 @@ def _build_free_baseline_template_export(
     )
     impact_payload, _impact_error = _build_job_map_payload(
         job_record,
-        "original",
-        "original",
+        scenario_key,
+        scenario_key,
         attach_impact=True,
     )
     if impact_payload:
@@ -3925,10 +3930,18 @@ def _build_free_baseline_template_export(
         scenario["points"] = points_with_impact
     try:
         return build_baseline_template_workbook_bytes(
-            scenario, service_direction=service_direction
+            scenario,
+            service_direction=service_direction,
+            source_label=scenario_label,
         ), None
     except Exception as exc:
         return None, str(exc)
+
+
+def _build_free_baseline_template_export(
+    job_record: dict[str, Any],
+) -> tuple[bytes | None, str | None]:
+    return _build_scenario_template_export(job_record, "original")
 
 
 def _excel_safe_value(value: Any) -> Any:

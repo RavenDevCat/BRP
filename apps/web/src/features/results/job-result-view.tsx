@@ -1959,8 +1959,8 @@ function MapsPanel({
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
-  const workbookExportUrl = scenarioSummaries.some((summary) => summary.key === "original")
-    ? getJobExportUrl(jobId, "free-optimization-template")
+  const workbookExportUrl = selected?.key
+    ? getJobExportUrl(jobId, `scenario-template-${selected.key}`)
     : "";
   const excludedStopCount = diagnostics.excludedStops.length;
   const geocodeWarningCount = diagnostics.geocodeWarnings.length;

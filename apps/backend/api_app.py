@@ -580,6 +580,12 @@ def get_job_export(
             backend_service._build_free_baseline_template_export(job_record)
         )
         filename = f"free_optimization_baseline_{job_id}.xlsx"
+    elif normalized_export_key.startswith("scenario-template-"):
+        scenario_key = normalized_export_key[len("scenario-template-") :]
+        workbook_bytes, export_error = backend_service._build_scenario_template_export(
+            job_record, scenario_key
+        )
+        filename = f"{scenario_key}_template_{job_id}.xlsx"
     elif normalized_export_key == "time-impact" or normalized_export_key.startswith(
         "time-impact-"
     ):

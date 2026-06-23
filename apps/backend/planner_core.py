@@ -2178,6 +2178,7 @@ def build_baseline_template_workbook_bytes(
     scenario: dict[str, Any],
     *,
     service_direction: str,
+    source_label: str = "Free Optimization Baseline",
 ) -> bytes:
     points = [dict(item) for item in list(scenario.get("points") or [])]
     routes = [dict(item) for item in list(scenario.get("routes") or [])]
@@ -2223,7 +2224,7 @@ def build_baseline_template_workbook_bytes(
                     "new pick up/drop off time": str(
                         time_impact.get("new_time_label") or ""
                     ).strip(),
-                    "note": "Free optimization baseline export",
+                    "note": f"{source_label} export",
                 }
             )
 
@@ -2235,7 +2236,7 @@ def build_baseline_template_workbook_bytes(
             "bus_type": bus_type,
             "seat_count": seat_count,
             "vehicle_count": vehicle_count,
-            "note": "Generated from free optimization baseline result",
+            "note": f"Generated from {source_label} result",
         }
         for (bus_type, seat_count), vehicle_count in sorted(fleet_counts.items(), key=lambda item: (item[0][0], item[0][1]))
     ]
@@ -2243,7 +2244,7 @@ def build_baseline_template_workbook_bytes(
         {
             "section": ["Source", "Service Direction", "How to use"],
             "guidance": [
-                "Generated from the Free Optimization Baseline result.",
+                f"Generated from the {source_label} result.",
                 str(service_direction or "From School"),
                 "This workbook uses the current-plan input sheet format and can be uploaded for another audit run.",
             ],

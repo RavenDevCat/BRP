@@ -92,6 +92,8 @@ class InteractiveMapDataTests(unittest.TestCase):
                 [[121.4001, 31.2001], [121.4101, 31.2101]],
                 "amap_cn",
                 "",
+                700,
+                1300,
             )
         )
         job_record = {
@@ -159,6 +161,8 @@ class InteractiveMapDataTests(unittest.TestCase):
             route["display_geometry"], [[121.4001, 31.2001], [121.4101, 31.2101]]
         )
         self.assertEqual(route["display_geometry_source"], "amap_cn")
+        self.assertEqual(route["display_duration_s"], 700)
+        self.assertEqual(route["display_distance_m"], 1300)
         self.assertEqual(route["duration_s"], 900)
         self.assertEqual(route["raw_duration_s"], 600)
         self.assertEqual(route["distance_m"], 1200)

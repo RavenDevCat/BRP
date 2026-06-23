@@ -339,6 +339,7 @@ function AuditPanel({
     result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode,
   );
   const trafficBasis = formatTrafficBasis(result, plannerConfig, trafficAttribution, t);
+  const arrivalGateSummary = formatArrivalGateSummary(result);
   const [showTrafficRouteEvidence, setShowTrafficRouteEvidence] = useState(false);
   const trafficAttributionQuery = useQuery({
     queryKey: ["job-traffic-attribution", jobId, showTrafficRouteEvidence],
@@ -381,6 +382,7 @@ function AuditPanel({
             <ReadoutItem label="Traffic multiplier" value={formatTrafficMultiplier(result.traffic_time_multiplier)} />
             <ReadoutItem label="Coefficient logic" value={trafficCoefficientMode === "attributed" ? "Attributed coefficient" : "Legacy coefficient"} translateValue />
             <ReadoutItem label="Traffic basis" value={trafficBasis} />
+            {arrivalGateSummary ? <ReadoutItem label="AM arrival gate" value={arrivalGateSummary} /> : null}
             <ReadoutItem label="Current bus mix" value={formatBusMix(asRecord(currentPlan.bus_mix))} />
           </div>
           {recommendations.length ? (
@@ -3257,6 +3259,28 @@ function formatTrafficBasis(
   const observedRoutes = formatNumber(trafficAttribution.observed_route_sample_count);
   const targetRoutes = formatNumber(trafficAttribution.attributed_route_count || trafficAttribution.target_route_count);
   return `${methodLabel}; ${confidenceLabel}; ${observedRoutes} ${t("observed routes")}; ${targetRoutes} ${t("target routes")}`;
+}
+
+function formatArrivalGateSummary(result: Record<string, unknown>): string {
+  const scenarios: Array<[string, Record<string, unknown>]> = [
+    ["Free", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
+    ["15-min", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+  ];
+  return scenarios
+    .filter(([, gate]) => Object.keys(gate).length > 0 && stringValue(gate.status) !== "not_applicable")
+    .map(([label, gate]) => {
+      const status = stringValue(gate.status) || "unknown";
+      const failed = Number(gate.failed_route_count || 0);
+      const delay = Number(gate.max_estimated_arrival_delay_minutes || 0);
+      const attempts = asRecordArray(gate.replan_attempts).length;
+      const details = [
+        failed > 0 ? `${formatNumber(failed)} late` : "",
+        delay > 0 ? `max ${formatNumber(Math.round(delay))} min` : "",
+        attempts > 0 ? `replanned ${formatNumber(attempts)}` : "",
+      ].filter(Boolean);
+      return `${label}: ${status}${details.length ? ` (${details.join(", ")})` : ""}`;
+    })
+    .join(" | ");
 }
 
 function formatSignedNumber(value: unknown): string {

@@ -39,6 +39,7 @@ PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"
 TRAFFIC_CALIBRATION_CACHE_PATH = CACHE_DIR / "traffic_calibration_cache.json"
+FINAL_ROUTE_TRAFFIC_CACHE_PATH = CACHE_DIR / "final_route_traffic_cache.json"
 
 
 def _default_runtime_path(*parts: str) -> str:
@@ -84,6 +85,10 @@ TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY = max(
     0.0,
     float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY", "0.18") or 0.18),
 )
+TRAFFIC_ATTRIBUTION_MIN_CORRIDOR_OVERLAP = max(
+    0.0,
+    float(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_CORRIDOR_OVERLAP", "0.05") or 0.05),
+)
 TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES = max(
     1,
     int(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES", "1") or 1),
@@ -113,6 +118,38 @@ AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR = max(
     float(os.environ.get("BRP_AMAP_TRAFFIC_CALIBRATION_MAX_FACTOR", "2.8") or 2.8),
 )
 AMAP_TRAFFIC_CALIBRATION_TZ = ZoneInfo("Asia/Shanghai")
+FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED = os.environ.get(
+    "BRP_FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED",
+    "true",
+).strip().lower() not in {"0", "false", "no", "off"}
+FINAL_ROUTE_TRAFFIC_MAX_CALLS = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_CALLS", "40") or 40),
+)
+FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS", "16") or 16),
+)
+AM_ARRIVAL_GATE_GRACE_MINUTES = max(
+    0.0,
+    float(os.environ.get("BRP_AM_ARRIVAL_GATE_GRACE_MINUTES", "0") or 0),
+)
+FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED = os.environ.get(
+    "BRP_FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED",
+    "true",
+).strip().lower() not in {"0", "false", "no", "off"}
+FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS", "2") or 2),
+)
+FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES = max(
+    1.0,
+    float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", "5") or 5),
+)
+FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES = max(
+    10.0,
+    float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES", "30") or 30),
+)
 TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES = max(
     0.0,
     float(os.environ.get("BRP_TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES", "15") or 15),
@@ -1457,6 +1494,8 @@ def _route_attributed_factor(
         item
         for item in geo_candidates
         if float(item.get("geo_similarity_score", 0.0) or 0.0) >= TRAFFIC_ATTRIBUTION_MIN_GEO_SIMILARITY
+        # ponytail: center proximity is not enough; long routes need real corridor overlap.
+        and float(item.get("corridor_overlap", 0.0) or 0.0) >= TRAFFIC_ATTRIBUTION_MIN_CORRIDOR_OVERLAP
     ]
     scale_ranked = [
         item
@@ -1813,6 +1852,258 @@ def _traffic_route_estimate_summary(estimates: list[dict[str, Any]]) -> dict[str
         "route_similarity_route_count": int(method_counts.get("route_similarity", 0)),
         "fallback_route_count": int(method_counts.get("fallback", 0)),
     }
+
+
+def _parse_minutes_clock(value: Any, default_minutes: int) -> int:
+    parts = str(value or "").strip().split(":")
+    if len(parts) < 2:
+        return default_minutes
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+    except ValueError:
+        return default_minutes
+    if hours < 0 or minutes < 0 or minutes > 59:
+        return default_minutes
+    return (hours * 60 + minutes) % (24 * 60)
+
+
+def _format_minutes_clock(minutes: float | int) -> str:
+    total = int(round(float(minutes))) % (24 * 60)
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
+    provider = str(point.get("provider") or point.get("geocode_provider") or "").lower()
+    if provider == "amap" or str(point.get("adcode") or "").strip():
+        lat = _traffic_float(point.get("lat"))
+        lng = _traffic_float(point.get("lng"))
+        if lat is not None and lng is not None:
+            return lat, lng
+    return _traffic_point_coordinates(point)
+
+
+def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> list[tuple[float, float]]:
+    request_points: list[tuple[float, float]] = []
+    for node in list(route.get("nodes") or []):
+        try:
+            node_index = int(node)
+        except (TypeError, ValueError):
+            continue
+        if node_index < 0 or node_index >= len(points):
+            continue
+        coords = _amap_route_point(dict(points[node_index] or {}))
+        if coords:
+            request_points.append(coords)
+    return request_points
+
+
+def _final_route_traffic_cache_key(points: list[tuple[float, float]]) -> str:
+    rounded = [[round(lat, 6), round(lng, 6)] for lat, lng in points]
+    digest = hashlib.sha1(json.dumps(rounded, separators=(",", ":")).encode("utf-8")).hexdigest()
+    return f"amap-final-route-v1|{digest}"
+
+
+def _amap_route_segment_stats(planner: Any, request_points: list[tuple[float, float]]) -> dict[str, float]:
+    if len(request_points) < 2:
+        return {"duration_s": 0.0, "distance_m": 0.0}
+    origin_lat, origin_lng = request_points[0]
+    dest_lat, dest_lng = request_points[-1]
+    params: dict[str, str] = {
+        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
+        "destination": f"{dest_lng:.6f},{dest_lat:.6f}",
+        "extensions": "base",
+        "output": "json",
+    }
+    waypoint_values = [f"{lng:.6f},{lat:.6f}" for lat, lng in request_points[1:-1]]
+    if waypoint_values:
+        params["waypoints"] = ";".join(waypoint_values)
+    payload = planner.amap_request_json("/v3/direction/driving", params, planner.AMAP_ROUTING_LIMITER)
+    paths = list(dict(payload.get("route") or {}).get("paths") or [])
+    if not paths:
+        return {"duration_s": 0.0, "distance_m": 0.0}
+    path = dict(paths[0] or {})
+    return {
+        "duration_s": float(path.get("duration", 0.0) or 0.0),
+        "distance_m": float(path.get("distance", 0.0) or 0.0),
+    }
+
+
+def _amap_route_stats(
+    planner: Any,
+    request_points: list[tuple[float, float]],
+    cache: dict[str, Any],
+    state: dict[str, int],
+) -> dict[str, Any] | None:
+    if len(request_points) < 2:
+        return None
+    cache_key = _final_route_traffic_cache_key(request_points)
+    cached = dict(cache.get(cache_key) or {})
+    if cached:
+        state["cache_hits"] = int(state.get("cache_hits", 0)) + 1
+        return {
+            "duration_s": float(cached.get("duration_s", 0.0) or 0.0),
+            "distance_m": float(cached.get("distance_m", 0.0) or 0.0),
+            "source": "amap_final_route_cache",
+            "cache_key": cache_key,
+        }
+    max_points = max(2, FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS + 2)
+    duration_s = 0.0
+    distance_m = 0.0
+    start = 0
+    while start < len(request_points) - 1:
+        if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
+            return None
+        end = min(len(request_points), start + max_points)
+        stats = _amap_route_segment_stats(planner, request_points[start:end])
+        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        duration_s += float(stats.get("duration_s", 0.0) or 0.0)
+        distance_m += float(stats.get("distance_m", 0.0) or 0.0)
+        start = end - 1
+    cache[cache_key] = {
+        "created_at": datetime.now(AMAP_TRAFFIC_CALIBRATION_TZ).isoformat(timespec="seconds"),
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "point_count": len(request_points),
+    }
+    state["cache_changed"] = 1
+    return {
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "source": "amap_final_route",
+        "cache_key": cache_key,
+    }
+
+
+def attach_final_route_traffic_gate(
+    planner: Any,
+    scenario: dict[str, Any],
+    points: list[dict[str, Any]],
+    config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+    scenario_label: str,
+) -> dict[str, Any]:
+    service_direction = normalize_service_direction(config.service_direction)
+    country, city = infer_traffic_location(input_records)
+    routes = list(scenario.get("routes") or [])
+    gate: dict[str, Any] = {
+        "enabled": bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
+        "scenario": scenario_label,
+        "service_direction": service_direction,
+        "country": country,
+        "city": city,
+        "provider": "amap",
+        "target_arrival_label": str(config.to_school_arrival_time or "08:00"),
+        "checked_route_count": 0,
+        "failed_route_count": 0,
+        "unavailable_route_count": 0,
+        "api_calls": 0,
+        "cache_hits": 0,
+        "max_estimated_arrival_delay_minutes": 0.0,
+    }
+    if not FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED:
+        gate["status"] = "disabled"
+        scenario["traffic_gate"] = gate
+        return gate
+    if service_direction != "To School":
+        gate["status"] = "not_applicable"
+        gate["reason"] = "non_am_to_school_direction"
+        scenario["traffic_gate"] = gate
+        return gate
+    if country != "CHINA":
+        gate["status"] = "not_applicable"
+        gate["reason"] = "non_china_location"
+        scenario["traffic_gate"] = gate
+        return gate
+    if not str(getattr(planner, "AMAP_KEY", "") or "").strip():
+        gate["status"] = "unavailable"
+        gate["reason"] = "missing_amap_key"
+        scenario["traffic_gate"] = gate
+        return gate
+
+    cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
+    state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
+    target_minutes = _parse_minutes_clock(config.to_school_arrival_time, 8 * 60)
+    grace_s = AM_ARRIVAL_GATE_GRACE_MINUTES * 60.0
+    for route_index, route in enumerate(routes, start=1):
+        planned_total_s = float(route.get("time_s", 0.0) or 0.0)
+        stop_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
+        verification: dict[str, Any] = {
+            "scenario": scenario_label,
+            "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
+            "target_arrival_minutes": target_minutes,
+            "target_arrival_label": _format_minutes_clock(target_minutes),
+            "planned_total_duration_s": planned_total_s,
+            "planned_stop_service_s": stop_service_s,
+            "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
+        }
+        try:
+            stats = _amap_route_stats(planner, _route_amap_points(points, route), cache, state)
+        except Exception as exc:
+            stats = None
+            verification["error"] = str(exc)
+        if not stats:
+            gate["unavailable_route_count"] += 1
+            verification.update({"status": "unavailable", "passes": None})
+            route["final_route_traffic_gate"] = verification
+            continue
+        verified_drive_s = float(stats.get("duration_s", 0.0) or 0.0)
+        verified_total_s = verified_drive_s + stop_service_s
+        delay_s = max(0.0, verified_total_s - planned_total_s)
+        passes = delay_s <= grace_s
+        gate["checked_route_count"] += 1
+        if not passes:
+            gate["failed_route_count"] += 1
+        gate["max_estimated_arrival_delay_minutes"] = max(
+            float(gate["max_estimated_arrival_delay_minutes"]),
+            delay_s / 60.0,
+        )
+        verification.update(
+            {
+                "status": "passed" if passes else "failed",
+                "passes": passes,
+                "verified_source": stats.get("source"),
+                "verified_drive_duration_s": verified_drive_s,
+                "verified_total_duration_s": verified_total_s,
+                "verified_distance_m": float(stats.get("distance_m", 0.0) or 0.0),
+                "estimated_arrival_delay_s": delay_s,
+                "estimated_arrival_delay_minutes": delay_s / 60.0,
+                "verified_arrival_minutes": target_minutes + delay_s / 60.0,
+                "verified_arrival_label": _format_minutes_clock(target_minutes + delay_s / 60.0),
+            }
+        )
+        route["final_route_traffic_gate"] = verification
+
+    if state.get("cache_changed"):
+        save_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH, cache, sort_keys=True)
+    gate["api_calls"] = int(state.get("api_calls", 0))
+    gate["cache_hits"] = int(state.get("cache_hits", 0))
+    if gate["checked_route_count"]:
+        gate["status"] = "failed" if gate["failed_route_count"] else "passed"
+    else:
+        gate["status"] = "unavailable"
+    scenario["traffic_gate"] = gate
+    scenario["traffic_feasible"] = gate["status"] in {"passed", "not_applicable", "disabled"}
+    return gate
+
+
+def _next_final_route_replan_limit_seconds(
+    current_limit_seconds: float,
+    gate: dict[str, Any],
+) -> float | None:
+    if not FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED:
+        return None
+    if dict(gate or {}).get("status") != "failed":
+        return None
+    if int(dict(gate or {}).get("failed_route_count", 0) or 0) <= 0:
+        return None
+    delay_minutes = float(dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0)
+    reduction_minutes = max(FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES, math.ceil(delay_minutes))
+    min_limit_seconds = FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES * 60.0
+    next_limit_seconds = max(min_limit_seconds, float(current_limit_seconds) - reduction_minutes * 60.0)
+    if next_limit_seconds >= float(current_limit_seconds) - 1:
+        return None
+    return next_limit_seconds
 
 
 def calibrate_peak_traffic_multiplier(
@@ -2330,6 +2621,7 @@ def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[
     )
 
     planner.INPUT_STOPS = deepcopy(input_records)
+    planner._BRP_ACTIVE_CONFIG = config
     planner.ADDRESSES = [record["address"] for record in input_records]
     planner.BUS_TYPE_CONFIGS = _build_bus_type_configs(config)
     (
@@ -5914,6 +6206,7 @@ def _compute_scenario_without_render(
     previous_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
     previous_node_time_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}))
     previous_min_solver_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
+    previous_max_route_duration_seconds = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
     full_fleet = planner.build_vehicle_fleet()
@@ -5964,18 +6257,72 @@ def _compute_scenario_without_render(
         else:
             planner.NODE_TIME_UPPER_BOUNDS = {}
             planner.MIN_SOLVER_VEHICLE_COUNT = 0
-        final_routes = planner.solve_routes(points, solve_time, solve_distance)
-        planner.enrich_routes_with_actual_driving(points, final_routes)
-        route_attribution_estimates = apply_attributed_traffic_to_scenario_routes(
-            final_routes,
-            route_traffic_attribution_context,
-            float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
-            scenario_label,
-            points=points,
-        )
-        planner.annotate_and_price_routes(points, final_routes)
-        result = planner.build_scenario_result(points, final_routes, "")
-        result["output_html"] = ""
+        traffic_replan_attempts: list[dict[str, Any]] = []
+        route_attribution_estimates: list[dict[str, Any]] = []
+        result: dict[str, Any] = {}
+        replan_attempt_index = 0
+        while True:
+            route_limit_before_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
+            try:
+                final_routes = planner.solve_routes(points, solve_time, solve_distance)
+            except Exception as exc:
+                if replan_attempt_index > 0 and result:
+                    if traffic_replan_attempts:
+                        traffic_replan_attempts[-1]["error"] = str(exc)
+                    planner.log(
+                        f"[WARN] {scenario_label} AM arrival replan failed after "
+                        f"tightening route target to {route_limit_before_s / 60.0:.1f} minutes: {exc}"
+                    )
+                    break
+                raise
+            planner.enrich_routes_with_actual_driving(points, final_routes)
+            route_attribution_estimates = apply_attributed_traffic_to_scenario_routes(
+                final_routes,
+                route_traffic_attribution_context,
+                float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
+                scenario_label,
+                points=points,
+            )
+            planner.annotate_and_price_routes(points, final_routes)
+            result = planner.build_scenario_result(points, final_routes, "")
+            result["output_html"] = ""
+            gate = attach_final_route_traffic_gate(
+                planner,
+                result,
+                points,
+                getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
+                list(getattr(planner, "INPUT_STOPS", []) or []),
+                scenario_label,
+            )
+            if replan_attempt_index >= FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS:
+                break
+            next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
+            if next_limit_s is None:
+                break
+            traffic_replan_attempts.append(
+                {
+                    "attempt": replan_attempt_index + 1,
+                    "from_route_duration_minutes": route_limit_before_s / 60.0,
+                    "to_route_duration_minutes": next_limit_s / 60.0,
+                    "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                    "max_estimated_arrival_delay_minutes": float(
+                        dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                    ),
+                }
+            )
+            planner.log(
+                f"[BACKEND] {scenario_label} failed AM arrival gate; "
+                f"tightening route target from {route_limit_before_s / 60.0:.1f} "
+                f"to {next_limit_s / 60.0:.1f} minutes and resolving."
+            )
+            planner.MAX_ROUTE_DURATION_SECONDS = next_limit_s
+            replan_attempt_index += 1
+        if traffic_replan_attempts:
+            result["traffic_replan_attempts"] = traffic_replan_attempts
+            traffic_gate = dict(result.get("traffic_gate") or {})
+            traffic_gate["replan_enabled"] = bool(FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED)
+            traffic_gate["replan_attempts"] = traffic_replan_attempts
+            result["traffic_gate"] = traffic_gate
         if route_attribution_estimates:
             result["traffic_route_attribution"] = {
                 "enabled": True,
@@ -6006,6 +6353,7 @@ def _compute_scenario_without_render(
         planner.BUS_TYPE_CONFIGS = previous_bus_type_configs
         planner.NODE_TIME_UPPER_BOUNDS = previous_node_time_upper_bounds
         planner.MIN_SOLVER_VEHICLE_COUNT = previous_min_solver_vehicle_count
+        planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
 
 
 def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -6252,36 +6600,8 @@ def run_backend_planner_with_prepared_data(
                 planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
                 planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
             else:
-                traffic_calibration = calibrate_peak_traffic_multiplier(
-                    planner,
-                    current_plan,
-                    original_points,
-                    input_records,
-                    config,
-                    traffic_profile_name,
-                    traffic_time_multiplier,
-                    traffic_profile_context,
-                )
-                if traffic_calibration.get("succeeded"):
-                    traffic_profile_name = str(traffic_calibration["traffic_profile_name"])
-                    traffic_time_multiplier = float(traffic_calibration["traffic_time_multiplier"])
-                    traffic_profile_context = str(traffic_calibration["traffic_profile_context"])
-                    planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
-                    planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
-                    planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
-                    planner.log(
-                        f"[BACKEND] AMap peak calibration selected {traffic_time_multiplier:.2f}x "
-                        f"for {traffic_calibration.get('selected_period')} "
-                        f"({traffic_calibration.get('sampled_edge_count')} edge(s))."
-                    )
-                elif traffic_calibration.get("enabled"):
-                    planner.log(
-                        "[WARN] AMap peak calibration did not produce a usable factor; "
-                        f"falling back to {traffic_time_multiplier:.2f}x."
-                    )
-                else:
-                    reason = str(traffic_calibration.get("reason", "not_applicable"))
-                    planner.log(f"[BACKEND] AMap peak calibration skipped: {reason}.")
+                traffic_calibration = {"enabled": False, "reason": "superseded_by_final_route_arrival_gate"}
+                planner.log("[BACKEND] Legacy AMap peak calibration skipped; final route arrival gate handles AM compliance.")
             if live_traffic_sample and not traffic_calibration.get("succeeded") and not traffic_attribution.get("succeeded"):
                 planner.log(
                     f"[BACKEND] Live traffic sample selected {traffic_time_multiplier:.2f}x "

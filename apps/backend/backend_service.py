@@ -2749,12 +2749,12 @@ def _throttle_amap_display_request() -> None:
 
 def _fetch_amap_display_segment(
     request_points: list[tuple[float, float]]
-) -> list[list[float]]:
+) -> dict[str, Any]:
     if len(request_points) < 2:
-        return []
+        return {"geometry": [], "duration_s": None, "distance_m": None}
     amap_key = _amap_display_api_key()
     if not amap_key:
-        return []
+        return {"geometry": [], "duration_s": None, "distance_m": None}
     origin_lat, origin_lng = request_points[0]
     dest_lat, dest_lng = request_points[-1]
     params: dict[str, str] = {
@@ -2786,37 +2786,57 @@ def _fetch_amap_display_segment(
         raise RuntimeError(f"AMap display route failed: {message}")
     paths = list(dict(payload.get("route") or {}).get("paths") or [])
     if not paths:
-        return []
+        return {"geometry": [], "duration_s": None, "distance_m": None}
     path = dict(paths[0] or {})
     coordinates: list[list[float]] = []
     for step in list(path.get("steps") or []):
         coordinates.extend(_decode_amap_polyline(str(dict(step or {}).get("polyline") or "")))
     if not coordinates:
         coordinates = _decode_amap_polyline(str(path.get("polyline") or ""))
-    return _dedupe_line_coordinates(coordinates)
+    duration_s = _float_or_none(path.get("duration"))
+    distance_m = _float_or_none(path.get("distance"))
+    return {
+        "geometry": _dedupe_line_coordinates(coordinates),
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+    }
 
 
 def _fetch_amap_display_geometry(
     request_points: list[tuple[float, float]]
-) -> list[list[float]]:
+) -> dict[str, Any]:
     max_points_per_request = max(2, AMAP_DISPLAY_GEOMETRY_MAX_WAYPOINTS + 2)
     if len(request_points) <= max_points_per_request:
         return _fetch_amap_display_segment(request_points)
 
     geometry: list[list[float]] = []
+    duration_s = 0.0
+    distance_m = 0.0
+    has_duration = False
+    has_distance = False
     start_index = 0
     while start_index < len(request_points) - 1:
         end_index = min(len(request_points), start_index + max_points_per_request)
         segment = _fetch_amap_display_segment(request_points[start_index:end_index])
-        geometry.extend(segment)
+        geometry.extend(list(segment.get("geometry") or []))
+        if segment.get("duration_s") is not None:
+            duration_s += float(segment.get("duration_s") or 0.0)
+            has_duration = True
+        if segment.get("distance_m") is not None:
+            distance_m += float(segment.get("distance_m") or 0.0)
+            has_distance = True
         start_index = end_index - 1
-    return _dedupe_line_coordinates(geometry)
+    return {
+        "geometry": _dedupe_line_coordinates(geometry),
+        "duration_s": duration_s if has_duration else None,
+        "distance_m": distance_m if has_distance else None,
+    }
 
 
 def _amap_display_geometry_for_route(
     points: list[Any],
     nodes: list[Any],
-) -> tuple[list[list[float]] | None, str, str]:
+) -> tuple[list[list[float]] | None, str, str, float | None, float | None]:
     route_points: list[dict[str, Any]] = []
     for node in nodes:
         node_index = _int_or_none(node)
@@ -2831,7 +2851,7 @@ def _amap_display_geometry_for_route(
         if (coords := _amap_request_coordinates_for_point(point)) is not None
     ]
     if len(request_points) < 2:
-        return None, "osrm", ""
+        return None, "osrm", "", None, None
 
     cache_key = _amap_display_cache_key(request_points)
     with _AMAP_DISPLAY_CACHE_LOCK:
@@ -2839,14 +2859,21 @@ def _amap_display_geometry_for_route(
         cached = dict(cache.get(cache_key) or {})
         cached_geometry = cached.get("geometry")
         if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
-            return cached_geometry, "amap_cn_cache", ""
+            return (
+                cached_geometry,
+                "amap_cn_cache",
+                "",
+                _float_or_none(cached.get("duration_s")),
+                _float_or_none(cached.get("distance_m")),
+            )
 
     try:
-        geometry = _fetch_amap_display_geometry(request_points)
+        response = _fetch_amap_display_geometry(request_points)
     except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
-        return None, "osrm", str(exc)
+        return None, "osrm", str(exc), None, None
+    geometry = list(response.get("geometry") or [])
     if len(geometry) < 2:
-        return None, "osrm", "AMap display route returned no geometry"
+        return None, "osrm", "AMap display route returned no geometry", None, None
 
     with _AMAP_DISPLAY_CACHE_LOCK:
         cache = _load_amap_display_cache_unlocked()
@@ -2854,13 +2881,24 @@ def _amap_display_geometry_for_route(
             "created_at": utc_now_iso(),
             "point_count": len(request_points),
             "geometry": geometry,
+            "duration_s": response.get("duration_s"),
+            "distance_m": response.get("distance_m"),
         }
         _save_amap_display_cache_unlocked(cache)
-    return geometry, "amap_cn", ""
+    return (
+        geometry,
+        "amap_cn",
+        "",
+        _float_or_none(response.get("duration_s")),
+        _float_or_none(response.get("distance_m")),
+    )
 
 
 DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
 DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
+AM_ARRIVAL_GATE_GRACE_MINUTES = float(
+    os.environ.get("BRP_AM_ARRIVAL_GATE_GRACE_MINUTES", "0") or 0
+)
 
 
 def _job_planner_config_payload(job_record: dict[str, Any]) -> dict[str, Any]:
@@ -2990,6 +3028,64 @@ def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -
             stop["scheduled_offset_s"] = offset_s
             stop["scheduled_time_minutes"] = scheduled_minutes
             stop["scheduled_time_label"] = _format_clock_minutes(scheduled_minutes)
+
+
+def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any]) -> None:
+    if str(payload.get("service_direction") or "").strip() != "To School":
+        return
+    target_minutes, target_label, _target_kind = _schedule_anchor_minutes(job_record, "To School")
+    grace_s = max(0.0, AM_ARRIVAL_GATE_GRACE_MINUTES * 60.0)
+    checked = 0
+    failed = 0
+    unavailable = 0
+    max_delay_s = 0.0
+    for route in list(payload.get("routes") or []):
+        planned_drive_s = _float_or_none(route.get("duration_s"))
+        verified_drive_s = _float_or_none(route.get("display_duration_s"))
+        source = str(route.get("display_geometry_source") or "")
+        gate: dict[str, Any] = {
+            "target_arrival_minutes": target_minutes,
+            "target_arrival_label": target_label,
+            "planned_drive_duration_s": planned_drive_s,
+            "verified_drive_duration_s": verified_drive_s,
+            "verified_source": source,
+            "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
+        }
+        if planned_drive_s is None or verified_drive_s is None or not source.startswith("amap"):
+            unavailable += 1
+            gate.update({"status": "unavailable", "passes": None})
+        else:
+            checked += 1
+            delay_s = max(0.0, verified_drive_s - planned_drive_s)
+            max_delay_s = max(max_delay_s, delay_s)
+            passes = delay_s <= grace_s
+            if not passes:
+                failed += 1
+            gate.update(
+                {
+                    "status": "passed" if passes else "failed",
+                    "passes": passes,
+                    "estimated_arrival_delay_s": delay_s,
+                    "estimated_arrival_delay_minutes": delay_s / 60.0,
+                    "verified_arrival_minutes": target_minutes + (delay_s / 60.0),
+                    "verified_arrival_label": _format_clock_minutes(target_minutes + (delay_s / 60.0)),
+                }
+            )
+        route["am_arrival_gate"] = gate
+
+    status = "unavailable"
+    if checked:
+        status = "failed" if failed else "passed"
+    payload.setdefault("summary", {})["am_arrival_gate"] = {
+        "enabled": True,
+        "status": status,
+        "target_arrival_label": target_label,
+        "checked_route_count": checked,
+        "failed_route_count": failed,
+        "unavailable_route_count": unavailable,
+        "max_estimated_arrival_delay_minutes": max_delay_s / 60.0,
+        "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
+    }
 
 
 def _normalize_stop_match_text(value: Any) -> str:
@@ -3450,11 +3546,15 @@ def _build_job_map_payload(
         display_geometry: list[list[float]] | None = None
         display_geometry_source = "osrm"
         display_geometry_message = ""
+        display_duration_s: float | None = None
+        display_distance_m: float | None = None
         if use_amap_display_geometry:
             (
                 display_geometry,
                 display_geometry_source,
                 display_geometry_message,
+                display_duration_s,
+                display_distance_m,
             ) = _amap_display_geometry_for_route(points, nodes)
 
         visible_geometry = display_geometry if display_geometry else geometry
@@ -3537,6 +3637,8 @@ def _build_job_map_payload(
                 "display_geometry": display_geometry,
                 "display_geometry_source": display_geometry_source,
                 "display_geometry_message": display_geometry_message,
+                "display_duration_s": display_duration_s,
+                "display_distance_m": display_distance_m,
                 "stop_ids": route_stop_ids,
             }
         )
@@ -3633,6 +3735,7 @@ def _build_job_map_payload(
         },
     }
     _apply_schedule_times(payload, job_record)
+    _attach_am_arrival_gate(payload, job_record)
     if attach_impact and scenario_key != "current_plan":
         current_payload, _current_error = _build_job_map_payload(
             job_record,

@@ -273,6 +273,44 @@ class LiveTrafficSamplerTests(unittest.TestCase):
         self.assertEqual(routes[0]["distance_m"], 6789.0)
         self.assertEqual(routes[0]["baseline_metric_source"], "baseline_json_coordinates")
 
+    def test_baseline_json_with_coordinates_can_fill_missing_metrics_from_osrm(self) -> None:
+        baseline = {
+            "baseline_id": "fixture",
+            "source_title": "Fixture",
+            "service_direction": "to_school",
+            "routes": [
+                {
+                    "route_id": "route-1",
+                    "stops": [
+                        {"stop_sequence": 1, "address": "A", "lat": 31.1, "lng": 120.1},
+                        {"stop_sequence": 2, "address": "School", "lat": 31.2, "lng": 120.2, "is_school": True},
+                    ],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "baseline.json"
+            path.write_text(json.dumps(baseline), encoding="utf-8")
+            args = argparse.Namespace(baseline_path=str(path), baseline_dir=Path(tmpdir))
+
+            with (
+                mock.patch.object(live_traffic_sampler.planner, "geocode_records", side_effect=AssertionError("geocode")),
+                mock.patch.object(
+                    live_traffic_sampler,
+                    "_route_osrm_metrics",
+                    return_value=(6789.0, 1234.5, [{"from_node": 0, "to_node": 1}]),
+                ) as osrm_metrics,
+            ):
+                _payload, metadata, points, routes = live_traffic_sampler._scenario_from_baseline_json(args)
+
+        self.assertEqual(metadata["baseline_load_mode"], "coordinates")
+        self.assertEqual([point["node_id"] for point in points], [0, 1])
+        osrm_metrics.assert_called_once()
+        self.assertEqual(routes[0]["raw_osrm_time_s"], 1234.5)
+        self.assertEqual(routes[0]["distance_m"], 6789.0)
+        self.assertEqual(routes[0]["leg_details"], [{"from_node": 0, "to_node": 1}])
+        self.assertEqual(routes[0]["baseline_metric_source"], "baseline_json_coordinates_osrm")
+
 
 if __name__ == "__main__":
     unittest.main()

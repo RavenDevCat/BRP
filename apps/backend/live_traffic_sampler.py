@@ -577,8 +577,11 @@ def _scenario_from_baseline_coordinates(
             "historical_distance_m",
             "total_distance_m",
         )
+        leg_details: list[dict[str, Any]] = []
+        metric_source = "baseline_json_coordinates"
         if duration_s is None or distance_m is None:
-            return None
+            distance_m, duration_s, leg_details = _route_osrm_metrics(route_points)
+            metric_source = "baseline_json_coordinates_osrm"
         route_id = str(raw_route.get("route_id") or route_index).strip()
         routes.append(
             {
@@ -588,8 +591,8 @@ def _scenario_from_baseline_coordinates(
                 "nodes": [int(point["node_id"]) for point in route_points],
                 "raw_osrm_time_s": duration_s,
                 "distance_m": distance_m,
-                "leg_details": [],
-                "baseline_metric_source": "baseline_json_coordinates",
+                "leg_details": leg_details,
+                "baseline_metric_source": metric_source,
             }
         )
     if not routes:

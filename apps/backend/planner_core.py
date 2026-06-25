@@ -5975,6 +5975,10 @@ def _compute_scenario_without_render(
                     "from_route_duration_minutes": route_limit_before_s / 60.0,
                     "to_route_duration_minutes": next_limit_s / 60.0,
                     "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                    "checked_route_count": int(dict(gate or {}).get("checked_route_count", 0) or 0),
+                    "unavailable_route_count": int(dict(gate or {}).get("unavailable_route_count", 0) or 0),
+                    "api_calls": int(dict(gate or {}).get("api_calls", 0) or 0),
+                    "cache_hits": int(dict(gate or {}).get("cache_hits", 0) or 0),
                     "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
                     "max_estimated_arrival_delay_minutes": float(
                         dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0

@@ -85,6 +85,11 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     assert result["traffic_gate"]["status"] == "passed"
     assert len(result["traffic_replan_attempts"]) == 1
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
+    assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
+    assert result["traffic_replan_attempts"][0]["unavailable_route_count"] == 0
+    assert result["traffic_replan_attempts"][0]["api_calls"] == 1
+    assert result["traffic_replan_attempts"][0]["cache_hits"] == 0
+    assert result["traffic_gate"]["replan_attempts"][0]["api_calls"] == 1
 
 
 def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):

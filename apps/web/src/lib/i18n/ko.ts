@@ -337,6 +337,8 @@ const ko: Translations = {
     completed: "완료됨",
     failed: "실패",
     canceled: "취소됨",
+    scheduled: "예약됨",
+    "Scheduled for": "예약 실행",
 
     // KR localization expansion - New Audit
     "Current plan audit": "현행 계획 감사",
@@ -376,6 +378,15 @@ const ko: Translations = {
     "Validate workbook": "워크북 검증",
     "Run audit": "감사 실행",
     "Workbook will be validated before the audit starts.": "감사 시작 전에 워크북을 먼저 검증합니다.",
+    "Scheduled Job": "예약 작업",
+    Scheduled: "예약됨",
+    "Run now": "즉시 실행",
+    "Queue this audit for the fixed traffic window instead of running it immediately.":
+        "즉시 실행하지 않고 고정 교통 시간대에 실행되도록 감사 작업을 대기열에 넣습니다.",
+    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
+        "켜면 등교 감사는 현지 시간 06:00, 하교 감사는 15:40에 실행 대기열로 전환됩니다.",
+    "Cancel is available only while a job is scheduled, queued, or running.":
+        "예약됨, 대기 중 또는 실행 중인 작업만 취소할 수 있습니다.",
     Name: "이름",
     "Fleet slots": "차량 슬롯",
     Optional: "선택 사항",

@@ -1,62 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-LOCAL_ENV_FILE="$ROOT_DIR/ops/env/local.env"
-if [ -f "$LOCAL_ENV_FILE" ]; then
-  set -a
-  # shellcheck source=/dev/null
-  source "$LOCAL_ENV_FILE"
-  set +a
-fi
+cat >&2 <<'EOF'
+BRP live traffic sampling timers are retired on CN.
 
-AM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_AM_ON_CALENDAR:-Mon..Fri 06:20:00 Asia/Shanghai}"
-PM_ON_CALENDAR="${BRP_LIVE_TRAFFIC_PM_ON_CALENDAR:-Mon..Fri 15:40:00 Asia/Shanghai}"
-SYSTEMD_DIR="${BRP_LIVE_TRAFFIC_SYSTEMD_DIR:-/etc/systemd/system}"
-
-write_service() {
-  local name="$1"
-  local description="$2"
-  local command="$3"
-  local path="$SYSTEMD_DIR/$name.service"
-  sudo tee "$path" >/dev/null <<EOF
-[Unit]
-Description=BRP live traffic sampler ($description)
-
-[Service]
-Type=oneshot
-WorkingDirectory=$ROOT_DIR
-ExecStart=$command
+Use ops/scripts/install_scheduled_audit_timers.sh instead. The new flow queues
+Route Audit jobs and releases them at the fixed AM/PM traffic windows; it does
+not maintain separate AMap sampling timers.
 EOF
-}
-
-write_timer() {
-  local name="$1"
-  local calendar="$2"
-  local path="$SYSTEMD_DIR/$name.timer"
-  sudo tee "$path" >/dev/null <<EOF
-[Unit]
-Description=BRP live traffic sampler timer ($name)
-
-[Timer]
-OnCalendar=$calendar
-Persistent=false
-Unit=$name.service
-
-[Install]
-WantedBy=timers.target
-EOF
-}
-
-write_service "brp-live-traffic-am" "am_peak arrival window" "$ROOT_DIR/ops/scripts/run_live_traffic_am_window.sh"
-write_timer "brp-live-traffic-am" "$AM_ON_CALENDAR"
-write_service "brp-live-traffic-pm" "pm_peak departure" "$ROOT_DIR/ops/scripts/run_live_traffic_sampler.sh pm_peak"
-write_timer "brp-live-traffic-pm" "$PM_ON_CALENDAR"
-
-sudo systemctl daemon-reload
-echo "Installed timers, not enabled:"
-echo "  brp-live-traffic-am.timer -> $AM_ON_CALENDAR"
-echo "  brp-live-traffic-pm.timer -> $PM_ON_CALENDAR"
-echo "AM uses run_live_traffic_am_window.sh and samples only routes due near their planned departure."
-echo "Enable after confirming times:"
-echo "  sudo systemctl enable --now brp-live-traffic-am.timer brp-live-traffic-pm.timer"
+exit 1

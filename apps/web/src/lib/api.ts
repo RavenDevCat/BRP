@@ -137,6 +137,8 @@ export type JobSummary = {
     created_at?: string | null;
     started_at?: string | null;
     finished_at?: string | null;
+    scheduled_start_at?: string | null;
+    scheduled_trigger_label?: string | null;
     metadata?: Record<string, unknown>;
     prepared_payload_summary?: Record<string, unknown>;
     error?: string | null;
@@ -840,6 +842,7 @@ export function submitWorkbookJob(payload: {
     file_base64: string;
     config: PlannerConfigPayload;
     job_custom_name?: string;
+    scheduled_job?: boolean;
 }) {
     return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {
         method: "POST",

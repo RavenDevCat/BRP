@@ -14,7 +14,7 @@ import time
 import traceback
 from copy import deepcopy
 from dataclasses import asdict, fields
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -246,6 +246,35 @@ def _amap_display_api_key() -> str:
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+BRP_LOCAL_TZ = timezone(timedelta(hours=8))
+
+
+def _parse_iso_datetime(value: object) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _next_scheduled_job_trigger(config_payload: dict[str, Any]) -> tuple[str, str]:
+    direction = str(config_payload.get("service_direction") or "").strip().lower()
+    if direction == "from school":
+        hour, minute, label = 15, 40, "15:40 PM peak"
+    else:
+        hour, minute, label = 6, 0, "06:00 AM peak"
+    now = datetime.now(BRP_LOCAL_TZ).replace(microsecond=0)
+    target = now.replace(hour=hour, minute=minute, second=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return target.isoformat(), label
 
 
 _RUNTIME_SQLITE_STORE: SqliteRuntimeStore | None = None
@@ -1616,12 +1645,22 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
     job_custom_name = str(payload.get("job_custom_name") or "").strip()
     job_default_name = _build_job_display_name(source_label)
     job_name = _build_job_display_name(source_label, job_custom_name)
+    scheduled_requested = bool(payload.get("scheduled_job"))
+    scheduled_start_at = None
+    scheduled_trigger_label = None
+    if scheduled_requested:
+        scheduled_start_at, scheduled_trigger_label = _next_scheduled_job_trigger(
+            config_payload
+        )
     metadata = {
         "job_name": job_name,
         "job_default_name": job_default_name,
         "job_custom_name": job_custom_name,
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
+        "scheduled_job": scheduled_requested,
+        "scheduled_start_at": scheduled_start_at,
+        "scheduled_trigger_label": scheduled_trigger_label,
         "planner_config": dict(config_payload),
         "client_prep": {
             "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
@@ -1636,10 +1675,14 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         dict(client_prep["prepared_payload"]),
         metadata=metadata,
         owner_email=user_email,
+        status="scheduled" if scheduled_requested else "queued",
+        scheduled_start_at=scheduled_start_at,
+        scheduled_trigger_label=scheduled_trigger_label,
     )
-    spawned = _spawn_job_worker(str(summary["job_id"]))
-    if spawned:
-        summary["worker_pid"] = spawned.get("worker_pid")
+    if not scheduled_requested:
+        spawned = _spawn_job_worker(str(summary["job_id"]))
+        if spawned:
+            summary["worker_pid"] = spawned.get("worker_pid")
     return {
         "job": summary,
         "source_label": source_label,
@@ -2127,17 +2170,23 @@ class JobStore:
         prepared_payload: dict[str, Any],
         metadata: dict[str, Any] | None = None,
         owner_email: str = "",
+        status: str = "queued",
+        scheduled_start_at: str | None = None,
+        scheduled_trigger_label: str | None = None,
     ) -> dict[str, Any]:
         job_id = uuid4().hex[:12]
         created_at = utc_now_iso()
         normalized_owner_email = _normalize_email(owner_email)
+        initial_status = str(status or "queued").strip().lower() or "queued"
         record = {
             "job_id": job_id,
             "owner_email": normalized_owner_email,
-            "status": "queued",
+            "status": initial_status,
             "created_at": created_at,
             "started_at": None,
             "finished_at": None,
+            "scheduled_start_at": scheduled_start_at,
+            "scheduled_trigger_label": scheduled_trigger_label,
             "worker_pid": None,
             "job_slot_path": None,
             "config": deepcopy(config_payload or {}),
@@ -2155,10 +2204,12 @@ class JobStore:
         return {
             "job_id": job_id,
             "owner_email": normalized_owner_email,
-            "status": "queued",
+            "status": initial_status,
             "created_at": created_at,
             "started_at": None,
             "finished_at": None,
+            "scheduled_start_at": scheduled_start_at,
+            "scheduled_trigger_label": scheduled_trigger_label,
             "metadata": deepcopy(metadata or {}),
             "prepared_payload_summary": record["prepared_payload_summary"],
             "error": None,
@@ -2253,6 +2304,36 @@ class JobStore:
                     records.append(deepcopy(record))
             records.sort(key=lambda item: str(item.get("created_at") or ""))
             return records
+
+    def release_due_scheduled_jobs(self) -> list[dict[str, Any]]:
+        now = datetime.now(timezone.utc)
+        released: list[dict[str, Any]] = []
+        with self.lock:
+            entries = self._list_jobs_unlocked(include_all=True)
+            for entry in entries:
+                if str(entry.get("status", "")).strip().lower() != "scheduled":
+                    continue
+                job_id = str(entry.get("job_id", "")).strip()
+                if not job_id:
+                    continue
+                record = self._load_job_unlocked(job_id)
+                if not record or str(record.get("status", "")).strip().lower() != "scheduled":
+                    continue
+                scheduled_at = _parse_iso_datetime(
+                    record.get("scheduled_start_at")
+                    or dict(record.get("metadata") or {}).get("scheduled_start_at")
+                )
+                if scheduled_at is None or scheduled_at > now:
+                    continue
+                metadata = dict(record.get("metadata") or {})
+                metadata["scheduled_released_at"] = utc_now_iso()
+                record["metadata"] = metadata
+                record["status"] = "queued"
+                record["worker_pid"] = None
+                record["job_slot_path"] = None
+                self._save_job_unlocked(job_id, record)
+                released.append(deepcopy(record))
+        return released
 
     def delete_job(self, job_id: str) -> bool:
         with self.lock:

@@ -61,6 +61,8 @@ def job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "created_at": record.get("created_at"),
         "started_at": record.get("started_at"),
         "finished_at": record.get("finished_at"),
+        "scheduled_start_at": record.get("scheduled_start_at"),
+        "scheduled_trigger_label": record.get("scheduled_trigger_label"),
         "metadata": dict(record.get("metadata") or {}),
         "prepared_payload_summary": dict(record.get("prepared_payload_summary") or {}),
         "error": record.get("error"),

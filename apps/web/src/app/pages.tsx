@@ -60,7 +60,7 @@ export function DashboardPage() {
     const jobsQuery = useQuery({ queryKey: ["jobs"], queryFn: listJobs });
     const jobs = jobsQuery.data || [];
     const runningCount = jobs.filter((job) =>
-        ["queued", "running"].includes(job.status),
+        ["scheduled", "queued", "running"].includes(job.status),
     ).length;
     const succeededCount = jobs.filter(
         (job) => job.status === "succeeded",
@@ -637,6 +637,7 @@ function JobHistorySubList({
                 const active = job.job_id === selectedJobId;
                 const isDeleting = deletingJobId === job.job_id;
                 const summary = job.prepared_payload_summary || {};
+                const scheduledStartAt = getScheduledStartAt(job);
                 return (
                     <div
                         key={job.job_id}
@@ -666,6 +667,17 @@ function JobHistorySubList({
                                     >
                                         {formatDateTime(job.created_at)}
                                     </div>
+                                    {scheduledStartAt ? (
+                                        <div
+                                            className={
+                                                active
+                                                    ? "mt-1 text-xs text-primary-foreground/75"
+                                                    : "mt-1 text-xs text-muted-foreground"
+                                            }
+                                        >
+                                            {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
+                                        </div>
+                                    ) : null}
                                 </div>
                                 <Badge
                                     tone={
@@ -733,6 +745,17 @@ function JobHistorySubList({
     );
 }
 
+function getScheduledStartAt(job: {
+    scheduled_start_at?: string | null;
+    metadata?: Record<string, unknown>;
+}): string | null {
+    if (typeof job.scheduled_start_at === "string" && job.scheduled_start_at.trim()) {
+        return job.scheduled_start_at;
+    }
+    const metadataValue = job.metadata?.scheduled_start_at;
+    return typeof metadataValue === "string" && metadataValue.trim() ? metadataValue : null;
+}
+
 function JobDetailPanel({ jobId }: { jobId: string }) {
     const t = useT();
     const navigate = useNavigate();
@@ -742,7 +765,7 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
         queryFn: () => getJob(jobId),
         refetchInterval: (query) => {
             const status = query.state.data?.status;
-            return status === "queued" || status === "running" ? 5_000 : false;
+            return status === "scheduled" || status === "queued" || status === "running" ? 5_000 : false;
         },
     });
     const cancelMutation = useMutation({
@@ -778,7 +801,8 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
     }
 
     const job = jobQuery.data;
-    const jobIsActive = job.status === "queued" || job.status === "running";
+    const jobIsActive = job.status === "scheduled" || job.status === "queued" || job.status === "running";
+    const scheduledStartAt = getScheduledStartAt(job);
 
     return (
         <div className="min-w-0 space-y-6">
@@ -816,6 +840,12 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                                     label={t("Created")}
                                     value={formatDateTime(job.created_at)}
                                 />
+                                {scheduledStartAt ? (
+                                    <TimelineItem
+                                        label={t("Scheduled for")}
+                                        value={formatDateTime(scheduledStartAt)}
+                                    />
+                                ) : null}
                                 <TimelineItem
                                     label={t("Started")}
                                     value={formatDateTime(job.started_at)}
@@ -894,9 +924,9 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                             </Button>
                             {!jobIsActive ? (
                                 <div className="text-xs leading-5 text-muted-foreground">
-                                    {t(
-                                        "Cancel is available only while a job is queued or running.",
-                                    )}
+                                {t(
+                                    "Cancel is available only while a job is scheduled, queued, or running.",
+                                )}
                                 </div>
                             ) : null}
                             {cancelMutation.error ? (

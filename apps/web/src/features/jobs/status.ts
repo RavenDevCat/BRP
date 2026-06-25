@@ -7,7 +7,7 @@ export function getJobStatusTone(status: string): JobStatusTone {
   if (normalized === "succeeded" || normalized === "completed") {
     return "success";
   }
-  if (normalized === "queued" || normalized === "running") {
+  if (normalized === "scheduled" || normalized === "queued" || normalized === "running") {
     return "info";
   }
   if (normalized === "failed" || normalized === "canceled") {

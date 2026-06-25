@@ -317,6 +317,17 @@ const zh: Translations = {
     problem: "问题",
     locks: "锁",
     Running: "运行中",
+    scheduled: "已定时",
+    "Scheduled for": "预计触发",
+    "Scheduled Job": "定时任务",
+    Scheduled: "已定时",
+    "Run now": "立即执行",
+    "Queue this audit for the fixed traffic window instead of running it immediately.":
+        "将本次审计放入固定交通窗口队列，而不是立即执行。",
+    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
+        "开启后，上学任务在本地时间 06:00 释放，放学任务在本地时间 15:40 释放。",
+    "Cancel is available only while a job is scheduled, queued, or running.":
+        "只有定时、排队或运行中的任务可以取消。",
 };
 
 export default zh;

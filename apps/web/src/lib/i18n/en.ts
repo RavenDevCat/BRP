@@ -364,6 +364,17 @@ const en: Translations = {
         "Delete this job from local history? This cannot be undone.",
     "Cancel is available only while a job is queued or running.":
         "Cancel is available only while a job is queued or running.",
+    "Cancel is available only while a job is scheduled, queued, or running.":
+        "Cancel is available only while a job is scheduled, queued, or running.",
+    scheduled: "scheduled",
+    "Scheduled for": "Scheduled for",
+    "Scheduled Job": "Scheduled Job",
+    Scheduled: "Scheduled",
+    "Run now": "Run now",
+    "Queue this audit for the fixed traffic window instead of running it immediately.":
+        "Queue this audit for the fixed traffic window instead of running it immediately.",
+    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
+        "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.",
 
     // Misc
     Export: "Export",

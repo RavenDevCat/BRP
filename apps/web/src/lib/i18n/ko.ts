@@ -397,6 +397,19 @@ const ko: Translations = {
         "워크북의 탑승자 기록입니다. 여러 학생이 같은 승차 지점을 공유하면 정류장 수보다 클 수 있습니다.",
     "Current distance": "현행 총거리",
     "Total distance in the uploaded current plan.": "업로드된 현행 계획의 총 주행 거리입니다.",
+    "Run parameters": "실행 조건",
+    "Route budget": "노선 시간 예산",
+    "Solver route budget before final traffic verification.":
+        "최종 교통 검증 전에 solver가 사용하는 노선 시간 예산입니다.",
+    Comfort: "승차감",
+    On: "켜짐",
+    Off: "꺼짐",
+    "Comfort capacity cap": "승차감 기준 탑승률 상한",
+    "Full capacity allowed": "전체 정원 허용",
+    "AM arrival": "오전 도착",
+    "PM departure": "오후 출발",
+    "Stop dwell": "정류장 체류",
+    "Fleet limits": "차량 상한",
 
     // KR localization expansion - result tabs and fixed analysis
     Summary: "요약",

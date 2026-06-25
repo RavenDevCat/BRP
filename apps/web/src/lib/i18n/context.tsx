@@ -10,8 +10,9 @@ import type { Language, Translations } from "./types";
 import { getStoredLanguage, storeLanguage } from "./types";
 import en from "./en";
 import ko from "./ko";
+import zh from "./zh";
 
-const dictionaries: Record<Language, Translations> = { en, ko };
+const dictionaries: Record<Language, Translations> = { en, ko, zh };
 
 interface LanguageContextValue {
     lang: Language;

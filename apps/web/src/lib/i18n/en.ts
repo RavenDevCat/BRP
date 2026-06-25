@@ -232,6 +232,34 @@ const en: Translations = {
     "To School (AM)": "To School (AM)",
     "From School (PM)": "From School (PM)",
 
+    // Job overview
+    "Effective stops": "Effective stops",
+    "Unique stop points used for route planning.":
+        "Unique stop points used for route planning.",
+    "Routes in the uploaded current plan.":
+        "Routes in the uploaded current plan.",
+    "Student assignments": "Student assignments",
+    "Rider records from the workbook; this can exceed stops when students share a pickup point.":
+        "Rider records from the workbook; this can exceed stops when students share a pickup point.",
+    "Current distance": "Current distance",
+    "Total distance in the uploaded current plan.":
+        "Total distance in the uploaded current plan.",
+    "Run parameters": "Run parameters",
+    "Route budget": "Route budget",
+    "Solver route budget before final traffic verification.":
+        "Solver route budget before final traffic verification.",
+    Comfort: "Comfort",
+    On: "On",
+    Off: "Off",
+    "Comfort capacity cap": "Comfort capacity cap",
+    "Full capacity allowed": "Full capacity allowed",
+    "AM arrival": "AM arrival",
+    "PM departure": "PM departure",
+    "Stop dwell": "Stop dwell",
+    "Subway baseline": "Subway baseline",
+    "Nearby baseline": "Nearby baseline",
+    "Fleet limits": "Fleet limits",
+
     // Dashboard / Jobs pages
     "Route planning": "Route planning",
     "Planning dashboard": "Planning dashboard",

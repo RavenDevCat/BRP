@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CalendarClock, Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -237,16 +237,31 @@ export function NewJobPage() {
                     {t("Queue this audit for the fixed traffic window instead of running it immediately.")}
                   </div>
                 </div>
-                <Button
+                <button
                   type="button"
-                  variant={scheduledJob ? "primary" : "secondary"}
-                  icon={<CalendarClock className="h-4 w-4" aria-hidden="true" />}
-                  aria-pressed={scheduledJob}
+                  role="switch"
+                  aria-checked={scheduledJob}
+                  className="grid h-9 w-full max-w-[240px] shrink-0 grid-cols-2 rounded-full border border-border bg-surface p-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                   title={t("When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.")}
                   onClick={() => setScheduledJob((value) => !value)}
                 >
-                  {scheduledJob ? t("Scheduled") : t("Run now")}
-                </Button>
+                  <span
+                    className={[
+                      "flex items-center justify-center rounded-full px-2 transition",
+                      scheduledJob ? "text-muted-foreground" : "bg-primary text-primary-foreground shadow-sm",
+                    ].join(" ")}
+                  >
+                    {t("Not enabled")}
+                  </span>
+                  <span
+                    className={[
+                      "flex items-center justify-center rounded-full px-2 transition",
+                      scheduledJob ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground",
+                    ].join(" ")}
+                  >
+                    {t("Schedule enabled")}
+                  </span>
+                </button>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">

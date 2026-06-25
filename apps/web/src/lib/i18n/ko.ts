@@ -381,6 +381,8 @@ const ko: Translations = {
     "Scheduled Job": "예약 작업",
     Scheduled: "예약됨",
     "Run now": "즉시 실행",
+    "Not enabled": "사용 안 함",
+    "Schedule enabled": "예약 사용",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "즉시 실행하지 않고 고정 교통 시간대에 실행되도록 감사 작업을 대기열에 넣습니다.",
     "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":

@@ -322,6 +322,8 @@ const zh: Translations = {
     "Scheduled Job": "定时任务",
     Scheduled: "已定时",
     "Run now": "立即执行",
+    "Not enabled": "未启用",
+    "Schedule enabled": "启用 Schedule",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "将本次审计放入固定交通窗口队列，而不是立即执行。",
     "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":

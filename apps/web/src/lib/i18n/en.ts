@@ -371,6 +371,8 @@ const en: Translations = {
     "Scheduled Job": "Scheduled Job",
     Scheduled: "Scheduled",
     "Run now": "Run now",
+    "Not enabled": "Not enabled",
+    "Schedule enabled": "Schedule enabled",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "Queue this audit for the fixed traffic window instead of running it immediately.",
     "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":

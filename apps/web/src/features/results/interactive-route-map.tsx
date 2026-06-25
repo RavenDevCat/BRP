@@ -523,12 +523,12 @@ export function InteractiveRouteMap({
                     stopId,
                     routeId: stop.route_id,
                     label: stop.is_depot
-                        ? "School / Start"
-                        : `Stop ${stop.order}`,
+                        ? t("School / Start")
+                        : `${t("Stop")} ${stop.order}`,
                     address:
                         stop.address ||
                         stop.requested_address ||
-                        "Unknown address",
+                        t("Unknown address"),
                     passengerCount: stop.passenger_count,
                     cumulativeDurationSeconds: stop.cumulative_duration_s,
                     longitude: event.lngLat.lng,
@@ -599,10 +599,10 @@ export function InteractiveRouteMap({
                                 {data.scenario_name}
                             </h3>
                             <div className="mt-1 text-xs text-muted-foreground">
-                                {formatNumber(data.summary.route_count)} routes
-                                · {formatNumber(data.summary.stop_count)} stops
+                                {formatNumber(data.summary.route_count)} {t("routes")}
+                                · {formatNumber(data.summary.stop_count)} {t("stops")}
                                 · {formatNumber(data.summary.passenger_count)}{" "}
-                                riders
+                                {t("riders")}
                             </div>
                         </div>
                         <Button
@@ -629,14 +629,14 @@ export function InteractiveRouteMap({
                         >
                             <div className="flex items-center justify-between gap-3">
                                 <span className="font-medium text-foreground">
-                                    Time impact
+                                    {t("Time impact")}
                                 </span>
                                 <span className="text-muted-foreground">
                                     {formatNumber(
                                         data.summary.time_impact
                                             .compared_stop_count || 0,
                                     )}{" "}
-                                    stops
+                                    {t("stops")}
                                 </span>
                             </div>
                             <div className="mt-1 text-muted-foreground">
@@ -645,7 +645,7 @@ export function InteractiveRouteMap({
                                     data.summary.time_impact
                                         .p90_adverse_delta_minutes,
                                 )}{" "}
-                                · Max{" "}
+                                · {t("Max")}{" "}
                                 {formatDeltaMinutes(
                                     data.summary.time_impact
                                         .max_adverse_delta_minutes,
@@ -655,7 +655,7 @@ export function InteractiveRouteMap({
                                     data.summary.time_impact
                                         .high_risk_stop_count || 0,
                                 )}{" "}
-                                high risk
+                                {t("high risk")}
                             </div>
                         </div>
                     ) : null}
@@ -700,8 +700,8 @@ export function InteractiveRouteMap({
                             ))}
                         </div>
                         <div className="text-[11px] text-muted-foreground">
-                            Showing {formatNumber(visibleRoutes.length)} of{" "}
-                            {formatNumber(data.routes.length)} routes
+                            {t("Showing")} {formatNumber(visibleRoutes.length)} {t("of")}{" "}
+                            {formatNumber(data.routes.length)} {t("routes")}
                         </div>
                         {selectedRoute ? (
                             <div
@@ -714,12 +714,12 @@ export function InteractiveRouteMap({
                             >
                                 <div>
                                     <div className="text-xs font-medium text-foreground">
-                                        Route context
+                                        {t("Route context")}
                                     </div>
                                     <div className="text-[11px] text-muted-foreground">
                                         {showRouteContext
-                                            ? "Other routes visible"
-                                            : "Only selected route"}
+                                            ? t("Other routes visible")
+                                            : t("Only selected route")}
                                     </div>
                                 </div>
                                 <button
@@ -756,7 +756,7 @@ export function InteractiveRouteMap({
                 >
                     {visibleRoutes.length ? null : (
                         <div className="p-4 text-sm text-muted-foreground">
-                            No routes match the current filter.
+                            {t("No routes match the current filter.")}
                         </div>
                     )}
                     {visibleRoutes.map((route) => {
@@ -804,9 +804,9 @@ export function InteractiveRouteMap({
                                             <RouteStatusBadge route={route} />
                                         </span>
                                         <span className="mt-1 block text-xs text-muted-foreground">
-                                            {formatNumber(route.load)} riders ·{" "}
+                                            {formatNumber(route.load)} {t("riders")} ·{" "}
                                             {formatNumber(route.stop_count)}{" "}
-                                            stops ·{" "}
+                                            {t("stops")} ·{" "}
                                             {formatDurationMinFromSeconds(
                                                 route.duration_s,
                                             )}
@@ -851,7 +851,7 @@ export function InteractiveRouteMap({
                                         )}
                                     >
                                         <div className="mb-2 pt-2 text-[11px] font-semibold uppercase text-muted-foreground">
-                                            Stop sequence
+                                            {t("Stop sequence")}
                                         </div>
                                         <div className="space-y-1">
                                             {routeStops.map((stop) => (
@@ -880,7 +880,7 @@ export function InteractiveRouteMap({
                                                         <span className="block truncate font-medium">
                                                             {stop.address ||
                                                                 stop.requested_address ||
-                                                                "Unknown address"}
+                                                                t("Unknown address")}
                                                         </span>
                                                         <span
                                                             className={cn(
@@ -894,7 +894,7 @@ export function InteractiveRouteMap({
                                                             {formatNumber(
                                                                 stop.passenger_count,
                                                             )}{" "}
-                                                            riders ·{" "}
+                                                            {t("riders")} ·{" "}
                                                             {formatDurationMinFromSeconds(
                                                                 stop.cumulative_duration_s,
                                                             )}
@@ -1345,11 +1345,11 @@ export function InteractiveRouteMap({
                                         <>
                                             <div className="text-muted-foreground">
                                                 {routeLoadLabel(hoveredRoute)}{" "}
-                                                riders ·{" "}
+                                                {t("riders")} ·{" "}
                                                 {formatNumber(
                                                     hoveredRoute.stop_count,
                                                 )}{" "}
-                                                stops
+                                                {t("stops")}
                                             </div>
                                             <div className="text-muted-foreground">
                                                 {formatDurationMinFromSeconds(
@@ -1379,7 +1379,7 @@ export function InteractiveRouteMap({
                                     <div className="text-muted-foreground">
                                         {hoverInfo.routeId} ·{" "}
                                         {formatNumber(hoverInfo.passengerCount)}{" "}
-                                        riders
+                                        {t("riders")}
                                     </div>
                                     <div className="text-muted-foreground">
                                         {formatDurationMinFromSeconds(
@@ -1401,18 +1401,18 @@ export function InteractiveRouteMap({
                             <div className="max-w-[260px] space-y-1 text-xs">
                                 <div className="font-semibold">
                                     {selectedStop.is_depot
-                                        ? "School / Start"
-                                        : `Stop ${selectedStop.order}`}
+                                        ? t("School / Start")
+                                        : `${t("Stop")} ${selectedStop.order}`}
                                 </div>
                                 <div>
                                     {selectedStop.address ||
                                         selectedStop.requested_address ||
-                                        "Unknown address"}
+                                        t("Unknown address")}
                                 </div>
                                 <div className="text-muted-foreground">
                                     {selectedStop.route_id} ·{" "}
                                     {formatNumber(selectedStop.passenger_count)}{" "}
-                                    riders
+                                    {t("riders")}
                                 </div>
                                 <div className="text-muted-foreground">
                                     {formatDurationMinFromSeconds(
@@ -1445,14 +1445,14 @@ export function InteractiveRouteMap({
                         <div className="flex items-center justify-between gap-3">
                             <div>
                                 <div className="font-semibold text-foreground">
-                                    Review first
+                                    {t("Review first")}
                                 </div>
                                 <div className="mt-0.5 text-[11px] text-muted-foreground">
-                                    Top {formatNumber(topImpactedStops.length)} time impacts
+                                    {t("Top")} {formatNumber(topImpactedStops.length)} {t("time impacts")}
                                 </div>
                             </div>
                             <span className="text-[11px] text-muted-foreground">
-                                Time impact
+                                {t("Time impact")}
                             </span>
                         </div>
                         <div className="mt-2 space-y-1.5">
@@ -1474,7 +1474,7 @@ export function InteractiveRouteMap({
                                             <span className="block truncate font-medium text-foreground">
                                                 {stop.address ||
                                                     stop.requested_address ||
-                                                    "Unknown address"}
+                                                    t("Unknown address")}
                                             </span>
                                             <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                                                 {route

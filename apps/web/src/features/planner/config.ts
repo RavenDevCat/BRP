@@ -35,7 +35,3 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
 
 export const SERVICE_DIRECTION_OPTIONS = ["From School", "To School"];
 export const TRAFFIC_PROFILE_OPTIONS = ["Off-Peak", "AM Peak", "PM Peak"];
-export const TRAFFIC_COEFFICIENT_MODE_OPTIONS = [
-  { value: "legacy", label: "Legacy coefficient" },
-  { value: "attributed", label: "Attributed coefficient" },
-] as const;

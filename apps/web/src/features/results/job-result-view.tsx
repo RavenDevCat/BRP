@@ -30,15 +30,12 @@ import {
   getJobArtifactUrl,
   getJobExportUrl,
   getJobMapData,
-  getJobTrafficAttribution,
   type JobMapData,
   type JobMapRoute,
   type JobMapStop,
   type JobMapTimeImpactSummary,
   type JobMapTimeImpactTopStop,
   type JobRecord,
-  type JobTrafficAttributionResponse,
-  type JobTrafficAttributionScenarioSummary,
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import {
@@ -148,7 +145,6 @@ export function JobResultView({ job }: { job: JobRecord }) {
       {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
       {activeTab === "review" ? (
         <ReviewPanel
-          jobId={job.job_id}
           currentPlan={currentPlan}
           currentComparison={currentComparison}
           routeSummaries={routeSummaries}
@@ -296,7 +292,6 @@ function PlansPanel({
 }
 
 function ReviewPanel({
-  jobId,
   currentPlan,
   currentComparison,
   routeSummaries,
@@ -304,7 +299,6 @@ function ReviewPanel({
   diagnostics,
   mapOutputs,
 }: {
-  jobId: string;
   currentPlan: Record<string, unknown>;
   currentComparison: Record<string, unknown>;
   routeSummaries: Array<Record<string, unknown>>;
@@ -315,7 +309,6 @@ function ReviewPanel({
   return (
     <div className="space-y-4">
       <AuditPanel
-        jobId={jobId}
         currentPlan={currentPlan}
         currentComparison={currentComparison}
         routeSummaries={routeSummaries}
@@ -327,13 +320,11 @@ function ReviewPanel({
 }
 
 function AuditPanel({
-  jobId,
   currentPlan,
   currentComparison,
   routeSummaries,
   result,
 }: {
-  jobId: string;
   currentPlan: Record<string, unknown>;
   currentComparison: Record<string, unknown>;
   routeSummaries: Array<Record<string, unknown>>;
@@ -343,24 +334,9 @@ function AuditPanel({
   const recommendations = asStringArray(currentComparison.recommendations);
   const benchmarkGateWarnings = buildBenchmarkGateWarnings(result);
   const plannerConfig = asRecord(result.planner_config);
-  const trafficAttribution = asRecord(result.traffic_attribution);
-  const trafficCoefficientMode = normalizeTrafficCoefficientMode(
-    result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode,
-  );
-  const trafficBasis = formatTrafficBasis(result, plannerConfig, trafficAttribution, t);
+  const trafficBasis = stringValue(result.traffic_profile_context || plannerConfig.traffic_profile_name);
   const arrivalGateSummary = formatArrivalGateSummary(result);
   const solveProcessRows = buildSolveProcessRows(result);
-  const [showTrafficRouteEvidence, setShowTrafficRouteEvidence] = useState(false);
-  const trafficAttributionQuery = useQuery({
-    queryKey: ["job-traffic-attribution", jobId, showTrafficRouteEvidence],
-    queryFn: () =>
-      getJobTrafficAttribution(jobId, {
-        routeEvidence: showTrafficRouteEvidence,
-        topMatches: showTrafficRouteEvidence,
-      }),
-    enabled: trafficCoefficientMode === "attributed" && Boolean(jobId),
-    staleTime: 60_000,
-  });
 
   return (
     <div className="space-y-4">
@@ -390,7 +366,6 @@ function AuditPanel({
             <ReadoutItem label="Service direction" value={stringValue(result.service_direction || plannerConfig.service_direction)} translateValue />
             <ReadoutItem label="Traffic profile" value={stringValue(result.traffic_profile_name || plannerConfig.traffic_profile_name)} translateValue />
             <ReadoutItem label="Traffic multiplier" value={formatTrafficMultiplier(result.traffic_time_multiplier)} />
-            <ReadoutItem label="Coefficient logic" value={trafficCoefficientMode === "attributed" ? "Attributed coefficient" : "Legacy coefficient"} translateValue />
             <ReadoutItem label="Traffic basis" value={trafficBasis} />
             {arrivalGateSummary ? <ReadoutItem label="AM arrival gate" value={arrivalGateSummary} /> : null}
             <ReadoutItem label="Current bus mix" value={formatBusMix(asRecord(currentPlan.bus_mix))} />
@@ -421,16 +396,6 @@ function AuditPanel({
       </Card>
 
       <SolveProcessCard rows={solveProcessRows} />
-
-      {trafficCoefficientMode === "attributed" ? (
-        <TrafficAttributionEvidencePanel
-          data={trafficAttributionQuery.data}
-          error={trafficAttributionQuery.error}
-          isLoading={trafficAttributionQuery.isLoading}
-          showRouteEvidence={showTrafficRouteEvidence}
-          onToggleRouteEvidence={() => setShowTrafficRouteEvidence((value) => !value)}
-        />
-      ) : null}
 
       <Card>
         <CardHeader>
@@ -474,233 +439,6 @@ function SolveProcessCard({ rows }: { rows: ReturnType<typeof buildSolveProcessR
         ))}
       </CardContent>
     </Card>
-  );
-}
-
-function TrafficAttributionEvidencePanel({
-  data,
-  error,
-  isLoading,
-  showRouteEvidence,
-  onToggleRouteEvidence,
-}: {
-  data?: JobTrafficAttributionResponse;
-  error: unknown;
-  isLoading: boolean;
-  showRouteEvidence: boolean;
-  onToggleRouteEvidence: () => void;
-}) {
-  const t = useT();
-  const scenarios = data?.scenarios ?? [];
-  const geoRouteCount = scenarios.reduce((sum, scenario) => sum + Number(scenario.geo_attributed_route_count || 0), 0);
-  const attributedRouteCount = scenarios.reduce((sum, scenario) => sum + Number(scenario.attributed_route_count || 0), 0);
-  const nonGeoRouteCount = scenarios.reduce((sum, scenario) => sum + (scenario.non_geo_routes?.length ?? 0), 0);
-  const confidence = stringValue(data?.attribution_confidence);
-
-  return (
-    <Card>
-      <CardHeader>
-        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-          <div className="flex items-center gap-2">
-            <GitCompareArrows className="h-4 w-4 text-primary" aria-hidden="true" />
-            <div>
-              <h2 className="text-sm font-semibold">{t("Route traffic evidence")}</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t("Loaded from historical route samples for this job. It does not call traffic providers.")}
-              </p>
-            </div>
-          </div>
-          {data?.route_level_applied ? (
-            <Badge tone="success">{t("Applied")}</Badge>
-          ) : (
-            <Badge tone="warning">{t("Not applied")}</Badge>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {isLoading ? (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            <span>{t("Loading traffic evidence…")}</span>
-          </div>
-        ) : error ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            {t("Traffic evidence could not load")}
-          </div>
-        ) : !data?.has_traffic_attribution ? (
-          <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-            {t("No route traffic evidence yet")}
-          </div>
-        ) : (
-          <>
-            <div className="grid gap-3 md:grid-cols-4">
-              <MetricCard label="Geo route coverage" value={formatRouteCoverage(geoRouteCount, attributedRouteCount)} tone={geoRouteCount ? "success" : "warning"} />
-              <MetricCard label="Observed samples" value={formatNumber(data.observed_route_sample_count)} />
-              <MetricCard label="Scale-only samples" value={formatNumber(data.scale_only_route_sample_count)} tone={data.scale_only_route_sample_count ? "warning" : "neutral"} />
-              <MetricCard label="Fallback routes" value={formatNumber(nonGeoRouteCount)} tone={nonGeoRouteCount ? "warning" : "success"} />
-            </div>
-            <div className="grid gap-3 text-sm md:grid-cols-2">
-              <ReadoutItem label="Route-level timing" value={data.route_level_applied ? "Applied" : "Not applied"} translateValue />
-              <ReadoutItem label="Confidence" value={confidence ? toTitle(confidence) : "Not available"} translateValue />
-            </div>
-            {scenarios.length ? (
-              <>
-                <div className="flex justify-end">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    icon={<GitCompareArrows className="h-4 w-4" />}
-                    onClick={onToggleRouteEvidence}
-                  >
-                    {showRouteEvidence ? t("Hide route evidence") : t("Show route evidence")}
-                  </Button>
-                </div>
-                <div className="space-y-2">
-                  {scenarios.slice(0, 4).map((scenario) => (
-                    <TrafficAttributionScenarioRow
-                      key={scenario.scenario_key || scenario.scenario_label}
-                      scenario={scenario}
-                      showRouteEvidence={showRouteEvidence}
-                    />
-                  ))}
-                </div>
-              </>
-            ) : null}
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function TrafficAttributionScenarioRow({
-  scenario,
-  showRouteEvidence,
-}: {
-  scenario: JobTrafficAttributionScenarioSummary;
-  showRouteEvidence: boolean;
-}) {
-  const t = useT();
-  const label = stringValue(scenario.scenario_label || scenario.scenario_key);
-  const nonGeoCount = scenario.non_geo_routes?.length ?? 0;
-  const routeEvidence = (scenario.route_evidence ?? []).slice(0, 12);
-  return (
-    <div className="rounded-md border border-border bg-surface px-3 py-3">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-        <div className="font-medium text-foreground">{label ? t(label) : t("Unknown")}</div>
-        <div className="flex flex-wrap gap-2">
-          <Badge tone={scenario.geo_attributed_route_count ? "success" : "warning"}>
-            {formatPercent(scenario.geo_attributed_route_ratio, 100)} {t("geo")}
-          </Badge>
-          <Badge tone={nonGeoCount ? "warning" : "success"}>
-            {formatNumber(nonGeoCount)} {t("fallback")}
-          </Badge>
-        </div>
-      </div>
-      <div className="mt-2 grid gap-2 text-xs text-muted-foreground md:grid-cols-2">
-        <div>
-          <span className="font-medium text-foreground">{t("Methods")}:</span>{" "}
-          {formatCountMap(scenario.method_counts)}
-        </div>
-        <div>
-          <span className="font-medium text-foreground">{t("Quality")}:</span>{" "}
-          {formatCountMap(scenario.quality_reason_counts)}
-        </div>
-      </div>
-      {showRouteEvidence ? (
-        <div className="mt-3 overflow-x-auto">
-          {routeEvidence.length ? (
-            <table className="w-full min-w-[760px] border-collapse text-xs">
-              <thead className="bg-muted text-left uppercase text-muted-foreground">
-                <tr>
-                  <th className="px-2 py-2">{t("Route")}</th>
-                  <th className="px-2 py-2">{t("Factor")}</th>
-                  <th className="px-2 py-2">{t("Method")}</th>
-                  <th className="px-2 py-2">{t("Quality")}</th>
-                  <th className="px-2 py-2">{t("Matches")}</th>
-                  <th className="px-2 py-2">{t("Geo candidates")}</th>
-                  <th className="px-2 py-2">{t("Similarity")}</th>
-                  <th className="px-2 py-2">{t("OSRM")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {routeEvidence.map((route, index) => (
-                  <TrafficAttributionRouteEvidenceRow key={`${stringValue(route.route_id)}-${index}`} route={route} />
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="rounded-md border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground">
-              {t("Route evidence was not requested for this scenario.")}
-            </div>
-          )}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function TrafficAttributionRouteEvidenceRow({ route }: { route: Record<string, unknown> }) {
-  const t = useT();
-  const fallback = Boolean(route.fallback);
-  const topMatches = asRecordArray(route.top_matches).slice(0, 3);
-  const topMatchCount = Number(route.top_match_count ?? topMatches.length);
-  return (
-    <>
-      <tr className="border-t border-border">
-        <td className="px-2 py-2 font-medium text-foreground">{stringValue(route.route_id || route.vehicle_id || "—")}</td>
-        <td className="px-2 py-2">{formatTrafficMultiplier(route.factor)}</td>
-        <td className="px-2 py-2">{formatTrafficMethodLabel(route.method, t)}</td>
-        <td className="px-2 py-2">
-          <Badge tone={fallback ? "warning" : "success"}>{formatTrafficQualityLabel(route.quality_reason, t)}</Badge>
-        </td>
-        <td className="px-2 py-2">
-          {formatNumber(route.matched_sample_count)}
-          {Number.isFinite(topMatchCount) && topMatchCount > 0 ? (
-            <span className="ml-1 text-muted-foreground">({formatNumber(topMatchCount)} {t("top")})</span>
-          ) : null}
-        </td>
-        <td className="px-2 py-2">{formatNumber(route.usable_geo_candidate_count || route.geo_candidate_count)}</td>
-        <td className="px-2 py-2">{formatPercent(route.avg_similarity, 100)}</td>
-        <td className="px-2 py-2">{formatNumber(route.osrm_duration_min)} {t("min")}</td>
-      </tr>
-      {topMatches.length ? (
-        <tr className="border-t border-border bg-muted/30">
-          <td className="px-2 py-3" colSpan={8}>
-            <div className="mb-2 text-xs font-medium text-foreground">{t("Top supporting matches")}</div>
-            <div className="grid gap-2 lg:grid-cols-3">
-              {topMatches.map((match, index) => (
-                <TrafficAttributionTopMatchCard
-                  key={`${stringValue(match.source_id)}-${stringValue(match.route_id)}-${index}`}
-                  match={match}
-                />
-              ))}
-            </div>
-          </td>
-        </tr>
-      ) : null}
-    </>
-  );
-}
-
-function TrafficAttributionTopMatchCard({ match }: { match: Record<string, unknown> }) {
-  const t = useT();
-  const sourceId = stringValue(match.source_id) || t("Unknown source");
-  const routeId = stringValue(match.route_id) || t("Unknown route");
-  return (
-    <div className="rounded-md border border-border bg-surface px-3 py-2">
-      <div className="truncate text-xs font-medium text-foreground">
-        {t("Source")} {sourceId} · {t("Route")} {routeId}
-      </div>
-      <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-muted-foreground">
-        <div>{t("Factor")}: {formatTrafficMultiplier(match.factor) || t("Not available")}</div>
-        <div>{t("Score")}: {formatPercent(match.similarity_score, 100)}</div>
-        <div>{t("Geo score")}: {formatPercent(match.geo_similarity_score, 100)}</div>
-        <div>{t("Corridor")}: {formatPercent(match.corridor_overlap, 100)}</div>
-        <div>{t("Center distance")}: {formatDistanceKmValue(match.center_distance_km)}</div>
-        <div>{t("Bearing")}: {formatPercent(match.bearing_score, 100)}</div>
-      </div>
-    </div>
   );
 }
 
@@ -3291,96 +3029,12 @@ function stringValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function normalizeTrafficCoefficientMode(value: unknown): "legacy" | "attributed" {
-  const normalized = stringValue(value).trim().toLowerCase().replace(/-/g, "_");
-  return normalized === "attributed" || normalized === "attribution" || normalized === "route_attributed"
-    ? "attributed"
-    : "legacy";
-}
-
 function formatTrafficMultiplier(value: unknown): string {
   const numericValue = Number(value);
   if (!Number.isFinite(numericValue) || numericValue <= 0) {
     return "";
   }
   return `${numericValue.toFixed(2).replace(/\.?0+$/, "")}x`;
-}
-
-function formatDistanceKmValue(value: unknown): string {
-  const numericValue = Number(value);
-  if (!Number.isFinite(numericValue)) {
-    return "Not available";
-  }
-  return `${formatNumber(numericValue)} km`;
-}
-
-function formatRouteCoverage(numerator: unknown, denominator: unknown): string {
-  const top = Number(numerator);
-  const bottom = Number(denominator);
-  if (!Number.isFinite(top) || !Number.isFinite(bottom) || bottom <= 0) {
-    return "0 / 0";
-  }
-  return `${formatNumber(top)} / ${formatNumber(bottom)}`;
-}
-
-function formatCountMap(value: Record<string, number> | Record<string, unknown> | undefined): string {
-  const entries = Object.entries(value || {})
-    .filter(([, count]) => Number(count) > 0)
-    .map(([name, count]) => `${toTitle(name.replace(/_/g, " "))}: ${formatNumber(count)}`);
-  return entries.length ? entries.join(" | ") : "Not available";
-}
-
-function formatTrafficMethodLabel(value: unknown, t: (key: string, fallback?: string) => string): string {
-  const method = stringValue(value);
-  if (method === "geo_route_similarity") {
-    return t("Geo route similarity");
-  }
-  if (method === "route_similarity") {
-    return t("Route similarity");
-  }
-  if (method === "city_period_average") {
-    return t("City-period average");
-  }
-  return method ? toTitle(method.replace(/_/g, " ")) : t("Unknown");
-}
-
-function formatTrafficQualityLabel(value: unknown, t: (key: string, fallback?: string) => string): string {
-  const quality = stringValue(value);
-  if (quality === "geo_route_similarity") {
-    return t("Geo route similarity");
-  }
-  if (quality === "geo_mismatch_fallback") {
-    return t("Geo mismatch fallback");
-  }
-  if (quality === "route_similarity") {
-    return t("Route similarity");
-  }
-  if (quality === "city_period_average") {
-    return t("City-period average");
-  }
-  return quality ? toTitle(quality.replace(/_/g, " ")) : t("Unknown");
-}
-
-function formatTrafficBasis(
-  result: Record<string, unknown>,
-  plannerConfig: Record<string, unknown>,
-  trafficAttribution: Record<string, unknown>,
-  t: (key: string, fallback?: string) => string,
-): string {
-  if (normalizeTrafficCoefficientMode(result.traffic_coefficient_mode || plannerConfig.traffic_coefficient_mode) !== "attributed") {
-    return stringValue(result.traffic_profile_context || trafficAttribution.fallback_context || plannerConfig.traffic_profile_name);
-  }
-  if (trafficAttribution.succeeded !== true) {
-    const reason = stringValue(trafficAttribution.reason || "Not available");
-    return `${t("Fallback to legacy coefficient")} (${reason})`;
-  }
-  const method = stringValue(trafficAttribution.method);
-  const methodLabel = method === "route_similarity" ? t("Route similarity") : t("City-period average");
-  const confidence = stringValue(trafficAttribution.confidence);
-  const confidenceLabel = confidence ? t(toTitle(confidence)) : t("Not available");
-  const observedRoutes = formatNumber(trafficAttribution.observed_route_sample_count);
-  const targetRoutes = formatNumber(trafficAttribution.attributed_route_count || trafficAttribution.target_route_count);
-  return `${methodLabel}; ${confidenceLabel}; ${observedRoutes} ${t("observed routes")}; ${targetRoutes} ${t("target routes")}`;
 }
 
 function formatArrivalGateSummary(result: Record<string, unknown>): string {

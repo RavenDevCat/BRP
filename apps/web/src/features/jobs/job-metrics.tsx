@@ -140,13 +140,6 @@ function buildRunParameterItems(job: JobRecord): RunParameterItem[] {
     items.push({ label: "Traffic profile", value: trafficProfile, translateValue: true });
   }
 
-  const coefficientMode = normalizeTrafficCoefficientMode(result.traffic_coefficient_mode || config.traffic_coefficient_mode);
-  items.push({
-    label: "Coefficient logic",
-    value: coefficientMode === "attributed" ? "Attributed coefficient" : "Legacy coefficient",
-    translateValue: true,
-  });
-
   const toSchoolArrival = stringValue(config.to_school_arrival_time);
   const fromSchoolDeparture = stringValue(config.from_school_departure_time);
   if (serviceDirection === "To School" && toSchoolArrival) {
@@ -193,13 +186,6 @@ function formatFleetLimits(config: Record<string, unknown>): string {
     })
     .filter(Boolean);
   return entries.join(" | ");
-}
-
-function normalizeTrafficCoefficientMode(value: unknown): "legacy" | "attributed" {
-  const normalized = stringValue(value).trim().toLowerCase().replace(/-/g, "_");
-  return normalized === "attributed" || normalized === "attribution" || normalized === "route_attributed"
-    ? "attributed"
-    : "legacy";
 }
 
 function finiteNumber(value: unknown): number | null {

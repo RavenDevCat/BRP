@@ -1,6 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useRef, useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -10,11 +10,9 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   DEFAULT_PLANNER_CONFIG,
   SERVICE_DIRECTION_OPTIONS,
-  TRAFFIC_COEFFICIENT_MODE_OPTIONS,
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
 import {
-  getDeploymentFeatures,
   getWorkbookTemplateUrl,
   previewWorkbook,
   submitWorkbookJob,
@@ -38,34 +36,12 @@ const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
 
 const COMFORT_LOAD_FACTOR = 0.85;
 const FULL_CAPACITY_LOAD_FACTOR = 1.0;
-const TRAFFIC_COEFFICIENT_MODE_VALUES = TRAFFIC_COEFFICIENT_MODE_OPTIONS.map((option) => option.value);
-
-function normalizeTrafficCoefficientMode(value: unknown) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return TRAFFIC_COEFFICIENT_MODE_VALUES.includes(normalized as (typeof TRAFFIC_COEFFICIENT_MODE_VALUES)[number])
-    ? normalized
-    : DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode;
-}
 
 export function NewJobPage() {
   const t = useT();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const featuresQuery = useQuery({
-    queryKey: ["deployment-features"],
-    queryFn: getDeploymentFeatures,
-    staleTime: 60_000,
-  });
-  const defaultTrafficCoefficientMode = normalizeTrafficCoefficientMode(
-    featuresQuery.data?.default_traffic_coefficient_mode,
-  );
-  const defaultConfig = useMemo(
-    () => ({
-      ...DEFAULT_PLANNER_CONFIG,
-      traffic_coefficient_mode: defaultTrafficCoefficientMode,
-    }),
-    [defaultTrafficCoefficientMode],
-  );
+  const defaultConfig = DEFAULT_PLANNER_CONFIG;
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
@@ -73,16 +49,6 @@ export function NewJobPage() {
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
-
-  useEffect(() => {
-    if (Object.prototype.hasOwnProperty.call(configOverridesRef.current, "traffic_coefficient_mode")) {
-      return;
-    }
-    setConfig((current) => ({
-      ...current,
-      traffic_coefficient_mode: defaultTrafficCoefficientMode,
-    }));
-  }, [defaultTrafficCoefficientMode]);
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
@@ -93,11 +59,7 @@ export function NewJobPage() {
     if (subwayAggregationBlocked) {
       delete safeOverrides.include_subway_aggregation_scenario;
     }
-    const nextConfig = { ...baseConfig, ...safeOverrides };
-    if (!Object.prototype.hasOwnProperty.call(safeOverrides, "traffic_coefficient_mode")) {
-      nextConfig.traffic_coefficient_mode = defaultTrafficCoefficientMode;
-    }
-    return nextConfig;
+    return { ...baseConfig, ...safeOverrides, traffic_coefficient_mode: DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode };
   }
 
   function updateUserConfig(patch: Partial<PlannerConfigPayload>) {
@@ -313,32 +275,6 @@ export function NewJobPage() {
                       </option>
                     ))}
                   </select>
-                </Field>
-                <Field label="Coefficient Logic">
-                  <div className="grid grid-cols-2 gap-2">
-                    {TRAFFIC_COEFFICIENT_MODE_OPTIONS.map((option) => {
-                      const selected = config.traffic_coefficient_mode === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={`h-10 rounded-md border px-3 text-sm font-medium transition ${
-                            selected
-                              ? "border-primary bg-primary text-white shadow-sm"
-                              : "border-border bg-surface text-foreground hover:border-primary/60"
-                          }`}
-                          onClick={() => updateUserConfig({ traffic_coefficient_mode: option.value })}
-                        >
-                          {t(option.label)}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {config.traffic_coefficient_mode === "attributed"
-                      ? t("Uses existing traffic samples to estimate the coefficient from similar route duration and stop-count evidence.")
-                      : t("Keeps the current fixed/live traffic coefficient behavior.")}
-                  </div>
                 </Field>
                 <Field label="OSRM Route Budget">
                   <input

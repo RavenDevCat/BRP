@@ -42,6 +42,8 @@ function isAvailableLanguage(lang: Language) {
     return configured.split(",").map((item) => item.trim()).includes(lang);
   }
   const host = typeof window === "undefined" ? "" : window.location.hostname;
+  if (host.includes("brp-staging")) return true;
   if (host.includes("brp-kr")) return lang === "en" || lang === "ko";
-  return lang === "en" || lang === "zh";
+  if (host === "brp.ravenapis.com") return lang === "en" || lang === "zh";
+  return true;
 }

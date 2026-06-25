@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { CheckCircle2, Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -100,10 +100,6 @@ export function NewJobPage() {
     return nextConfig;
   }
 
-  function resetConfigToDefaultsWithOverrides() {
-    setConfig(buildConfigWithOverrides(defaultConfig));
-  }
-
   function updateUserConfig(patch: Partial<PlannerConfigPayload>) {
     configOverridesRef.current = { ...configOverridesRef.current, ...patch };
     updateConfig(setConfig, patch);
@@ -134,11 +130,14 @@ export function NewJobPage() {
   }
 
   const previewMutation = useMutation({
-    mutationFn: async () => {
-      if (!file || !fileBase64) {
+    mutationFn: async (source?: { file: File; fileBase64: string; config: PlannerConfigPayload }) => {
+      const sourceFile = source?.file || file;
+      const sourceBase64 = source?.fileBase64 || fileBase64;
+      const sourceConfig = source?.config || config;
+      if (!sourceFile || !sourceBase64) {
         throw new Error(t("Select a workbook first."));
       }
-      return previewWorkbook({ file_name: file.name, file_base64: fileBase64, config });
+      return previewWorkbook({ file_name: sourceFile.name, file_base64: sourceBase64, config: sourceConfig });
     },
     onSuccess: (payload) => {
       setPreview(payload);
@@ -179,9 +178,11 @@ export function NewJobPage() {
   }, [file?.name, jobCustomName, preview?.job_default_name, t]);
 
   async function handleFileChange(nextFile: File | null) {
+    previewMutation.reset();
     setFile(nextFile);
     setPreview(null);
-    resetConfigToDefaultsWithOverrides();
+    configOverridesRef.current = {};
+    setConfig(defaultConfig);
     setFileError("");
     setFileBase64("");
     if (!nextFile) {
@@ -193,14 +194,17 @@ export function NewJobPage() {
       return;
     }
     try {
-      setFileBase64(await fileToBase64(nextFile));
+      const nextBase64 = await fileToBase64(nextFile);
+      setFileBase64(nextBase64);
+      previewMutation.mutate({ file: nextFile, fileBase64: nextBase64, config: defaultConfig });
     } catch (error) {
       setFileError(error instanceof Error ? error.message : t("Workbook could not be read."));
     }
   }
 
   const busy = previewMutation.isPending || submitMutation.isPending;
-  const canSubmit = Boolean(fileBase64 && !busy);
+  const canSubmit = Boolean(fileBase64 && preview && !busy);
+  const controlsLocked = previewMutation.isPending || submitMutation.isPending;
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -223,7 +227,7 @@ export function NewJobPage() {
                 <h2 className="text-sm font-semibold">{t("Workbook")}</h2>
               </div>
             </CardHeader>
-            <CardContent className="space-y-4">
+            <CardContent className={`space-y-4 ${controlsLocked ? "pointer-events-none opacity-60" : ""}`}>
               <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
                 <div className="text-sm text-muted-foreground">{t("Upload a completed current-plan workbook.")}</div>
                 <a className={buttonClassName("secondary")} href={getWorkbookTemplateUrl()}>
@@ -245,6 +249,12 @@ export function NewJobPage() {
               </label>
               {fileError ? <InlineError message={fileError} /> : null}
               {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
+              {previewMutation.isPending ? (
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  {t("Validating workbook and calculating OSRM route budget...")}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -262,7 +272,6 @@ export function NewJobPage() {
                     className={fieldClassName}
                     value={config.service_direction}
                     onChange={(event) => {
-                      setPreview(null);
                       updateUserConfig({ service_direction: event.target.value });
                     }}
                   >
@@ -331,7 +340,7 @@ export function NewJobPage() {
                       : t("Keeps the current fixed/live traffic coefficient behavior.")}
                   </div>
                 </Field>
-                <Field label="Target Duration">
+                <Field label="OSRM Route Budget">
                   <input
                     className={fieldClassName}
                     type="number"
@@ -339,8 +348,12 @@ export function NewJobPage() {
                     max={300}
                     step={5}
                     value={config.max_route_duration_minutes}
-                    onChange={(event) => updateUserConfig({ max_route_duration_minutes: Number(event.target.value) })}
+                    readOnly
+                    title={t("Auto-set from the uploaded current plan after geocoding. This is not a live traffic estimate.")}
                   />
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {t("Auto-set from the longest current-plan OSRM base route after geocoding; actual timing comes from the final AMap audit.")}
+                  </div>
                 </Field>
               </div>
 
@@ -445,17 +458,8 @@ export function NewJobPage() {
               <div className="flex flex-col gap-3 sm:flex-row">
                 <Button
                   type="button"
-                  variant="secondary"
-                  disabled={!fileBase64 || busy}
-                  icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
-                  onClick={() => previewMutation.mutate()}
-                >
-                  {t("Validate workbook")}
-                </Button>
-                <Button
-                  type="button"
                   disabled={!canSubmit}
-                  title={preview ? undefined : t("Workbook will be validated before the audit starts.")}
+                  title={preview ? undefined : t("Workbook is validating. Run audit will unlock when parsing is complete.")}
                   icon={submitMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   onClick={() => submitMutation.mutate()}
                 >

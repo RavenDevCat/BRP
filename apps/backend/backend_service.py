@@ -41,6 +41,7 @@ try:
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
+        load_legacy_planner,
         normalize_traffic_coefficient_mode,
         rerender_html_from_structured_results,
         resolve_traffic_profile,
@@ -63,6 +64,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
+        load_legacy_planner,
         normalize_traffic_coefficient_mode,
         rerender_html_from_structured_results,
         resolve_traffic_profile,
@@ -1336,26 +1338,48 @@ def _handle_distance_checker_history_create(
     }
 
 
+def _infer_service_direction_from_label(source_label: str) -> str:
+    label = str(source_label or "").lower().replace("_", " ").replace("-", " ")
+    if "to school" in label or "morning" in label:
+        return "To School"
+    if "from school" in label or "afternoon" in label:
+        return "From School"
+    return ""
+
+
 def _read_current_plan_upload(
     payload: dict[str, Any],
 ) -> tuple[Any, str, dict[str, Any]]:
     client_core = _client_core_module()
     source_label, workbook_bytes = _decode_workbook_bytes(payload)
     config_payload = dict(payload.get("config") or {})
-    service_direction = str(
+    preferred_direction = _infer_service_direction_from_label(source_label) or str(
         config_payload.get("service_direction")
         or payload.get("service_direction")
         or "From School"
     )
+    directions = [
+        preferred_direction,
+        "To School" if preferred_direction == "From School" else "From School",
+    ]
     suffix = Path(source_label).suffix.lower()
     temp_path = ""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(workbook_bytes)
             temp_path = temp_file.name
-        current_plan = client_core.read_current_plan_from_excel(
-            temp_path, service_direction=service_direction
-        )
+        last_error: Exception | None = None
+        for service_direction in directions:
+            try:
+                current_plan = client_core.read_current_plan_from_excel(
+                    temp_path, service_direction=service_direction
+                )
+                break
+            except Exception as exc:
+                last_error = exc
+        else:
+            assert last_error is not None
+            raise last_error
     finally:
         if temp_path:
             try:
@@ -1431,6 +1455,20 @@ def _suggest_planner_config_from_current_plan(
         or suggested.get("service_direction")
         or "From School"
     )
+    if suggested["service_direction"] == "To School":
+        suggested["traffic_profile_name"] = "AM Peak"
+        suggested["to_school_arrival_time"] = str(
+            config_payload.get("to_school_arrival_time")
+            or suggested.get("to_school_arrival_time")
+            or "08:00"
+        )
+    else:
+        suggested["traffic_profile_name"] = "PM Peak"
+        suggested["from_school_departure_time"] = str(
+            config_payload.get("from_school_departure_time")
+            or suggested.get("from_school_departure_time")
+            or "15:40"
+        )
     if "include_subway_aggregation_scenario" not in config_payload:
         suggested["include_subway_aggregation_scenario"] = False
     if "include_nearby_aggregation_scenario" not in config_payload:
@@ -1450,6 +1488,16 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if block_reason:
         suggested_config["include_subway_aggregation_scenario"] = False
+    try:
+        auto_route_budget_minutes = _auto_route_budget_from_current_plan(
+            client_core,
+            current_plan,
+            suggested_config,
+        )
+    except Exception:
+        auto_route_budget_minutes = None
+    if auto_route_budget_minutes is not None:
+        suggested_config["max_route_duration_minutes"] = auto_route_budget_minutes
     return {
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
@@ -1460,6 +1508,80 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "subway_aggregation_block_reason": block_reason,
         "suggested_config": suggested_config,
     }
+
+
+def _route_budget_address_key(item: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(item.get("country") or "").strip().lower(),
+        str(item.get("city") or "").strip().lower(),
+        str(item.get("address") or item.get("display_address") or item.get("requested_address") or "").strip().lower(),
+    )
+
+
+def _auto_current_plan_route_budget_minutes(
+    current_plan: dict[str, Any],
+    prepared_payload: dict[str, Any],
+) -> int | None:
+    points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
+    if len(points) < 2:
+        return None
+    point_by_address = {_route_budget_address_key(point): int(point["node_id"]) for point in points}
+    stop_lookup = {
+        str(stop.get("stop_id") or "").strip(): dict(stop)
+        for stop in list(current_plan.get("stops") or [])
+    }
+    route_groups: dict[str, list[dict[str, Any]]] = {}
+    for assignment in list(current_plan.get("assignments") or []):
+        route_id = str(assignment.get("route_id") or "").strip()
+        stop_id = str(assignment.get("stop_id") or "").strip()
+        stop = stop_lookup.get(stop_id)
+        if route_id and stop:
+            route_groups.setdefault(route_id, []).append({**stop, **dict(assignment)})
+    if not route_groups:
+        for stop in list(current_plan.get("stops") or []):
+            route_groups.setdefault(str(stop.get("route_id") or "").strip(), []).append(dict(stop))
+    if not route_groups:
+        return None
+
+    planner = load_legacy_planner()
+    planner.TRAFFIC_TIME_MULTIPLIER = 1.0
+    time_matrix, _distance_matrix = planner.build_osrm_full_matrix(points)
+    raw_time_matrix = getattr(planner, "RAW_SOLVER_TIME_MATRIX", None) or time_matrix
+    longest_s = 0
+    for route_stops in route_groups.values():
+        ordered_stops = sorted(route_stops, key=lambda item: int(item.get("stop_sequence", 0) or 0))
+        nodes = [
+            point_by_address.get(_route_budget_address_key(stop))
+            for stop in ordered_stops
+        ]
+        nodes = [node for node in nodes if node is not None]
+        if len(nodes) < 2:
+            continue
+        route_s = sum(int(raw_time_matrix[a][b] or 0) for a, b in zip(nodes, nodes[1:]))
+        longest_s = max(longest_s, route_s)
+    if longest_s <= 0:
+        return None
+    return max(5, min(240, int(math.ceil(longest_s / 60.0))))
+
+
+def _auto_route_budget_from_current_plan(
+    client_core: Any,
+    current_plan: dict[str, Any],
+    config_payload: dict[str, Any],
+) -> int | None:
+    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    if not input_records:
+        return None
+    client_config = _build_client_planner_config(client_core, config_payload)
+    client_prep = client_core.prepare_client_payload(
+        input_records,
+        current_plan_data=current_plan,
+        config=client_config,
+    )
+    return _auto_current_plan_route_budget_minutes(
+        current_plan,
+        dict(client_prep["prepared_payload"]),
+    )
 
 
 def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1481,6 +1603,16 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         current_plan_data=current_plan,
         config=client_config,
     )
+    auto_route_budget_minutes: int | None = None
+    try:
+        auto_route_budget_minutes = _auto_current_plan_route_budget_minutes(
+            current_plan,
+            dict(client_prep["prepared_payload"]),
+        )
+    except Exception:
+        auto_route_budget_minutes = None
+    if auto_route_budget_minutes is not None:
+        config_payload["max_route_duration_minutes"] = auto_route_budget_minutes
     job_custom_name = str(payload.get("job_custom_name") or "").strip()
     job_default_name = _build_job_display_name(source_label)
     job_name = _build_job_display_name(source_label, job_custom_name)
@@ -1496,6 +1628,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
             "excluded_stops": list(client_prep.get("excluded_stops") or []),
             "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
             "logs": str(client_prep.get("logs", "") or ""),
+            "auto_route_budget_minutes": auto_route_budget_minutes,
         },
     }
     summary = JOB_STORE.create_job(
@@ -2896,6 +3029,8 @@ def _amap_display_geometry_for_route(
 
 DEFAULT_TO_SCHOOL_ARRIVAL_MINUTES = 8 * 60
 DEFAULT_FROM_SCHOOL_DEPARTURE_MINUTES = 15 * 60 + 40
+AM_EARLIEST_DEPARTURE_MINUTES = 6 * 60
+AM_LATEST_ARRIVAL_MINUTES = 8 * 60
 AM_ARRIVAL_GATE_GRACE_MINUTES = float(
     os.environ.get("BRP_AM_ARRIVAL_GATE_GRACE_MINUTES", "0") or 0
 )
@@ -2962,6 +3097,11 @@ def _schedule_anchor_minutes(
         if parsed is not None:
             return parsed, _format_clock_minutes(parsed), label
     return default_minutes, _format_clock_minutes(default_minutes), label
+
+
+def _to_school_time_window_minutes(job_record: dict[str, Any]) -> tuple[int, int]:
+    target_minutes, _target_label, _target_kind = _schedule_anchor_minutes(job_record, "To School")
+    return AM_EARLIEST_DEPARTURE_MINUTES, min(target_minutes, AM_LATEST_ARRIVAL_MINUTES)
 
 
 def _map_route_duration_scale(route: dict[str, Any], stops: list[dict[str, Any]]) -> tuple[float, float]:
@@ -3034,20 +3174,27 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
     if str(payload.get("service_direction") or "").strip() != "To School":
         return
     target_minutes, target_label, _target_kind = _schedule_anchor_minutes(job_record, "To School")
+    earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window_minutes(job_record)
     grace_s = max(0.0, AM_ARRIVAL_GATE_GRACE_MINUTES * 60.0)
     checked = 0
     failed = 0
     unavailable = 0
-    max_delay_s = 0.0
+    max_overrun_s = 0.0
     for route in list(payload.get("routes") or []):
         planned_drive_s = _float_or_none(route.get("duration_s"))
         verified_drive_s = _float_or_none(route.get("display_duration_s"))
+        stop_service_s = _float_or_none(route.get("stop_service_time_s")) or 0.0
         source = str(route.get("display_geometry_source") or "")
         gate: dict[str, Any] = {
             "target_arrival_minutes": target_minutes,
             "target_arrival_label": target_label,
+            "earliest_departure_minutes": earliest_departure_minutes,
+            "earliest_departure_label": _format_clock_minutes(earliest_departure_minutes),
+            "latest_arrival_minutes": latest_arrival_minutes,
+            "latest_arrival_label": _format_clock_minutes(latest_arrival_minutes),
             "planned_drive_duration_s": planned_drive_s,
             "verified_drive_duration_s": verified_drive_s,
+            "verified_stop_service_s": stop_service_s,
             "verified_source": source,
             "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
         }
@@ -3056,26 +3203,39 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
             gate.update({"status": "unavailable", "passes": None})
         else:
             checked += 1
-            delay_s = max(0.0, verified_drive_s - planned_drive_s)
-            max_delay_s = max(max_delay_s, delay_s)
-            passes = delay_s <= grace_s
+            verified_total_s = verified_drive_s + stop_service_s
+            latest_departure_minutes = latest_arrival_minutes - (verified_total_s / 60.0)
+            overrun_s = max(0.0, (earliest_departure_minutes - latest_departure_minutes) * 60.0)
+            scheduled_departure_minutes = max(earliest_departure_minutes, latest_departure_minutes)
+            scheduled_arrival_minutes = scheduled_departure_minutes + (verified_total_s / 60.0)
+            max_overrun_s = max(max_overrun_s, overrun_s)
+            passes = overrun_s <= grace_s
             if not passes:
                 failed += 1
             gate.update(
                 {
                     "status": "passed" if passes else "failed",
                     "passes": passes,
-                    "estimated_arrival_delay_s": delay_s,
-                    "estimated_arrival_delay_minutes": delay_s / 60.0,
-                    "verified_arrival_minutes": target_minutes + (delay_s / 60.0),
-                    "verified_arrival_label": _format_clock_minutes(target_minutes + (delay_s / 60.0)),
+                    "verified_total_duration_s": verified_total_s,
+                    "estimated_arrival_delay_s": overrun_s,
+                    "estimated_arrival_delay_minutes": overrun_s / 60.0,
+                    "time_window_overrun_s": overrun_s,
+                    "time_window_overrun_minutes": overrun_s / 60.0,
+                    "verified_departure_minutes": scheduled_departure_minutes,
+                    "verified_departure_label": _format_clock_minutes(scheduled_departure_minutes),
+                    "verified_arrival_minutes": scheduled_arrival_minutes,
+                    "verified_arrival_label": _format_clock_minutes(scheduled_arrival_minutes),
                 }
             )
         route["am_arrival_gate"] = gate
 
     status = "unavailable"
-    if checked:
-        status = "failed" if failed else "passed"
+    if failed:
+        status = "failed"
+    elif unavailable:
+        status = "unavailable"
+    elif checked:
+        status = "passed"
     payload.setdefault("summary", {})["am_arrival_gate"] = {
         "enabled": True,
         "status": status,
@@ -3083,7 +3243,8 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
         "checked_route_count": checked,
         "failed_route_count": failed,
         "unavailable_route_count": unavailable,
-        "max_estimated_arrival_delay_minutes": max_delay_s / 60.0,
+        "max_estimated_arrival_delay_minutes": max_overrun_s / 60.0,
+        "max_time_window_overrun_minutes": max_overrun_s / 60.0,
         "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
     }
 
@@ -3624,12 +3785,14 @@ def _build_job_map_payload(
                 "max_stops": _int_or_none(route.get("max_stops")),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
                 "duration_s": float(
-                    route.get("traffic_api_duration_s")
+                    display_duration_s
+                    or route.get("traffic_api_duration_s")
                     or route.get("traffic_adjusted_drive_time_s")
                     or route.get("time_s")
                     or 0.0
                 ),
                 "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
+                "stop_service_time_s": float(route.get("stop_service_time_s", 0.0) or 0.0),
                 "traffic_time_source": str(
                     route.get("traffic_time_source") or ""
                 ).strip(),
@@ -4016,6 +4179,10 @@ def _build_scenario_template_export(
         attach_impact=True,
     )
     if impact_payload:
+        route_gate_by_id = {
+            str(route.get("id") or "").strip(): dict(route.get("am_arrival_gate") or {})
+            for route in list(impact_payload.get("routes") or [])
+        }
         points_with_impact = [
             dict(point) for point in list(scenario.get("points") or [])
         ]
@@ -4024,13 +4191,26 @@ def _build_scenario_template_export(
             if node_index is None or node_index < 0 or node_index >= len(points_with_impact):
                 continue
             time_impact = dict(stop.get("time_impact") or {})
-            if not bool(time_impact.get("comparison_available")):
-                continue
+            if not time_impact:
+                time_impact = {"new_time_label": str(stop.get("scheduled_time_label") or "")}
+            elif not str(time_impact.get("new_time_label") or "").strip():
+                time_impact["new_time_label"] = str(stop.get("scheduled_time_label") or "")
             point = dict(points_with_impact[node_index] or {})
             point["time_impact"] = time_impact
             points_with_impact[node_index] = point
+        routes_with_gate = []
+        for route_index, route in enumerate(list(scenario.get("routes") or [])):
+            route = dict(route or {})
+            route_id = str(
+                route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}"
+            ).strip()
+            route_gate = route_gate_by_id.get(route_id)
+            if route_gate:
+                route["am_arrival_gate"] = route_gate
+            routes_with_gate.append(route)
         scenario = dict(scenario)
         scenario["points"] = points_with_impact
+        scenario["routes"] = routes_with_gate
     try:
         return build_baseline_template_workbook_bytes(
             scenario,
@@ -4092,7 +4272,9 @@ def _build_time_impact_workbook_export(
     if payload_error or not payload:
         return None, payload_error or "Time impact data is not available."
 
-    summary = dict(dict(payload.get("summary") or {}).get("time_impact") or {})
+    payload_summary = dict(payload.get("summary") or {})
+    summary = dict(payload_summary.get("time_impact") or {})
+    am_gate = dict(payload_summary.get("am_arrival_gate") or {})
     if not bool(summary.get("available")):
         return None, "Time impact comparison is not available for this scenario."
 
@@ -4122,6 +4304,12 @@ def _build_time_impact_workbook_export(
         ["Max adverse minutes", summary.get("max_adverse_delta_minutes")],
         ["Total adverse rider-minutes", summary.get("total_adverse_rider_minutes")],
         ["Total benefit rider-minutes", summary.get("total_benefit_rider_minutes")],
+        ["AM window status", am_gate.get("status")],
+        ["AM target arrival", am_gate.get("target_arrival_label")],
+        ["AM checked routes", am_gate.get("checked_route_count")],
+        ["AM failed routes", am_gate.get("failed_route_count")],
+        ["AM unavailable routes", am_gate.get("unavailable_route_count")],
+        ["AM max overrun minutes", am_gate.get("max_time_window_overrun_minutes")],
     ]
     _append_excel_table(summary_sheet, ["Metric", "Value"], summary_rows)
 
@@ -4139,10 +4327,15 @@ def _build_time_impact_workbook_export(
         "Weighted adverse minutes",
         "Max adverse minutes",
         "Route-changed riders",
+        "AM window status",
+        "AM departure",
+        "AM arrival",
+        "AM overrun minutes",
     ]
     route_rows = []
     for route in list(payload.get("routes") or []):
         route_impact = dict(dict(route).get("time_impact") or {})
+        route_gate = dict(dict(route).get("am_arrival_gate") or {})
         route_rows.append(
             [
                 payload.get("scenario_name"),
@@ -4157,6 +4350,10 @@ def _build_time_impact_workbook_export(
                 route_impact.get("weighted_avg_adverse_delta_minutes"),
                 route_impact.get("max_adverse_delta_minutes"),
                 route_impact.get("route_changed_rider_count"),
+                route_gate.get("status"),
+                route_gate.get("verified_departure_label"),
+                route_gate.get("verified_arrival_label"),
+                route_gate.get("time_window_overrun_minutes"),
             ]
         )
     _append_excel_table(route_sheet, route_headers, route_rows)

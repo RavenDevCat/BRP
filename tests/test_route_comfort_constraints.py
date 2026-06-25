@@ -1,5 +1,11 @@
 import importlib
+import sys
 import unittest
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 
 def _simple_matrix(size: int) -> list[list[int]]:
@@ -107,6 +113,21 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self.assertEqual(routes[0]["bus_capacity"], 42)
         self.assertEqual(routes[0]["comfort_capacity"], 35)
         self.assertGreater(routes[0]["load"], routes[0]["comfort_capacity"])
+
+    def test_solver_rejects_single_rider_trivial_route(self) -> None:
+        points = [_point(0), _point(1, 1)]
+        matrix = _simple_matrix(len(points))
+
+        with self.assertRaisesRegex(RuntimeError, "single-rider"):
+            self.planner.solve_routes(points, matrix, matrix)
+
+    def test_solver_rejects_single_rider_active_routes(self) -> None:
+        self._setattr("MAX_STOPS_PER_ROUTE", 1)
+        points = [_point(0), _point(1, 1), _point(2, 1)]
+        matrix = _simple_matrix(len(points))
+
+        with self.assertRaisesRegex(RuntimeError, "single-rider"):
+            self.planner.solve_routes(points, matrix, matrix)
 
     def test_stop_over_physical_capacity_is_split_into_vehicle_batches(self) -> None:
         points = [_point(0), _point(1, 43)]

@@ -123,6 +123,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
       {activeTab === "summary" ? (
         <SummaryPanel
           job={job}
+          result={result}
           currentPlan={currentPlan}
           currentComparison={currentComparison}
           diagnostics={diagnostics}
@@ -162,6 +163,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
 
 function SummaryPanel({
   job,
+  result,
   currentPlan,
   currentComparison,
   diagnostics,
@@ -172,6 +174,7 @@ function SummaryPanel({
   onOpenReview,
 }: {
   job: JobRecord;
+  result: Record<string, unknown>;
   currentPlan: Record<string, unknown>;
   currentComparison: Record<string, unknown>;
   diagnostics: Diagnostics;
@@ -185,6 +188,7 @@ function SummaryPanel({
   const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.name === "15-Minute Constrained" && scenario.enabled);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
+  const solveProcessRows = buildSolveProcessRows(result);
 
   return (
     <div className="space-y-4">
@@ -197,12 +201,14 @@ function SummaryPanel({
         <MetricCard
           label="Free optimization"
           value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
-          tone={freeOptimization ? "success" : "warning"}
+          tone={freeOptimization ? scenarioTrafficTone(freeOptimization, "success") : "warning"}
+          detail={freeOptimization ? scenarioTrafficStatusLabel(freeOptimization) : ""}
         />
         <MetricCard
           label="15-min constrained"
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
-          tone={timeConstrained ? "info" : "warning"}
+          tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
+          detail={timeConstrained ? scenarioTrafficStatusLabel(timeConstrained) : ""}
         />
         <MetricCard
           label="Data review"
@@ -210,6 +216,8 @@ function SummaryPanel({
           tone={reviewCount ? "warning" : "success"}
         />
       </div>
+
+      <SolveProcessCard rows={solveProcessRows} />
 
       <AiAuditPanel
         job={job}
@@ -333,6 +341,7 @@ function AuditPanel({
 }) {
   const t = useT();
   const recommendations = asStringArray(currentComparison.recommendations);
+  const benchmarkGateWarnings = buildBenchmarkGateWarnings(result);
   const plannerConfig = asRecord(result.planner_config);
   const trafficAttribution = asRecord(result.traffic_attribution);
   const trafficCoefficientMode = normalizeTrafficCoefficientMode(
@@ -340,6 +349,7 @@ function AuditPanel({
   );
   const trafficBasis = formatTrafficBasis(result, plannerConfig, trafficAttribution, t);
   const arrivalGateSummary = formatArrivalGateSummary(result);
+  const solveProcessRows = buildSolveProcessRows(result);
   const [showTrafficRouteEvidence, setShowTrafficRouteEvidence] = useState(false);
   const trafficAttributionQuery = useQuery({
     queryKey: ["job-traffic-attribution", jobId, showTrafficRouteEvidence],
@@ -385,6 +395,16 @@ function AuditPanel({
             {arrivalGateSummary ? <ReadoutItem label="AM arrival gate" value={arrivalGateSummary} /> : null}
             <ReadoutItem label="Current bus mix" value={formatBusMix(asRecord(currentPlan.bus_mix))} />
           </div>
+          {benchmarkGateWarnings.length ? (
+            <ul className="space-y-2 text-sm text-amber-800">
+              {benchmarkGateWarnings.map((item) => (
+                <li key={item} className="flex gap-2">
+                  <TriangleAlert className="mt-0.5 h-4 w-4 flex-none" aria-hidden="true" />
+                  <span>{t(item)}</span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
           {recommendations.length ? (
             <ul className="space-y-2 text-sm text-muted-foreground">
               {recommendations.map((item) => (
@@ -399,6 +419,8 @@ function AuditPanel({
           )}
         </CardContent>
       </Card>
+
+      <SolveProcessCard rows={solveProcessRows} />
 
       {trafficCoefficientMode === "attributed" ? (
         <TrafficAttributionEvidencePanel
@@ -422,6 +444,36 @@ function AuditPanel({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function SolveProcessCard({ rows }: { rows: ReturnType<typeof buildSolveProcessRows> }) {
+  const t = useT();
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <RefreshCw className="h-4 w-4 text-primary" aria-hidden="true" />
+          <h2 className="text-sm font-semibold">{t("Solve process")}</h2>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {rows.map((row) => (
+          <div key={row.label} className="rounded-lg border border-border bg-surface px-4 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="text-sm font-semibold">{t(row.label)}</div>
+              <Badge tone={row.passed ? "success" : row.neutral ? "info" : "warning"}>{t(row.status)}</Badge>
+            </div>
+            <div className="mt-2 text-sm leading-6 text-muted-foreground">{row.summary}</div>
+            <ol className="mt-3 space-y-1 text-sm leading-6 text-muted-foreground">
+              {row.steps.map((step) => (
+                <li key={step}>{step}</li>
+              ))}
+            </ol>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -925,7 +977,9 @@ function BaselinePanel({
                   <div className="text-sm font-semibold">{t(scenario.name)}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{t(scenario.detail)}</div>
                 </div>
-                <Badge tone={scenario.enabled ? "success" : "neutral"}>{scenario.enabled ? t("ready") : t("skipped")}</Badge>
+                <Badge tone={scenario.enabled ? scenarioTrafficTone(scenario, "success") : "neutral"}>
+                  {scenario.enabled ? t(scenarioTrafficStatusLabel(scenario) || "ready") : t("skipped")}
+                </Badge>
               </div>
               {scenario.enabled ? (
                 <div className="grid grid-cols-2 gap-2 text-sm">
@@ -2049,6 +2103,7 @@ function MapsPanel({
                 <div>{t("Riders")}: {formatNumber(summary.passengerCount)}</div>
                 <div>{t("Total")}: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
                 <div>{t("Longest")}: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
+                {summary.trafficStatusLabel ? <div className="col-span-2 text-amber-700">{t(summary.trafficStatusLabel)}</div> : null}
                 {excludedStopCount ? <div className="col-span-2 text-amber-700">{t("Excluded")}: {formatNumber(excludedStopCount)} {t("stop(s)")}</div> : null}
               </div>
             </button>
@@ -2385,10 +2440,12 @@ function MetricCard({
   label,
   value,
   tone = "neutral",
+  detail = "",
 }: {
   label: string;
   value: string;
   tone?: "neutral" | "success" | "warning" | "info";
+  detail?: string;
 }) {
   const t = useT();
   return (
@@ -2397,6 +2454,7 @@ function MetricCard({
         <div className="min-w-0 text-xs font-medium uppercase text-muted-foreground">{t(label)}</div>
       </div>
       <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
+      {detail ? <div className="mt-2 text-xs leading-5 text-muted-foreground">{t(detail)}</div> : null}
     </div>
   );
 }
@@ -2563,6 +2621,7 @@ type ScenarioRow = {
   detail: string;
   enabled: boolean;
   skippedReason: string;
+  trafficGate: Record<string, unknown>;
   routeCount: unknown;
   stopCount: unknown;
   avgDistanceM: unknown;
@@ -2586,6 +2645,7 @@ function scenarioFromAssessment(name: string, detail: string, assessment: Record
     detail,
     enabled: Object.keys(assessment).length > 0,
     skippedReason: "",
+    trafficGate: {},
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
     avgDistanceM: assessment.avg_route_distance_m,
@@ -2601,6 +2661,7 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
     detail,
     enabled: Object.keys(scenario).length > 0 && scenario.enabled !== false,
     skippedReason: stringValue(scenario.skipped_reason),
+    trafficGate: asRecord(scenario.traffic_gate),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
     avgDistanceM: scenario.avg_route_distance_m,
@@ -2608,6 +2669,51 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
     busMix: asRecord(scenario.bus_mix),
     routes: asRecordArray(scenario.routes),
   };
+}
+
+function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">): string {
+  const status = stringValue(scenario.trafficGate.status);
+  if (status === "passed") {
+    return "AM window passed";
+  }
+  if (status === "failed") {
+    return "Time window failed";
+  }
+  if (status === "unavailable") {
+    return "AMap verification incomplete";
+  }
+  return "";
+}
+
+function scenarioTrafficTone(
+  scenario: Pick<ScenarioRow, "trafficGate">,
+  fallback: "neutral" | "success" | "warning" | "info",
+): "neutral" | "success" | "warning" | "info" {
+  const status = stringValue(scenario.trafficGate.status);
+  if (status === "passed") {
+    return "success";
+  }
+  if (status === "failed" || status === "unavailable") {
+    return "warning";
+  }
+  return fallback;
+}
+
+function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
+  const scenarios: Array<[string, Record<string, unknown>]> = [
+    ["Free Optimization", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
+    ["15-Minute Constrained", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+  ];
+  return scenarios.flatMap(([label, gate]) => {
+    const status = stringValue(gate.status);
+    if (status === "failed") {
+      return [`${label} failed the 06:00-08:00 AM time-window check; do not treat its vehicle saving as adoption-ready.`];
+    }
+    if (status === "unavailable") {
+      return [`${label} did not complete AMap AM time-window verification; review before adoption.`];
+    }
+    return [];
+  });
 }
 
 
@@ -2647,6 +2753,18 @@ function sanitizeDownloadFilename(value: string) {
 function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
   const title = `${jobName} - ${mapName}`;
+  const summaryRecord = asRecord(data.summary);
+  const amGate = asRecord(summaryRecord.am_arrival_gate);
+  const amStatus = String(amGate.status || "");
+  const amWindowSummary =
+    amStatus === "failed"
+      ? `AM window failed (${formatNumber(amGate.failed_route_count)} routes)`
+      : amStatus === "unavailable"
+        ? `AM window unverified (${formatNumber(amGate.unavailable_route_count)} routes)`
+        : amStatus === "passed"
+          ? "AM window passed"
+          : "";
+  const mapSummary = `${formatNumber(data.summary.route_count)} routes · ${formatNumber(data.summary.stop_count)} stops · ${formatNumber(data.summary.passenger_count)} riders${amWindowSummary ? ` · ${amWindowSummary}` : ""}`;
   const standaloneTileUrls = ["https://tile.openstreetmap.de/{z}/{x}/{y}.png"];
   const routeColors = [
     "#0f766e", "#2563eb", "#c2410c", "#7c3aed", "#15803d", "#be123c", "#0891b2", "#a16207",
@@ -2720,7 +2838,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       <div class="toolbar">
         <div class="title">
           <h1>${htmlEscape(title)}</h1>
-          <p>${htmlEscape(data.scenario_name)} · ${htmlEscape(formatNumber(data.summary.route_count))} routes · ${htmlEscape(formatNumber(data.summary.stop_count))} stops · ${htmlEscape(formatNumber(data.summary.passenger_count))} riders</p>
+          <p>${htmlEscape(data.scenario_name)} · ${htmlEscape(mapSummary)}</p>
         </div>
         <div class="toolbar-actions">
           <button class="button" type="button" onclick="fitAll()">Fit all</button>
@@ -2732,7 +2850,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
         <aside class="sidebar">
           <div class="sidebar-head">
             <div class="sidebar-title-row">
-              <div><h2>${htmlEscape(data.scenario_name)}</h2><div class="summary">${htmlEscape(formatNumber(data.summary.route_count))} routes · ${htmlEscape(formatNumber(data.summary.stop_count))} stops · ${htmlEscape(formatNumber(data.summary.passenger_count))} riders</div></div>
+              <div><h2>${htmlEscape(data.scenario_name)}</h2><div class="summary">${htmlEscape(mapSummary)}</div></div>
               <button class="button fit" type="button" onclick="fitAll()">Fit all</button>
             </div>
             <input id="search" class="search" placeholder="Search route, bus, vehicle" />
@@ -2794,7 +2912,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       map.on("mouseleave", "stops-circle", clearHover);
     }
     function showRouteHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const route = routesById.get(String(feature.properties.route_id)); if (!route) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</strong><div>' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops</div><div>' + duration(route.duration_s) + ' · ' + distance(route.distance_m) + '</div>' + (route.bus_type_name ? '<div>' + esc(route.bus_type_name) + '</div>' : '') + '</div>'); }
-    function showStopHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const stop = data.stops.find(item => item.id === String(feature.properties.stop_id)); if (!stop) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + duration(stop.cumulative_duration_s) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>'); }
+    function showStopHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const stop = data.stops.find(item => item.id === String(feature.properties.stop_id)); if (!stop) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>'); }
     function showHover(lngLat, html) { if (!hoverPopup) hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12 }); hoverPopup.setLngLat(lngLat).setHTML(html).addTo(map); }
     function clearHover() { map.getCanvas().style.cursor = "grab"; if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; } }
     function routeGeometry(route) { return route && Array.isArray(route.display_geometry) && route.display_geometry.length >= 2 ? route.display_geometry : (route && Array.isArray(route.geometry) ? route.geometry : []); }
@@ -2805,9 +2923,9 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }
     function updateMapSources() { if (!map.getSource("routes")) return; map.getSource("route-connectors").setData(connectorGeojson(Boolean(selectedRouteId))); map.getSource("routes").setData(routeGeojson(Boolean(selectedRouteId))); map.getSource("selected-route-connectors").setData(selectedConnectorGeojson()); map.getSource("selected-route").setData(selectedRouteGeojson()); map.getSource("stops").setData(stopGeojson()); }
     function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = "Showing " + routes.length + " of " + data.routes.length + " routes"; document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
-    function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">Stop sequence</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || 'Unknown address') + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' riders · ' + duration(stop.cumulative_duration_s) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
+    function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">Stop sequence</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || 'Unknown address') + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' riders · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
-    function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + duration(stop.cumulative_duration_s) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
+    function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
     function fitAll() { if (!bounds) return; map.fitBounds([[bounds.min_lng, bounds.min_lat], [bounds.max_lng, bounds.max_lat]], { padding: 72, duration: 500 }); }
     function normalizeBounds(value) {
       if (!value) return null;
@@ -2820,7 +2938,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       return [normalized.min_lng, normalized.min_lat, normalized.max_lng, normalized.max_lat].every(Number.isFinite) ? normalized : null;
     }
     function fitRoute(route) { const geometry = routeGeometry(route); if (!route || geometry.length < 2) return; const connectorPoints = routeConnectors.filter(connector => connector.route_id === route.id).flatMap(connector => connector.geometry || []); const points = geometry.concat(connectorPoints); const lngs = points.map(p => p[0]).filter(Number.isFinite); const lats = points.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
-    function statusBadge(route) { const status = route.load / (route.bus_capacity || 0) >= 1 ? 'CAPACITY' : route.load / (route.bus_capacity || 1) >= .85 ? 'HIGH LOAD' : route.duration_s >= 3600 ? 'LONG' : ''; if (!status) return ''; return '<span class="badge ' + (status === 'CAPACITY' ? 'capacity' : status === 'HIGH LOAD' ? 'high' : '') + '">' + status + '</span>'; }
+    function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? 'TIME WINDOW' : gate.status === 'unavailable' ? 'UNVERIFIED' : route.load / (route.bus_capacity || 0) >= 1 ? 'CAPACITY' : route.load / (route.bus_capacity || 1) >= .85 ? 'HIGH LOAD' : route.duration_s >= 3600 ? 'LONG' : ''; if (!status) return ''; return '<span class="badge ' + (status === 'CAPACITY' || status === 'TIME WINDOW' ? 'capacity' : status === 'HIGH LOAD' || status === 'UNVERIFIED' ? 'high' : '') + '">' + status + '</span>'; }
+    function stopTiming(stop) { return (stop.scheduled_time_label ? esc(stop.scheduled_time_label) + ' · ' : '') + duration(stop.cumulative_duration_s); }
     function color(index) { return colors[index % colors.length]; }
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }
     function percentile(values, ratio) { const sorted = values.filter(Number.isFinite).sort((a,b)=>a-b); return sorted.length ? sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio)))] : 0; }
@@ -2872,6 +2991,7 @@ type MapScenarioSummary = {
   passengerCount: number;
   totalDistanceM: number;
   longestDurationS: number;
+  trafficStatusLabel: string;
 };
 
 function dataRouteCountForSummary(summaries: MapScenarioSummary[], key: string) {
@@ -2924,6 +3044,7 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       passengerCount: routes.reduce((total, route) => total + Number(routePassengerCount(route) || 0), 0),
       totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
       longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
+      trafficStatusLabel: scenarioTrafficStatusLabel({ trafficGate: asRecord(scenario.traffic_gate) }),
     };
   });
 }
@@ -2961,6 +3082,7 @@ function buildAiReportHtml({
         <tr>
           <td>${htmlEscape(t(scenario.name))}</td>
           <td>${htmlEscape(formatNumber(scenario.routeCount))}</td>
+          <td>${htmlEscape(t(scenarioTrafficStatusLabel(scenario) || "Not applicable"))}</td>
           <td>${htmlEscape(formatDurationMinFromSeconds(scenario.avgDurationS))}</td>
           <td>${htmlEscape(formatDistanceKmFromMeters(scenario.avgDistanceM))}</td>
           <td>${htmlEscape(formatBusMix(scenario.busMix))}</td>
@@ -3013,7 +3135,7 @@ function buildAiReportHtml({
   ${markdownToHtml(stringValue(report.report_markdown))}
   <h2>${htmlEscape(t("Scenario Evidence"))}</h2>
   <table>
-    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
+    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("AM Window"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
     <tbody>${scenarioRows}</tbody>
   </table>
   <h2>${htmlEscape(t("Top Suggested Actions"))}</h2>
@@ -3274,13 +3396,59 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
       const delay = Number(gate.max_estimated_arrival_delay_minutes || 0);
       const attempts = asRecordArray(gate.replan_attempts).length;
       const details = [
-        failed > 0 ? `${formatNumber(failed)} late` : "",
+        failed > 0 ? `${formatNumber(failed)} time-window issue(s)` : "",
         delay > 0 ? `max ${formatNumber(Math.round(delay))} min` : "",
         attempts > 0 ? `replanned ${formatNumber(attempts)}` : "",
       ].filter(Boolean);
       return `${label}: ${status}${details.length ? ` (${details.join(", ")})` : ""}`;
     })
     .join(" | ");
+}
+
+function buildSolveProcessRows(result: Record<string, unknown>) {
+  const scenarios: Array<[string, Record<string, unknown>]> = [
+    ["Free Optimization Baseline", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
+    ["15-Minute Constrained", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+  ];
+  return scenarios.map(([label, gate]) => buildSolveProcessRow(label, gate));
+}
+
+function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
+  const status = stringValue(gate.status);
+  if (!status || status === "not_applicable") {
+    return {
+      label,
+      status: status === "not_applicable" ? "Not applicable" : "No record",
+      passed: true,
+      neutral: true,
+      summary: status === "not_applicable" ? "This scenario did not require AM arrival-gate replanning." : "This job was created before solve-process tracking, or no optimization scenario was recorded.",
+      steps: ["No replan rounds were recorded."],
+    };
+  }
+  const attempts = asRecordArray(gate.replan_attempts);
+  const finalFailed = Number(gate.failed_route_count || 0);
+  const finalDelay = Number(gate.max_estimated_arrival_delay_minutes || 0);
+  const firstFailed = Number(attempts[0]?.failed_route_count ?? finalFailed);
+  const reduced = Math.max(0, firstFailed - finalFailed);
+  const steps = attempts.map((attempt, index) => {
+    const failed = Number(attempt.failed_route_count || 0);
+    const delay = Number(attempt.max_estimated_arrival_delay_minutes || 0);
+    const fromTarget = Number(attempt.from_route_duration_minutes || 0);
+    const toTarget = Number(attempt.to_route_duration_minutes || 0);
+    const routeIds = asStringArray(attempt.failed_route_ids);
+    const shownRoutes = routeIds.slice(0, 6).join(", ");
+    const routeText = shownRoutes ? `; routes ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
+    return `Round ${index + 1}: ${formatNumber(failed)} time-window route(s), max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+  });
+  steps.push(`Final: ${status}, ${formatNumber(finalFailed)} time-window route(s), max ${formatNumber(Math.round(finalDelay))} min over.`);
+  return {
+    label,
+    status: status === "passed" ? "Passed" : toTitle(status.replace(/_/g, " ")),
+    passed: status === "passed",
+    neutral: false,
+    summary: `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); time-window routes reduced by ${formatNumber(reduced)}.`,
+    steps,
+  };
 }
 
 function formatSignedNumber(value: unknown): string {

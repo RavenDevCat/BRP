@@ -118,12 +118,14 @@ COMFORT_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_LOAD_FACTOR", "0.85") or
 DEMAND_SPLIT_TARGET_LOAD_RATIO = float(os.environ.get("BRP_DEMAND_SPLIT_TARGET_LOAD_RATIO", "0.70") or 0.70)
 DEMAND_SPLIT_MIN_BATCH_SIZE = int(os.environ.get("BRP_DEMAND_SPLIT_MIN_BATCH_SIZE", "8") or 8)
 DEMAND_SPLIT_MAX_EXTRA_BATCHES = int(os.environ.get("BRP_DEMAND_SPLIT_MAX_EXTRA_BATCHES", "2") or 2)
+MIN_ACTIVE_ROUTE_PASSENGERS = 2
 SUBWAY_SEARCH_RADIUS_M = 1500
 MAX_SUBWAY_WALK_DISTANCE_M = 800
 NEARBY_CLUSTER_RADIUS_M = 500
 TRAFFIC_PROFILE_NAME = "Off-Peak"
 TRAFFIC_TIME_MULTIPLIER = 1.0
 TRAFFIC_PROFILE_CONTEXT = "Global default"
+RAW_SOLVER_TIME_MATRIX: list[list[int]] | None = None
 SERVICE_DIRECTION = "From School"
 MATRIX_NEAREST_NEIGHBORS = 10
 MATRIX_MAX_CANDIDATE_DISTANCE_KM = 15.0
@@ -1137,8 +1139,10 @@ def build_nearby_aggregated_points(points: list[dict[str, Any]]) -> list[dict[st
 
 
 def seed_edge_metrics(points: list[dict[str, Any]]) -> tuple[list[list[int]], list[list[int]]]:
+    global RAW_SOLVER_TIME_MATRIX
     n = len(points)
     time_matrix = [[0] * n for _ in range(n)]
+    raw_time_matrix = [[0] * n for _ in range(n)]
     distance_matrix = [[0] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
@@ -1146,11 +1150,15 @@ def seed_edge_metrics(points: list[dict[str, Any]]) -> tuple[list[list[int]], li
                 continue
             distance_km = haversine_distance_km(points[i]["lat"], points[i]["lng"], points[j]["lat"], points[j]["lng"])
             distance_m = max(100, int(distance_km * 1000))
-            time_s = apply_traffic_time_multiplier(max(120, int(distance_km * SEED_SECONDS_PER_KM)))
+            raw_time_s = max(120, int(distance_km * SEED_SECONDS_PER_KM))
+            time_s = apply_traffic_time_multiplier(raw_time_s)
             if j != 0:
+                raw_time_s += STOP_SERVICE_SECONDS
                 time_s += STOP_SERVICE_SECONDS
+            raw_time_matrix[i][j] = raw_time_s
             time_matrix[i][j] = time_s
             distance_matrix[i][j] = distance_m
+    RAW_SOLVER_TIME_MATRIX = raw_time_matrix
     return time_matrix, distance_matrix
 
 
@@ -1317,6 +1325,7 @@ def build_trivial_routes(
         return []
 
     demand = int(points[1].get("passenger_count", 0))
+    enforce_minimum_active_route_load(demand)
     chosen_vehicle = next((item for item in sort_regular_preference(fleet) if solver_capacity_for_vehicle(item) >= demand), None)
     if chosen_vehicle is None:
         raise RuntimeError("No feasible vehicle is large enough for the requested stop demand.")
@@ -1385,6 +1394,16 @@ def subset_matrix(matrix: list[list[int]], nodes: list[int]) -> list[list[int]]:
     return [[matrix[i][j] for j in nodes] for i in nodes]
 
 
+def solver_route_budget_time_matrix(time_matrix: list[list[int]]) -> list[list[int]]:
+    if (
+        RAW_SOLVER_TIME_MATRIX
+        and len(RAW_SOLVER_TIME_MATRIX) == len(time_matrix)
+        and all(len(row) == len(time_matrix) for row in RAW_SOLVER_TIME_MATRIX)
+    ):
+        return RAW_SOLVER_TIME_MATRIX
+    return time_matrix
+
+
 def remap_subset_routes(subset_routes: list[dict[str, Any]], subset_nodes: list[int]) -> list[dict[str, Any]]:
     remapped: list[dict[str, Any]] = []
     for route in subset_routes:
@@ -1400,6 +1419,11 @@ def points_total_demand(points: list[dict[str, Any]]) -> int:
 
 def fleet_total_capacity(fleet: list[dict[str, Any]]) -> int:
     return sum(solver_capacity_for_vehicle(item) for item in fleet)
+
+
+def enforce_minimum_active_route_load(route_load: int) -> None:
+    if 0 < int(route_load or 0) < MIN_ACTIVE_ROUTE_PASSENGERS:
+        raise RuntimeError("No feasible routing solution under the no single-rider bus constraint.")
 
 
 def subset_node_time_upper_bounds(
@@ -1580,6 +1604,7 @@ def solve_routes_for_fleet(
             route_distance_m += int(working_distance_matrix[from_node][to_node])
             index = next_index
         route_load = sum(int(points[node].get("passenger_count", 0) or 0) for node in nodes if node != 0)
+        enforce_minimum_active_route_load(route_load)
         route_stop_count = len([node for node in nodes if node != 0])
         routes.append(
             reverse_route_for_to_school(
@@ -1617,10 +1642,12 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     if not full_fleet:
         raise RuntimeError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
+    route_budget_time_matrix = solver_route_budget_time_matrix(time_matrix)
+
     # Small cases do not need the full VRP search; avoiding it keeps the backend responsive.
     if len(points) == 2:
-        validate_trivial_time_bounds(points, time_matrix, NODE_TIME_UPPER_BOUNDS)
-        return build_trivial_routes(points, time_matrix, distance_matrix, full_fleet)
+        validate_trivial_time_bounds(points, route_budget_time_matrix, NODE_TIME_UPPER_BOUNDS)
+        return build_trivial_routes(points, route_budget_time_matrix, distance_matrix, full_fleet)
 
     depot_distances = compute_depot_distances(points)
     remote_nodes = [
@@ -1664,7 +1691,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
         try:
             subset_nodes = [0] + eligible_remote_nodes
             subset_points = [points[idx] for idx in subset_nodes]
-            subset_time = subset_matrix(time_matrix, subset_nodes)
+            subset_time = subset_matrix(route_budget_time_matrix, subset_nodes)
             subset_distance = subset_matrix(distance_matrix, subset_nodes)
             express_routes = solve_routes_for_fleet(
                 subset_points,
@@ -1691,7 +1718,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     if regular_nodes:
         subset_nodes = [0] + regular_nodes
         subset_points = [points[idx] for idx in subset_nodes]
-        subset_time = subset_matrix(time_matrix, subset_nodes)
+        subset_time = subset_matrix(route_budget_time_matrix, subset_nodes)
         subset_distance = subset_matrix(distance_matrix, subset_nodes)
         regular_routes = solve_routes_for_fleet(
             subset_points,
@@ -1742,7 +1769,9 @@ def osrm_distance_matrix_batch(origin_points: list[dict[str, Any]], destination_
 
 
 def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]], list[list[int]]]:
+    global RAW_SOLVER_TIME_MATRIX
     if not points:
+        RAW_SOLVER_TIME_MATRIX = []
         return [], []
 
     coordinates = []
@@ -1763,6 +1792,7 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
         raise RuntimeError("OSRM full table returned an unexpected matrix shape.")
 
     time_matrix = [[0] * len(points) for _ in range(len(points))]
+    raw_time_matrix = [[0] * len(points) for _ in range(len(points))]
     distance_matrix = [[0] * len(points) for _ in range(len(points))]
     for i in range(len(points)):
         if len(durations[i]) != len(points) or len(distances[i]) != len(points):
@@ -1775,10 +1805,14 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
             if distance_m_raw is None or duration_s_raw is None:
                 distance_matrix[i][j] = HUGE_DISTANCE_METERS
                 time_matrix[i][j] = HUGE_TIME_SECONDS
+                raw_time_matrix[i][j] = HUGE_TIME_SECONDS
                 continue
             distance_matrix[i][j] = int(round(float(distance_m_raw)))
+            raw_duration_s = int(round(float(duration_s_raw)))
             duration_s = apply_traffic_time_multiplier(float(duration_s_raw))
+            raw_time_matrix[i][j] = raw_duration_s + (STOP_SERVICE_SECONDS if j != 0 else 0)
             time_matrix[i][j] = duration_s + (STOP_SERVICE_SECONDS if j != 0 else 0)
+    RAW_SOLVER_TIME_MATRIX = raw_time_matrix
     return time_matrix, distance_matrix
 
 

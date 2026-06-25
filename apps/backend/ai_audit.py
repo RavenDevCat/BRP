@@ -110,6 +110,23 @@ def _scenario_service_stop_count(scenario: dict[str, Any]) -> Any:
     return scenario.get("stop_count")
 
 
+def _compact_traffic_gate(scenario: dict[str, Any]) -> dict[str, Any]:
+    gate = dict(scenario.get("traffic_gate") or {})
+    if not gate:
+        return {"available": False, "status": "not_applicable"}
+    return {
+        "available": True,
+        "status": gate.get("status"),
+        "checked_route_count": gate.get("checked_route_count"),
+        "failed_route_count": gate.get("failed_route_count"),
+        "unavailable_route_count": gate.get("unavailable_route_count"),
+        "max_time_window_overrun_min": gate.get("max_time_window_overrun_minutes")
+        or gate.get("max_estimated_arrival_delay_minutes"),
+        "earliest_departure": "06:00",
+        "latest_arrival": gate.get("target_arrival_label") or "08:00",
+    }
+
+
 def _compact_route(route: dict[str, Any]) -> dict[str, Any]:
     return {
         "route_id": route.get("route_id"),
@@ -369,6 +386,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
                 "avg_route_duration_min": _float_minutes(free_baseline.get("avg_route_duration_s")),
                 "avg_load_factor_pct": round(float(free_baseline.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
                 "bus_mix": free_baseline.get("bus_mix"),
+                "am_time_window": _compact_traffic_gate(free_baseline),
             },
             "time_constrained": {
                 "route_count": time_constrained.get("route_count") or time_constrained.get("bus_count"),
@@ -377,6 +395,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
                 "avg_route_duration_min": _float_minutes(time_constrained.get("avg_route_duration_s")),
                 "avg_load_factor_pct": round(float(time_constrained.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
                 "time_constraint": time_constrained.get("time_constraint"),
+                "am_time_window": _compact_traffic_gate(time_constrained),
             },
         },
         "comparisons": {
@@ -434,6 +453,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "Write a clean management briefing for operators. "
         "Prefer readable business language over template language. "
         "Treat decision_review as deterministic evidence, not optional decoration. "
+        "Do not recommend adopting a benchmark whose am_time_window status is failed or unavailable. "
         "Keep recommendations practical and clearly separate measured facts from interpretation."
     )
     user_prompt = (

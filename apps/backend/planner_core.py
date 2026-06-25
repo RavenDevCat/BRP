@@ -109,6 +109,8 @@ AM_ARRIVAL_GATE_GRACE_MINUTES = max(
     0.0,
     float(os.environ.get("BRP_AM_ARRIVAL_GATE_GRACE_MINUTES", "0") or 0),
 )
+AM_EARLIEST_DEPARTURE_MINUTES = 6 * 60
+AM_LATEST_ARRIVAL_MINUTES = 8 * 60
 FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED = os.environ.get(
     "BRP_FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED",
     "true",
@@ -1666,6 +1668,11 @@ def _format_minutes_clock(minutes: float | int) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
+def _to_school_time_window(config: PlannerConfig) -> tuple[int, int]:
+    target_minutes = _parse_minutes_clock(config.to_school_arrival_time, AM_LATEST_ARRIVAL_MINUTES)
+    return AM_EARLIEST_DEPARTURE_MINUTES, min(target_minutes, AM_LATEST_ARRIVAL_MINUTES)
+
+
 def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
     provider = str(point.get("provider") or point.get("geocode_provider") or "").lower()
     if provider == "amap" or str(point.get("adcode") or "").strip():
@@ -1789,10 +1796,12 @@ def attach_final_route_traffic_gate(
         "target_arrival_label": str(config.to_school_arrival_time or "08:00"),
         "checked_route_count": 0,
         "failed_route_count": 0,
+        "failed_route_ids": [],
         "unavailable_route_count": 0,
         "api_calls": 0,
         "cache_hits": 0,
         "max_estimated_arrival_delay_minutes": 0.0,
+        "max_time_window_overrun_minutes": 0.0,
     }
     if not FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED:
         gate["status"] = "disabled"
@@ -1816,7 +1825,8 @@ def attach_final_route_traffic_gate(
 
     cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
     state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
-    target_minutes = _parse_minutes_clock(config.to_school_arrival_time, 8 * 60)
+    target_minutes = _parse_minutes_clock(config.to_school_arrival_time, AM_LATEST_ARRIVAL_MINUTES)
+    earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
     grace_s = AM_ARRIVAL_GATE_GRACE_MINUTES * 60.0
     for route_index, route in enumerate(routes, start=1):
         planned_total_s = float(route.get("time_s", 0.0) or 0.0)
@@ -1826,6 +1836,10 @@ def attach_final_route_traffic_gate(
             "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
             "target_arrival_minutes": target_minutes,
             "target_arrival_label": _format_minutes_clock(target_minutes),
+            "earliest_departure_minutes": earliest_departure_minutes,
+            "earliest_departure_label": _format_minutes_clock(earliest_departure_minutes),
+            "latest_arrival_minutes": latest_arrival_minutes,
+            "latest_arrival_label": _format_minutes_clock(latest_arrival_minutes),
             "planned_total_duration_s": planned_total_s,
             "planned_stop_service_s": stop_service_s,
             "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
@@ -1842,14 +1856,22 @@ def attach_final_route_traffic_gate(
             continue
         verified_drive_s = float(stats.get("duration_s", 0.0) or 0.0)
         verified_total_s = verified_drive_s + stop_service_s
-        delay_s = max(0.0, verified_total_s - planned_total_s)
-        passes = delay_s <= grace_s
+        latest_departure_minutes = latest_arrival_minutes - (verified_total_s / 60.0)
+        time_window_overrun_s = max(0.0, (earliest_departure_minutes - latest_departure_minutes) * 60.0)
+        scheduled_departure_minutes = max(earliest_departure_minutes, latest_departure_minutes)
+        scheduled_arrival_minutes = scheduled_departure_minutes + (verified_total_s / 60.0)
+        passes = time_window_overrun_s <= grace_s
         gate["checked_route_count"] += 1
         if not passes:
             gate["failed_route_count"] += 1
+            gate["failed_route_ids"].append(verification["route_id"])
         gate["max_estimated_arrival_delay_minutes"] = max(
             float(gate["max_estimated_arrival_delay_minutes"]),
-            delay_s / 60.0,
+            time_window_overrun_s / 60.0,
+        )
+        gate["max_time_window_overrun_minutes"] = max(
+            float(gate["max_time_window_overrun_minutes"]),
+            time_window_overrun_s / 60.0,
         )
         verification.update(
             {
@@ -1859,10 +1881,14 @@ def attach_final_route_traffic_gate(
                 "verified_drive_duration_s": verified_drive_s,
                 "verified_total_duration_s": verified_total_s,
                 "verified_distance_m": float(stats.get("distance_m", 0.0) or 0.0),
-                "estimated_arrival_delay_s": delay_s,
-                "estimated_arrival_delay_minutes": delay_s / 60.0,
-                "verified_arrival_minutes": target_minutes + delay_s / 60.0,
-                "verified_arrival_label": _format_minutes_clock(target_minutes + delay_s / 60.0),
+                "estimated_arrival_delay_s": time_window_overrun_s,
+                "estimated_arrival_delay_minutes": time_window_overrun_s / 60.0,
+                "time_window_overrun_s": time_window_overrun_s,
+                "time_window_overrun_minutes": time_window_overrun_s / 60.0,
+                "verified_departure_minutes": scheduled_departure_minutes,
+                "verified_departure_label": _format_minutes_clock(scheduled_departure_minutes),
+                "verified_arrival_minutes": scheduled_arrival_minutes,
+                "verified_arrival_label": _format_minutes_clock(scheduled_arrival_minutes),
             }
         )
         route["final_route_traffic_gate"] = verification
@@ -1871,8 +1897,12 @@ def attach_final_route_traffic_gate(
         save_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH, cache, sort_keys=True)
     gate["api_calls"] = int(state.get("api_calls", 0))
     gate["cache_hits"] = int(state.get("cache_hits", 0))
-    if gate["checked_route_count"]:
-        gate["status"] = "failed" if gate["failed_route_count"] else "passed"
+    if gate["failed_route_count"]:
+        gate["status"] = "failed"
+    elif gate["unavailable_route_count"]:
+        gate["status"] = "unavailable"
+    elif gate["checked_route_count"]:
+        gate["status"] = "passed"
     else:
         gate["status"] = "unavailable"
     scenario["traffic_gate"] = gate
@@ -2115,6 +2145,7 @@ def build_baseline_template_workbook_bytes(
             route_id = f"R{route_id}"
         bus_type = str(route.get("bus_type_name") or route.get("bus_type") or "").strip() or "Unknown"
         bus_capacity = int(route.get("bus_capacity", 0) or 0)
+        am_gate = dict(route.get("am_arrival_gate") or route.get("final_route_traffic_gate") or {})
         fleet_counts[(bus_type, bus_capacity)] = fleet_counts.get((bus_type, bus_capacity), 0) + 1
 
         for stop_sequence, raw_node_id in enumerate(list(route.get("nodes") or []), start=1):
@@ -2139,6 +2170,10 @@ def build_baseline_template_workbook_bytes(
                     "new pick up/drop off time": str(
                         time_impact.get("new_time_label") or ""
                     ).strip(),
+                    "am window status": str(am_gate.get("status") or "").strip(),
+                    "am departure": str(am_gate.get("verified_departure_label") or "").strip(),
+                    "am arrival": str(am_gate.get("verified_arrival_label") or "").strip(),
+                    "am overrun minutes": am_gate.get("time_window_overrun_minutes"),
                     "note": f"{source_label} export",
                 }
             )
@@ -4441,6 +4476,17 @@ def compare_current_plan_to_baseline(
     ) if baseline_avg_route_duration_s else 0.0
 
     recommendations: list[str] = []
+    baseline_gate = dict(baseline_result.get("traffic_gate") or {})
+    baseline_gate_status = str(baseline_gate.get("status") or "").strip().lower()
+    if baseline_gate_status in {"failed", "unavailable"}:
+        gate_label = (
+            "failed the 06:00-08:00 AM time-window check"
+            if baseline_gate_status == "failed"
+            else "did not complete AMap AM time-window verification"
+        )
+        recommendations.append(
+            f"The free-optimization baseline {gate_label}; do not treat the vehicle saving as adoption-ready."
+        )
     if route_gap > 0:
         recommendations.append(
             f"The current plan uses {route_gap} more routes than the free-optimization baseline."
@@ -5929,6 +5975,7 @@ def _compute_scenario_without_render(
                     "from_route_duration_minutes": route_limit_before_s / 60.0,
                     "to_route_duration_minutes": next_limit_s / 60.0,
                     "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                    "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
                     "max_estimated_arrival_delay_minutes": float(
                         dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
                     ),

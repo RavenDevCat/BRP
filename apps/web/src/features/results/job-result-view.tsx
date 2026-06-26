@@ -198,13 +198,13 @@ function SummaryPanel({
           label="Free optimization"
           value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
           tone={freeOptimization ? scenarioTrafficTone(freeOptimization, "success") : "warning"}
-          detail={freeOptimization ? scenarioTrafficStatusLabel(freeOptimization) : ""}
+          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; AM window is checked after routing.") : ""}
         />
         <MetricCard
           label="15-min constrained"
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
-          detail={timeConstrained ? scenarioTrafficStatusLabel(timeConstrained) : ""}
+          detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; AM window is checked after routing.") : ""}
         />
         <MetricCard
           label="Data review"
@@ -1841,7 +1841,16 @@ function MapsPanel({
                 <div>{t("Riders")}: {formatNumber(summary.passengerCount)}</div>
                 <div>{t("Total")}: {formatDistanceKmFromMeters(summary.totalDistanceM)}</div>
                 <div>{t("Longest")}: {formatDurationMinFromSeconds(summary.longestDurationS)}</div>
-                {summary.trafficStatusLabel ? <div className="col-span-2 text-amber-700">{t(summary.trafficStatusLabel)}</div> : null}
+                {summary.trafficStatusLabel ? (
+                  <div
+                    className={cn(
+                      "col-span-2 font-medium",
+                      summary.trafficStatusTone === "success" ? "text-emerald-700" : "text-amber-700",
+                    )}
+                  >
+                    {t(summary.trafficStatusLabel)}
+                  </div>
+                ) : null}
                 {excludedStopCount ? <div className="col-span-2 text-amber-700">{t("Excluded")}: {formatNumber(excludedStopCount)} {t("stop(s)")}</div> : null}
               </div>
             </button>
@@ -2415,12 +2424,17 @@ function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">):
     return "AM window passed";
   }
   if (status === "failed") {
-    return "Time window failed";
+    return "AM window failed";
   }
   if (status === "unavailable") {
     return "AMap verification incomplete";
   }
   return "";
+}
+
+function scenarioCardDetail(scenario: Pick<ScenarioRow, "trafficGate">, detail: string): string {
+  const status = scenarioTrafficStatusLabel(scenario);
+  return status ? `${status}. ${detail}` : detail;
 }
 
 function scenarioTrafficTone(
@@ -2730,6 +2744,7 @@ type MapScenarioSummary = {
   totalDistanceM: number;
   longestDurationS: number;
   trafficStatusLabel: string;
+  trafficStatusTone: "neutral" | "success" | "warning" | "info";
 };
 
 function dataRouteCountForSummary(summaries: MapScenarioSummary[], key: string) {
@@ -2783,6 +2798,7 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
       longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
       trafficStatusLabel: scenarioTrafficStatusLabel({ trafficGate: asRecord(scenario.traffic_gate) }),
+      trafficStatusTone: scenarioTrafficTone({ trafficGate: asRecord(scenario.traffic_gate) }, "neutral"),
     };
   });
 }
@@ -3050,7 +3066,7 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
       const delay = Number(gate.max_estimated_arrival_delay_minutes || 0);
       const attempts = asRecordArray(gate.replan_attempts).length;
       const details = [
-        failed > 0 ? `${formatNumber(failed)} time-window issue(s)` : "",
+        failed > 0 ? `${formatNumber(failed)} route(s) outside AM window` : "",
         delay > 0 ? `max ${formatNumber(Math.round(delay))} min` : "",
         attempts > 0 ? `replanned ${formatNumber(attempts)}` : "",
       ].filter(Boolean);
@@ -3082,8 +3098,6 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
   const attempts = asRecordArray(gate.replan_attempts);
   const finalFailed = Number(gate.failed_route_count || 0);
   const finalDelay = Number(gate.max_estimated_arrival_delay_minutes || 0);
-  const firstFailed = Number(attempts[0]?.failed_route_count ?? finalFailed);
-  const reduced = Math.max(0, firstFailed - finalFailed);
   const steps = attempts.map((attempt, index) => {
     const failed = Number(attempt.failed_route_count || 0);
     const delay = Number(attempt.max_estimated_arrival_delay_minutes || 0);
@@ -3091,16 +3105,23 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const toTarget = Number(attempt.to_route_duration_minutes || 0);
     const routeIds = asStringArray(attempt.failed_route_ids);
     const shownRoutes = routeIds.slice(0, 6).join(", ");
-    const routeText = shownRoutes ? `; routes ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
-    return `Round ${index + 1}: ${formatNumber(failed)} time-window route(s), max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+    const routeText = shownRoutes ? `; affected routes: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
+    return `Round ${index + 1}: ${formatNumber(failed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
   });
-  steps.push(`Final: ${status}, ${formatNumber(finalFailed)} time-window route(s), max ${formatNumber(Math.round(finalDelay))} min over.`);
+  steps.push(
+    status === "passed"
+      ? `Final check passed: all checked routes fit 06:00-08:00.`
+      : `Final check failed: ${formatNumber(finalFailed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`
+  );
   return {
     label,
     status: status === "passed" ? "Passed" : toTitle(status.replace(/_/g, " ")),
     passed: status === "passed",
     neutral: false,
-    summary: `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); time-window routes reduced by ${formatNumber(reduced)}.`,
+    summary:
+      status === "passed"
+        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); final AM check passed.`
+        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); ${formatNumber(finalFailed)} route(s) still outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`,
     steps,
   };
 }

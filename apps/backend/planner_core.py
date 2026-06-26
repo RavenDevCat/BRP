@@ -419,6 +419,30 @@ class PlannerConfig:
     include_nearby_aggregation_scenario: bool = True
 
 
+@dataclass(frozen=True)
+class TrafficPolicy:
+    provider: str
+    country: str
+    city: str
+    final_validation_enabled: bool
+    final_validation_applicable: bool
+    unavailable_reason: str | None = None
+
+    def status(self) -> str:
+        if not self.final_validation_enabled:
+            return "disabled"
+        if not self.final_validation_applicable:
+            return "not_applicable"
+        if self.unavailable_reason:
+            return "unavailable"
+        return "ready"
+
+    def as_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["status"] = self.status()
+        return payload
+
+
 def _normalize_location_value(value: str | None) -> str:
     normalized = str(value or "").strip().upper()
     if normalized in {"KR", "KOREA", "SOUTH KOREA", "REPUBLIC OF KOREA", "KOREA, REPUBLIC OF", "대한민국", "한국"}:
@@ -1787,6 +1811,28 @@ def _amap_route_stats(
     }
 
 
+def resolve_final_route_traffic_policy(
+    planner: Any,
+    _config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+) -> TrafficPolicy:
+    country, city = infer_traffic_location(input_records)
+    country_label = str(country or "").strip().upper()
+    provider = "amap" if country_label == "CHINA" else "none"
+    applicable = country_label == "CHINA"
+    unavailable_reason = None
+    if applicable and not str(getattr(planner, "AMAP_KEY", "") or "").strip():
+        unavailable_reason = "missing_amap_key"
+    return TrafficPolicy(
+        provider=provider,
+        country=country,
+        city=city,
+        final_validation_enabled=bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
+        final_validation_applicable=applicable,
+        unavailable_reason=unavailable_reason,
+    )
+
+
 def attach_final_route_traffic_gate(
     planner: Any,
     scenario: dict[str, Any],
@@ -1798,7 +1844,8 @@ def attach_final_route_traffic_gate(
     service_direction = normalize_service_direction(config.service_direction)
     is_to_school = service_direction == "To School"
     gate_type = "arrival_window" if is_to_school else "route_duration"
-    country, city = infer_traffic_location(input_records)
+    traffic_policy = resolve_final_route_traffic_policy(planner, config, input_records)
+    country, city = traffic_policy.country, traffic_policy.city
     routes = list(scenario.get("routes") or [])
     solver_route_duration_limit_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
     route_duration_limit_s = float(
@@ -1812,7 +1859,8 @@ def attach_final_route_traffic_gate(
         "gate_type": gate_type,
         "country": country,
         "city": city,
-        "provider": "amap",
+        "provider": traffic_policy.provider,
+        "traffic_policy": traffic_policy.as_dict(),
         "target_arrival_label": str(config.to_school_arrival_time or "08:00"),
         "target_departure_label": str(config.from_school_departure_time or "15:40"),
         "target_duration_minutes": route_duration_limit_s / 60.0 if route_duration_limit_s > 0 else None,
@@ -1829,18 +1877,18 @@ def attach_final_route_traffic_gate(
         "max_time_window_overrun_minutes": 0.0,
         "max_route_duration_overrun_minutes": 0.0,
     }
-    if not FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED:
+    if traffic_policy.status() == "disabled":
         gate["status"] = "disabled"
         scenario["traffic_gate"] = gate
         return gate
-    if country != "CHINA":
+    if traffic_policy.status() == "not_applicable":
         gate["status"] = "not_applicable"
         gate["reason"] = "non_china_location"
         scenario["traffic_gate"] = gate
         return gate
-    if not str(getattr(planner, "AMAP_KEY", "") or "").strip():
+    if traffic_policy.status() == "unavailable":
         gate["status"] = "unavailable"
-        gate["reason"] = "missing_amap_key"
+        gate["reason"] = traffic_policy.unavailable_reason or "traffic_policy_unavailable"
         scenario["traffic_gate"] = gate
         return gate
 
@@ -1949,6 +1997,123 @@ def attach_final_route_traffic_gate(
 
 def _traffic_gate_passed(gate: dict[str, Any] | None) -> bool:
     return str(dict(gate or {}).get("status") or "").strip().lower() == "passed"
+
+
+def build_route_feasibility_report(
+    scenario: dict[str, Any],
+    traffic_gate: dict[str, Any] | None,
+    config: PlannerConfig,
+    *,
+    current_min_active_vehicle_count: int = 0,
+    max_vehicle_count: int = 0,
+) -> dict[str, Any]:
+    routes = list(scenario.get("routes") or [])
+    route_count = int(scenario.get("bus_count", len(routes)) or len(routes))
+    service_direction = normalize_service_direction(config.service_direction)
+    gate = dict(traffic_gate or {})
+    gate_status = str(gate.get("status") or "not_checked").strip().lower()
+    gate_type = str(gate.get("gate_type") or ("arrival_window" if service_direction == "To School" else "route_duration"))
+
+    physical_overloaded_routes: list[str] = []
+    comfort_over_target_routes: list[str] = []
+    for route_index, route in enumerate(routes, start=1):
+        route_id = str(route.get("route_id") or route.get("id") or f"Bus {route_index}")
+        load = float(route.get("load", 0.0) or 0.0)
+        physical_capacity = float(route.get("bus_capacity", 0.0) or 0.0)
+        comfort_capacity = float(route.get("comfort_capacity", physical_capacity) or physical_capacity)
+        if physical_capacity > 0 and load > physical_capacity:
+            physical_overloaded_routes.append(route_id)
+        if comfort_capacity > 0 and comfort_capacity < physical_capacity and load > comfort_capacity:
+            comfort_over_target_routes.append(route_id)
+
+    failed_route_ids = list(gate.get("failed_route_ids") or [])
+    failure_reasons: list[str] = []
+    if physical_overloaded_routes:
+        failure_reasons.append("physical_capacity")
+    if gate_status == "failed":
+        failure_reasons.append(gate_type)
+    elif gate_status == "unavailable":
+        failure_reasons.append("traffic_validation_unavailable")
+
+    current_min_active_vehicle_count = max(0, int(current_min_active_vehicle_count or 0))
+    max_vehicle_count = max(0, int(max_vehicle_count or 0))
+    can_add_vehicle = max_vehicle_count > 0 and route_count < max_vehicle_count
+    recommended_min_active_vehicle_count = current_min_active_vehicle_count
+    if failure_reasons and can_add_vehicle:
+        recommended_min_active_vehicle_count = min(
+            max_vehicle_count,
+            max(current_min_active_vehicle_count + 1, route_count + 1),
+        )
+
+    fleet_status = "ok"
+    if failure_reasons and max_vehicle_count > 0 and not can_add_vehicle:
+        fleet_status = "at_max_vehicle_count"
+        if "fleet_limit" not in failure_reasons:
+            failure_reasons.append("fleet_limit")
+
+    if physical_overloaded_routes or gate_status == "failed":
+        status = "failed"
+    elif gate_status == "unavailable":
+        status = "unavailable"
+    else:
+        status = "passed"
+
+    return {
+        "version": 1,
+        "status": status,
+        "scenario": gate.get("scenario"),
+        "service_direction": service_direction,
+        "route_count": route_count,
+        "failure_reasons": failure_reasons,
+        "hard_constraints": {
+            "physical_capacity": {
+                "status": "failed" if physical_overloaded_routes else "passed",
+                "failed_route_count": len(physical_overloaded_routes),
+                "failed_route_ids": physical_overloaded_routes,
+            },
+            "time_window": {
+                "status": gate_status,
+                "gate_type": gate_type,
+                "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
+                "failed_route_ids": failed_route_ids,
+                "max_overrun_minutes": float(gate.get("max_time_window_overrun_minutes", 0.0) or 0.0),
+            },
+            "fleet": {
+                "status": fleet_status,
+                "max_vehicle_count": max_vehicle_count,
+                "current_min_active_vehicle_count": current_min_active_vehicle_count,
+                "recommended_min_active_vehicle_count": recommended_min_active_vehicle_count,
+                "can_add_vehicle": can_add_vehicle,
+            },
+        },
+        "soft_targets": {
+            "comfort": {
+                "hard_constraint": False,
+                "load_factor_target": float(config.comfort_load_factor),
+                "over_target_route_count": len(comfort_over_target_routes),
+                "over_target_route_ids": comfort_over_target_routes,
+            }
+        },
+        "traffic_policy": dict(gate.get("traffic_policy") or {}),
+    }
+
+
+def _scenario_feasibility_passed(result: dict[str, Any]) -> bool:
+    report = dict(result.get("feasibility_report") or {})
+    if report:
+        return str(report.get("status") or "").strip().lower() == "passed"
+    return _traffic_gate_passed(dict(result.get("traffic_gate") or {}))
+
+
+def _next_active_vehicle_count_from_feasibility(
+    report: dict[str, Any] | None,
+    current_min_vehicle_count: int,
+) -> int:
+    fleet = dict(dict(report or {}).get("hard_constraints", {}).get("fleet", {}) or {})
+    return max(
+        int(current_min_vehicle_count or 0),
+        int(fleet.get("recommended_min_active_vehicle_count", current_min_vehicle_count) or 0),
+    )
 
 
 def _cap_bus_type_configs_for_vehicle_count(
@@ -6059,25 +6224,32 @@ def _compute_scenario_without_render(
                     list(getattr(planner, "INPUT_STOPS", []) or []),
                     scenario_label,
                 )
+                current_min_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
+                feasibility_report = build_route_feasibility_report(
+                    result,
+                    gate,
+                    getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
+                    current_min_active_vehicle_count=current_min_vehicle_count,
+                    max_vehicle_count=max_vehicle_count,
+                )
+                result["feasibility_report"] = feasibility_report
                 replan_limit = FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS if max_replans is None else max(0, int(max_replans))
                 if max_replans is None:
                     replan_limit = max(replan_limit, FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS)
                 if replan_attempt_index >= replan_limit:
                     break
                 next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
-                current_min_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
-                next_min_vehicle_count = current_min_vehicle_count
-                if dict(gate or {}).get("status") == "failed" and max_vehicle_count > 0:
-                    result_bus_count = int(result.get("bus_count", 0) or 0)
-                    next_min_vehicle_count = min(
-                        max_vehicle_count,
-                        max(current_min_vehicle_count + 1, result_bus_count + 1),
-                    )
+                next_min_vehicle_count = _next_active_vehicle_count_from_feasibility(
+                    feasibility_report,
+                    current_min_vehicle_count,
+                )
                 if next_limit_s is None and next_min_vehicle_count <= current_min_vehicle_count:
                     break
                 traffic_replan_attempts.append(
                     {
                         "attempt": replan_attempt_index + 1,
+                        "feasibility_status": str(feasibility_report.get("status") or ""),
+                        "failure_reasons": list(feasibility_report.get("failure_reasons") or []),
                         "gate_type": dict(gate or {}).get("gate_type"),
                         "bus_count": int(result.get("bus_count", 0) or 0),
                         "from_route_duration_minutes": route_limit_before_s / 60.0,
@@ -6122,7 +6294,7 @@ def _compute_scenario_without_render(
         route_attribution_estimates = list(result.pop("_route_attribution_estimates", []) or [])
 
         vehicle_search_attempts: list[dict[str, Any]] = []
-        if _traffic_gate_passed(dict(result.get("traffic_gate") or {})):
+        if _scenario_feasibility_passed(result):
             min_vehicle_count = _minimum_solver_vehicle_count(planner, points)
             selected_bus_count = int(result.get("bus_count", 0) or 0)
             target_bus_count = selected_bus_count - 1
@@ -6148,10 +6320,13 @@ def _compute_scenario_without_render(
                     candidate = solve_with_current_settings(FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS)
                     candidate_estimates = list(candidate.pop("_route_attribution_estimates", []) or [])
                     gate = dict(candidate.get("traffic_gate") or {})
+                    feasibility_report = dict(candidate.get("feasibility_report") or {})
                     candidate_bus_count = int(candidate.get("bus_count", 0) or 0)
                     attempt.update(
                         {
-                            "status": str(gate.get("status") or "unknown"),
+                            "status": str(feasibility_report.get("status") or gate.get("status") or "unknown"),
+                            "feasibility_status": str(feasibility_report.get("status") or ""),
+                            "failure_reasons": list(feasibility_report.get("failure_reasons") or []),
                             "bus_count": candidate_bus_count,
                             "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
                             "max_estimated_arrival_delay_minutes": float(
@@ -6160,7 +6335,7 @@ def _compute_scenario_without_render(
                         }
                     )
                     vehicle_search_attempts.append(attempt)
-                    if _traffic_gate_passed(gate):
+                    if _scenario_feasibility_passed(candidate):
                         result = candidate
                         route_attribution_estimates = candidate_estimates
                         selected_bus_count = candidate_bus_count

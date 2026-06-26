@@ -88,7 +88,11 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     assert planner.solve_count == 2
     assert result["bus_count"] == 2
     assert result["traffic_gate"]["status"] == "passed"
+    assert result["feasibility_report"]["status"] == "passed"
+    assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 2
     assert len(result["traffic_replan_attempts"]) == 1
+    assert result["traffic_replan_attempts"][0]["feasibility_status"] == "failed"
+    assert result["traffic_replan_attempts"][0]["failure_reasons"] == ["arrival_window"]
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 2
     assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
@@ -180,8 +184,10 @@ def test_pm_route_duration_gate_adds_vehicle_before_saving(monkeypatch):
     assert result["bus_count"] == 15
     assert result["traffic_gate"]["status"] == "passed"
     assert result["traffic_gate"]["gate_type"] == "route_duration"
+    assert result["traffic_gate"]["traffic_policy"]["status"] == "ready"
     assert result["traffic_gate"]["target_duration_minutes"] == 60
     assert result["traffic_gate"]["solver_target_duration_minutes"] < 60
+    assert result["feasibility_report"]["status"] == "passed"
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 15
     assert result["traffic_vehicle_search_attempts"][0]["target_bus_count"] == 14
     assert result["traffic_vehicle_search_attempts"][0]["status"] == "failed"
@@ -230,10 +236,23 @@ def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):
 
     assert gate["status"] == "failed"
     assert gate["failed_route_ids"] == ["Bus 1"]
+    assert gate["traffic_policy"]["provider"] == "amap"
+    assert gate["traffic_policy"]["status"] == "ready"
     assert round(gate["max_time_window_overrun_minutes"]) == 30
     route_gate = result["routes"][0]["final_route_traffic_gate"]
     assert route_gate["verified_departure_label"] == "06:00"
     assert route_gate["verified_arrival_label"] == "08:30"
+
+    report = planner_core.build_route_feasibility_report(
+        result,
+        gate,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        current_min_active_vehicle_count=1,
+        max_vehicle_count=3,
+    )
+    assert report["status"] == "failed"
+    assert report["failure_reasons"] == ["arrival_window"]
+    assert report["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 2
 
 
 def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
@@ -278,3 +297,34 @@ def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
     assert gate["checked_route_count"] == 1
     assert gate["unavailable_route_count"] == 1
     assert scenario["traffic_feasible"] is False
+
+
+def test_final_route_traffic_policy_skips_non_china(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("SOUTH_KOREA", "Seoul"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+
+    scenario = {
+        "routes": [
+            {"route_id": "Bus 1", "nodes": [0, 1], "time_s": 1200, "stop_service_time_s": 0},
+        ]
+    }
+    points = [
+        {"is_depot": True, "provider": "google", "lat": 37.5, "lng": 127.0},
+        {"provider": "google", "lat": 37.6, "lng": 127.1},
+    ]
+
+    gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(),
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Seoul"}],
+        "kr-smoke",
+    )
+
+    assert gate["status"] == "not_applicable"
+    assert gate["provider"] == "none"
+    assert gate["traffic_policy"]["status"] == "not_applicable"

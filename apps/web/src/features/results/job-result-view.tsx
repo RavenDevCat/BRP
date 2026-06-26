@@ -198,13 +198,13 @@ function SummaryPanel({
           label="Free optimization"
           value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
           tone={freeOptimization ? scenarioTrafficTone(freeOptimization, "success") : "warning"}
-          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; final time window is checked after routing.") : ""}
+          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; final provider timing is checked after routing.") : ""}
         />
         <MetricCard
           label="15-min constrained"
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
-          detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; final time window is checked after routing.") : ""}
+          detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; final provider timing is checked after routing.") : ""}
         />
         <MetricCard
           label="Data review"
@@ -2418,16 +2418,33 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
   };
 }
 
+function trafficGateType(gate: Record<string, unknown>): "route_duration" | "arrival_window" {
+  const gateType = stringValue(gate.gate_type);
+  if (gateType === "route_duration" || stringValue(gate.service_direction) === "From School") {
+    return "route_duration";
+  }
+  return "arrival_window";
+}
+
+function trafficGateCheckName(gate: Record<string, unknown>): string {
+  return trafficGateType(gate) === "route_duration" ? "route-duration check" : "time-window check";
+}
+
+function trafficGateFailureText(gate: Record<string, unknown>): string {
+  return trafficGateType(gate) === "route_duration" ? "route(s) over route-duration budget" : "route(s) outside final time window";
+}
+
 function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">): string {
   const status = stringValue(scenario.trafficGate.status);
+  const checkName = trafficGateCheckName(scenario.trafficGate);
   if (status === "passed") {
-    return "Time window passed";
+    return trafficGateType(scenario.trafficGate) === "route_duration" ? "Route duration passed" : "Time window passed";
   }
   if (status === "failed") {
-    return "Time window failed";
+    return trafficGateType(scenario.trafficGate) === "route_duration" ? "Route duration failed" : "Time window failed";
   }
   if (status === "unavailable") {
-    return "AMap verification incomplete";
+    return `AMap ${checkName} incomplete`;
   }
   return "";
 }
@@ -2458,11 +2475,12 @@ function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
   ];
   return scenarios.flatMap(([label, gate]) => {
     const status = stringValue(gate.status);
+    const checkName = trafficGateCheckName(gate);
     if (status === "failed") {
-      return [`${label} failed the final time-window check; do not treat its vehicle saving as adoption-ready.`];
+      return [`${label} failed the final ${checkName}; do not treat its vehicle saving as adoption-ready.`];
     }
     if (status === "unavailable") {
-      return [`${label} did not complete AMap final time-window verification; review before adoption.`];
+      return [`${label} did not complete AMap final ${checkName}; review before adoption.`];
     }
     return [];
   });
@@ -3065,8 +3083,9 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
       const failed = Number(gate.failed_route_count || 0);
       const delay = Number(gate.max_estimated_arrival_delay_minutes || 0);
       const attempts = asRecordArray(gate.replan_attempts).length;
+      const failureText = trafficGateFailureText(gate);
       const details = [
-        failed > 0 ? `${formatNumber(failed)} route(s) outside time window` : "",
+        failed > 0 ? `${formatNumber(failed)} ${failureText}` : "",
         delay > 0 ? `max ${formatNumber(Math.round(delay))} min` : "",
         attempts > 0 ? `replanned ${formatNumber(attempts)}` : "",
       ].filter(Boolean);
@@ -3097,6 +3116,8 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
   }
   const attempts = asRecordArray(gate.replan_attempts);
   const vehicleAttempts = asRecordArray(gate.vehicle_search_attempts);
+  const checkName = trafficGateCheckName(gate);
+  const failureText = trafficGateFailureText(gate);
   const finalFailed = Number(gate.failed_route_count || 0);
   const finalDelay = Number(gate.max_estimated_arrival_delay_minutes || 0);
   const steps = attempts.map((attempt, index) => {
@@ -3107,7 +3128,7 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const routeIds = asStringArray(attempt.failed_route_ids);
     const shownRoutes = routeIds.slice(0, 6).join(", ");
     const routeText = shownRoutes ? `; affected routes: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
-    return `Round ${index + 1}: ${formatNumber(failed)} route(s) outside final time window, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+    return `Round ${index + 1}: ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
   });
   vehicleAttempts.forEach((attempt, index) => {
     const targetBusCount = Number(attempt.target_bus_count || 0);
@@ -3118,14 +3139,14 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const passed = attemptStatus === "passed";
     steps.push(
       passed
-        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the final time-window check.`
-        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} route(s) outside final time window, max ${formatNumber(Math.round(delay))} min over.`
+        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the final ${checkName}.`
+        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over.`
     );
   });
   steps.push(
     status === "passed"
-      ? `Final check passed: all checked routes fit the final time window.`
-      : `Final check failed: ${formatNumber(finalFailed)} route(s) outside final time window, max ${formatNumber(Math.round(finalDelay))} min over.`
+      ? `Final check passed: all checked routes passed the final ${checkName}.`
+      : `Final check failed: ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`
   );
   return {
     label,
@@ -3134,8 +3155,8 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     neutral: false,
     summary:
       status === "passed"
-        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final time-window check passed.`
-        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} route(s) still outside final time window, max ${formatNumber(Math.round(finalDelay))} min over.`,
+        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final ${checkName} passed.`
+        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`,
     steps,
   };
 }

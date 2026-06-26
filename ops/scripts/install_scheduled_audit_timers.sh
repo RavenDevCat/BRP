@@ -26,6 +26,7 @@ Description=BRP scheduled audit queue release ($description)
 Type=oneshot
 WorkingDirectory=$ROOT_DIR
 ExecStart=$ROOT_DIR/ops/scripts/run_scheduled_audit_release.sh
+KillMode=process
 EOF
 }
 

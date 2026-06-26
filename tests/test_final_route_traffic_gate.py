@@ -91,10 +91,12 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     assert result["feasibility_report"]["status"] == "passed"
     assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 2
     assert len(result["traffic_replan_attempts"]) == 1
+    assert result["traffic_replan_attempts"][0]["action"] == "increase_active_vehicles"
     assert result["traffic_replan_attempts"][0]["feasibility_status"] == "failed"
     assert result["traffic_replan_attempts"][0]["failure_reasons"] == ["arrival_window"]
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 2
+    assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 60
     assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
     assert result["traffic_replan_attempts"][0]["unavailable_route_count"] == 0
     assert result["traffic_replan_attempts"][0]["api_calls"] == 1
@@ -186,9 +188,11 @@ def test_pm_route_duration_gate_adds_vehicle_before_saving(monkeypatch):
     assert result["traffic_gate"]["gate_type"] == "route_duration"
     assert result["traffic_gate"]["traffic_policy"]["status"] == "ready"
     assert result["traffic_gate"]["target_duration_minutes"] == 60
-    assert result["traffic_gate"]["solver_target_duration_minutes"] < 60
+    assert result["traffic_gate"]["solver_target_duration_minutes"] == 60
     assert result["feasibility_report"]["status"] == "passed"
+    assert result["traffic_replan_attempts"][0]["action"] == "increase_active_vehicles"
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 15
+    assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 60
     assert result["traffic_vehicle_search_attempts"][0]["target_bus_count"] == 14
     assert result["traffic_vehicle_search_attempts"][0]["status"] == "failed"
 

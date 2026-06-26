@@ -6243,11 +6243,16 @@ def _compute_scenario_without_render(
                     feasibility_report,
                     current_min_vehicle_count,
                 )
+                search_action = "tighten_route_target" if next_limit_s is not None else "none"
+                if next_min_vehicle_count > current_min_vehicle_count:
+                    next_limit_s = None
+                    search_action = "increase_active_vehicles"
                 if next_limit_s is None and next_min_vehicle_count <= current_min_vehicle_count:
                     break
                 traffic_replan_attempts.append(
                     {
                         "attempt": replan_attempt_index + 1,
+                        "action": search_action,
                         "feasibility_status": str(feasibility_report.get("status") or ""),
                         "failure_reasons": list(feasibility_report.get("failure_reasons") or []),
                         "gate_type": dict(gate or {}).get("gate_type"),
@@ -6269,7 +6274,8 @@ def _compute_scenario_without_render(
                 )
                 planner.log(
                     f"[BACKEND] {scenario_label} failed {gate_name} gate; "
-                    f"tightening route target from {route_limit_before_s / 60.0:.1f} "
+                    f"action {search_action}; "
+                    f"route target {route_limit_before_s / 60.0:.1f} "
                     f"to {(next_limit_s or route_limit_before_s) / 60.0:.1f} minutes; "
                     f"vehicle floor {current_min_vehicle_count} -> {next_min_vehicle_count}; resolving."
                 )

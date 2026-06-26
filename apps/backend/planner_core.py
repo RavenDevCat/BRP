@@ -1800,7 +1800,11 @@ def attach_final_route_traffic_gate(
     gate_type = "arrival_window" if is_to_school else "route_duration"
     country, city = infer_traffic_location(input_records)
     routes = list(scenario.get("routes") or [])
-    route_duration_limit_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
+    solver_route_duration_limit_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
+    route_duration_limit_s = float(
+        getattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS", 0.0)
+        or solver_route_duration_limit_s
+    )
     gate: dict[str, Any] = {
         "enabled": bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
         "scenario": scenario_label,
@@ -1812,6 +1816,9 @@ def attach_final_route_traffic_gate(
         "target_arrival_label": str(config.to_school_arrival_time or "08:00"),
         "target_departure_label": str(config.from_school_departure_time or "15:40"),
         "target_duration_minutes": route_duration_limit_s / 60.0 if route_duration_limit_s > 0 else None,
+        "solver_target_duration_minutes": (
+            solver_route_duration_limit_s / 60.0 if solver_route_duration_limit_s > 0 else None
+        ),
         "checked_route_count": 0,
         "failed_route_count": 0,
         "failed_route_ids": [],
@@ -5956,6 +5963,7 @@ def _compute_scenario_without_render(
     previous_node_time_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}))
     previous_min_solver_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
     previous_max_route_duration_seconds = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
+    previous_gate_route_duration_seconds = getattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS", None)
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
     full_fleet = planner.build_vehicle_fleet()
@@ -6052,14 +6060,14 @@ def _compute_scenario_without_render(
                     scenario_label,
                 )
                 replan_limit = FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS if max_replans is None else max(0, int(max_replans))
-                if max_replans is None and is_from_school:
+                if max_replans is None:
                     replan_limit = max(replan_limit, FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS)
                 if replan_attempt_index >= replan_limit:
                     break
                 next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
                 current_min_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
                 next_min_vehicle_count = current_min_vehicle_count
-                if is_from_school and dict(gate or {}).get("status") == "failed" and max_vehicle_count > 0:
+                if dict(gate or {}).get("status") == "failed" and max_vehicle_count > 0:
                     result_bus_count = int(result.get("bus_count", 0) or 0)
                     next_min_vehicle_count = min(
                         max_vehicle_count,
@@ -6109,6 +6117,7 @@ def _compute_scenario_without_render(
 
         planner.BUS_TYPE_CONFIGS = deepcopy(original_scenario_bus_type_configs)
         planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
+        planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_max_route_duration_seconds
         result = solve_with_current_settings()
         route_attribution_estimates = list(result.pop("_route_attribution_estimates", []) or [])
 
@@ -6130,6 +6139,7 @@ def _compute_scenario_without_render(
                     target_bus_count,
                 )
                 planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
+                planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_max_route_duration_seconds
                 attempt: dict[str, Any] = {
                     "attempt": search_count,
                     "target_bus_count": target_bus_count,
@@ -6198,6 +6208,11 @@ def _compute_scenario_without_render(
         planner.NODE_TIME_UPPER_BOUNDS = previous_node_time_upper_bounds
         planner.MIN_SOLVER_VEHICLE_COUNT = previous_min_solver_vehicle_count
         planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
+        if previous_gate_route_duration_seconds is None:
+            if hasattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS"):
+                delattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS")
+        else:
+            planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_gate_route_duration_seconds
 
 
 def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:

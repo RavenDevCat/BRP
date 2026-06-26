@@ -19,7 +19,7 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     def fake_amap_route_stats(planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
         return {
-            "duration_s": 9000 if planner.solve_count == 1 else 1200,
+            "duration_s": 9000 if planner.last_bus_count < 2 else 1200,
             "distance_m": 1234,
             "source": "fake_amap",
         }
@@ -28,7 +28,7 @@ def test_am_arrival_gate_replans_once(monkeypatch):
 
     class FakePlanner:
         AMAP_KEY = "fake"
-        BUS_TYPE_CONFIGS = []
+        BUS_TYPE_CONFIGS = [{"name": "bus", "capacity": 99, "max_count": 3}]
         NODE_TIME_UPPER_BOUNDS = {}
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
@@ -38,6 +38,7 @@ def test_am_arrival_gate_replans_once(monkeypatch):
 
         def __init__(self):
             self.solve_count = 0
+            self.last_bus_count = 0
             self._BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(
                 service_direction="To School",
                 to_school_arrival_time="08:00",
@@ -57,13 +58,15 @@ def test_am_arrival_gate_replans_once(monkeypatch):
 
         def solve_routes(self, _points, _solve_time, _solve_distance):
             self.solve_count += 1
+            self.last_bus_count = max(1, int(self.MIN_SOLVER_VEHICLE_COUNT or 0))
             return [
                 {
-                    "route_id": "Bus 1",
+                    "route_id": f"Bus {index + 1}",
                     "nodes": [0, 1],
                     "time_s": float(self.MAX_ROUTE_DURATION_SECONDS),
                     "stop_service_time_s": 0,
                 }
+                for index in range(self.last_bus_count)
             ]
 
         def enrich_routes_with_actual_driving(self, _points, _routes):
@@ -83,9 +86,11 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     result = planner_core._compute_scenario_without_render(planner, points, "smoke")
 
     assert planner.solve_count == 2
+    assert result["bus_count"] == 2
     assert result["traffic_gate"]["status"] == "passed"
     assert len(result["traffic_replan_attempts"]) == 1
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
+    assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 2
     assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
     assert result["traffic_replan_attempts"][0]["unavailable_route_count"] == 0
     assert result["traffic_replan_attempts"][0]["api_calls"] == 1
@@ -105,7 +110,7 @@ def test_pm_route_duration_gate_adds_vehicle_before_saving(monkeypatch):
     def fake_amap_route_stats(planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
         return {
-            "duration_s": 1200 if planner.last_bus_count >= 15 else 5000,
+            "duration_s": 3300 if planner.last_bus_count >= 15 else 5000,
             "distance_m": 1234,
             "source": "fake_amap",
         }
@@ -175,6 +180,8 @@ def test_pm_route_duration_gate_adds_vehicle_before_saving(monkeypatch):
     assert result["bus_count"] == 15
     assert result["traffic_gate"]["status"] == "passed"
     assert result["traffic_gate"]["gate_type"] == "route_duration"
+    assert result["traffic_gate"]["target_duration_minutes"] == 60
+    assert result["traffic_gate"]["solver_target_duration_minutes"] < 60
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 15
     assert result["traffic_vehicle_search_attempts"][0]["target_bus_count"] == 14
     assert result["traffic_vehicle_search_attempts"][0]["status"] == "failed"

@@ -47,6 +47,7 @@ export function RootLayout() {
     return (
         <LanguageProvider
             switchEnabled={featuresQuery.data?.language_switch_enabled ?? false}
+            availableLanguages={featuresQuery.data?.available_languages}
         >
             <AppShell>
                 <Outlet />

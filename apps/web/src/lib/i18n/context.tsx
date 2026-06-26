@@ -2,12 +2,13 @@ import {
     createContext,
     useCallback,
     useContext,
+    useEffect,
     useMemo,
     useState,
     type ReactNode,
 } from "react";
 import type { Language, Translations } from "./types";
-import { getStoredLanguage, storeLanguage } from "./types";
+import { LANGUAGES, getStoredLanguage, storeLanguage } from "./types";
 import en from "./en";
 import ko from "./ko";
 import zh from "./zh";
@@ -21,6 +22,7 @@ interface LanguageContextValue {
     t: (key: string, fallback?: string) => string;
     /** Whether the language switcher should be visible (server-controlled). */
     switchEnabled: boolean;
+    availableLanguages: typeof LANGUAGES;
 }
 
 const LanguageContext = createContext<LanguageContextValue>({
@@ -28,16 +30,31 @@ const LanguageContext = createContext<LanguageContextValue>({
     setLang: () => {},
     t: (key, fallback) => fallback ?? key,
     switchEnabled: false,
+    availableLanguages: LANGUAGES,
 });
 
 export function LanguageProvider({
     switchEnabled,
+    availableLanguages,
     children,
 }: {
     switchEnabled: boolean;
+    availableLanguages?: string[];
     children: ReactNode;
 }) {
     const [lang, setLangState] = useState<Language>(() => getStoredLanguage());
+    const enabledLanguages = useMemo(() => {
+        const allowed = new Set(availableLanguages?.filter(isKnownLanguage));
+        return allowed.size ? LANGUAGES.filter((item) => allowed.has(item.code)) : LANGUAGES;
+    }, [availableLanguages]);
+
+    useEffect(() => {
+        if (!enabledLanguages.some((item) => item.code === lang)) {
+            const fallback = enabledLanguages[0]?.code ?? "en";
+            setLangState(fallback);
+            storeLanguage(fallback);
+        }
+    }, [enabledLanguages, lang]);
 
     const setLang = useCallback((next: Language) => {
         setLangState(next);
@@ -52,8 +69,8 @@ export function LanguageProvider({
     );
 
     const value = useMemo<LanguageContextValue>(
-        () => ({ lang, setLang, t, switchEnabled }),
-        [lang, setLang, t, switchEnabled],
+        () => ({ lang, setLang, t, switchEnabled, availableLanguages: enabledLanguages }),
+        [lang, setLang, t, switchEnabled, enabledLanguages],
     );
 
     return (
@@ -69,4 +86,8 @@ export function useT() {
 
 export function useLanguage() {
     return useContext(LanguageContext);
+}
+
+function isKnownLanguage(value: unknown): value is Language {
+    return value === "en" || value === "ko" || value === "zh";
 }

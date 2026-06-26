@@ -24,7 +24,6 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { formatNumber } from "@/lib/format";
 import { useLanguage, useT } from "@/lib/i18n/context";
-import { LANGUAGES } from "@/lib/i18n/types";
 
 const primaryNavItems = [
     { to: "/", labelKey: "Dashboard", icon: LayoutDashboard },
@@ -355,13 +354,13 @@ function NavGroup({
 }
 
 function LanguageSwitcher() {
-    const { lang, setLang, switchEnabled } = useLanguage();
+    const { lang, setLang, switchEnabled, availableLanguages } = useLanguage();
 
     if (!switchEnabled) return null;
 
     return (
         <div className="flex items-center gap-1 rounded-md border border-border bg-muted/50 p-0.5">
-            {LANGUAGES.map(({ code, label }) => (
+            {availableLanguages.map(({ code, label }) => (
                 <button
                     key={code}
                     type="button"

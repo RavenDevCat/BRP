@@ -1837,8 +1837,16 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
 
 
 def _deployment_features_payload() -> dict[str, Any]:
+    root_text = str(BASE_DIR).replace("\\", "/").lower()
+    if "/staging/" in root_text:
+        available_languages = ["en", "ko", "zh"]
+    elif "users/bus.eim/brp" in root_text:
+        available_languages = ["en", "ko"]
+    else:
+        available_languages = ["en", "zh"]
     return {
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
+        "available_languages": available_languages,
         "default_traffic_coefficient_mode": DEFAULT_TRAFFIC_COEFFICIENT_MODE,
     }
 

@@ -1571,6 +1571,20 @@ def solve_routes_for_fleet(
             ROUTE_DURATION_SOFT_PENALTY_PER_SECOND,
         )
 
+    requested_min_active_vehicles = max(0, int(MIN_SOLVER_VEHICLE_COUNT or 0))
+    if requested_min_active_vehicles > 0:
+        max_active_by_stops = max(0, len(points) - 1)
+        min_route_load = max(1, int(MIN_ACTIVE_ROUTE_PASSENGERS or 1))
+        max_active_by_load = max(1, total_demand // min_route_load) if total_demand > 0 else 0
+        min_active_vehicles = min(
+            vehicle_count,
+            requested_min_active_vehicles,
+            max_active_by_stops,
+            max_active_by_load,
+        )
+        for vehicle_id in range(min_active_vehicles):
+            routing.solver().Add(routing.ActiveVehicleVar(vehicle_id) == 1)
+
     search = pywrapcp.DefaultRoutingSearchParameters()
     search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH

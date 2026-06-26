@@ -114,6 +114,17 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self.assertEqual(routes[0]["comfort_capacity"], 35)
         self.assertGreater(routes[0]["load"], routes[0]["comfort_capacity"])
 
+    def test_min_solver_vehicle_count_forces_active_routes(self) -> None:
+        self._setattr("BUS_TYPE_CONFIGS", [{"name": "Large Bus", "capacity": 42, "max_count": 4}])
+        self._setattr("MIN_SOLVER_VEHICLE_COUNT", 3)
+        points = [_point(0)] + [_point(index, 4) for index in range(1, 7)]
+        matrix = _simple_matrix(len(points))
+
+        routes = self.planner.solve_routes(points, matrix, matrix)
+
+        self.assertGreaterEqual(len(routes), 3)
+        self.assertTrue(all(route["load"] >= 2 for route in routes))
+
     def test_solver_rejects_single_rider_trivial_route(self) -> None:
         points = [_point(0), _point(1, 1)]
         matrix = _simple_matrix(len(points))

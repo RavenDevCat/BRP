@@ -81,13 +81,18 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
         )
 
         class FakePlanner:
+            OSRM_BASE_URL = "original"
             RAW_SOLVER_TIME_MATRIX = [
                 [0, 60, 600],
                 [60, 0, 1200],
                 [600, 1200, 0],
             ]
 
+            def resolve_osrm_base_url(self, _points):
+                return "fake-osrm"
+
             def build_osrm_full_matrix(self, _points):
+                self.OSRM_BASE_URL = "used-fake-osrm"
                 return self.RAW_SOLVER_TIME_MATRIX, self.RAW_SOLVER_TIME_MATRIX
 
         current_plan = {
@@ -107,9 +112,14 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
         }
 
         original_loader = backend_service.load_legacy_planner
+        fake_planner = FakePlanner()
         try:
-            backend_service.load_legacy_planner = lambda: FakePlanner()
+            backend_service.load_legacy_planner = lambda: fake_planner
             budget_minutes = backend_service._auto_current_plan_route_budget_minutes(
+                current_plan,
+                prepared_payload,
+            )
+            budget_details = backend_service._auto_current_plan_route_budget_details(
                 current_plan,
                 prepared_payload,
             )
@@ -117,6 +127,11 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
             backend_service.load_legacy_planner = original_loader
 
         self.assertEqual(budget_minutes, 10)
+        self.assertEqual(fake_planner.OSRM_BASE_URL, "original")
+        self.assertEqual(budget_details["status"], "ready")
+        self.assertEqual(budget_details["minutes"], 10)
+        self.assertEqual(budget_details["longest_route_id"], "r2")
+        self.assertEqual(budget_details["measured_route_count"], 2)
 
 
 if __name__ == "__main__":

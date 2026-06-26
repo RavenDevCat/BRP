@@ -438,6 +438,16 @@ export type WorkbookPreview = {
     fleet: Array<Record<string, unknown>>;
     input_record_count: number;
     subway_aggregation_block_reason?: string | null;
+    auto_route_budget?: {
+        status?: string;
+        source?: string;
+        minutes?: number;
+        longest_route_id?: string;
+        longest_route_duration_minutes?: number;
+        measured_route_count?: number;
+        route_count?: number;
+        reason?: string;
+    };
     suggested_config: PlannerConfigPayload;
 };
 

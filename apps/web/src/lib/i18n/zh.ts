@@ -328,6 +328,17 @@ const zh: Translations = {
         "将本次审计放入固定交通窗口队列，而不是立即执行。",
     "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
         "开启后，上学任务在本地时间 06:00 释放，放学任务在本地时间 15:40 释放。",
+    "Calculating current-plan longest route. Please wait before running the audit.":
+        "正在计算当前计划最长路线，请等待完成后再运行审计。",
+    "Auto-filled from longest current-plan route":
+        "已根据当前计划最长路线自动填写",
+    "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
+        "路线预算计算不可用，请先修正 workbook 或 OSRM 路线数据后再运行审计。",
+    "Upload a workbook to calculate the route budget from the current plan.":
+        "上传 workbook 后会根据当前计划自动计算路线预算。",
+    Calculating: "计算中",
+    "Run audit will unlock after workbook validation and route-budget calculation finish.":
+        "workbook 校验和路线预算计算完成后才能运行审计。",
     "Cancel is available only while a job is scheduled, queued, or running.":
         "只有定时、排队或运行中的任务可以取消。",
 };

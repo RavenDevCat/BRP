@@ -377,6 +377,17 @@ const en: Translations = {
         "Queue this audit for the fixed traffic window instead of running it immediately.",
     "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
         "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.",
+    "Calculating current-plan longest route. Please wait before running the audit.":
+        "Calculating current-plan longest route. Please wait before running the audit.",
+    "Auto-filled from longest current-plan route":
+        "Auto-filled from longest current-plan route",
+    "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
+        "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.",
+    "Upload a workbook to calculate the route budget from the current plan.":
+        "Upload a workbook to calculate the route budget from the current plan.",
+    Calculating: "Calculating",
+    "Run audit will unlock after workbook validation and route-budget calculation finish.":
+        "Run audit will unlock after workbook validation and route-budget calculation finish.",
 
     // Misc
     Export: "Export",

@@ -1517,16 +1517,14 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if block_reason:
         suggested_config["include_subway_aggregation_scenario"] = False
-    try:
-        auto_route_budget_minutes = _auto_route_budget_from_current_plan(
-            client_core,
-            current_plan,
-            suggested_config,
-        )
-    except Exception:
-        auto_route_budget_minutes = None
+    auto_route_budget = _auto_route_budget_from_current_plan(
+        client_core,
+        current_plan,
+        suggested_config,
+    )
+    auto_route_budget_minutes = auto_route_budget.get("minutes")
     if auto_route_budget_minutes is not None:
-        suggested_config["max_route_duration_minutes"] = auto_route_budget_minutes
+        suggested_config["max_route_duration_minutes"] = int(auto_route_budget_minutes)
     return {
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
@@ -1535,6 +1533,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "fleet": list(current_plan.get("fleet") or []),
         "input_record_count": _service_input_record_count(input_records),
         "subway_aggregation_block_reason": block_reason,
+        "auto_route_budget": auto_route_budget,
         "suggested_config": suggested_config,
     }
 
@@ -1547,14 +1546,17 @@ def _route_budget_address_key(item: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
-def _auto_current_plan_route_budget_minutes(
+def _auto_current_plan_route_budget_details(
     current_plan: dict[str, Any],
     prepared_payload: dict[str, Any],
-) -> int | None:
+) -> dict[str, Any] | None:
     points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
     if len(points) < 2:
         return None
-    point_by_address = {_route_budget_address_key(point): int(point["node_id"]) for point in points}
+    point_by_address = {
+        _route_budget_address_key(point): int(point.get("node_id", index) or index)
+        for index, point in enumerate(points)
+    }
     stop_lookup = {
         str(stop.get("stop_id") or "").strip(): dict(stop)
         for stop in list(current_plan.get("stops") or [])
@@ -1574,10 +1576,20 @@ def _auto_current_plan_route_budget_minutes(
 
     planner = load_legacy_planner()
     planner.TRAFFIC_TIME_MULTIPLIER = 1.0
-    time_matrix, _distance_matrix = planner.build_osrm_full_matrix(points)
+    previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
+    try:
+        resolver = getattr(planner, "resolve_osrm_base_url", None)
+        if callable(resolver):
+            planner.OSRM_BASE_URL = resolver(points)
+        time_matrix, _distance_matrix = planner.build_osrm_full_matrix(points)
+    finally:
+        if hasattr(planner, "OSRM_BASE_URL"):
+            planner.OSRM_BASE_URL = previous_osrm_base_url
     raw_time_matrix = getattr(planner, "RAW_SOLVER_TIME_MATRIX", None) or time_matrix
     longest_s = 0
-    for route_stops in route_groups.values():
+    longest_route_id = ""
+    measured_route_count = 0
+    for route_id, route_stops in route_groups.items():
         ordered_stops = sorted(route_stops, key=lambda item: int(item.get("stop_sequence", 0) or 0))
         nodes = [
             point_by_address.get(_route_budget_address_key(stop))
@@ -1587,30 +1599,57 @@ def _auto_current_plan_route_budget_minutes(
         if len(nodes) < 2:
             continue
         route_s = sum(int(raw_time_matrix[a][b] or 0) for a, b in zip(nodes, nodes[1:]))
-        longest_s = max(longest_s, route_s)
+        measured_route_count += 1
+        if route_s > longest_s:
+            longest_s = route_s
+            longest_route_id = route_id
     if longest_s <= 0:
         return None
-    return max(5, min(240, int(math.ceil(longest_s / 60.0))))
+    minutes = max(5, min(240, int(math.ceil(longest_s / 60.0))))
+    return {
+        "status": "ready",
+        "source": "longest_current_plan_osrm_route",
+        "minutes": minutes,
+        "longest_route_id": longest_route_id,
+        "longest_route_duration_minutes": round(longest_s / 60.0, 1),
+        "measured_route_count": measured_route_count,
+        "route_count": len(route_groups),
+    }
+
+
+def _auto_current_plan_route_budget_minutes(
+    current_plan: dict[str, Any],
+    prepared_payload: dict[str, Any],
+) -> int | None:
+    details = _auto_current_plan_route_budget_details(current_plan, prepared_payload)
+    if not details:
+        return None
+    minutes = details.get("minutes")
+    return int(minutes) if minutes is not None else None
 
 
 def _auto_route_budget_from_current_plan(
     client_core: Any,
     current_plan: dict[str, Any],
     config_payload: dict[str, Any],
-) -> int | None:
+) -> dict[str, Any]:
     input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
     if not input_records:
-        return None
-    client_config = _build_client_planner_config(client_core, config_payload)
-    client_prep = client_core.prepare_client_payload(
-        input_records,
-        current_plan_data=current_plan,
-        config=client_config,
-    )
-    return _auto_current_plan_route_budget_minutes(
-        current_plan,
-        dict(client_prep["prepared_payload"]),
-    )
+        return {"status": "unavailable", "reason": "no_input_records"}
+    try:
+        client_config = _build_client_planner_config(client_core, config_payload)
+        client_prep = client_core.prepare_client_payload(
+            input_records,
+            current_plan_data=current_plan,
+            config=client_config,
+        )
+        details = _auto_current_plan_route_budget_details(
+            current_plan,
+            dict(client_prep["prepared_payload"]),
+        )
+    except Exception as exc:
+        return {"status": "unavailable", "reason": exc.__class__.__name__}
+    return details or {"status": "unavailable", "reason": "no_measurable_current_routes"}
 
 
 def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1632,14 +1671,17 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         current_plan_data=current_plan,
         config=client_config,
     )
+    auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
     auto_route_budget_minutes: int | None = None
     try:
-        auto_route_budget_minutes = _auto_current_plan_route_budget_minutes(
+        auto_route_budget = _auto_current_plan_route_budget_details(
             current_plan,
             dict(client_prep["prepared_payload"]),
-        )
+        ) or {"status": "unavailable", "reason": "no_measurable_current_routes"}
+        if auto_route_budget.get("minutes") is not None:
+            auto_route_budget_minutes = int(auto_route_budget["minutes"])
     except Exception:
-        auto_route_budget_minutes = None
+        auto_route_budget = {"status": "unavailable", "reason": "calculation_failed"}
     if auto_route_budget_minutes is not None:
         config_payload["max_route_duration_minutes"] = auto_route_budget_minutes
     job_custom_name = str(payload.get("job_custom_name") or "").strip()
@@ -1667,6 +1709,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
             "excluded_stops": list(client_prep.get("excluded_stops") or []),
             "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
             "logs": str(client_prep.get("logs", "") or ""),
+            "auto_route_budget": auto_route_budget,
             "auto_route_budget_minutes": auto_route_budget_minutes,
         },
     }

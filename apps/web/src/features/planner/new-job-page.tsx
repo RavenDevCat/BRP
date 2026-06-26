@@ -57,6 +57,7 @@ export function NewJobPage() {
     overrides = configOverridesRef.current,
   ) {
     const safeOverrides = { ...overrides };
+    delete safeOverrides.max_route_duration_minutes;
     if (subwayAggregationBlocked) {
       delete safeOverrides.include_subway_aggregation_scenario;
     }
@@ -166,8 +167,26 @@ export function NewJobPage() {
     }
   }
 
+  const autoRouteBudget = preview?.auto_route_budget;
+  const routeBudgetPending = previewMutation.isPending && !preview;
+  const routeBudgetReady = Boolean(
+    preview && autoRouteBudget?.status === "ready" && Number.isFinite(Number(autoRouteBudget.minutes)),
+  );
+  const routeBudgetDetail = routeBudgetPending
+    ? t("Calculating current-plan longest route. Please wait before running the audit.")
+    : autoRouteBudget?.status === "ready"
+      ? `${t("Auto-filled from longest current-plan route")}: ${
+          autoRouteBudget.longest_route_id || t("Unknown")
+        } · ${formatNumber(autoRouteBudget.minutes)} min${
+          autoRouteBudget.longest_route_duration_minutes
+            ? ` (${formatNumber(autoRouteBudget.longest_route_duration_minutes)} min OSRM)`
+            : ""
+        }`
+      : preview
+        ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
+        : t("Upload a workbook to calculate the route budget from the current plan.");
   const busy = previewMutation.isPending || submitMutation.isPending;
-  const canSubmit = Boolean(fileBase64 && preview && !busy);
+  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && !busy);
   const controlsLocked = previewMutation.isPending || submitMutation.isPending;
 
   return (
@@ -319,12 +338,14 @@ export function NewJobPage() {
                     min={10}
                     max={300}
                     step={5}
-                    value={config.max_route_duration_minutes}
+                    value={routeBudgetPending ? "" : config.max_route_duration_minutes}
+                    placeholder={routeBudgetPending ? t("Calculating") : undefined}
                     readOnly
+                    disabled={!preview}
                     title={t("Auto-set from the uploaded current plan after geocoding. This is not a live traffic estimate.")}
                   />
                   <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {t("Auto-set from the longest current-plan OSRM base route after geocoding; actual timing comes from the final AMap audit.")}
+                    {routeBudgetDetail}
                   </div>
                 </Field>
               </div>
@@ -431,7 +452,7 @@ export function NewJobPage() {
                 <Button
                   type="button"
                   disabled={!canSubmit}
-                  title={preview ? undefined : t("Workbook is validating. Run audit will unlock when parsing is complete.")}
+                  title={canSubmit ? undefined : t("Run audit will unlock after workbook validation and route-budget calculation finish.")}
                   icon={submitMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   onClick={() => submitMutation.mutate()}
                 >

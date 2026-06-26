@@ -680,6 +680,17 @@ const ko: Translations = {
     "School / Start": "학교 / 시작",
     Top: "상위",
     "time impacts": "시간 영향",
+    "Calculating current-plan longest route. Please wait before running the audit.":
+        "현재 계획의 최장 노선을 계산 중입니다. 감사 실행 전에 완료될 때까지 기다려 주세요.",
+    "Auto-filled from longest current-plan route":
+        "현재 계획의 최장 노선을 기준으로 자동 입력됨",
+    "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
+        "노선 시간 예산 계산을 사용할 수 없습니다. 감사 실행 전에 워크북 또는 OSRM 노선 데이터를 확인해 주세요.",
+    "Upload a workbook to calculate the route budget from the current plan.":
+        "워크북을 업로드하면 현재 계획 기준으로 노선 시간 예산을 계산합니다.",
+    Calculating: "계산 중",
+    "Run audit will unlock after workbook validation and route-budget calculation finish.":
+        "워크북 검증과 노선 시간 예산 계산이 완료되면 감사 실행이 활성화됩니다.",
 
     // Misc
     Export: "내보내기",

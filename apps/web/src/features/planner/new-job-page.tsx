@@ -172,6 +172,17 @@ export function NewJobPage() {
   const routeBudgetReady = Boolean(
     preview && autoRouteBudget?.status === "ready" && Number.isFinite(Number(autoRouteBudget.minutes)),
   );
+  const amapRouteDetail =
+    autoRouteBudget?.amap_route_status === "ready" &&
+    Number.isFinite(Number(autoRouteBudget.amap_route_duration_minutes))
+      ? `${t("AMap drive time")}: ${formatNumber(autoRouteBudget.amap_route_duration_minutes)} min${
+          Number.isFinite(Number(autoRouteBudget.amap_route_distance_km))
+            ? ` · ${formatNumber(autoRouteBudget.amap_route_distance_km)} km`
+            : ""
+        }`
+      : autoRouteBudget?.amap_route_status === "unavailable"
+        ? `${t("AMap drive time")}: ${t("Unavailable")}`
+        : "";
   const routeBudgetDetail = routeBudgetPending
     ? t("Calculating current-plan longest route. Please wait before running the audit.")
     : autoRouteBudget?.status === "ready"
@@ -181,7 +192,7 @@ export function NewJobPage() {
           autoRouteBudget.longest_route_duration_minutes
             ? ` (${formatNumber(autoRouteBudget.longest_route_duration_minutes)} min OSRM)`
             : ""
-        }`
+        }${amapRouteDetail ? ` · ${amapRouteDetail}` : ""}`
       : preview
         ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
         : t("Upload a workbook to calculate the route budget from the current plan.");

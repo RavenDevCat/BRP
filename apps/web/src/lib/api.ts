@@ -444,6 +444,17 @@ export type WorkbookPreview = {
         minutes?: number;
         longest_route_id?: string;
         longest_route_duration_minutes?: number;
+        longest_route_node_count?: number;
+        amap_route_status?: string;
+        amap_route_reason?: string;
+        amap_route_source?: string;
+        amap_route_duration_minutes?: number;
+        amap_route_distance_km?: number;
+        amap_route_api_calls?: number;
+        amap_route_cache_hits?: number;
+        amap_route_point_count?: number;
+        amap_route_country?: string;
+        amap_route_city?: string;
         measured_route_count?: number;
         route_count?: number;
         reason?: string;

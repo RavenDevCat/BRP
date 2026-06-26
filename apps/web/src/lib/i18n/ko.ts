@@ -688,6 +688,8 @@ const ko: Translations = {
         "노선 시간 예산 계산을 사용할 수 없습니다. 감사 실행 전에 워크북 또는 OSRM 노선 데이터를 확인해 주세요.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "워크북을 업로드하면 현재 계획 기준으로 노선 시간 예산을 계산합니다.",
+    "AMap drive time": "AMap 주행 시간",
+    Unavailable: "사용 불가",
     Calculating: "계산 중",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "워크북 검증과 노선 시간 예산 계산이 완료되면 감사 실행이 활성화됩니다.",

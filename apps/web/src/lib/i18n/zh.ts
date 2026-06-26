@@ -336,6 +336,8 @@ const zh: Translations = {
         "路线预算计算不可用，请先修正 workbook 或 OSRM 路线数据后再运行审计。",
     "Upload a workbook to calculate the route budget from the current plan.":
         "上传 workbook 后会根据当前计划自动计算路线预算。",
+    "AMap drive time": "高德实况行驶时长",
+    Unavailable: "不可用",
     Calculating: "计算中",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "workbook 校验和路线预算计算完成后才能运行审计。",

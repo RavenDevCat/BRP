@@ -37,7 +37,10 @@ try:
     from .quota_store_sqlite import SqliteQuotaStore
     from .runtime_store_sqlite import SqliteRuntimeStore
     from .planner_core import (
+        FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
+        _amap_route_stats,
+        _route_amap_points,
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
@@ -60,7 +63,10 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from quota_store_sqlite import SqliteQuotaStore
     from runtime_store_sqlite import SqliteRuntimeStore
     from planner_core import (
+        FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
+        _amap_route_stats,
+        _route_amap_points,
         build_baseline_template_workbook_bytes,
         build_excel_template_bytes,
         infer_traffic_location,
@@ -1546,6 +1552,77 @@ def _route_budget_address_key(item: dict[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def _auto_route_budget_location(
+    current_plan: dict[str, Any],
+    points: list[dict[str, Any]],
+) -> tuple[str, str]:
+    country, city = infer_traffic_location(
+        [dict(item) for item in list(current_plan.get("input_records") or [])]
+    )
+    if country:
+        return str(country).upper(), str(city or "")
+    for item in [*points, *list(current_plan.get("stops") or [])]:
+        raw_country = str(dict(item or {}).get("country") or "").strip()
+        raw_city = str(dict(item or {}).get("city") or "").strip()
+        if raw_country.upper() in {"CN", "CHINA"} or raw_country in {"中国", "中國"}:
+            return "CHINA", raw_city
+    return "", ""
+
+
+def _attach_longest_route_amap_details(
+    planner: Any,
+    details: dict[str, Any],
+    current_plan: dict[str, Any],
+    points: list[dict[str, Any]],
+    route_nodes: list[int],
+) -> None:
+    country, city = _auto_route_budget_location(current_plan, points)
+    details["amap_route_country"] = country
+    details["amap_route_city"] = city
+    if country != "CHINA":
+        details["amap_route_status"] = "not_applicable"
+        details["amap_route_reason"] = "non_china_location"
+        return
+    if not str(getattr(planner, "AMAP_KEY", "") or "").strip():
+        details["amap_route_status"] = "unavailable"
+        details["amap_route_reason"] = "missing_amap_key"
+        return
+    if len(route_nodes) < 2:
+        details["amap_route_status"] = "unavailable"
+        details["amap_route_reason"] = "missing_route_nodes"
+        return
+
+    try:
+        cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
+        state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
+        request_points = _route_amap_points(points, {"nodes": route_nodes})
+        stats = _amap_route_stats(planner, request_points, cache, state)
+        if state.get("cache_changed"):
+            save_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH, cache, sort_keys=True)
+    except Exception as exc:
+        details["amap_route_status"] = "unavailable"
+        details["amap_route_reason"] = exc.__class__.__name__
+        return
+
+    if not stats:
+        details["amap_route_status"] = "unavailable"
+        details["amap_route_reason"] = "no_amap_route"
+        return
+    duration_s = float(stats.get("duration_s", 0.0) or 0.0)
+    distance_m = float(stats.get("distance_m", 0.0) or 0.0)
+    details.update(
+        {
+            "amap_route_status": "ready",
+            "amap_route_source": stats.get("source"),
+            "amap_route_duration_minutes": round(duration_s / 60.0, 1),
+            "amap_route_distance_km": round(distance_m / 1000.0, 1),
+            "amap_route_api_calls": int(state.get("api_calls", 0) or 0),
+            "amap_route_cache_hits": int(state.get("cache_hits", 0) or 0),
+            "amap_route_point_count": len(request_points),
+        }
+    )
+
+
 def _auto_current_plan_route_budget_details(
     current_plan: dict[str, Any],
     prepared_payload: dict[str, Any],
@@ -1588,6 +1665,7 @@ def _auto_current_plan_route_budget_details(
     raw_time_matrix = getattr(planner, "RAW_SOLVER_TIME_MATRIX", None) or time_matrix
     longest_s = 0
     longest_route_id = ""
+    longest_route_nodes: list[int] = []
     measured_route_count = 0
     for route_id, route_stops in route_groups.items():
         ordered_stops = sorted(route_stops, key=lambda item: int(item.get("stop_sequence", 0) or 0))
@@ -1603,18 +1681,23 @@ def _auto_current_plan_route_budget_details(
         if route_s > longest_s:
             longest_s = route_s
             longest_route_id = route_id
+            longest_route_nodes = nodes
     if longest_s <= 0:
         return None
     minutes = max(5, min(240, int(math.ceil(longest_s / 60.0))))
-    return {
+    details = {
         "status": "ready",
         "source": "longest_current_plan_osrm_route",
         "minutes": minutes,
         "longest_route_id": longest_route_id,
         "longest_route_duration_minutes": round(longest_s / 60.0, 1),
+        "longest_route_node_count": len(longest_route_nodes),
         "measured_route_count": measured_route_count,
         "route_count": len(route_groups),
     }
+    _attach_longest_route_amap_details(planner, details, current_plan, points, longest_route_nodes)
+    return details
+
 
 
 def _auto_current_plan_route_budget_minutes(

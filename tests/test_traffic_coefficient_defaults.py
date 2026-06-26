@@ -132,6 +132,76 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
         self.assertEqual(budget_details["minutes"], 10)
         self.assertEqual(budget_details["longest_route_id"], "r2")
         self.assertEqual(budget_details["measured_route_count"], 2)
+        self.assertEqual(budget_details["amap_route_status"], "unavailable")
+        self.assertEqual(budget_details["amap_route_reason"], "missing_amap_key")
+
+    def test_auto_budget_includes_amap_longest_route_note(self) -> None:
+        class FakePlanner:
+            AMAP_KEY = "fake"
+            OSRM_BASE_URL = "original"
+            RAW_SOLVER_TIME_MATRIX = [
+                [0, 60, 780],
+                [60, 0, 1200],
+                [780, 1200, 0],
+            ]
+
+            def resolve_osrm_base_url(self, _points):
+                return "fake-osrm"
+
+            def build_osrm_full_matrix(self, _points):
+                return self.RAW_SOLVER_TIME_MATRIX, self.RAW_SOLVER_TIME_MATRIX
+
+        current_plan = {
+            "stops": [
+                {"route_id": "r1", "stop_sequence": 1, "country": "CN", "city": "Shanghai", "address": "school"},
+                {"route_id": "r1", "stop_sequence": 2, "country": "CN", "city": "Shanghai", "address": "a"},
+                {"route_id": "r2", "stop_sequence": 1, "country": "CN", "city": "Shanghai", "address": "school"},
+                {"route_id": "r2", "stop_sequence": 2, "country": "CN", "city": "Shanghai", "address": "b"},
+            ]
+        }
+        prepared_payload = {
+            "original_points": [
+                {"node_id": 0, "country": "CN", "city": "Shanghai", "address": "school", "lat": 31.2, "lng": 121.4},
+                {"node_id": 1, "country": "CN", "city": "Shanghai", "address": "a", "lat": 31.21, "lng": 121.41},
+                {"node_id": 2, "country": "CN", "city": "Shanghai", "address": "b", "lat": 31.3, "lng": 121.5},
+            ]
+        }
+
+        def fake_amap_stats(_planner, request_points, _cache, state):
+            self.assertEqual(request_points, [(31.2, 121.4), (31.3, 121.5)])
+            state["api_calls"] = 1
+            return {
+                "duration_s": 900,
+                "distance_m": 12345,
+                "source": "amap_final_route",
+            }
+
+        original_loader = backend_service.load_legacy_planner
+        original_amap_stats = backend_service._amap_route_stats
+        original_load_json = backend_service.load_json_object
+        original_save_json = backend_service.save_json_object
+        try:
+            backend_service.load_legacy_planner = lambda: FakePlanner()
+            backend_service._amap_route_stats = fake_amap_stats
+            backend_service.load_json_object = lambda _path: {}
+            backend_service.save_json_object = lambda *_args, **_kwargs: None
+            budget_details = backend_service._auto_current_plan_route_budget_details(
+                current_plan,
+                prepared_payload,
+            )
+        finally:
+            backend_service.load_legacy_planner = original_loader
+            backend_service._amap_route_stats = original_amap_stats
+            backend_service.load_json_object = original_load_json
+            backend_service.save_json_object = original_save_json
+
+        self.assertEqual(budget_details["status"], "ready")
+        self.assertEqual(budget_details["minutes"], 13)
+        self.assertEqual(budget_details["longest_route_id"], "r2")
+        self.assertEqual(budget_details["amap_route_status"], "ready")
+        self.assertEqual(budget_details["amap_route_duration_minutes"], 15.0)
+        self.assertEqual(budget_details["amap_route_distance_km"], 12.3)
+        self.assertEqual(budget_details["amap_route_api_calls"], 1)
 
 
 if __name__ == "__main__":

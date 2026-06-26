@@ -385,6 +385,8 @@ const en: Translations = {
         "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "Upload a workbook to calculate the route budget from the current plan.",
+    "AMap drive time": "AMap drive time",
+    Unavailable: "Unavailable",
     Calculating: "Calculating",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "Run audit will unlock after workbook validation and route-budget calculation finish.",

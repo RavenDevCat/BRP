@@ -289,6 +289,9 @@ class JobQueueManager:
             )
             raise
 
+        threading.Thread(
+            target=process.wait, name=f"brp-job-worker-reaper-{process.pid}", daemon=True
+        ).start()
         self.gate.attach_worker(slot_path, int(process.pid))
         updated = self.job_store.update_job(
             normalized_job_id,

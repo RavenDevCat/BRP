@@ -198,13 +198,13 @@ function SummaryPanel({
           label="Free optimization"
           value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
           tone={freeOptimization ? scenarioTrafficTone(freeOptimization, "success") : "warning"}
-          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; AM window is checked after routing.") : ""}
+          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; final time window is checked after routing.") : ""}
         />
         <MetricCard
           label="15-min constrained"
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
-          detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; AM window is checked after routing.") : ""}
+          detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; final time window is checked after routing.") : ""}
         />
         <MetricCard
           label="Data review"
@@ -2421,10 +2421,10 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
 function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">): string {
   const status = stringValue(scenario.trafficGate.status);
   if (status === "passed") {
-    return "AM window passed";
+    return "Time window passed";
   }
   if (status === "failed") {
-    return "AM window failed";
+    return "Time window failed";
   }
   if (status === "unavailable") {
     return "AMap verification incomplete";
@@ -2459,10 +2459,10 @@ function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
   return scenarios.flatMap(([label, gate]) => {
     const status = stringValue(gate.status);
     if (status === "failed") {
-      return [`${label} failed the 06:00-08:00 AM time-window check; do not treat its vehicle saving as adoption-ready.`];
+      return [`${label} failed the final time-window check; do not treat its vehicle saving as adoption-ready.`];
     }
     if (status === "unavailable") {
-      return [`${label} did not complete AMap AM time-window verification; review before adoption.`];
+      return [`${label} did not complete AMap final time-window verification; review before adoption.`];
     }
     return [];
   });
@@ -2510,11 +2510,11 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
   const amStatus = String(amGate.status || "");
   const amWindowSummary =
     amStatus === "failed"
-      ? `AM window failed (${formatNumber(amGate.failed_route_count)} routes)`
+      ? `Time window failed (${formatNumber(amGate.failed_route_count)} routes)`
       : amStatus === "unavailable"
-        ? `AM window unverified (${formatNumber(amGate.unavailable_route_count)} routes)`
+        ? `Time window unverified (${formatNumber(amGate.unavailable_route_count)} routes)`
         : amStatus === "passed"
-          ? "AM window passed"
+          ? "Time window passed"
           : "";
   const mapSummary = `${formatNumber(data.summary.route_count)} routes · ${formatNumber(data.summary.stop_count)} stops · ${formatNumber(data.summary.passenger_count)} riders${amWindowSummary ? ` · ${amWindowSummary}` : ""}`;
   const standaloneTileUrls = ["https://tile.openstreetmap.de/{z}/{x}/{y}.png"];
@@ -2889,7 +2889,7 @@ function buildAiReportHtml({
   ${markdownToHtml(stringValue(report.report_markdown))}
   <h2>${htmlEscape(t("Scenario Evidence"))}</h2>
   <table>
-    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("AM Window"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
+    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("Time Window"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
     <tbody>${scenarioRows}</tbody>
   </table>
   <h2>${htmlEscape(t("Top Suggested Actions"))}</h2>
@@ -3066,7 +3066,7 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
       const delay = Number(gate.max_estimated_arrival_delay_minutes || 0);
       const attempts = asRecordArray(gate.replan_attempts).length;
       const details = [
-        failed > 0 ? `${formatNumber(failed)} route(s) outside AM window` : "",
+        failed > 0 ? `${formatNumber(failed)} route(s) outside time window` : "",
         delay > 0 ? `max ${formatNumber(Math.round(delay))} min` : "",
         attempts > 0 ? `replanned ${formatNumber(attempts)}` : "",
       ].filter(Boolean);
@@ -3107,7 +3107,7 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const routeIds = asStringArray(attempt.failed_route_ids);
     const shownRoutes = routeIds.slice(0, 6).join(", ");
     const routeText = shownRoutes ? `; affected routes: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
-    return `Round ${index + 1}: ${formatNumber(failed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+    return `Round ${index + 1}: ${formatNumber(failed)} route(s) outside final time window, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
   });
   vehicleAttempts.forEach((attempt, index) => {
     const targetBusCount = Number(attempt.target_bus_count || 0);
@@ -3115,17 +3115,17 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const failed = Number(attempt.failed_route_count || 0);
     const delay = Number(attempt.max_estimated_arrival_delay_minutes || 0);
     const attemptStatus = stringValue(attempt.status);
-    const passed = attemptStatus === "passed" || attemptStatus === "not_applicable" || attemptStatus === "disabled";
+    const passed = attemptStatus === "passed";
     steps.push(
       passed
-        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the 06:00-08:00 check.`
-        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(delay))} min over.`
+        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the final time-window check.`
+        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} route(s) outside final time window, max ${formatNumber(Math.round(delay))} min over.`
     );
   });
   steps.push(
     status === "passed"
-      ? `Final check passed: all checked routes fit 06:00-08:00.`
-      : `Final check failed: ${formatNumber(finalFailed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`
+      ? `Final check passed: all checked routes fit the final time window.`
+      : `Final check failed: ${formatNumber(finalFailed)} route(s) outside final time window, max ${formatNumber(Math.round(finalDelay))} min over.`
   );
   return {
     label,
@@ -3134,8 +3134,8 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     neutral: false,
     summary:
       status === "passed"
-        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final AM check passed.`
-        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} route(s) still outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`,
+        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final time-window check passed.`
+        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} route(s) still outside final time window, max ${formatNumber(Math.round(finalDelay))} min over.`,
     steps,
   };
 }

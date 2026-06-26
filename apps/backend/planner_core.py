@@ -109,6 +109,10 @@ AM_ARRIVAL_GATE_GRACE_MINUTES = max(
     0.0,
     float(os.environ.get("BRP_AM_ARRIVAL_GATE_GRACE_MINUTES", "0") or 0),
 )
+PM_ROUTE_GATE_GRACE_MINUTES = max(
+    0.0,
+    float(os.environ.get("BRP_PM_ROUTE_GATE_GRACE_MINUTES", "0") or 0),
+)
 AM_EARLIEST_DEPARTURE_MINUTES = 6 * 60
 AM_LATEST_ARRIVAL_MINUTES = 8 * 60
 FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED = os.environ.get(
@@ -1792,8 +1796,10 @@ def attach_final_route_traffic_gate(
     scenario_label: str,
 ) -> dict[str, Any]:
     service_direction = normalize_service_direction(config.service_direction)
+    is_to_school = service_direction == "To School"
     country, city = infer_traffic_location(input_records)
     routes = list(scenario.get("routes") or [])
+    route_duration_limit_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
     gate: dict[str, Any] = {
         "enabled": bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
         "scenario": scenario_label,
@@ -1802,6 +1808,8 @@ def attach_final_route_traffic_gate(
         "city": city,
         "provider": "amap",
         "target_arrival_label": str(config.to_school_arrival_time or "08:00"),
+        "target_departure_label": str(config.from_school_departure_time or "15:40"),
+        "target_duration_minutes": route_duration_limit_s / 60.0 if route_duration_limit_s > 0 else None,
         "checked_route_count": 0,
         "failed_route_count": 0,
         "failed_route_ids": [],
@@ -1813,11 +1821,6 @@ def attach_final_route_traffic_gate(
     }
     if not FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED:
         gate["status"] = "disabled"
-        scenario["traffic_gate"] = gate
-        return gate
-    if service_direction != "To School":
-        gate["status"] = "not_applicable"
-        gate["reason"] = "non_am_to_school_direction"
         scenario["traffic_gate"] = gate
         return gate
     if country != "CHINA":
@@ -1834,11 +1837,13 @@ def attach_final_route_traffic_gate(
     cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
     state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
     target_minutes = _parse_minutes_clock(config.to_school_arrival_time, AM_LATEST_ARRIVAL_MINUTES)
+    departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
     earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
-    grace_s = AM_ARRIVAL_GATE_GRACE_MINUTES * 60.0
+    grace_s = (AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES) * 60.0
     for route_index, route in enumerate(routes, start=1):
         planned_total_s = float(route.get("time_s", 0.0) or 0.0)
         stop_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
+        target_duration_s = route_duration_limit_s if route_duration_limit_s > 0 else planned_total_s
         verification: dict[str, Any] = {
             "scenario": scenario_label,
             "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
@@ -1848,9 +1853,13 @@ def attach_final_route_traffic_gate(
             "earliest_departure_label": _format_minutes_clock(earliest_departure_minutes),
             "latest_arrival_minutes": latest_arrival_minutes,
             "latest_arrival_label": _format_minutes_clock(latest_arrival_minutes),
+            "target_departure_minutes": departure_minutes,
+            "target_departure_label": _format_minutes_clock(departure_minutes),
+            "target_duration_s": target_duration_s,
+            "target_duration_minutes": target_duration_s / 60.0 if target_duration_s > 0 else None,
             "planned_total_duration_s": planned_total_s,
             "planned_stop_service_s": stop_service_s,
-            "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
+            "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES,
         }
         try:
             stats = _amap_route_stats(planner, _route_amap_points(points, route), cache, state)
@@ -1864,10 +1873,15 @@ def attach_final_route_traffic_gate(
             continue
         verified_drive_s = float(stats.get("duration_s", 0.0) or 0.0)
         verified_total_s = verified_drive_s + stop_service_s
-        latest_departure_minutes = latest_arrival_minutes - (verified_total_s / 60.0)
-        time_window_overrun_s = max(0.0, (earliest_departure_minutes - latest_departure_minutes) * 60.0)
-        scheduled_departure_minutes = max(earliest_departure_minutes, latest_departure_minutes)
-        scheduled_arrival_minutes = scheduled_departure_minutes + (verified_total_s / 60.0)
+        if is_to_school:
+            latest_departure_minutes = latest_arrival_minutes - (verified_total_s / 60.0)
+            time_window_overrun_s = max(0.0, (earliest_departure_minutes - latest_departure_minutes) * 60.0)
+            scheduled_departure_minutes = max(earliest_departure_minutes, latest_departure_minutes)
+            scheduled_arrival_minutes = scheduled_departure_minutes + (verified_total_s / 60.0)
+        else:
+            time_window_overrun_s = max(0.0, verified_total_s - target_duration_s)
+            scheduled_departure_minutes = departure_minutes
+            scheduled_arrival_minutes = departure_minutes + (verified_total_s / 60.0)
         passes = time_window_overrun_s <= grace_s
         gate["checked_route_count"] += 1
         if not passes:
@@ -1919,7 +1933,7 @@ def attach_final_route_traffic_gate(
 
 
 def _traffic_gate_passed(gate: dict[str, Any] | None) -> bool:
-    return str(dict(gate or {}).get("status") or "").strip().lower() in {"passed", "not_applicable", "disabled"}
+    return str(dict(gate or {}).get("status") or "").strip().lower() == "passed"
 
 
 def _cap_bus_type_configs_for_vehicle_count(

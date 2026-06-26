@@ -135,9 +135,20 @@ FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES = max(
     1.0,
     float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", "5") or 5),
 )
+FINAL_ROUTE_TRAFFIC_REPLAN_MAX_STEP_MINUTES = max(
+    FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES,
+    float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_MAX_STEP_MINUTES", "15") or 15),
+)
 FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES = max(
     10.0,
     float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES", "30") or 30),
+)
+FINAL_ROUTE_TRAFFIC_REPLAN_TARGET_FLOOR_RATIO = min(
+    1.0,
+    max(
+        0.1,
+        float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_TARGET_FLOOR_RATIO", "0.7") or 0.7),
+    ),
 )
 TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES = max(
     0.0,
@@ -2116,6 +2127,19 @@ def _next_active_vehicle_count_from_feasibility(
     )
 
 
+def _route_duration_replan_bounds(gate: dict[str, Any] | None) -> tuple[float | None, float | None]:
+    gate = dict(gate or {})
+    if str(gate.get("gate_type") or "").strip() != "route_duration":
+        return None, None
+    target_minutes = float(gate.get("target_duration_minutes", 0.0) or 0.0)
+    if target_minutes <= 0:
+        return None, FINAL_ROUTE_TRAFFIC_REPLAN_MAX_STEP_MINUTES
+    return (
+        target_minutes * FINAL_ROUTE_TRAFFIC_REPLAN_TARGET_FLOOR_RATIO * 60.0,
+        FINAL_ROUTE_TRAFFIC_REPLAN_MAX_STEP_MINUTES,
+    )
+
+
 def _cap_bus_type_configs_for_vehicle_count(
     planner: Any,
     bus_type_configs: list[dict[str, Any]],
@@ -2164,6 +2188,9 @@ def _minimum_solver_vehicle_count(planner: Any, points: list[dict[str, Any]]) ->
 def _next_final_route_replan_limit_seconds(
     current_limit_seconds: float,
     gate: dict[str, Any],
+    *,
+    minimum_limit_seconds: float | None = None,
+    max_step_minutes: float | None = None,
 ) -> float | None:
     if not FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED:
         return None
@@ -2173,7 +2200,11 @@ def _next_final_route_replan_limit_seconds(
         return None
     delay_minutes = float(dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0)
     reduction_minutes = max(FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES, math.ceil(delay_minutes))
+    if max_step_minutes is not None:
+        reduction_minutes = min(reduction_minutes, max(FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES, float(max_step_minutes)))
     min_limit_seconds = FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES * 60.0
+    if minimum_limit_seconds is not None:
+        min_limit_seconds = max(min_limit_seconds, float(minimum_limit_seconds))
     next_limit_seconds = max(min_limit_seconds, float(current_limit_seconds) - reduction_minutes * 60.0)
     if next_limit_seconds >= float(current_limit_seconds) - 1:
         return None
@@ -3575,6 +3606,18 @@ def _normalize_current_plan(current_plan: dict[str, Any] | None) -> dict[str, An
         "summary": dict(current_plan.get("summary") or {}),
         "service_direction": str(current_plan.get("service_direction", "From School") or "From School"),
     }
+
+
+def _current_plan_route_count(current_plan: dict[str, Any] | None) -> int:
+    normalized = _normalize_current_plan(current_plan)
+    if not normalized:
+        return 0
+    route_ids = {
+        str(item.get("route_id", "")).strip()
+        for item in list(normalized.get("assignments") or [])
+        if str(item.get("route_id", "")).strip()
+    }
+    return len(route_ids)
 
 
 def _build_bus_capacity_lookup(config: PlannerConfig, current_plan: dict[str, Any] | None = None) -> dict[str, int]:
@@ -6112,6 +6155,7 @@ def _compute_scenario_without_render(
     points: list[dict[str, Any]],
     scenario_label: str,
     bus_type_configs: list[dict[str, Any]] | None = None,
+    reduced_vehicle_limit: int | None = None,
     node_time_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
     route_traffic_attribution_context: dict[str, Any] | None = None,
@@ -6131,6 +6175,15 @@ def _compute_scenario_without_render(
     previous_gate_route_duration_seconds = getattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS", None)
     if bus_type_configs is not None:
         planner.BUS_TYPE_CONFIGS = deepcopy(bus_type_configs)
+    reduced_vehicle_limit_int = None
+    if reduced_vehicle_limit is not None:
+        reduced_vehicle_limit_int = max(0, int(reduced_vehicle_limit or 0))
+        if reduced_vehicle_limit_int > 0:
+            planner.BUS_TYPE_CONFIGS = _cap_bus_type_configs_for_vehicle_count(
+                planner,
+                list(getattr(planner, "BUS_TYPE_CONFIGS", []) or []),
+                reduced_vehicle_limit_int,
+            )
     full_fleet = planner.build_vehicle_fleet()
     if full_fleet:
         max_physical_capacity = max(planner.solver_capacity_for_vehicle(item) for item in full_fleet)
@@ -6158,13 +6211,14 @@ def _compute_scenario_without_render(
             planner.NODE_TIME_UPPER_BOUNDS = dict(node_time_upper_bounds)
             planner.MIN_SOLVER_VEHICLE_COUNT = max(
                 0,
-                int(scenario_constraint_metadata.get("current_route_count", 0) or 0),
+                int(scenario_constraint_metadata.get("min_solver_vehicle_count", 0) or 0),
             )
             scenario_constraint_metadata.update(
                 {
                     "enabled": bool(node_time_upper_bounds),
                     "bounded_solver_stop_count": len(node_time_upper_bounds),
                     "min_solver_vehicle_count": int(planner.MIN_SOLVER_VEHICLE_COUNT),
+                    "reduced_vehicle_limit": reduced_vehicle_limit_int,
                 }
             )
             if isinstance(time_constraint_metadata, dict):
@@ -6184,6 +6238,8 @@ def _compute_scenario_without_render(
         active_service_direction = normalize_service_direction(active_config.service_direction)
         is_from_school = active_service_direction == "From School"
         max_vehicle_count = _max_vehicle_count_from_bus_type_configs(original_scenario_bus_type_configs)
+        if reduced_vehicle_limit_int is not None and reduced_vehicle_limit_int > 0:
+            max_vehicle_count = min(max_vehicle_count, reduced_vehicle_limit_int)
         gate_name = "route-duration" if is_from_school else "AM arrival"
 
         def solve_with_current_settings(max_replans: int | None = None) -> dict[str, Any]:
@@ -6197,12 +6253,76 @@ def _compute_scenario_without_render(
                     final_routes = planner.solve_routes(points, solve_time, solve_distance)
                 except Exception as exc:
                     if replan_attempt_index > 0 and result:
+                        last_attempt = traffic_replan_attempts[-1] if traffic_replan_attempts else {}
                         if traffic_replan_attempts:
                             traffic_replan_attempts[-1]["error"] = str(exc)
                         planner.log(
                             f"[WARN] {scenario_label} {gate_name} replan failed after "
-                            f"tightening route target to {route_limit_before_s / 60.0:.1f} minutes: {exc}"
+                            f"action {last_attempt.get('action') or 'unknown'} at "
+                            f"{route_limit_before_s / 60.0:.1f} minutes: {exc}"
                         )
+                        fallback_gate = dict(result.get("traffic_gate") or {})
+                        fallback_min_limit_s, fallback_max_step_minutes = _route_duration_replan_bounds(fallback_gate)
+                        fallback_limit_s = _next_final_route_replan_limit_seconds(
+                            float(last_attempt.get("from_route_duration_minutes", route_limit_before_s / 60.0) or 0.0)
+                            * 60.0,
+                            fallback_gate,
+                            minimum_limit_seconds=fallback_min_limit_s,
+                            max_step_minutes=fallback_max_step_minutes,
+                        )
+                        if (
+                            str(last_attempt.get("action") or "") == "increase_active_vehicles"
+                            and fallback_limit_s is not None
+                            and replan_attempt_index < (
+                                max(0, int(max_replans))
+                                if max_replans is not None
+                                else max(
+                                    FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS,
+                                    FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS,
+                                    max_vehicle_count,
+                                )
+                            )
+                        ):
+                            fallback_min_vehicle_count = max(
+                                0,
+                                int(last_attempt.get("from_min_solver_vehicle_count", 0) or 0),
+                            )
+                            fallback_feasibility = dict(result.get("feasibility_report") or {})
+                            planner.MIN_SOLVER_VEHICLE_COUNT = fallback_min_vehicle_count
+                            planner.MAX_ROUTE_DURATION_SECONDS = fallback_limit_s
+                            traffic_replan_attempts.append(
+                                {
+                                    "attempt": replan_attempt_index + 1,
+                                    "action": "tighten_route_target_after_vehicle_error",
+                                    "feasibility_status": str(fallback_feasibility.get("status") or ""),
+                                    "failure_reasons": list(fallback_feasibility.get("failure_reasons") or []),
+                                    "gate_type": fallback_gate.get("gate_type"),
+                                    "bus_count": int(result.get("bus_count", 0) or 0),
+                                    "from_route_duration_minutes": float(
+                                        last_attempt.get("from_route_duration_minutes", route_limit_before_s / 60.0)
+                                        or 0.0
+                                    ),
+                                    "to_route_duration_minutes": fallback_limit_s / 60.0,
+                                    "from_min_solver_vehicle_count": fallback_min_vehicle_count,
+                                    "to_min_solver_vehicle_count": fallback_min_vehicle_count,
+                                    "failed_route_count": int(fallback_gate.get("failed_route_count", 0) or 0),
+                                    "checked_route_count": int(fallback_gate.get("checked_route_count", 0) or 0),
+                                    "unavailable_route_count": int(fallback_gate.get("unavailable_route_count", 0) or 0),
+                                    "api_calls": int(fallback_gate.get("api_calls", 0) or 0),
+                                    "cache_hits": int(fallback_gate.get("cache_hits", 0) or 0),
+                                    "failed_route_ids": list(fallback_gate.get("failed_route_ids") or []),
+                                    "max_estimated_arrival_delay_minutes": float(
+                                        fallback_gate.get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                                    ),
+                                }
+                            )
+                            planner.log(
+                                f"[BACKEND] {scenario_label} falling back to route-target search after "
+                                f"vehicle-floor solve error; vehicle floor {fallback_min_vehicle_count}, "
+                                f"route target {fallback_limit_s / 60.0:.1f} minutes."
+                            )
+                            replan_attempt_index += 1
+                            continue
                         break
                     raise
                 planner.enrich_routes_with_actual_driving(points, final_routes)
@@ -6235,16 +6355,31 @@ def _compute_scenario_without_render(
                 result["feasibility_report"] = feasibility_report
                 replan_limit = FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS if max_replans is None else max(0, int(max_replans))
                 if max_replans is None:
-                    replan_limit = max(replan_limit, FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS)
+                    replan_limit = max(
+                        replan_limit,
+                        FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS,
+                        max_vehicle_count,
+                    )
                 if replan_attempt_index >= replan_limit:
                     break
-                next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
+                min_limit_s, max_step_minutes = _route_duration_replan_bounds(gate)
+                next_limit_s = _next_final_route_replan_limit_seconds(
+                    route_limit_before_s,
+                    gate,
+                    minimum_limit_seconds=min_limit_s,
+                    max_step_minutes=max_step_minutes,
+                )
                 next_min_vehicle_count = _next_active_vehicle_count_from_feasibility(
                     feasibility_report,
                     current_min_vehicle_count,
                 )
+                gate_type = str(dict(gate or {}).get("gate_type") or "")
+                prefer_route_target_search = gate_type == "route_duration" and next_limit_s is not None
                 search_action = "tighten_route_target" if next_limit_s is not None else "none"
-                if next_min_vehicle_count > current_min_vehicle_count:
+                if prefer_route_target_search:
+                    next_min_vehicle_count = current_min_vehicle_count
+                    search_action = "tighten_route_target"
+                elif next_min_vehicle_count > current_min_vehicle_count:
                     next_limit_s = None
                     search_action = "increase_active_vehicles"
                 if next_limit_s is None and next_min_vehicle_count <= current_min_vehicle_count:
@@ -6672,11 +6807,18 @@ def run_backend_planner_with_prepared_data(
             f"({traffic_profile_context})."
         )
         free_baseline_bus_type_configs = build_free_baseline_bus_type_configs(config)
+        current_plan_route_count_for_reduction = _current_plan_route_count(current_plan)
+        reduced_vehicle_limit = (
+            current_plan_route_count_for_reduction - 1
+            if current_plan_route_count_for_reduction > 1
+            else None
+        )
         original_result = _compute_scenario_without_render(
             planner,
             original_points,
             "Free optimization baseline",
             bus_type_configs=free_baseline_bus_type_configs,
+            reduced_vehicle_limit=reduced_vehicle_limit,
             route_traffic_attribution_context=route_traffic_attribution_context,
             route_traffic_fallback_multiplier=traffic_time_multiplier,
         )
@@ -6690,6 +6832,7 @@ def run_backend_planner_with_prepared_data(
                 planner,
                 subway_points,
                 "Subway aggregated",
+                reduced_vehicle_limit=reduced_vehicle_limit,
                 route_traffic_attribution_context=route_traffic_attribution_context,
                 route_traffic_fallback_multiplier=traffic_time_multiplier,
             )
@@ -6703,6 +6846,7 @@ def run_backend_planner_with_prepared_data(
                 planner,
                 nearby_points,
                 "Nearby-address aggregated",
+                reduced_vehicle_limit=reduced_vehicle_limit,
                 route_traffic_attribution_context=route_traffic_attribution_context,
                 route_traffic_fallback_multiplier=traffic_time_multiplier,
             )
@@ -6743,6 +6887,7 @@ def run_backend_planner_with_prepared_data(
                     original_points,
                     "15-minute time-impact constrained optimization",
                     bus_type_configs=free_baseline_bus_type_configs,
+                    reduced_vehicle_limit=reduced_vehicle_limit,
                     node_time_upper_bounds_builder=time_constraint_builder,
                     time_constraint_metadata=time_constraint_metadata,
                     route_traffic_attribution_context=route_traffic_attribution_context,

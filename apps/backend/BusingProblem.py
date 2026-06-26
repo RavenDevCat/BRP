@@ -126,6 +126,10 @@ TRAFFIC_PROFILE_NAME = "Off-Peak"
 TRAFFIC_TIME_MULTIPLIER = 1.0
 TRAFFIC_PROFILE_CONTEXT = "Global default"
 RAW_SOLVER_TIME_MATRIX: list[list[int]] | None = None
+SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED = os.environ.get(
+    "BRP_SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED",
+    "true",
+).strip().lower() not in {"0", "false", "no", "off"}
 SERVICE_DIRECTION = "From School"
 MATRIX_NEAREST_NEIGHBORS = 10
 MATRIX_MAX_CANDIDATE_DISTANCE_KM = 15.0
@@ -1395,6 +1399,8 @@ def subset_matrix(matrix: list[list[int]], nodes: list[int]) -> list[list[int]]:
 
 
 def solver_route_budget_time_matrix(time_matrix: list[list[int]]) -> list[list[int]]:
+    if SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED:
+        return time_matrix
     if (
         RAW_SOLVER_TIME_MATRIX
         and len(RAW_SOLVER_TIME_MATRIX) == len(time_matrix)

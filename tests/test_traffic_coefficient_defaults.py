@@ -57,17 +57,23 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
 
         self.assertEqual(payload["default_traffic_coefficient_mode"], "attributed")
 
-    def test_solver_route_budget_uses_raw_osrm_time(self) -> None:
+    def test_solver_route_budget_uses_traffic_adjusted_time_by_default(self) -> None:
         original_multiplier = BusingProblem.TRAFFIC_TIME_MULTIPLIER
+        original_flag = BusingProblem.SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED
         try:
             BusingProblem.TRAFFIC_TIME_MULTIPLIER = 2.0
+            BusingProblem.SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED = True
             display_matrix, _distance_matrix = BusingProblem.seed_edge_metrics(
                 [{"lat": 0, "lng": 0}, {"lat": 0, "lng": 0.01}]
             )
+            route_budget_matrix = BusingProblem.solver_route_budget_time_matrix(display_matrix)
+            BusingProblem.SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED = False
             raw_matrix = BusingProblem.solver_route_budget_time_matrix(display_matrix)
         finally:
             BusingProblem.TRAFFIC_TIME_MULTIPLIER = original_multiplier
+            BusingProblem.SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED = original_flag
 
+        self.assertEqual(route_budget_matrix[0][1], display_matrix[0][1])
         self.assertLess(raw_matrix[0][1], display_matrix[0][1])
 
     def test_workbook_direction_and_auto_budget_helpers(self) -> None:
@@ -167,11 +173,14 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
             ]
         }
 
+        amap_requests = []
+
         def fake_amap_stats(_planner, request_points, _cache, state):
-            self.assertEqual(request_points, [(31.2, 121.4), (31.3, 121.5)])
-            state["api_calls"] = 1
+            amap_requests.append(list(request_points))
+            state["api_calls"] = int(state.get("api_calls", 0) or 0) + 1
+            duration_s = 900 if request_points[-1] == (31.3, 121.5) else 300
             return {
-                "duration_s": 900,
+                "duration_s": duration_s,
                 "distance_m": 12345,
                 "source": "amap_final_route",
             }
@@ -196,12 +205,19 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
             backend_service.save_json_object = original_save_json
 
         self.assertEqual(budget_details["status"], "ready")
-        self.assertEqual(budget_details["minutes"], 13)
+        self.assertEqual(budget_details["minutes"], 16)
         self.assertEqual(budget_details["longest_route_id"], "r2")
         self.assertEqual(budget_details["amap_route_status"], "ready")
-        self.assertEqual(budget_details["amap_route_duration_minutes"], 15.0)
+        self.assertEqual(budget_details["amap_route_id"], "r2")
+        self.assertEqual(budget_details["amap_route_duration_minutes"], 16.0)
+        self.assertEqual(budget_details["amap_route_drive_duration_minutes"], 15.0)
         self.assertEqual(budget_details["amap_route_distance_km"], 12.3)
-        self.assertEqual(budget_details["amap_route_api_calls"], 1)
+        self.assertEqual(budget_details["amap_route_api_calls"], 2)
+        self.assertEqual(budget_details["amap_route_measured_count"], 2)
+        self.assertEqual(
+            amap_requests,
+            [[(31.2, 121.4), (31.21, 121.41)], [(31.2, 121.4), (31.3, 121.5)]],
+        )
 
 
 if __name__ == "__main__":

@@ -119,6 +119,14 @@ FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS", "2") or 2),
 )
+FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS", "5") or 5),
+)
+FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS", "1") or 1),
+)
 FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES = max(
     1.0,
     float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", "5") or 5),
@@ -1908,6 +1916,51 @@ def attach_final_route_traffic_gate(
     scenario["traffic_gate"] = gate
     scenario["traffic_feasible"] = gate["status"] in {"passed", "not_applicable", "disabled"}
     return gate
+
+
+def _traffic_gate_passed(gate: dict[str, Any] | None) -> bool:
+    return str(dict(gate or {}).get("status") or "").strip().lower() in {"passed", "not_applicable", "disabled"}
+
+
+def _cap_bus_type_configs_for_vehicle_count(
+    planner: Any,
+    bus_type_configs: list[dict[str, Any]],
+    target_vehicle_count: int,
+) -> list[dict[str, Any]]:
+    target_vehicle_count = max(0, int(target_vehicle_count or 0))
+    if target_vehicle_count <= 0:
+        return []
+    expanded: list[dict[str, Any]] = []
+    for item in bus_type_configs:
+        count = max(0, int(item.get("max_count", 0) or 0))
+        for _ in range(count):
+            expanded.append({"name": item.get("name"), "capacity": item.get("capacity")})
+    if not expanded:
+        return deepcopy(bus_type_configs)
+    sorter = getattr(planner, "sort_regular_preference", None)
+    ordered = list(sorter(expanded)) if callable(sorter) else expanded
+    selected = ordered[:target_vehicle_count]
+    counts: dict[tuple[str, int], int] = {}
+    for item in selected:
+        key = (str(item.get("name")), int(item.get("capacity", 0) or 0))
+        counts[key] = counts.get(key, 0) + 1
+    capped: list[dict[str, Any]] = []
+    for item in bus_type_configs:
+        cloned = deepcopy(item)
+        key = (str(cloned.get("name")), int(cloned.get("capacity", 0) or 0))
+        cloned["max_count"] = int(counts.get(key, 0))
+        capped.append(cloned)
+    return capped
+
+
+def _minimum_solver_vehicle_count(planner: Any, points: list[dict[str, Any]]) -> int:
+    fleet = list(getattr(planner, "build_vehicle_fleet")())
+    if not fleet:
+        return 0
+    demand = sum(int(point.get("passenger_count", 0) or 0) for point in points[1:])
+    demand_count = int(getattr(planner, "_minimum_vehicle_count_for_demand")(demand, fleet))
+    stop_count = math.ceil(max(0, len(points) - 1) / max(1, int(getattr(planner, "route_stop_limit")())))
+    return max(1, demand_count, stop_count)
 
 
 def _next_final_route_replan_limit_seconds(
@@ -5927,76 +5980,143 @@ def _compute_scenario_without_render(
         else:
             planner.NODE_TIME_UPPER_BOUNDS = {}
             planner.MIN_SOLVER_VEHICLE_COUNT = 0
-        traffic_replan_attempts: list[dict[str, Any]] = []
-        route_attribution_estimates: list[dict[str, Any]] = []
-        result: dict[str, Any] = {}
-        replan_attempt_index = 0
-        while True:
-            route_limit_before_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
-            try:
-                final_routes = planner.solve_routes(points, solve_time, solve_distance)
-            except Exception as exc:
-                if replan_attempt_index > 0 and result:
-                    if traffic_replan_attempts:
-                        traffic_replan_attempts[-1]["error"] = str(exc)
-                    planner.log(
-                        f"[WARN] {scenario_label} AM arrival replan failed after "
-                        f"tightening route target to {route_limit_before_s / 60.0:.1f} minutes: {exc}"
-                    )
+        original_scenario_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
+
+        def solve_with_current_settings(max_replans: int | None = None) -> dict[str, Any]:
+            traffic_replan_attempts: list[dict[str, Any]] = []
+            route_attribution_estimates: list[dict[str, Any]] = []
+            result: dict[str, Any] = {}
+            replan_attempt_index = 0
+            while True:
+                route_limit_before_s = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
+                try:
+                    final_routes = planner.solve_routes(points, solve_time, solve_distance)
+                except Exception as exc:
+                    if replan_attempt_index > 0 and result:
+                        if traffic_replan_attempts:
+                            traffic_replan_attempts[-1]["error"] = str(exc)
+                        planner.log(
+                            f"[WARN] {scenario_label} AM arrival replan failed after "
+                            f"tightening route target to {route_limit_before_s / 60.0:.1f} minutes: {exc}"
+                        )
+                        break
+                    raise
+                planner.enrich_routes_with_actual_driving(points, final_routes)
+                route_attribution_estimates = apply_attributed_traffic_to_scenario_routes(
+                    final_routes,
+                    route_traffic_attribution_context,
+                    float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
+                    scenario_label,
+                    points=points,
+                )
+                planner.annotate_and_price_routes(points, final_routes)
+                result = planner.build_scenario_result(points, final_routes, "")
+                result["output_html"] = ""
+                gate = attach_final_route_traffic_gate(
+                    planner,
+                    result,
+                    points,
+                    getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
+                    list(getattr(planner, "INPUT_STOPS", []) or []),
+                    scenario_label,
+                )
+                replan_limit = FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS if max_replans is None else max(0, int(max_replans))
+                if replan_attempt_index >= replan_limit:
                     break
-                raise
-            planner.enrich_routes_with_actual_driving(points, final_routes)
-            route_attribution_estimates = apply_attributed_traffic_to_scenario_routes(
-                final_routes,
-                route_traffic_attribution_context,
-                float(route_traffic_fallback_multiplier or getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0) or 1.0),
-                scenario_label,
-                points=points,
-            )
-            planner.annotate_and_price_routes(points, final_routes)
-            result = planner.build_scenario_result(points, final_routes, "")
-            result["output_html"] = ""
-            gate = attach_final_route_traffic_gate(
-                planner,
-                result,
-                points,
-                getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
-                list(getattr(planner, "INPUT_STOPS", []) or []),
-                scenario_label,
-            )
-            if replan_attempt_index >= FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS:
-                break
-            next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
-            if next_limit_s is None:
-                break
-            traffic_replan_attempts.append(
-                {
-                    "attempt": replan_attempt_index + 1,
-                    "from_route_duration_minutes": route_limit_before_s / 60.0,
-                    "to_route_duration_minutes": next_limit_s / 60.0,
-                    "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
-                    "checked_route_count": int(dict(gate or {}).get("checked_route_count", 0) or 0),
-                    "unavailable_route_count": int(dict(gate or {}).get("unavailable_route_count", 0) or 0),
-                    "api_calls": int(dict(gate or {}).get("api_calls", 0) or 0),
-                    "cache_hits": int(dict(gate or {}).get("cache_hits", 0) or 0),
-                    "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
-                    "max_estimated_arrival_delay_minutes": float(
-                        dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
-                    ),
+                next_limit_s = _next_final_route_replan_limit_seconds(route_limit_before_s, gate)
+                if next_limit_s is None:
+                    break
+                traffic_replan_attempts.append(
+                    {
+                        "attempt": replan_attempt_index + 1,
+                        "from_route_duration_minutes": route_limit_before_s / 60.0,
+                        "to_route_duration_minutes": next_limit_s / 60.0,
+                        "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                        "checked_route_count": int(dict(gate or {}).get("checked_route_count", 0) or 0),
+                        "unavailable_route_count": int(dict(gate or {}).get("unavailable_route_count", 0) or 0),
+                        "api_calls": int(dict(gate or {}).get("api_calls", 0) or 0),
+                        "cache_hits": int(dict(gate or {}).get("cache_hits", 0) or 0),
+                        "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
+                        "max_estimated_arrival_delay_minutes": float(
+                            dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                        ),
+                    }
+                )
+                planner.log(
+                    f"[BACKEND] {scenario_label} failed AM arrival gate; "
+                    f"tightening route target from {route_limit_before_s / 60.0:.1f} "
+                    f"to {next_limit_s / 60.0:.1f} minutes and resolving."
+                )
+                planner.MAX_ROUTE_DURATION_SECONDS = next_limit_s
+                replan_attempt_index += 1
+            if traffic_replan_attempts:
+                result["traffic_replan_attempts"] = traffic_replan_attempts
+                traffic_gate = dict(result.get("traffic_gate") or {})
+                traffic_gate["replan_enabled"] = bool(FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED)
+                traffic_gate["replan_attempts"] = traffic_replan_attempts
+                result["traffic_gate"] = traffic_gate
+            result["_route_attribution_estimates"] = route_attribution_estimates
+            return result
+
+        planner.BUS_TYPE_CONFIGS = deepcopy(original_scenario_bus_type_configs)
+        planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
+        result = solve_with_current_settings()
+        route_attribution_estimates = list(result.pop("_route_attribution_estimates", []) or [])
+
+        vehicle_search_attempts: list[dict[str, Any]] = []
+        if _traffic_gate_passed(dict(result.get("traffic_gate") or {})):
+            min_vehicle_count = _minimum_solver_vehicle_count(planner, points)
+            selected_bus_count = int(result.get("bus_count", 0) or 0)
+            target_bus_count = selected_bus_count - 1
+            search_count = 0
+            while (
+                FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS > 0
+                and target_bus_count >= min_vehicle_count
+                and search_count < FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS
+            ):
+                search_count += 1
+                planner.BUS_TYPE_CONFIGS = _cap_bus_type_configs_for_vehicle_count(
+                    planner,
+                    original_scenario_bus_type_configs,
+                    target_bus_count,
+                )
+                planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
+                attempt: dict[str, Any] = {
+                    "attempt": search_count,
+                    "target_bus_count": target_bus_count,
                 }
-            )
-            planner.log(
-                f"[BACKEND] {scenario_label} failed AM arrival gate; "
-                f"tightening route target from {route_limit_before_s / 60.0:.1f} "
-                f"to {next_limit_s / 60.0:.1f} minutes and resolving."
-            )
-            planner.MAX_ROUTE_DURATION_SECONDS = next_limit_s
-            replan_attempt_index += 1
-        if traffic_replan_attempts:
-            result["traffic_replan_attempts"] = traffic_replan_attempts
+                try:
+                    candidate = solve_with_current_settings(FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS)
+                    candidate_estimates = list(candidate.pop("_route_attribution_estimates", []) or [])
+                    gate = dict(candidate.get("traffic_gate") or {})
+                    candidate_bus_count = int(candidate.get("bus_count", 0) or 0)
+                    attempt.update(
+                        {
+                            "status": str(gate.get("status") or "unknown"),
+                            "bus_count": candidate_bus_count,
+                            "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
+                            "max_estimated_arrival_delay_minutes": float(
+                                gate.get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                            ),
+                        }
+                    )
+                    vehicle_search_attempts.append(attempt)
+                    if _traffic_gate_passed(gate):
+                        result = candidate
+                        route_attribution_estimates = candidate_estimates
+                        selected_bus_count = candidate_bus_count
+                        target_bus_count = selected_bus_count - 1
+                        continue
+                    break
+                except Exception as exc:
+                    attempt.update({"status": "error", "error": str(exc)})
+                    vehicle_search_attempts.append(attempt)
+                    break
+        if vehicle_search_attempts:
+            result["traffic_vehicle_search_attempts"] = vehicle_search_attempts
             traffic_gate = dict(result.get("traffic_gate") or {})
-            traffic_gate["replan_enabled"] = bool(FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED)
-            traffic_gate["replan_attempts"] = traffic_replan_attempts
+            traffic_gate["vehicle_search_enabled"] = True
+            traffic_gate["vehicle_search_attempts"] = vehicle_search_attempts
             result["traffic_gate"] = traffic_gate
         if route_attribution_estimates:
             result["traffic_route_attribution"] = {

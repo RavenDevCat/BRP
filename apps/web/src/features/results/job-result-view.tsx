@@ -3096,6 +3096,7 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     };
   }
   const attempts = asRecordArray(gate.replan_attempts);
+  const vehicleAttempts = asRecordArray(gate.vehicle_search_attempts);
   const finalFailed = Number(gate.failed_route_count || 0);
   const finalDelay = Number(gate.max_estimated_arrival_delay_minutes || 0);
   const steps = attempts.map((attempt, index) => {
@@ -3107,6 +3108,19 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     const shownRoutes = routeIds.slice(0, 6).join(", ");
     const routeText = shownRoutes ? `; affected routes: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
     return `Round ${index + 1}: ${formatNumber(failed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+  });
+  vehicleAttempts.forEach((attempt, index) => {
+    const targetBusCount = Number(attempt.target_bus_count || 0);
+    const busCount = Number(attempt.bus_count || 0);
+    const failed = Number(attempt.failed_route_count || 0);
+    const delay = Number(attempt.max_estimated_arrival_delay_minutes || 0);
+    const attemptStatus = stringValue(attempt.status);
+    const passed = attemptStatus === "passed" || attemptStatus === "not_applicable" || attemptStatus === "disabled";
+    steps.push(
+      passed
+        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the 06:00-08:00 check.`
+        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} route(s) outside 06:00-08:00, max ${formatNumber(Math.round(delay))} min over.`
+    );
   });
   steps.push(
     status === "passed"
@@ -3120,8 +3134,8 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
     neutral: false,
     summary:
       status === "passed"
-        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); final AM check passed.`
-        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s); ${formatNumber(finalFailed)} route(s) still outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`,
+        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final AM check passed.`
+        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} route(s) still outside 06:00-08:00, max ${formatNumber(Math.round(finalDelay))} min over.`,
     steps,
   };
 }

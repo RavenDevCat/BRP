@@ -94,13 +94,11 @@ deployment only. That counter is persistent runtime state in the SQLite quota
 store. Preserve `BRP_QUOTA_DB_PATH` or `BRP_RUNTIME_DB_PATH` during deploys; if
 `apps/client/cache/google_geocode_usage.json` exists, keep it as a legacy
 migration source and do not reset it to an old verified value.
-KR traffic profile refresh uses Kakao Navi future weekday samples and a
-separate persistent usage counter in the same SQLite quota store. The
-`BRP_KAKAO_NAVI_USAGE_PATH` JSON path is retained only as a legacy migration
-source. Preserve the quota/runtime SQLite DB during KR deploys and use the
-checked-in KR traffic profile wrappers instead of adapting the CN AMap
-live-timer scripts. Do not use Google Routes for Seoul driving profiles unless a
-future verified probe proves coverage has changed.
+KR Route Audit final route validation uses Kakao Navi future directions per job.
+The old weekly KR coefficient sampler/timer is retired for normal production
+operation; the checked-in KR traffic profile wrappers are manual diagnostics
+only. Do not use Google Routes for Seoul driving profiles unless a future
+verified probe proves coverage has changed.
 
 External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, DeepSeek, and the Google geocode relay use the SQLite quota store at
@@ -210,11 +208,10 @@ Provider safety checks:
 - Do not write usage JSON files directly; use the atomic reservation helpers.
 - Preserve the SQLite quota store as runtime coordination state; set
   `BRP_QUOTA_DB_PATH` to an equivalent server-local runtime path when needed.
-- Kakao Navi traffic profile sampling has provider caps in SQLite:
-  keep `BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP`, `BRP_KAKAO_NAVI_DAILY_CAP`, and
-  `BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH` configured on KR. Full weekly KR
-  AM/PM/off-peak refreshes currently need the Kakao daily and per-refresh caps
-  set to at least 500 calls.
+- Kakao Navi final route checks must use future `departure_time` calls, not
+  realtime calls. Keep `BRP_KAKAO_NAVI_MAX_WAYPOINTS`,
+  `BRP_KAKAO_NAVI_TIMEOUT_SECONDS`, `BRP_KAKAO_NAVI_MAX_QPS`, and
+  `BRP_KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS` configured on KR.
 - Provider QPS limiting should gate only outbound requests, not whole jobs.
 - Keep `BRP_MAX_CONCURRENT_JOBS` and `BRP_JOB_CONCURRENCY_DIR` configured on
   shared servers so planner workers queue instead of exhausting memory.

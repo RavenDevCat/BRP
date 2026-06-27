@@ -169,41 +169,23 @@ AI Audit calls use the same limiter family:
 export BRP_DEEPSEEK_MAX_QPS="1.0"
 ```
 
-### KR Kakao Navi traffic profile
+### KR Kakao Navi route timing
 
-The South Korea deployment can refresh weekday traffic profiles with Kakao Navi
-future directions. This is separate from the Google geocode usage counter and
-should use its own persistent usage file. Do not use Google Routes for KR/Seoul
-driving profiles; production probes returned HTTP 200 with empty route results.
-Route-level traffic attribution normalizes Seoul, Incheon, Gyeonggi, and nearby
-Seoul-metro cities into a shared `Seoul Metro` matching bucket while keeping the
-stored sample market as `KR`.
+The South Korea deployment validates Route Audit final route timing with Kakao
+Navi future directions per job. Do not use Google Routes for KR/Seoul driving
+checks; production probes returned HTTP 200 with empty route results. The old
+weekly KR coefficient sampler/timer is retired for normal production operation.
 
 Recommended defaults:
 
 ```bash
-export BRP_LIVE_TRAFFIC_KR_SOURCE="baseline_json"
-export BRP_LIVE_TRAFFIC_KR_PROVIDER="kakao_navi"
-export BRP_LIVE_TRAFFIC_KR_MARKET="KR"
-export BRP_LIVE_TRAFFIC_KR_CITY="Seoul"
-export BRP_LIVE_TRAFFIC_KR_TIMEZONE="Asia/Seoul"
-export BRP_LIVE_TRAFFIC_SAMPLE_DIR="/srv/brp/runtime/traffic_samples"
-export BRP_LIVE_TRAFFIC_KR_BASELINE_DIR="/srv/brp/runtime/traffic_baselines"
-export BRP_LIVE_TRAFFIC_KR_TO_SCHOOL_BASELINE_PATH="..."
-export BRP_LIVE_TRAFFIC_KR_FROM_SCHOOL_BASELINE_PATH="..."
-export BRP_LIVE_TRAFFIC_KR_AM_TARGET_ARRIVAL_LOCAL_TIME="08:00"
-export BRP_LIVE_TRAFFIC_KR_PM_DEPARTURE_LOCAL_TIME="15:40"
-export BRP_LIVE_TRAFFIC_KR_OFF_PEAK_DEPARTURE_LOCAL_TIME="11:00"
-export BRP_KAKAO_NAVI_USAGE_PATH="/srv/brp/runtime/kakao_navi_usage.json"  # legacy migration source
-export BRP_QUOTA_DB_PATH="/srv/brp/runtime/brp_quota.sqlite"
-export BRP_KAKAO_NAVI_MONTHLY_SAFETY_CAP="4000"
-export BRP_KAKAO_NAVI_DAILY_CAP="500"
-export BRP_KAKAO_NAVI_MAX_CALLS_PER_REFRESH="500"
 export BRP_KAKAO_NAVI_MAX_WAYPOINTS="5"
-export BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE="attributed"
+export BRP_KAKAO_NAVI_TIMEOUT_SECONDS="20"
+export BRP_KAKAO_NAVI_MAX_QPS="2.8"
+export BRP_KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS="0"
 ```
 
-Linux/staging validation:
+Historical KR profile wrappers remain available for manual diagnostics only:
 
 ```bash
 ops/scripts/run_live_traffic_kr_weekday_profile.sh all --dry-run
@@ -213,6 +195,11 @@ KR production Windows wrapper:
 
 ```powershell
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
+```
+
+If `BRP-KR-Weekly-Traffic-Profile` exists on KR production, remove it with:
+
+```powershell
 .\ops\scripts\install_live_traffic_kr_timer.ps1
 ```
 
@@ -222,7 +209,8 @@ flags still look old, check for stale `backend_service.py` Python child
 processes and restart through the scheduled task. Do not stop unrelated relay
 processes such as the Google geocode relay.
 
-Do not schedule the KR profile refresh until the source-specific inputs are
+Do not schedule the retired KR profile refresh. If it is used manually for
+diagnostics, make sure the source-specific inputs are
 configured and a dry-run confirms the expected call count. `baseline_json`
 requires To School and From School baseline JSON paths; `route_audit_job`
 requires the corresponding To School, From School, and off-peak job ids.

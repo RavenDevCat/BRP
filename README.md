@@ -175,21 +175,17 @@ Only deploy the regions that a server actually serves. See
 `docs/deployment-overview.md` for the multi-region and South Korea-only startup
 patterns.
 
-## Traffic Profile Sampling
+## Traffic Timing
 
-BRP supports two traffic-profile sampling modes:
+BRP uses region-specific traffic timing sources:
 
 - CN traffic sampling uses AMap driving routes against saved current-plan jobs
   or baseline JSON. The existing AM/PM timers are intended for workday peak
   windows.
-- KR traffic sampling uses Kakao Navi future directions against stable baseline
-  JSON exports. It refreshes Monday-Friday profiles as a batch rather than
-  running a daily realtime timer. Google Routes is not used for KR traffic
-  profiles because Seoul driving probes returned empty routes in production
-  diagnostics. Seoul, Incheon, Gyeonggi, and nearby Seoul-metro cities share one
-  `Seoul Metro` route-attribution bucket for reusable KR traffic factors.
-  Production verification confirmed route-level attributed factors for KR
-  current-plan, free-baseline, and 15-minute constrained Route Audit scenarios.
+- KR Route Audit final validation uses Kakao Navi future directions per job.
+  The old weekly KR coefficient sampler/timer is retired for normal production
+  operation. Google Routes is not used for KR driving checks because Seoul
+  driving probes returned empty routes in production diagnostics.
 - Bangkok currently uses a conservative static traffic multiplier until a richer
   Bangkok traffic-profile sampling strategy is added.
 
@@ -198,30 +194,20 @@ Useful checked-in wrappers:
 ```bash
 # CN/general sampler
 ops/scripts/run_live_traffic_sampler.sh am_peak
-
-# KR profile refresh on Linux/staging: AM, PM, and off-peak for Mon-Fri
-ops/scripts/run_live_traffic_kr_weekday_profile.sh all --dry-run
 ```
 
-KR production uses the Windows PowerShell wrapper:
+Historical KR profile wrappers remain for manual diagnostics only. They should
+not be scheduled for normal production operation.
 
 ```powershell
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
 ```
 
-Kakao Navi profile calls are guarded by `BRP_KAKAO_NAVI_*` caps and a
-persistent `BRP_KAKAO_NAVI_USAGE_PATH` counter. Do not reset that counter
-during deployment.
-
-KR production can install the weekly Windows task with:
+If the retired weekly Windows task exists on KR production, remove it with:
 
 ```powershell
 .\ops\scripts\install_live_traffic_kr_timer.ps1
 ```
-
-The task runs `run_live_traffic_kr_weekly_profile.ps1` every Sunday at 08:00
-server local time and refreshes the upcoming Monday-Friday AM, PM, and
-off-peak profiles.
 
 ## Documentation
 

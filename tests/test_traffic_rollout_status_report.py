@@ -410,8 +410,11 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         self.assertEqual(markets["CN / Shanghai"]["provider"], "amap")
         self.assertFalse(markets["CN / Shanghai"]["required_in_current_environment"])
         self.assertEqual(markets["CN / Shanghai"]["route_sample_count"], 2)
-        self.assertEqual(markets["KR / Seoul Metro"]["status"], "warning")
+        self.assertEqual(markets["KR / Seoul Metro"]["status"], "healthy")
         self.assertFalse(markets["KR / Seoul Metro"]["required_in_current_environment"])
+        self.assertEqual(markets["KR / Seoul Metro"]["traffic_mode"], "final_route_provider")
+        self.assertEqual(markets["KR / Seoul Metro"]["required_periods"], [])
+        self.assertEqual(markets["KR / Seoul Metro"]["warnings"], [])
         self.assertEqual(markets["BK / Bangkok"]["status"], "warning")
         self.assertEqual(markets["BK / Bangkok"]["warnings"], ["static_fallback"])
         self.assertEqual(markets["BK / Bangkok"]["fallback_multiplier"], 1.75)
@@ -427,8 +430,8 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
         markets = {row["label"]: row for row in overview["markets"]}
         self.assertEqual(overview["market_scope"], ["KR"])
         self.assertEqual(list(markets), ["KR / Seoul Metro"])
-        self.assertEqual(markets["KR / Seoul Metro"]["status"], "blocked")
-        self.assertTrue(markets["KR / Seoul Metro"]["required_in_current_environment"])
+        self.assertEqual(markets["KR / Seoul Metro"]["status"], "healthy")
+        self.assertFalse(markets["KR / Seoul Metro"]["required_in_current_environment"])
 
     def test_market_overview_defaults_cn_production_to_cn_and_bangkok(self) -> None:
         with mock.patch.dict(os.environ, {"BRP_DEPLOYMENT_TIER": "production"}, clear=False):
@@ -474,9 +477,6 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
                 ("CN", "Shanghai", "pm_peak"),
                 ("CN", "Suzhou", "am_peak"),
                 ("CN", "Suzhou", "pm_peak"),
-                ("KR", "Seoul Metro", "am_peak"),
-                ("KR", "Seoul Metro", "pm_peak"),
-                ("KR", "Seoul Metro", "off_peak"),
             ],
         )
         self.assertEqual(
@@ -486,9 +486,6 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
                 "shanghai_pm_peak",
                 "suzhou_am_peak",
                 "suzhou_pm_peak",
-                "kr_am_peak",
-                "kr_pm_peak",
-                "kr_off_peak",
             ],
         )
 
@@ -528,15 +525,8 @@ class TrafficRolloutStatusReportTests(unittest.TestCase):
                     profiles = report_traffic_rollout_status.required_profiles_for_current_environment()
                     budget_profiles = report_traffic_rollout_status.budget_profile_names_for_current_environment()
 
-        self.assertEqual(
-            profiles,
-            [
-                ("KR", "Seoul Metro", "am_peak"),
-                ("KR", "Seoul Metro", "pm_peak"),
-                ("KR", "Seoul Metro", "off_peak"),
-            ],
-        )
-        self.assertEqual(budget_profiles, ["kr_am_peak", "kr_pm_peak", "kr_off_peak"])
+        self.assertEqual(profiles, [])
+        self.assertEqual(budget_profiles, [])
 
     def test_collect_budget_status_passes_scoped_profile_names(self) -> None:
         calls: list[list[str]] = []

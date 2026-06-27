@@ -22,9 +22,11 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 try:
+    from .api_rate_limit import CrossProcessRateLimiter
     from .BusingProblem import transpose_matrix
     from .json_cache_store import clear_json_object, load_json_object, save_json_object
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from api_rate_limit import CrossProcessRateLimiter
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
@@ -93,6 +95,33 @@ TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES = max(
     int(os.environ.get("BRP_TRAFFIC_ATTRIBUTION_MIN_GEO_MATCHES", "1") or 1),
 )
 AMAP_TRAFFIC_CALIBRATION_TZ = ZoneInfo("Asia/Shanghai")
+KAKAO_NAVI_MAX_QPS = max(
+    0.1,
+    float(os.environ.get("BRP_KAKAO_NAVI_MAX_QPS", "2.8") or 2.8),
+)
+KAKAO_NAVI_FINAL_ROUTE_LIMITER = CrossProcessRateLimiter("kakao-navi-final-route", KAKAO_NAVI_MAX_QPS)
+KAKAO_NAVI_FUTURE_DIRECTIONS_URL = (
+    os.environ.get("BRP_KAKAO_NAVI_FUTURE_DIRECTIONS_URL", "").strip()
+    or "https://apis-navi.kakaomobility.com/v1/future/directions"
+)
+KAKAO_NAVI_API_KEY = (
+    os.environ.get("KAKAO_MOBILITY_API_KEY", "").strip()
+    or os.environ.get("KAKAO_REST_API_KEY", "").strip()
+    or os.environ.get("KAKAO_API_KEY", "").strip()
+)
+KAKAO_NAVI_PRIORITY = os.environ.get("BRP_KAKAO_NAVI_PRIORITY", "RECOMMEND").strip() or "RECOMMEND"
+KAKAO_NAVI_MAX_WAYPOINTS = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_MAX_WAYPOINTS", "5") or 5),
+)
+KAKAO_NAVI_TIMEOUT_SECONDS = max(
+    1,
+    int(os.environ.get("BRP_KAKAO_NAVI_TIMEOUT_SECONDS", "20") or 20),
+)
+KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS = max(
+    0,
+    int(os.environ.get("BRP_KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS", "0") or 0),
+)
 FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED = os.environ.get(
     "BRP_FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED",
     "true",
@@ -1745,10 +1774,17 @@ def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> l
     return request_points
 
 
-def _final_route_traffic_cache_key(points: list[tuple[float, float]]) -> str:
+def _final_route_traffic_cache_key(
+    points: list[tuple[float, float]],
+    *,
+    provider: str = "amap",
+    departure_time: datetime | None = None,
+) -> str:
     rounded = [[round(lat, 6), round(lng, 6)] for lat, lng in points]
-    digest = hashlib.sha1(json.dumps(rounded, separators=(",", ":")).encode("utf-8")).hexdigest()
-    return f"amap-final-route-v1|{digest}"
+    departure_key = departure_time.isoformat(timespec="minutes") if departure_time else ""
+    payload = {"provider": provider, "departure_time": departure_key, "points": rounded}
+    digest = hashlib.sha1(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+    return f"{provider}-final-route-v2|{digest}"
 
 
 def _amap_route_segment_stats(planner: Any, request_points: list[tuple[float, float]]) -> dict[str, float]:
@@ -1784,7 +1820,7 @@ def _amap_route_stats(
 ) -> dict[str, Any] | None:
     if len(request_points) < 2:
         return None
-    cache_key = _final_route_traffic_cache_key(request_points)
+    cache_key = _final_route_traffic_cache_key(request_points, provider="amap")
     cached = dict(cache.get(cache_key) or {})
     if cached:
         state["cache_hits"] = int(state.get("cache_hits", 0)) + 1
@@ -1822,6 +1858,204 @@ def _amap_route_stats(
     }
 
 
+def _kakao_navi_coord(point: tuple[float, float]) -> str:
+    lat, lng = point
+    return f"{lng:.7f},{lat:.7f}"
+
+
+def _kakao_navi_departure_time(value: datetime) -> str:
+    return value.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d%H%M")
+
+
+def _next_service_datetime(minutes: float | int, country: str) -> datetime:
+    tz = _traffic_timezone(country)
+    now = datetime.now(tz)
+    total = int(round(float(minutes))) % (24 * 60)
+    candidate = now.replace(hour=total // 60, minute=total % 60, second=0, microsecond=0)
+    while candidate <= now + timedelta(minutes=5) or candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _balanced_route_point_chunks(
+    route_points: list[tuple[float, float]],
+    max_intermediates: int,
+) -> list[list[tuple[float, float]]]:
+    total_legs = max(0, len(route_points) - 1)
+    if total_legs <= 0:
+        return []
+    max_legs_per_call = max(1, int(max_intermediates) + 1)
+    if total_legs <= max_legs_per_call:
+        return [route_points]
+    chunk_count = (total_legs + max_legs_per_call - 1) // max_legs_per_call
+    base_legs = total_legs // chunk_count
+    extra = total_legs % chunk_count
+    chunks: list[list[tuple[float, float]]] = []
+    start = 0
+    for index in range(chunk_count):
+        leg_count = base_legs + (1 if index < extra else 0)
+        end = start + leg_count
+        chunks.append(route_points[start : end + 1])
+        start = end
+    return chunks
+
+
+def _kakao_route_segment_stats(
+    request_points: list[tuple[float, float]],
+    departure_time: datetime,
+) -> dict[str, float]:
+    if len(request_points) < 2:
+        return {"duration_s": 0.0, "distance_m": 0.0}
+    if not KAKAO_NAVI_API_KEY:
+        raise RuntimeError("KAKAO_MOBILITY_API_KEY or KAKAO_REST_API_KEY is required for Kakao Navi final route checks")
+    params: dict[str, str] = {
+        "origin": _kakao_navi_coord(request_points[0]),
+        "destination": _kakao_navi_coord(request_points[-1]),
+        "priority": KAKAO_NAVI_PRIORITY,
+        "car_fuel": "GASOLINE",
+        "car_hipass": "false",
+        "alternatives": "false",
+        "road_details": "false",
+        "departure_time": _kakao_navi_departure_time(departure_time),
+    }
+    waypoint_values = [_kakao_navi_coord(point) for point in request_points[1:-1]]
+    if waypoint_values:
+        params["waypoints"] = "|".join(waypoint_values)
+    KAKAO_NAVI_FINAL_ROUTE_LIMITER.wait()
+    response = requests.get(
+        KAKAO_NAVI_FUTURE_DIRECTIONS_URL,
+        headers={
+            "Authorization": f"KakaoAK {KAKAO_NAVI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        params=params,
+        timeout=KAKAO_NAVI_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    routes = list(payload.get("routes") or [])
+    if not routes:
+        code = payload.get("code") or payload.get("result_code") or payload.get("msg")
+        raise RuntimeError(f"Kakao Navi returned no routes: {code or 'empty response'}")
+    route = dict(routes[0] or {})
+    summary = dict(route.get("summary") or {})
+    duration_s = float(summary.get("duration", 0.0) or 0.0)
+    distance_m = float(summary.get("distance", 0.0) or 0.0)
+    if duration_s <= 0:
+        duration_s = sum(float(section.get("duration", 0.0) or 0.0) for section in route.get("sections") or [])
+    if distance_m <= 0:
+        distance_m = sum(float(section.get("distance", 0.0) or 0.0) for section in route.get("sections") or [])
+    if duration_s <= 0:
+        raise RuntimeError("Kakao Navi returned no usable duration")
+    return {"duration_s": duration_s, "distance_m": distance_m}
+
+
+def _kakao_route_stats(
+    request_points: list[tuple[float, float]],
+    cache: dict[str, Any],
+    state: dict[str, int],
+    *,
+    departure_time: datetime,
+) -> dict[str, Any] | None:
+    if len(request_points) < 2:
+        return None
+    cache_key = _final_route_traffic_cache_key(
+        request_points,
+        provider="kakao_navi",
+        departure_time=departure_time,
+    )
+    cached = dict(cache.get(cache_key) or {})
+    if cached:
+        state["cache_hits"] = int(state.get("cache_hits", 0)) + 1
+        return {
+            "duration_s": float(cached.get("duration_s", 0.0) or 0.0),
+            "distance_m": float(cached.get("distance_m", 0.0) or 0.0),
+            "source": "kakao_navi_final_route_cache",
+            "cache_key": cache_key,
+            "departure_time": cached.get("departure_time") or departure_time.isoformat(timespec="seconds"),
+            "segment_count": int(cached.get("segment_count", 0) or 0),
+        }
+    chunks = _balanced_route_point_chunks(request_points, KAKAO_NAVI_MAX_WAYPOINTS)
+    duration_s = 0.0
+    distance_m = 0.0
+    current_departure = departure_time
+    segment_rows: list[dict[str, Any]] = []
+    for index, chunk in enumerate(chunks, start=1):
+        if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
+            return None
+        stats = _kakao_route_segment_stats(chunk, current_departure)
+        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        segment_duration_s = float(stats.get("duration_s", 0.0) or 0.0)
+        segment_distance_m = float(stats.get("distance_m", 0.0) or 0.0)
+        duration_s += segment_duration_s
+        distance_m += segment_distance_m
+        segment_rows.append(
+            {
+                "segment_index": index,
+                "point_count": len(chunk),
+                "departure_time": current_departure.isoformat(timespec="seconds"),
+                "duration_s": segment_duration_s,
+                "distance_m": segment_distance_m,
+            }
+        )
+        current_departure = current_departure + timedelta(
+            seconds=segment_duration_s + KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS
+        )
+    cache[cache_key] = {
+        "created_at": datetime.now(ZoneInfo("Asia/Seoul")).isoformat(timespec="seconds"),
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "point_count": len(request_points),
+        "departure_time": departure_time.isoformat(timespec="seconds"),
+        "segment_count": len(segment_rows),
+        "segments": segment_rows,
+    }
+    state["cache_changed"] = 1
+    return {
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "source": "kakao_navi_final_route",
+        "cache_key": cache_key,
+        "departure_time": departure_time.isoformat(timespec="seconds"),
+        "segment_count": len(segment_rows),
+        "segments": segment_rows,
+    }
+
+
+def _route_provider_departure_datetime(
+    *,
+    country: str,
+    is_to_school: bool,
+    planned_total_s: float,
+    latest_arrival_minutes: int,
+    departure_minutes: int,
+) -> datetime | None:
+    if country != "SOUTH KOREA":
+        return None
+    if is_to_school:
+        planned_departure_minutes = latest_arrival_minutes - (planned_total_s / 60.0)
+        return _next_service_datetime(planned_departure_minutes, country)
+    return _next_service_datetime(departure_minutes, country)
+
+
+def _final_route_stats(
+    planner: Any,
+    provider: str,
+    request_points: list[tuple[float, float]],
+    cache: dict[str, Any],
+    state: dict[str, int],
+    *,
+    departure_time: datetime | None,
+) -> dict[str, Any] | None:
+    if provider == "amap":
+        return _amap_route_stats(planner, request_points, cache, state)
+    if provider == "kakao_navi":
+        if departure_time is None:
+            return None
+        return _kakao_route_stats(request_points, cache, state, departure_time=departure_time)
+    return None
+
+
 def resolve_final_route_traffic_policy(
     planner: Any,
     _config: PlannerConfig,
@@ -1829,11 +2063,18 @@ def resolve_final_route_traffic_policy(
 ) -> TrafficPolicy:
     country, city = infer_traffic_location(input_records)
     country_label = str(country or "").strip().upper()
-    provider = "amap" if country_label == "CHINA" else "none"
-    applicable = country_label == "CHINA"
+    if country_label == "CHINA":
+        provider = "amap"
+    elif country_label == "SOUTH KOREA":
+        provider = "kakao_navi"
+    else:
+        provider = "none"
+    applicable = provider != "none"
     unavailable_reason = None
-    if applicable and not str(getattr(planner, "AMAP_KEY", "") or "").strip():
+    if provider == "amap" and not str(getattr(planner, "AMAP_KEY", "") or "").strip():
         unavailable_reason = "missing_amap_key"
+    elif provider == "kakao_navi" and not KAKAO_NAVI_API_KEY:
+        unavailable_reason = "missing_kakao_navi_key"
     return TrafficPolicy(
         provider=provider,
         country=country,
@@ -1894,7 +2135,7 @@ def attach_final_route_traffic_gate(
         return gate
     if traffic_policy.status() == "not_applicable":
         gate["status"] = "not_applicable"
-        gate["reason"] = "non_china_location"
+        gate["reason"] = "unsupported_final_route_traffic_provider"
         scenario["traffic_gate"] = gate
         return gate
     if traffic_policy.status() == "unavailable":
@@ -1933,8 +2174,22 @@ def attach_final_route_traffic_gate(
             "planned_stop_service_s": stop_service_s,
             "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES,
         }
+        provider_departure_time = _route_provider_departure_datetime(
+            country=country,
+            is_to_school=is_to_school,
+            planned_total_s=planned_total_s,
+            latest_arrival_minutes=latest_arrival_minutes,
+            departure_minutes=departure_minutes,
+        )
         try:
-            stats = _amap_route_stats(planner, _route_amap_points(points, route), cache, state)
+            stats = _final_route_stats(
+                planner,
+                traffic_policy.provider,
+                _route_amap_points(points, route),
+                cache,
+                state,
+                departure_time=provider_departure_time,
+            )
         except Exception as exc:
             stats = None
             verification["error"] = str(exc)
@@ -1992,6 +2247,9 @@ def attach_final_route_traffic_gate(
                 "status": "passed" if passes else "failed",
                 "passes": passes,
                 "verified_source": stats.get("source"),
+                "provider_departure_time": stats.get("departure_time")
+                or (provider_departure_time.isoformat(timespec="seconds") if provider_departure_time else None),
+                "provider_segment_count": stats.get("segment_count"),
                 "verified_drive_duration_s": verified_drive_s,
                 "verified_total_duration_s": verified_total_s,
                 "verified_distance_m": float(stats.get("distance_m", 0.0) or 0.0),

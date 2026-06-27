@@ -1,31 +1,16 @@
 param(
-    [string]$TaskName = "BRP-KR-Weekly-Traffic-Profile",
-    [string]$At = "08:00",
-    [ValidateSet("Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday")]
-    [string]$DayOfWeek = "Sunday"
+    [string]$TaskName = "BRP-KR-Weekly-Traffic-Profile"
 )
 
 $ErrorActionPreference = "Stop"
-$RootDir = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
-$RunnerPath = Join-Path $RootDir "ops\scripts\run_live_traffic_kr_weekly_profile.ps1"
-if (-not (Test-Path -LiteralPath $RunnerPath)) {
-    throw "Missing runner script: $RunnerPath"
+
+$task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if ($null -ne $task) {
+    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
+    Write-Host "Removed retired KR traffic coefficient task: $TaskName"
+} else {
+    Write-Host "Retired KR traffic coefficient task is already absent: $TaskName"
 }
 
-$action = New-ScheduledTaskAction `
-    -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$RunnerPath`"" `
-    -WorkingDirectory $RootDir
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek $DayOfWeek -At ([DateTime]::ParseExact($At, "HH:mm", [Globalization.CultureInfo]::InvariantCulture))
-$principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
-$settings = New-ScheduledTaskSettingsSet `
-    -ExecutionTimeLimit (New-TimeSpan -Hours 2) `
-    -MultipleInstances IgnoreNew `
-    -StartWhenAvailable:$false
-
-$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings
-Register-ScheduledTask -TaskName $TaskName -InputObject $task -Force | Out-Null
-
-Write-Host "Installed $TaskName"
-Write-Host "Schedule: weekly $DayOfWeek at $At server local time"
-Write-Host "Runner: $RunnerPath"
+Write-Host "KR route timing now uses per-job Kakao Navi future directions in the final route gate."
+Write-Host "Do not reinstall weekly KR coefficient sampling for normal production operation."

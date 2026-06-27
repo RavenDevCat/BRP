@@ -1,6 +1,8 @@
 import importlib
 import sys
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
@@ -480,8 +482,8 @@ def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
     assert scenario["traffic_feasible"] is False
 
 
-def test_final_route_traffic_policy_skips_non_china(monkeypatch):
-    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("SOUTH_KOREA", "Seoul"))
+def test_final_route_traffic_policy_skips_unsupported_locations(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("THAILAND", "Bangkok"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
 
     class FakePlanner:
@@ -502,10 +504,111 @@ def test_final_route_traffic_policy_skips_non_china(monkeypatch):
         scenario,
         points,
         planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
-        [{"address": "Seoul"}],
-        "kr-smoke",
+        [{"address": "Bangkok"}],
+        "bk-smoke",
     )
 
     assert gate["status"] == "not_applicable"
     assert gate["provider"] == "none"
     assert gate["traffic_policy"]["status"] == "not_applicable"
+
+
+def test_korea_final_route_traffic_policy_requires_kakao_key(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("SOUTH KOREA", "Seoul Metro"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "KAKAO_NAVI_API_KEY", "")
+
+    class FakePlanner:
+        AMAP_KEY = ""
+
+    scenario = {
+        "routes": [
+            {"route_id": "Bus 1", "nodes": [0, 1], "time_s": 1200, "stop_service_time_s": 0},
+        ]
+    }
+    points = [
+        {"is_depot": True, "provider": "google", "lat": 37.5, "lng": 127.0},
+        {"provider": "google", "lat": 37.6, "lng": 127.1},
+    ]
+
+    gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(),
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Seoul"}],
+        "kr-smoke",
+    )
+
+    assert gate["status"] == "unavailable"
+    assert gate["provider"] == "kakao_navi"
+    assert gate["reason"] == "missing_kakao_navi_key"
+    assert gate["traffic_policy"]["status"] == "unavailable"
+
+
+def test_korea_final_route_gate_uses_kakao_future_departure_and_chunks(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("SOUTH KOREA", "Seoul Metro"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "KAKAO_NAVI_API_KEY", "fake")
+    monkeypatch.setattr(planner_core, "KAKAO_NAVI_MAX_WAYPOINTS", 1)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_MAX_CALLS", 10)
+    monkeypatch.setattr(planner_core, "load_json_object", lambda _path: {})
+    monkeypatch.setattr(planner_core, "save_json_object", lambda *_args, **_kwargs: None)
+
+    tz = ZoneInfo("Asia/Seoul")
+
+    def fake_next_service_datetime(minutes, country):
+        assert country == "SOUTH KOREA"
+        total = int(round(float(minutes))) % (24 * 60)
+        return datetime(2026, 6, 29, total // 60, total % 60, tzinfo=tz)
+
+    departures = []
+
+    def fake_kakao_segment(points, departure_time):
+        departures.append((len(points), departure_time))
+        return {"duration_s": 600, "distance_m": 1000}
+
+    monkeypatch.setattr(planner_core, "_next_service_datetime", fake_next_service_datetime)
+    monkeypatch.setattr(planner_core, "_kakao_route_segment_stats", fake_kakao_segment)
+
+    class FakePlanner:
+        AMAP_KEY = ""
+
+    scenario = {
+        "routes": [
+            {
+                "route_id": "Bus 1",
+                "nodes": [0, 1, 2, 3],
+                "time_s": 1800,
+                "stop_service_time_s": 0,
+            },
+        ]
+    }
+    points = [
+        {"is_depot": True, "provider": "google", "lat": 37.50, "lng": 127.00},
+        {"provider": "google", "lat": 37.51, "lng": 127.01},
+        {"provider": "google", "lat": 37.52, "lng": 127.02},
+        {"provider": "google", "lat": 37.53, "lng": 127.03},
+    ]
+
+    gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(),
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Seoul"}],
+        "kr-smoke",
+    )
+
+    assert gate["status"] == "passed"
+    assert gate["provider"] == "kakao_navi"
+    assert gate["api_calls"] == 2
+    assert gate["cache_hits"] == 0
+    route_gate = scenario["routes"][0]["final_route_traffic_gate"]
+    assert route_gate["verified_source"] == "kakao_navi_final_route"
+    assert route_gate["provider_segment_count"] == 2
+    assert route_gate["provider_departure_time"] == "2026-06-29T07:30:00+09:00"
+    assert route_gate["verified_total_duration_s"] == 1200
+    assert route_gate["verified_departure_label"] == "07:40"
+    assert [item[0] for item in departures] == [3, 2]
+    assert [item[1].strftime("%H:%M") for item in departures] == ["07:30", "07:40"]

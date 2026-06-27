@@ -46,9 +46,7 @@ DEFAULT_SERVICE_UNITS = (
     "brp-live-traffic-suzhou-pm.service",
     "brp-osrm-cleanup.service",
 )
-DEFAULT_WINDOWS_TIMER_TASKS = (
-    "BRP-KR-Weekly-Traffic-Profile",
-)
+DEFAULT_WINDOWS_TIMER_TASKS: tuple[str, ...] = ()
 
 DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
 DEFAULT_MARKET_STALE_HOURS = 24 * 7
@@ -82,12 +80,12 @@ MARKET_OVERVIEW_DEFINITIONS = (
         "market": "KR",
         "city": "Seoul Metro",
         "label": "KR / Seoul Metro",
-        "traffic_mode": "attributed",
+        "traffic_mode": "final_route_provider",
         "provider": "kakao_navi",
-        "active_source": "weekday route-network samples",
-        "required_periods": ("am_peak", "pm_peak", "off_peak"),
+        "active_source": "per-job Kakao Navi future route checks",
+        "required_periods": (),
         "fallback_multiplier": None,
-        "requires_samples": True,
+        "requires_samples": False,
     },
     {
         "market": "BK",
@@ -475,7 +473,7 @@ def build_market_overview(
                 warnings.append(f"stale_{period}")
             if requires_samples and float(row.get("geo_route_sample_ratio") or 0.0) <= 0.0:
                 warnings.append(f"no_geo_{period}")
-        if not requires_samples:
+        if not requires_samples and str(definition["traffic_mode"]) == "static_fallback":
             warnings.append("static_fallback")
         geo_ratio = (total_geo_routes / total_routes) if total_routes else 0.0
         if required_here and any(item.startswith("missing_") for item in warnings):

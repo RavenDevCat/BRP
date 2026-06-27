@@ -1836,9 +1836,6 @@ function MapsPanel({
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
-  const workbookExportUrl = selected?.key
-    ? getJobExportUrl(jobId, `scenario-template-${selected.key}`)
-    : "";
   const excludedStopCount = diagnostics.excludedStops.length;
   const geocodeWarningCount = diagnostics.geocodeWarnings.length;
   const interactiveQuery = useQuery({
@@ -1846,6 +1843,18 @@ function MapsPanel({
     queryFn: () => getJobMapData(jobId, selected.key),
     enabled: Boolean(selected),
   });
+  const displayScenarioSummaries = useMemo(
+    () =>
+      interactiveQuery.data && selected
+        ? scenarioSummaries.map((summary) =>
+            summary.key === selected.key ? mapDataScenarioSummary(summary, interactiveQuery.data as JobMapData) : summary,
+          )
+        : scenarioSummaries,
+    [interactiveQuery.data, scenarioSummaries, selected],
+  );
+  const workbookExportUrl = selected?.key
+    ? getJobExportUrl(jobId, `scenario-template-${selected.key}`)
+    : "";
 
   if (!mapOutputs.length || !selected) {
     return <EmptyState title={t("No maps available")} detail={t("This job did not include rendered route map artifacts.")} />;
@@ -1903,7 +1912,7 @@ function MapsPanel({
           </div>
         ) : null}
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-          {scenarioSummaries.map((summary) => (
+          {displayScenarioSummaries.map((summary) => (
             <button
               key={summary.key}
               type="button"
@@ -3024,6 +3033,23 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       trafficStatusTone: scenarioTrafficTone({ trafficGate: asRecord(scenario.traffic_gate) }, "neutral"),
     };
   });
+}
+
+function mapDataScenarioSummary(base: MapScenarioSummary, data: JobMapData): MapScenarioSummary {
+  const routes = Array.isArray(data.routes) ? data.routes : [];
+  const summary = data.summary || {};
+  return {
+    ...base,
+    routeCount: Number(summary.route_count || routes.length || base.routeCount),
+    stopCount: Number(summary.stop_count || base.stopCount),
+    passengerCount: Number(
+      summary.passenger_count || routes.reduce((total, route) => total + Number(route.load || 0), 0) || base.passengerCount,
+    ),
+    totalDistanceM: Number(
+      summary.distance_m || routes.reduce((total, route) => total + Number(route.distance_m || 0), 0) || base.totalDistanceM,
+    ),
+    longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, Number(route.duration_s || 0)), 0) || base.longestDurationS,
+  };
 }
 
 function mapRouteDurationSeconds(route: Record<string, unknown>) {

@@ -418,14 +418,8 @@ function AuditPanel({
 function SolveProcessCard({ rows }: { rows: ReturnType<typeof buildSolveProcessRows> }) {
   const t = useT();
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-2">
-          <RefreshCw className="h-4 w-4 text-primary" aria-hidden="true" />
-          <h2 className="text-sm font-semibold">{t("Solve process")}</h2>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
+    <CollapsibleSection title="Solve process">
+      <div className="space-y-3">
         {rows.map((row) => (
           <div key={row.label} className="rounded-lg border border-border bg-surface px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -440,8 +434,8 @@ function SolveProcessCard({ rows }: { rows: ReturnType<typeof buildSolveProcessR
             </ol>
           </div>
         ))}
-      </CardContent>
-    </Card>
+      </div>
+    </CollapsibleSection>
   );
 }
 

@@ -704,6 +704,7 @@ const ko: Translations = {
     "AMap drive time": "AMap 주행 시간",
     Unavailable: "사용 불가",
     Calculating: "계산 중",
+    "Recalculate route budget": "노선 시간 예산 다시 계산",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "워크북 검증과 노선 시간 예산 계산이 완료되면 감사 실행이 활성화됩니다.",
 

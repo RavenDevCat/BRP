@@ -244,6 +244,56 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
             [[(31.2, 121.4), (31.21, 121.41)], [(31.2, 121.4), (31.3, 121.5)]],
         )
 
+    def test_workbook_preview_survives_auto_budget_failure(self) -> None:
+        class FakeClientCore:
+            PlannerConfig = backend_service.PlannerConfig
+            runtime = object()
+
+            def prepare_client_payload(
+                self,
+                _input_records,
+                *,
+                current_plan_data=None,
+                config=None,
+            ):
+                return {
+                    "prepared_payload": {
+                        "original_points": [
+                            {"node_id": 0, "country": "CN", "city": "Shanghai", "address": "school"},
+                            {"node_id": 1, "country": "CN", "city": "Shanghai", "address": "a"},
+                        ]
+                    }
+                }
+
+        current_plan = {
+            "service_direction": "To School",
+            "summary": {"stops": 1},
+            "fleet": [{"bus_type": "Large Bus", "seat_count": 42, "vehicle_count": 2}],
+            "input_records": [{"country": "CN", "city": "Shanghai", "address": "a"}],
+        }
+
+        def fail_auto_budget(_current_plan, _prepared_payload):
+            raise RuntimeError("osrm unavailable")
+
+        original_reader = backend_service._read_current_plan_upload
+        original_auto_budget = backend_service._auto_current_plan_route_budget_details
+        try:
+            backend_service._read_current_plan_upload = (
+                lambda _payload: (FakeClientCore(), "routes.xlsx", current_plan)
+            )
+            backend_service._auto_current_plan_route_budget_details = fail_auto_budget
+            response = backend_service._workbook_preview_response(
+                {"config": {"traffic_coefficient_mode": "attributed"}}
+            )
+        finally:
+            backend_service._read_current_plan_upload = original_reader
+            backend_service._auto_current_plan_route_budget_details = original_auto_budget
+
+        self.assertEqual(response["source_label"], "routes.xlsx")
+        self.assertEqual(response["auto_route_budget"], {"status": "unavailable", "reason": "RuntimeError"})
+        self.assertEqual(response["suggested_config"]["traffic_coefficient_mode"], "attributed")
+        self.assertEqual(response["suggested_config"]["max_route_duration_minutes"], 60)
+
 
 if __name__ == "__main__":
     unittest.main()

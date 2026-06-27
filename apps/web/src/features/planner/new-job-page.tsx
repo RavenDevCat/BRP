@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
+import { Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -174,6 +174,16 @@ export function NewJobPage() {
     }
   }
 
+  function retryRouteBudgetPreview() {
+    if (!file || !fileBase64) {
+      return;
+    }
+    previewMutation.reset();
+    setFileError("");
+    setPreview(null);
+    previewMutation.mutate({ file, fileBase64, config });
+  }
+
   const autoRouteBudget = preview?.auto_route_budget;
   const routeBudgetPending = previewMutation.isPending && !preview;
   const routeBudgetReady = Boolean(
@@ -205,6 +215,12 @@ export function NewJobPage() {
         : t("Upload a workbook to calculate the route budget from the current plan.");
   const busy = previewMutation.isPending || submitMutation.isPending;
   const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && !busy);
+  const canRetryRouteBudget = Boolean(
+    file &&
+    fileBase64 &&
+    !busy &&
+    (previewMutation.error || (preview && !routeBudgetReady)),
+  );
   const controlsLocked = previewMutation.isPending || submitMutation.isPending;
 
   return (
@@ -245,7 +261,11 @@ export function NewJobPage() {
                   className="sr-only"
                   type="file"
                   accept=".xlsx,.xlsm"
-                  onChange={(event) => void handleFileChange(event.target.files?.[0] || null)}
+                  onChange={(event) => {
+                    const nextFile = event.target.files?.[0] || null;
+                    event.currentTarget.value = "";
+                    void handleFileChange(nextFile);
+                  }}
                 />
               </label>
               {fileError ? <InlineError message={fileError} /> : null}
@@ -367,6 +387,17 @@ export function NewJobPage() {
                   <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {routeBudgetDetail}
                   </div>
+                  {canRetryRouteBudget ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="mt-2 h-8 text-xs"
+                      icon={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
+                      onClick={retryRouteBudgetPreview}
+                    >
+                      {t("Recalculate route budget")}
+                    </Button>
+                  ) : null}
                 </Field>
               </div>
 

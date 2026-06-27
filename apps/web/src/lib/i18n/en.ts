@@ -401,6 +401,7 @@ const en: Translations = {
     "AMap drive time": "AMap drive time",
     Unavailable: "Unavailable",
     Calculating: "Calculating",
+    "Recalculate route budget": "Recalculate route budget",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "Run audit will unlock after workbook validation and route-budget calculation finish.",
 

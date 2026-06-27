@@ -350,6 +350,7 @@ const zh: Translations = {
     "AMap drive time": "高德实况行驶时长",
     Unavailable: "不可用",
     Calculating: "计算中",
+    "Recalculate route budget": "重新计算路线预算",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "workbook 校验和路线预算计算完成后才能运行审计。",
     "Release now": "立即释放",

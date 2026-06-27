@@ -2128,6 +2128,7 @@ def _traffic_rollout_status_payload(query_params: dict[str, str] | None = None) 
             include_timers=_query_bool(query_params, "include_timers", True),
             include_osrm=_query_bool(query_params, "include_osrm", True),
             include_budget=_query_bool(query_params, "include_budget", True),
+            include_remote=_query_bool(query_params, "include_remote", True),
             local_timezone=local_timezone,
         )
         report["endpoint"] = {

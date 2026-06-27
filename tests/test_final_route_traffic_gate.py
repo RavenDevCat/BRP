@@ -413,6 +413,16 @@ def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):
     route_gate = result["routes"][0]["final_route_traffic_gate"]
     assert route_gate["verified_departure_label"] == "06:00"
     assert route_gate["verified_arrival_label"] == "08:30"
+    reverse_check = result["arrival_reverse_check"]
+    assert reverse_check["target_arrival_label"] == "08:00"
+    assert reverse_check["earliest_departure_label"] == "06:00"
+    assert reverse_check["warning_route_count"] == 1
+    assert reverse_check["warning_route_ids"] == ["Bus 1"]
+    assert reverse_check["earliest_required_departure_label"] == "05:30"
+    assert round(reverse_check["max_departure_window_overrun_minutes"]) == 30
+    route_reverse_check = result["routes"][0]["arrival_reverse_check"]
+    assert route_reverse_check["required_departure_label"] == "05:30"
+    assert route_reverse_check["before_earliest_departure"] is True
 
     report = planner_core.build_route_feasibility_report(
         result,

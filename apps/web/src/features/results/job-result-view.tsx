@@ -281,9 +281,12 @@ function PlansPanel({
   scenarios: ScenarioRow[];
   currentComparison: Record<string, unknown>;
 }) {
+  const arrivalReverseChecks = useMemo(() => buildArrivalReverseChecks(result), [result]);
+
   return (
     <div className="space-y-4">
       <MapsPanel jobId={jobId} jobName={jobName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} />
+      {arrivalReverseChecks.length ? <ArrivalReverseCheckPanel checks={arrivalReverseChecks} /> : null}
       <CollapsibleSection title="Scenario tables">
         <BaselinePanel scenarios={scenarios} currentComparison={currentComparison} />
       </CollapsibleSection>
@@ -770,6 +773,86 @@ function BaselinePanel({
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function ArrivalReverseCheckPanel({ checks }: { checks: ArrivalReverseCheck[] }) {
+  const t = useT();
+  const routes = checks.flatMap((check) => check.routes);
+  const warningCount = checks.reduce((total, check) => total + check.warningRouteCount, 0);
+  const checkedCount = checks.reduce((total, check) => total + check.checkedRouteCount, 0);
+  const maxOverrun = Math.max(...checks.map((check) => check.maxDepartureWindowOverrunMinutes), 0);
+  const earliestRequired = checks
+    .map((check) => check.earliestRequiredDepartureMinutes)
+    .filter((value): value is number => Number.isFinite(value));
+  const earliestRequiredLabel = earliestRequired.length ? formatClockMinutes(Math.min(...earliestRequired)) : "";
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            {warningCount > 0 ? (
+              <TriangleAlert className="h-4 w-4 text-amber-600" aria-hidden="true" />
+            ) : (
+              <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-hidden="true" />
+            )}
+            <h2 className="text-sm font-semibold">{t("Arrival reverse check")}</h2>
+          </div>
+          <Badge tone={warningCount > 0 ? "warning" : "success"}>
+            {warningCount > 0 ? `${formatNumber(warningCount)} ${t("warning routes")}` : t("Within window")}
+          </Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <MetricCard label="Checked routes" value={formatNumber(checkedCount)} />
+          <MetricCard label="Warning routes" value={formatNumber(warningCount)} tone={warningCount > 0 ? "warning" : "success"} />
+          <MetricCard label="Earliest required departure" value={earliestRequiredLabel || t("Not available")} tone={warningCount > 0 ? "warning" : "neutral"} />
+          <MetricCard label="Max early departure gap" value={`${formatNumber(Math.round(maxOverrun))} ${t("min")}`} tone={maxOverrun > 0 ? "warning" : "success"} />
+        </div>
+        <div className="max-h-[360px] overflow-auto">
+          <table className="w-full min-w-[820px] border-collapse text-sm">
+            <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2">{t("Scenario")}</th>
+                <th className="px-3 py-2">{t("Route")}</th>
+                <th className="px-3 py-2">{t("Bus")}</th>
+                <th className="px-3 py-2">{t("Passengers")}</th>
+                <th className="px-3 py-2">{t("Service stops")}</th>
+                <th className="px-3 py-2">{t("Total time")}</th>
+                <th className="px-3 py-2">{t("Required departure")}</th>
+                <th className="px-3 py-2">{t("Status")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {routes.map((route, index) => (
+                <tr
+                  key={`${route.scenarioName}-${route.routeId}-${index}`}
+                  className={cn("border-t border-border", route.beforeEarliestDeparture ? "bg-amber-50/60" : "")}
+                >
+                  <td className="px-3 py-2">{t(route.scenarioName)}</td>
+                  <td className="px-3 py-2 font-medium">{route.routeId}</td>
+                  <td className="px-3 py-2">{route.busType || t("Not available")}</td>
+                  <td className="px-3 py-2">{formatNumber(route.riderCount)}</td>
+                  <td className="px-3 py-2">{formatNumber(route.serviceStopCount)}</td>
+                  <td className="px-3 py-2">{formatDurationMinFromSeconds(route.verifiedTotalDurationS)}</td>
+                  <td className="px-3 py-2">{route.requiredDepartureLabel || t("Not available")}</td>
+                  <td className="px-3 py-2">
+                    <Badge tone={route.available ? (route.beforeEarliestDeparture ? "warning" : "success") : "neutral"}>
+                      {route.available
+                        ? route.beforeEarliestDeparture
+                          ? t("Before earliest departure")
+                          : t("Within window")
+                        : t("Unverified")}
+                    </Badge>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -2377,6 +2460,29 @@ type ScenarioRow = {
   routes: Array<Record<string, unknown>>;
 };
 
+type ArrivalReverseCheck = {
+  scenarioName: string;
+  checkedRouteCount: number;
+  warningRouteCount: number;
+  unavailableRouteCount: number;
+  maxDepartureWindowOverrunMinutes: number;
+  earliestRequiredDepartureMinutes: number | null;
+  routes: ArrivalReverseRoute[];
+};
+
+type ArrivalReverseRoute = {
+  scenarioName: string;
+  routeId: string;
+  busType: string;
+  riderCount: unknown;
+  serviceStopCount: unknown;
+  verifiedTotalDurationS: unknown;
+  requiredDepartureLabel: string;
+  departureWindowOverrunMinutes: number;
+  beforeEarliestDeparture: boolean;
+  available: boolean;
+};
+
 function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
   const structured = asRecord(result.structured_results);
   return [
@@ -2384,6 +2490,105 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
   ];
+}
+
+function buildArrivalReverseChecks(result: Record<string, unknown>): ArrivalReverseCheck[] {
+  const structured = asRecord(result.structured_results);
+  const scenarios: Array<[string, Record<string, unknown>]> = [
+    ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
+    ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
+  ];
+  return scenarios
+    .map(([scenarioName, scenario]) => buildArrivalReverseCheck(scenarioName, scenario))
+    .filter((check): check is ArrivalReverseCheck => Boolean(check));
+}
+
+function buildArrivalReverseCheck(scenarioName: string, scenario: Record<string, unknown>): ArrivalReverseCheck | null {
+  if (!Object.keys(scenario).length || scenario.enabled === false) {
+    return null;
+  }
+  const explicit = asRecord(scenario.arrival_reverse_check);
+  const explicitRoutes = asRecordArray(explicit.routes);
+  const sourceRoutes = explicitRoutes.length ? explicitRoutes : asRecordArray(scenario.routes);
+  const routes = sourceRoutes
+    .map((route, index) => normalizeArrivalReverseRoute(scenarioName, route, index, Boolean(explicitRoutes.length)))
+    .filter((route): route is ArrivalReverseRoute => Boolean(route));
+  if (!routes.length) {
+    return null;
+  }
+  const warningRouteCount = routes.filter((route) => route.beforeEarliestDeparture).length;
+  const checkedRouteCount = routes.filter((route) => route.available).length;
+  const unavailableRouteCount = routes.length - checkedRouteCount;
+  const overrunMinutes = Number(explicit.max_departure_window_overrun_minutes);
+  const earliestRequiredMinutes = Number(explicit.earliest_required_departure_minutes);
+  const derivedEarliestRequired = routes
+    .map((route) => parseClockMinutes(route.requiredDepartureLabel))
+    .filter((value): value is number => value !== null);
+  return {
+    scenarioName,
+    checkedRouteCount: Number.isFinite(Number(explicit.checked_route_count)) ? Number(explicit.checked_route_count) : checkedRouteCount,
+    warningRouteCount: Number.isFinite(Number(explicit.warning_route_count)) ? Number(explicit.warning_route_count) : warningRouteCount,
+    unavailableRouteCount: Number.isFinite(Number(explicit.unavailable_route_count)) ? Number(explicit.unavailable_route_count) : unavailableRouteCount,
+    maxDepartureWindowOverrunMinutes: Number.isFinite(overrunMinutes)
+      ? overrunMinutes
+      : Math.max(...routes.map((route) => route.departureWindowOverrunMinutes), 0),
+    earliestRequiredDepartureMinutes: Number.isFinite(earliestRequiredMinutes)
+      ? earliestRequiredMinutes
+      : derivedEarliestRequired.length
+        ? Math.min(...derivedEarliestRequired)
+        : null,
+    routes,
+  };
+}
+
+function normalizeArrivalReverseRoute(
+  scenarioName: string,
+  route: Record<string, unknown>,
+  index: number,
+  routeIsExplicitCheck: boolean,
+): ArrivalReverseRoute | null {
+  const explicit = routeIsExplicitCheck ? route : asRecord(route.arrival_reverse_check);
+  if (Object.keys(explicit).length) {
+    return {
+      scenarioName,
+      routeId: stringValue(explicit.route_id || route.route_id || route.vehicle_id || `Bus ${index + 1}`),
+      busType: stringValue(explicit.bus_type || route.bus_type_name || route.bus_type),
+      riderCount: explicit.rider_count ?? routePassengerCount(route),
+      serviceStopCount: explicit.service_stop_count ?? routeStopCount(route),
+      verifiedTotalDurationS: explicit.verified_total_duration_s,
+      requiredDepartureLabel: stringValue(explicit.required_departure_label),
+      departureWindowOverrunMinutes: Number(explicit.departure_window_overrun_minutes || 0),
+      beforeEarliestDeparture: Boolean(explicit.before_earliest_departure),
+      available: explicit.available !== false && stringValue(explicit.status) !== "unavailable",
+    };
+  }
+  const gate = asRecord(route.final_route_traffic_gate || route.am_arrival_gate);
+  if (!Object.keys(gate).length || trafficGateType(gate) !== "arrival_window") {
+    return null;
+  }
+  const latestArrivalMinutes = Number(gate.latest_arrival_minutes ?? gate.target_arrival_minutes);
+  const earliestDepartureMinutes = Number(gate.earliest_departure_minutes);
+  const verifiedTotalDurationS = Number(gate.verified_total_duration_s);
+  const requiredDepartureMinutes =
+    Number.isFinite(latestArrivalMinutes) && Number.isFinite(verifiedTotalDurationS)
+      ? latestArrivalMinutes - verifiedTotalDurationS / 60
+      : Number(gate.verified_departure_minutes);
+  const available = stringValue(gate.status) !== "unavailable" && Number.isFinite(requiredDepartureMinutes);
+  return {
+    scenarioName,
+    routeId: stringValue(route.route_id || route.vehicle_id || gate.route_id || `Bus ${index + 1}`),
+    busType: stringValue(route.bus_type_name || route.bus_type),
+    riderCount: routePassengerCount(route),
+    serviceStopCount: routeStopCount(route),
+    verifiedTotalDurationS: gate.verified_total_duration_s,
+    requiredDepartureLabel: Number.isFinite(requiredDepartureMinutes) ? formatClockMinutes(requiredDepartureMinutes) : "",
+    departureWindowOverrunMinutes: Number(gate.time_window_overrun_minutes || gate.estimated_arrival_delay_minutes || 0),
+    beforeEarliestDeparture:
+      Number.isFinite(requiredDepartureMinutes) &&
+      Number.isFinite(earliestDepartureMinutes) &&
+      requiredDepartureMinutes < earliestDepartureMinutes,
+    available,
+  };
 }
 
 function scenarioFromAssessment(name: string, detail: string, assessment: Record<string, unknown>): ScenarioRow {
@@ -3061,6 +3266,31 @@ function stringValue(value: unknown): string {
     return String(value);
   }
   return JSON.stringify(value);
+}
+
+function parseClockMinutes(value: unknown): number | null {
+  const text = stringValue(value).trim();
+  const match = text.match(/^(\d{1,2}):(\d{2})$/);
+  if (!match) {
+    return null;
+  }
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || minutes > 59) {
+    return null;
+  }
+  return (hours * 60 + minutes) % (24 * 60);
+}
+
+function formatClockMinutes(value: unknown): string {
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue)) {
+    return "";
+  }
+  const total = ((Math.round(numericValue) % (24 * 60)) + 24 * 60) % (24 * 60);
+  const hours = Math.floor(total / 60);
+  const minutes = total % 60;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
 }
 
 function formatTrafficMultiplier(value: unknown): string {

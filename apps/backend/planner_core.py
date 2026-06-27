@@ -1909,13 +1909,15 @@ def attach_final_route_traffic_gate(
     departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
     earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
     grace_s = (AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES) * 60.0
+    reverse_check_routes: list[dict[str, Any]] = []
     for route_index, route in enumerate(routes, start=1):
         planned_total_s = float(route.get("time_s", 0.0) or 0.0)
         stop_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
         target_duration_s = route_duration_limit_s if route_duration_limit_s > 0 else planned_total_s
+        route_id = str(route.get("route_id") or route.get("id") or f"Bus {route_index}")
         verification: dict[str, Any] = {
             "scenario": scenario_label,
-            "route_id": str(route.get("route_id") or route.get("id") or f"Bus {route_index}"),
+            "route_id": route_id,
             "target_arrival_minutes": target_minutes,
             "target_arrival_label": _format_minutes_clock(target_minutes),
             "earliest_departure_minutes": earliest_departure_minutes,
@@ -1940,6 +1942,22 @@ def attach_final_route_traffic_gate(
             gate["unavailable_route_count"] += 1
             verification.update({"status": "unavailable", "passes": None})
             route["final_route_traffic_gate"] = verification
+            if is_to_school:
+                reverse_check = {
+                    "available": False,
+                    "status": "unavailable",
+                    "route_id": route_id,
+                    "scenario": scenario_label,
+                    "target_arrival_minutes": latest_arrival_minutes,
+                    "target_arrival_label": _format_minutes_clock(latest_arrival_minutes),
+                    "earliest_departure_minutes": earliest_departure_minutes,
+                    "earliest_departure_label": _format_minutes_clock(earliest_departure_minutes),
+                    "service_stop_count": max(0, len(list(route.get("nodes") or [])) - 1),
+                    "rider_count": route.get("load") or route.get("passenger_count") or route.get("passengers"),
+                    "bus_type": route.get("bus_type_name") or route.get("bus_type"),
+                }
+                route["arrival_reverse_check"] = reverse_check
+                reverse_check_routes.append(reverse_check)
             continue
         verified_drive_s = float(stats.get("duration_s", 0.0) or 0.0)
         verified_total_s = verified_drive_s + stop_service_s
@@ -1987,6 +2005,35 @@ def attach_final_route_traffic_gate(
                 "verified_arrival_label": _format_minutes_clock(scheduled_arrival_minutes),
             }
         )
+        if is_to_school:
+            reverse_check = {
+                "available": True,
+                "status": "passed" if passes else "failed",
+                "route_id": route_id,
+                "scenario": scenario_label,
+                "target_arrival_minutes": latest_arrival_minutes,
+                "target_arrival_label": _format_minutes_clock(latest_arrival_minutes),
+                "earliest_departure_minutes": earliest_departure_minutes,
+                "earliest_departure_label": _format_minutes_clock(earliest_departure_minutes),
+                "required_departure_minutes": latest_departure_minutes,
+                "required_departure_label": _format_minutes_clock(latest_departure_minutes),
+                "scheduled_departure_minutes": scheduled_departure_minutes,
+                "scheduled_departure_label": _format_minutes_clock(scheduled_departure_minutes),
+                "scheduled_arrival_minutes": scheduled_arrival_minutes,
+                "scheduled_arrival_label": _format_minutes_clock(scheduled_arrival_minutes),
+                "before_earliest_departure": latest_departure_minutes < earliest_departure_minutes,
+                "departure_window_overrun_s": time_window_overrun_s,
+                "departure_window_overrun_minutes": time_window_overrun_s / 60.0,
+                "verified_drive_duration_s": verified_drive_s,
+                "stop_service_time_s": stop_service_s,
+                "verified_total_duration_s": verified_total_s,
+                "verified_distance_m": float(stats.get("distance_m", 0.0) or 0.0),
+                "service_stop_count": max(0, len(list(route.get("nodes") or [])) - 1),
+                "rider_count": route.get("load") or route.get("passenger_count") or route.get("passengers"),
+                "bus_type": route.get("bus_type_name") or route.get("bus_type"),
+            }
+            route["arrival_reverse_check"] = reverse_check
+            reverse_check_routes.append(reverse_check)
         route["final_route_traffic_gate"] = verification
 
     if state.get("cache_changed"):
@@ -2001,6 +2048,39 @@ def attach_final_route_traffic_gate(
         gate["status"] = "passed"
     else:
         gate["status"] = "unavailable"
+    if is_to_school:
+        checked_reverse_routes = [row for row in reverse_check_routes if row.get("available")]
+        warning_reverse_routes = [row for row in checked_reverse_routes if row.get("before_earliest_departure")]
+        unavailable_reverse_routes = [row for row in reverse_check_routes if not row.get("available")]
+        required_departures = [
+            float(row.get("required_departure_minutes"))
+            for row in checked_reverse_routes
+            if isinstance(row.get("required_departure_minutes"), (int, float))
+        ]
+        max_overrun_minutes = max(
+            [float(row.get("departure_window_overrun_minutes", 0.0) or 0.0) for row in checked_reverse_routes],
+            default=0.0,
+        )
+        earliest_required_departure = min(required_departures) if required_departures else None
+        scenario["arrival_reverse_check"] = {
+            "available": bool(reverse_check_routes),
+            "service_direction": service_direction,
+            "target_arrival_minutes": latest_arrival_minutes,
+            "target_arrival_label": _format_minutes_clock(latest_arrival_minutes),
+            "earliest_departure_minutes": earliest_departure_minutes,
+            "earliest_departure_label": _format_minutes_clock(earliest_departure_minutes),
+            "route_count": len(routes),
+            "checked_route_count": len(checked_reverse_routes),
+            "unavailable_route_count": len(unavailable_reverse_routes),
+            "warning_route_count": len(warning_reverse_routes),
+            "warning_route_ids": [str(row.get("route_id") or "") for row in warning_reverse_routes if row.get("route_id")],
+            "max_departure_window_overrun_minutes": max_overrun_minutes,
+            "earliest_required_departure_minutes": earliest_required_departure,
+            "earliest_required_departure_label": (
+                _format_minutes_clock(earliest_required_departure) if earliest_required_departure is not None else ""
+            ),
+            "routes": reverse_check_routes,
+        }
     scenario["traffic_gate"] = gate
     scenario["traffic_feasible"] = gate["status"] in {"passed", "not_applicable", "disabled"}
     return gate

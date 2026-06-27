@@ -699,6 +699,8 @@ const ko: Translations = {
         "현재 계획의 최장 노선을 기준으로 자동 입력됨",
     "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
         "노선 시간 예산 계산을 사용할 수 없습니다. 감사 실행 전에 워크북 또는 OSRM 노선 데이터를 확인해 주세요.",
+    "Route budget service is not ready yet; retrying automatically.":
+        "노선 시간 예산 서비스가 아직 준비되지 않았습니다. 자동으로 다시 시도합니다.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "워크북을 업로드하면 현재 계획 기준으로 노선 시간 예산을 계산합니다.",
     "AMap drive time": "AMap 주행 시간",

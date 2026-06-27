@@ -1,5 +1,5 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Upload } from "lucide-react";
@@ -37,6 +37,24 @@ const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
 
 const COMFORT_LOAD_FACTOR = 0.85;
 const FULL_CAPACITY_LOAD_FACTOR = 1.0;
+const ROUTE_BUDGET_AUTO_RETRY_LIMIT = 4;
+const ROUTE_BUDGET_AUTO_RETRY_BASE_DELAY_MS = 2500;
+const ROUTE_BUDGET_RETRYABLE_REASONS = new Set([
+  "ConnectionError",
+  "ConnectTimeout",
+  "HTTPError",
+  "JSONDecodeError",
+  "OSError",
+  "ReadTimeout",
+  "RequestException",
+  "RuntimeError",
+  "Timeout",
+  "TimeoutError",
+]);
+
+function isRetryableRouteBudgetReason(reason?: string) {
+  return !reason || ROUTE_BUDGET_RETRYABLE_REASONS.has(reason);
+}
 
 export function NewJobPage() {
   const t = useT();
@@ -50,6 +68,7 @@ export function NewJobPage() {
   const [scheduledJob, setScheduledJob] = useState(false);
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
+  const [routeBudgetRetryAttempts, setRouteBudgetRetryAttempts] = useState(0);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
   const featuresQuery = useQuery({
     queryKey: ["deployment-features"],
@@ -113,6 +132,9 @@ export function NewJobPage() {
     onSuccess: (payload) => {
       setPreview(payload);
       setConfig(configFromPreview(payload));
+      if (payload.auto_route_budget?.status === "ready") {
+        setRouteBudgetRetryAttempts(0);
+      }
     },
   });
 
@@ -153,6 +175,7 @@ export function NewJobPage() {
     previewMutation.reset();
     setFile(nextFile);
     setPreview(null);
+    setRouteBudgetRetryAttempts(0);
     configOverridesRef.current = {};
     setConfig(defaultConfig);
     setFileError("");
@@ -181,6 +204,7 @@ export function NewJobPage() {
     previewMutation.reset();
     setFileError("");
     setPreview(null);
+    setRouteBudgetRetryAttempts(0);
     previewMutation.mutate({ file, fileBase64, config });
   }
 
@@ -200,8 +224,25 @@ export function NewJobPage() {
       : autoRouteBudget?.amap_route_status === "unavailable"
         ? `${t("AMap drive time")}: ${t("Unavailable")}`
         : "";
+  const busy = previewMutation.isPending || submitMutation.isPending;
+  const routeBudgetUnavailableRetryable = Boolean(
+    preview &&
+    autoRouteBudget?.status !== "ready" &&
+    isRetryableRouteBudgetReason(autoRouteBudget?.reason),
+  );
+  const routeBudgetShouldRetry = Boolean(
+    file &&
+    fileBase64 &&
+    !busy &&
+    !routeBudgetReady &&
+    (previewMutation.error || routeBudgetUnavailableRetryable),
+  );
+  const routeBudgetAutoRetrying = routeBudgetShouldRetry && routeBudgetRetryAttempts < ROUTE_BUDGET_AUTO_RETRY_LIMIT;
+  const routeBudgetRetryExhausted = routeBudgetShouldRetry && !routeBudgetAutoRetrying;
   const routeBudgetDetail = routeBudgetPending
     ? t("Calculating current-plan longest route. Please wait before running the audit.")
+    : previewMutation.isPending && preview && !routeBudgetReady
+      ? t("Calculating current-plan longest route. Please wait before running the audit.")
     : autoRouteBudget?.status === "ready"
       ? `${t("Auto-filled from longest current-plan route")}: ${
           autoRouteBudget.longest_route_id || t("Unknown")
@@ -210,18 +251,36 @@ export function NewJobPage() {
             ? ` (${formatNumber(autoRouteBudget.longest_route_duration_minutes)} min OSRM)`
             : ""
         }${amapRouteDetail ? ` · ${amapRouteDetail}` : ""}`
+      : routeBudgetAutoRetrying
+        ? t("Route budget service is not ready yet; retrying automatically.")
       : preview
         ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
         : t("Upload a workbook to calculate the route budget from the current plan.");
-  const busy = previewMutation.isPending || submitMutation.isPending;
   const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
     fileBase64 &&
     !busy &&
-    (previewMutation.error || (preview && !routeBudgetReady)),
+    routeBudgetRetryExhausted,
   );
   const controlsLocked = previewMutation.isPending || submitMutation.isPending;
+
+  useEffect(() => {
+    if (!routeBudgetAutoRetrying || !file || !fileBase64) {
+      return;
+    }
+    const delayMs = Math.min(
+      10_000,
+      ROUTE_BUDGET_AUTO_RETRY_BASE_DELAY_MS * (routeBudgetRetryAttempts + 1),
+    );
+    const timer = window.setTimeout(() => {
+      setRouteBudgetRetryAttempts((attempts) => attempts + 1);
+      previewMutation.reset();
+      setFileError("");
+      previewMutation.mutate({ file, fileBase64, config });
+    }, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [routeBudgetAutoRetrying, routeBudgetRetryAttempts, file, fileBase64, config]);
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -269,7 +328,9 @@ export function NewJobPage() {
                 />
               </label>
               {fileError ? <InlineError message={fileError} /> : null}
-              {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
+              {previewMutation.error && routeBudgetRetryExhausted ? (
+                <InlineError message={(previewMutation.error as Error).message} />
+              ) : null}
               {previewMutation.isPending ? (
                 <div className="flex items-center gap-2 rounded-md border border-border bg-muted px-3 py-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />

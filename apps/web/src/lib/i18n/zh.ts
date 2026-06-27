@@ -345,6 +345,8 @@ const zh: Translations = {
         "已根据当前计划最长路线自动填写",
     "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
         "路线预算计算不可用，请先修正 workbook 或 OSRM 路线数据后再运行审计。",
+    "Route budget service is not ready yet; retrying automatically.":
+        "路线预算服务暂时未就绪，系统正在自动重试。",
     "Upload a workbook to calculate the route budget from the current plan.":
         "上传 workbook 后会根据当前计划自动计算路线预算。",
     "AMap drive time": "高德实况行驶时长",

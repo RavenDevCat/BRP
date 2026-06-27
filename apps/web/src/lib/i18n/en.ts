@@ -396,6 +396,8 @@ const en: Translations = {
         "Auto-filled from longest current-plan route",
     "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.":
         "Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.",
+    "Route budget service is not ready yet; retrying automatically.":
+        "Route budget service is not ready yet; retrying automatically.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "Upload a workbook to calculate the route budget from the current plan.",
     "AMap drive time": "AMap drive time",

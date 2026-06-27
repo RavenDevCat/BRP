@@ -323,6 +323,8 @@ const ko: Translations = {
     Started: "시작됨",
     Finished: "완료됨",
     "Job actions": "작업 관리",
+    "Release now": "지금 실행",
+    "Release this scheduled job now?": "이 예약 작업을 지금 실행하시겠습니까?",
     "Cancel job": "작업 취소",
     "Delete job": "작업 삭제",
     "Cancel this job?": "이 작업을 취소하시겠습니까?",

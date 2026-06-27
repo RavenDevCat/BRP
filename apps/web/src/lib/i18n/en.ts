@@ -357,6 +357,8 @@ const en: Translations = {
     Started: "Started",
     Finished: "Finished",
     "Job actions": "Job actions",
+    "Release now": "Release now",
+    "Release this scheduled job now?": "Release this scheduled job now?",
     "Cancel job": "Cancel job",
     "Delete job": "Delete job",
     "Cancel this job?": "Cancel this job?",

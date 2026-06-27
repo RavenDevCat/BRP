@@ -838,6 +838,14 @@ export function cancelJob(jobId: string) {
     });
 }
 
+export function releaseJob(jobId: string) {
+    return apiFetch<JobRecord>(`/jobs/${encodeURIComponent(jobId)}/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+    });
+}
+
 export function deleteJob(jobId: string) {
     return apiFetch<{ deleted: boolean; job_id: string }>(
         `/jobs/${encodeURIComponent(jobId)}`,

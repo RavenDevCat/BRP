@@ -12,6 +12,7 @@ import {
     History,
     ListChecks,
     Loader2,
+    Play,
     RefreshCw,
     Trash2,
     XCircle,
@@ -26,6 +27,7 @@ import {
     getDeploymentFeatures,
     getJob,
     listJobs,
+    releaseJob,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -776,6 +778,13 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
             await queryClient.invalidateQueries({ queryKey: ["jobs"] });
         },
     });
+    const releaseMutation = useMutation({
+        mutationFn: () => releaseJob(jobId),
+        onSuccess: async () => {
+            await queryClient.invalidateQueries({ queryKey: ["jobs", jobId] });
+            await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+        },
+    });
     const deleteMutation = useMutation({
         mutationFn: () => deleteJob(jobId),
         onSuccess: async () => {
@@ -803,6 +812,7 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
 
     const job = jobQuery.data;
     const jobIsActive = job.status === "scheduled" || job.status === "queued" || job.status === "running";
+    const jobIsScheduled = job.status === "scheduled";
     const scheduledStartAt = getScheduledStartAt(job);
 
     return (
@@ -870,12 +880,39 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                             </h2>
                         </CardHeader>
                         <CardContent className="space-y-3">
+                            {jobIsScheduled ? (
+                                <Button
+                                    type="button"
+                                    variant="primary"
+                                    className="w-full"
+                                    disabled={
+                                        releaseMutation.isPending ||
+                                        cancelMutation.isPending ||
+                                        deleteMutation.isPending
+                                    }
+                                    icon={
+                                        releaseMutation.isPending ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                            <Play className="h-4 w-4" />
+                                        )
+                                    }
+                                    onClick={() => {
+                                        if (window.confirm(t("Release this scheduled job now?"))) {
+                                            releaseMutation.mutate();
+                                        }
+                                    }}
+                                >
+                                    {t("Release now")}
+                                </Button>
+                            ) : null}
                             <Button
                                 type="button"
                                 variant="secondary"
                                 className="w-full"
                                 disabled={
                                     !jobIsActive ||
+                                    releaseMutation.isPending ||
                                     cancelMutation.isPending ||
                                     deleteMutation.isPending
                                 }
@@ -900,6 +937,7 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                                 className="w-full"
                                 disabled={
                                     deleteMutation.isPending ||
+                                    releaseMutation.isPending ||
                                     cancelMutation.isPending
                                 }
                                 icon={
@@ -934,6 +972,13 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                                 <InlineError
                                     message={
                                         (cancelMutation.error as Error).message
+                                    }
+                                />
+                            ) : null}
+                            {releaseMutation.error ? (
+                                <InlineError
+                                    message={
+                                        (releaseMutation.error as Error).message
                                     }
                                 />
                             ) : null}

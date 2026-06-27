@@ -361,6 +361,46 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(delete_response.json(), {"deleted": True, "job_id": "owned"})
         self.assertEqual(store.deleted, ["owned"])
 
+    def test_scheduled_job_release_endpoint_queues_authorized_job(self) -> None:
+        store = FakeJobStore()
+        store.records["scheduled-job"] = {
+            "job_id": "scheduled-job",
+            "owner_email": "admin@example.com",
+            "status": "scheduled",
+        }
+        store.records["finished-job"] = {
+            "job_id": "finished-job",
+            "owner_email": "admin@example.com",
+            "status": "succeeded",
+        }
+        released: list[str] = []
+
+        def release_job(job_id: str) -> dict[str, Any] | None:
+            released.append(job_id)
+            record = store.records.get(job_id)
+            if not record:
+                return None
+            record["status"] = "queued"
+            return dict(record)
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS=set(),
+            JOB_STORE=store,
+            _release_scheduled_job=release_job,
+        ):
+            release_response = self.client.post(
+                "/api/jobs/scheduled-job/release", headers=auth_headers()
+            )
+            conflict_response = self.client.post(
+                "/api/jobs/finished-job/release", headers=auth_headers()
+            )
+
+        self.assertEqual(release_response.status_code, 200)
+        self.assertEqual(release_response.json()["status"], "queued")
+        self.assertEqual(released, ["scheduled-job"])
+        self.assertEqual(conflict_response.status_code, 409)
+
     def test_distance_history_read_create_and_delete_keep_legacy_store_selection(self) -> None:
         route_store = FakeHistoryStore(
             {

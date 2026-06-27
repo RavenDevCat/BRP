@@ -971,6 +971,25 @@ def cancel_job(
     return _json_response(200, updated)
 
 
+@_api_route("POST", "/jobs/{job_id}/release")
+def release_scheduled_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    normalized_job_id = str(job_id or "").strip()
+    job_record = _job_for_context(normalized_job_id, context)
+    if str(job_record.get("status", "")).strip().lower() != "scheduled":
+        raise BackendHttpError(
+            409,
+            {"error": "Only scheduled jobs can be released manually."},
+        )
+    updated = backend_service._release_scheduled_job(normalized_job_id)
+    if not updated:
+        raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
+    return _json_response(200, updated)
+
+
 @_api_route("POST", "/jobs/{job_id}/ai-audit")
 def generate_job_ai_audit(
     job_id: str,

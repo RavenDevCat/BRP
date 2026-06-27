@@ -2511,6 +2511,26 @@ class JobStore:
                 released.append(deepcopy(record))
         return released
 
+    def release_scheduled_job(self, job_id: str, *, release_mode: str = "manual") -> dict[str, Any] | None:
+        normalized_job_id = str(job_id or "").strip()
+        if not normalized_job_id:
+            return None
+        with self.lock:
+            record = self._load_job_unlocked(normalized_job_id)
+            if not record:
+                return None
+            if str(record.get("status", "")).strip().lower() != "scheduled":
+                return deepcopy(record)
+            metadata = dict(record.get("metadata") or {})
+            metadata["scheduled_released_at"] = utc_now_iso()
+            metadata["scheduled_release_mode"] = str(release_mode or "manual").strip() or "manual"
+            record["metadata"] = metadata
+            record["status"] = "queued"
+            record["worker_pid"] = None
+            record["job_slot_path"] = None
+            self._save_job_unlocked(normalized_job_id, record)
+            return deepcopy(record)
+
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
             return _delete_runtime_job(job_id)
@@ -2751,6 +2771,16 @@ def _spawn_job_worker(job_id: str) -> dict[str, Any] | None:
 
 def _schedule_queued_jobs() -> None:
     JOB_QUEUE.schedule_queued_jobs()
+
+
+def _release_scheduled_job(job_id: str) -> dict[str, Any] | None:
+    released = JOB_STORE.release_scheduled_job(job_id, release_mode="manual")
+    if not released:
+        return None
+    if str(released.get("status", "")).strip().lower() == "queued":
+        JOB_QUEUE.schedule_queued_jobs()
+        return JOB_STORE.get_job(job_id) or released
+    return released
 
 
 def _start_job_scheduler() -> None:

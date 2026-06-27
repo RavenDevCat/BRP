@@ -341,6 +341,8 @@ const zh: Translations = {
     Calculating: "计算中",
     "Run audit will unlock after workbook validation and route-budget calculation finish.":
         "workbook 校验和路线预算计算完成后才能运行审计。",
+    "Release now": "立即释放",
+    "Release this scheduled job now?": "现在释放这个定时任务吗？",
     "Cancel is available only while a job is scheduled, queued, or running.":
         "只有定时、排队或运行中的任务可以取消。",
 };

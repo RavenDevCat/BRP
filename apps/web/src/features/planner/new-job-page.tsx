@@ -1,6 +1,6 @@
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useMemo, useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { Download, FileSpreadsheet, Loader2, Send, SlidersHorizontal, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +13,7 @@ import {
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
 import {
+  getDeploymentFeatures,
   getWorkbookTemplateUrl,
   previewWorkbook,
   submitWorkbookJob,
@@ -50,6 +51,12 @@ export function NewJobPage() {
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
+  const featuresQuery = useQuery({
+    queryKey: ["deployment-features"],
+    queryFn: getDeploymentFeatures,
+    staleTime: 60_000,
+  });
+  const scheduledJobsEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
@@ -126,7 +133,7 @@ export function NewJobPage() {
         file_base64: fileBase64,
         config: submitConfig,
         job_custom_name: jobCustomName,
-        scheduled_job: scheduledJob,
+        scheduled_job: scheduledJobsEnabled && scheduledJob,
       });
     },
     onSuccess: async (payload) => {
@@ -260,39 +267,41 @@ export function NewJobPage() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <div className="text-sm font-medium">{t("Scheduled Job")}</div>
-                  <div className="text-xs text-muted-foreground">
-                    {t("Queue this audit for the fixed traffic window instead of running it immediately.")}
+              {scheduledJobsEnabled ? (
+                <div className="flex flex-col gap-2 rounded-lg border border-border bg-muted/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-medium">{t("Scheduled Job")}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {t("Queue this audit for the fixed traffic window instead of running it immediately.")}
+                    </div>
                   </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={scheduledJob}
+                    className="grid h-9 w-full max-w-[240px] shrink-0 grid-cols-2 rounded-full border border-border bg-surface p-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+                    title={t("When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.")}
+                    onClick={() => setScheduledJob((value) => !value)}
+                  >
+                    <span
+                      className={[
+                        "flex items-center justify-center rounded-full px-2 transition",
+                        scheduledJob ? "text-muted-foreground" : "bg-primary text-primary-foreground shadow-sm",
+                      ].join(" ")}
+                    >
+                      {t("Not enabled")}
+                    </span>
+                    <span
+                      className={[
+                        "flex items-center justify-center rounded-full px-2 transition",
+                        scheduledJob ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground",
+                      ].join(" ")}
+                    >
+                      {t("Schedule enabled")}
+                    </span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={scheduledJob}
-                  className="grid h-9 w-full max-w-[240px] shrink-0 grid-cols-2 rounded-full border border-border bg-surface p-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                  title={t("When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.")}
-                  onClick={() => setScheduledJob((value) => !value)}
-                >
-                  <span
-                    className={[
-                      "flex items-center justify-center rounded-full px-2 transition",
-                      scheduledJob ? "text-muted-foreground" : "bg-primary text-primary-foreground shadow-sm",
-                    ].join(" ")}
-                  >
-                    {t("Not enabled")}
-                  </span>
-                  <span
-                    className={[
-                      "flex items-center justify-center rounded-full px-2 transition",
-                      scheduledJob ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground",
-                    ].join(" ")}
-                  >
-                    {t("Schedule enabled")}
-                  </span>
-                </button>
-              </div>
+              ) : null}
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Service Direction">

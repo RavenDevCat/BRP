@@ -201,8 +201,19 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _default_scheduled_jobs_enabled() -> bool:
+    root_text = str(BASE_DIR).replace("\\", "/").lower()
+    if "users/bus.eim/brp" in root_text:
+        return False
+    return "/staging/" in root_text or "/prod/" in root_text
+
+
 GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
 ENABLE_LANGUAGE_SWITCH = not _env_flag("BRP_DISABLE_LANGUAGE_SWITCH", False)
+SCHEDULED_JOBS_ENABLED = _env_flag(
+    "BRP_ENABLE_SCHEDULED_JOBS",
+    _default_scheduled_jobs_enabled(),
+)
 DEFAULT_TRAFFIC_COEFFICIENT_MODE = normalize_traffic_coefficient_mode(
     os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy")
 )
@@ -1813,6 +1824,8 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
     job_default_name = _build_job_display_name(source_label)
     job_name = _build_job_display_name(source_label, job_custom_name)
     scheduled_requested = bool(payload.get("scheduled_job"))
+    if scheduled_requested and not SCHEDULED_JOBS_ENABLED:
+        raise ValueError("Scheduled jobs are not enabled for this deployment.")
     scheduled_start_at = None
     scheduled_trigger_label = None
     if scheduled_requested:
@@ -2015,6 +2028,7 @@ def _deployment_features_payload() -> dict[str, Any]:
     return {
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
         "available_languages": available_languages,
+        "scheduled_jobs_enabled": SCHEDULED_JOBS_ENABLED,
         "default_traffic_coefficient_mode": DEFAULT_TRAFFIC_COEFFICIENT_MODE,
     }
 

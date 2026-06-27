@@ -127,6 +127,7 @@ export type TrafficMarketStatus = {
 
 export type DeploymentFeatures = {
     language_switch_enabled: boolean;
+    scheduled_jobs_enabled: boolean;
     available_languages?: string[];
     default_traffic_coefficient_mode?: string;
 };

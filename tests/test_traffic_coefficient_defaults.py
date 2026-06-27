@@ -57,6 +57,31 @@ class TrafficCoefficientDefaultTests(unittest.TestCase):
 
         self.assertEqual(payload["default_traffic_coefficient_mode"], "attributed")
 
+    def test_scheduled_job_feature_defaults_to_cn_paths_only(self) -> None:
+        original = backend_service.BASE_DIR
+        try:
+            backend_service.BASE_DIR = Path("/opt/brp/staging/app/apps/backend")
+            self.assertTrue(backend_service._default_scheduled_jobs_enabled())
+            backend_service.BASE_DIR = Path("/opt/brp/prod/app/apps/backend")
+            self.assertTrue(backend_service._default_scheduled_jobs_enabled())
+            backend_service.BASE_DIR = Path("C:/Users/Bus.EIM/BRP/apps/backend")
+            self.assertFalse(backend_service._default_scheduled_jobs_enabled())
+        finally:
+            backend_service.BASE_DIR = original
+
+    def test_deployment_features_exposes_scheduled_job_capability(self) -> None:
+        original = backend_service.SCHEDULED_JOBS_ENABLED
+        try:
+            backend_service.SCHEDULED_JOBS_ENABLED = False
+            disabled = backend_service._deployment_features_payload()
+            backend_service.SCHEDULED_JOBS_ENABLED = True
+            enabled = backend_service._deployment_features_payload()
+        finally:
+            backend_service.SCHEDULED_JOBS_ENABLED = original
+
+        self.assertFalse(disabled["scheduled_jobs_enabled"])
+        self.assertTrue(enabled["scheduled_jobs_enabled"])
+
     def test_solver_route_budget_uses_traffic_adjusted_time_by_default(self) -> None:
         original_multiplier = BusingProblem.TRAFFIC_TIME_MULTIPLIER
         original_flag = BusingProblem.SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED

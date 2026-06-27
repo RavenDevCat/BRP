@@ -71,7 +71,7 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(payload["stops"][1]["address"], "Stop A")
         self.assertEqual(payload["bounds"]["min_lng"], 121.4)
 
-    def test_china_map_payload_adds_amap_display_geometry_without_changing_stats(self) -> None:
+    def test_china_map_payload_adds_amap_display_geometry_and_duration(self) -> None:
         old_key = os.environ.get("AMAP_API_KEY")
         old_enabled = self.service.AMAP_DISPLAY_GEOMETRY_ENABLED
         old_func = self.service._amap_display_geometry_for_route
@@ -163,7 +163,7 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(route["display_geometry_source"], "amap_cn")
         self.assertEqual(route["display_duration_s"], 700)
         self.assertEqual(route["display_distance_m"], 1300)
-        self.assertEqual(route["duration_s"], 900)
+        self.assertEqual(route["duration_s"], 700)
         self.assertEqual(route["raw_duration_s"], 600)
         self.assertEqual(route["distance_m"], 1200)
         self.assertEqual(payload["bounds"]["max_lng"], 121.4101)

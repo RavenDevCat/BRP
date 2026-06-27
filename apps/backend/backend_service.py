@@ -3289,25 +3289,44 @@ def _amap_display_geometry_for_route(
         return None, "osrm", "", None, None
 
     cache_key = _amap_display_cache_key(request_points)
+    stale_cached_geometry: list[list[float]] | None = None
     with _AMAP_DISPLAY_CACHE_LOCK:
         cache = _load_amap_display_cache_unlocked()
         cached = dict(cache.get(cache_key) or {})
         cached_geometry = cached.get("geometry")
         if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
-            return (
-                cached_geometry,
-                "amap_cn_cache",
-                "",
-                _float_or_none(cached.get("duration_s")),
-                _float_or_none(cached.get("distance_m")),
-            )
+            cached_duration_s = _float_or_none(cached.get("duration_s"))
+            cached_distance_m = _float_or_none(cached.get("distance_m"))
+            if cached_duration_s is None:
+                stale_cached_geometry = cached_geometry
+            else:
+                return (
+                    cached_geometry,
+                    "amap_cn_cache",
+                    "",
+                    cached_duration_s,
+                    cached_distance_m,
+                )
+
+    def stale_cache_result(
+        message: str,
+    ) -> tuple[list[list[float]], str, str, float | None, float | None] | None:
+        if not stale_cached_geometry:
+            return None
+        return stale_cached_geometry, "amap_cn_cache_stale", message, None, None
 
     try:
         response = _fetch_amap_display_geometry(request_points)
     except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
+        fallback = stale_cache_result(str(exc))
+        if fallback:
+            return fallback
         return None, "osrm", str(exc), None, None
     geometry = list(response.get("geometry") or [])
     if len(geometry) < 2:
+        fallback = stale_cache_result("AMap display route returned no geometry")
+        if fallback:
+            return fallback
         return None, "osrm", "AMap display route returned no geometry", None, None
 
     with _AMAP_DISPLAY_CACHE_LOCK:

@@ -106,6 +106,8 @@ class JobStoreProtocol(Protocol):
 
     def list_queued_jobs(self) -> list[dict[str, Any]]: ...
 
+    def release_due_scheduled_jobs(self) -> list[dict[str, Any]]: ...
+
     def get_job(self, job_id: str) -> dict[str, Any] | None: ...
 
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None: ...
@@ -305,6 +307,7 @@ class JobQueueManager:
             return
         try:
             self.gate.cleanup_stale_slots()
+            self.job_store.release_due_scheduled_jobs()
             for job_record in self.job_store.list_queued_jobs():
                 spawned = self.spawn_job_worker(str(job_record.get("job_id", "")))
                 if spawned is None and self.gate.enabled:

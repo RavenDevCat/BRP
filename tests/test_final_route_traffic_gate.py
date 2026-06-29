@@ -437,6 +437,28 @@ def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):
     assert report["failure_reasons"] == ["arrival_window"]
     assert report["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 2
 
+    over_limit_report = planner_core.build_route_feasibility_report(
+        {"routes": [], "bus_count": 4},
+        {"status": "passed", "gate_type": "arrival_window"},
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        current_min_active_vehicle_count=0,
+        max_vehicle_count=3,
+    )
+    assert over_limit_report["status"] == "failed"
+    assert "vehicle_savings_target" in over_limit_report["failure_reasons"]
+    assert over_limit_report["hard_constraints"]["fleet"]["status"] == "over_vehicle_limit"
+
+    single_rider_report = planner_core.build_route_feasibility_report(
+        {"routes": [{"route_id": "Bus 1", "load": 1, "bus_capacity": 18}], "bus_count": 1},
+        {"status": "passed", "gate_type": "arrival_window"},
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        current_min_active_vehicle_count=0,
+        max_vehicle_count=3,
+    )
+    assert single_rider_report["status"] == "failed"
+    assert "single_rider_route" in single_rider_report["failure_reasons"]
+    assert single_rider_report["hard_constraints"]["single_rider_route"]["failed_route_ids"] == ["Bus 1"]
+
 
 def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
@@ -612,3 +634,81 @@ def test_korea_final_route_gate_uses_kakao_future_departure_and_chunks(monkeypat
     assert route_gate["verified_departure_label"] == "07:40"
     assert [item[0] for item in departures] == [3, 2]
     assert [item[1].strftime("%H:%M") for item in departures] == ["07:30", "07:40"]
+
+
+def test_failed_free_baseline_can_recover_from_passing_time_constrained_result():
+    failed_free = {
+        "bus_count": 15,
+        "traffic_gate": {"status": "failed", "failed_route_count": 3},
+        "feasibility_report": {"status": "failed", "failure_reasons": ["arrival_window"]},
+    }
+    passing_time_constrained = {
+        "bus_count": 18,
+        "traffic_gate": {"status": "passed", "failed_route_count": 0},
+        "feasibility_report": {"status": "passed", "failure_reasons": []},
+        "time_constraint": {"enabled": True},
+    }
+    recovered = planner_core._recover_free_baseline_from_time_constrained(
+        failed_free,
+        passing_time_constrained,
+        planner_core.PlannerConfig(),
+        [{"name": "bus", "capacity": 42, "max_count": 20}],
+    )
+
+    assert recovered["bus_count"] == 18
+    assert recovered["baseline_name"] == "free_optimization_baseline"
+    assert recovered["traffic_recovery"]["source"] == "time_constrained_optimization"
+    assert recovered["time_constraint"]["used_as_free_baseline_recovery"] is True
+
+    already_passing = {
+        "bus_count": 16,
+        "traffic_gate": {"status": "passed"},
+        "feasibility_report": {"status": "passed"},
+    }
+    unchanged = planner_core._recover_free_baseline_from_time_constrained(
+        already_passing,
+        passing_time_constrained,
+        planner_core.PlannerConfig(),
+        [{"name": "bus", "capacity": 42, "max_count": 20}],
+    )
+    assert unchanged is already_passing
+
+
+def test_pm_final_route_gate_caps_duration_at_two_hour_window(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "PM_ROUTE_GATE_GRACE_MINUTES", 0)
+    monkeypatch.setattr(planner_core, "PM_MAX_ROUTE_WINDOW_MINUTES", 120)
+
+    def fake_amap_route_stats(_planner, _points, _cache, state):
+        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        return {"duration_s": 125 * 60, "distance_m": 1234, "source": "fake_amap"}
+
+    monkeypatch.setattr(planner_core, "_amap_route_stats", fake_amap_route_stats)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+        MAX_ROUTE_DURATION_SECONDS = 133 * 60
+
+    scenario = {
+        "routes": [
+            {"route_id": "Bus 1", "nodes": [0, 1], "time_s": 60 * 60, "stop_service_time_s": 0},
+        ]
+    }
+    points = [
+        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+    ]
+
+    gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(),
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="From School", from_school_departure_time="15:40"),
+        [{"address": "Shanghai"}],
+        "pm-window-smoke",
+    )
+
+    assert gate["status"] == "failed"
+    assert gate["target_duration_minutes"] == 120
+    assert round(gate["max_route_duration_overrun_minutes"]) == 5

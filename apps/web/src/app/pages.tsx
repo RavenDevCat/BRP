@@ -34,7 +34,7 @@ import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { formatDateTime, formatNumber } from "@/lib/format";
+import { formatDateTime, formatNumber, formatRuntime } from "@/lib/format";
 import { getJobName, getJobStatusTone } from "@/features/jobs/status";
 import { jobInputStopCount } from "@/features/jobs/summary-metrics";
 import { LanguageProvider, useT } from "@/lib/i18n/context";
@@ -864,6 +864,10 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                                 <TimelineItem
                                     label={t("Finished")}
                                     value={formatDateTime(job.finished_at)}
+                                />
+                                <TimelineItem
+                                    label={t("Runtime")}
+                                    value={formatRuntime(job.started_at, job.finished_at)}
                                 />
                                 <TimelineItem
                                     label={t("Owner")}

@@ -322,6 +322,7 @@ const ko: Translations = {
     Timeline: "타임라인",
     Started: "시작됨",
     Finished: "완료됨",
+    Runtime: "실행 시간",
     "Job actions": "작업 관리",
     "Release now": "지금 실행",
     "Release this scheduled job now?": "이 예약 작업을 지금 실행하시겠습니까?",

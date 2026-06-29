@@ -2838,6 +2838,26 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
     return True
 
 
+def _job_result_scenario(result: dict[str, Any], scenario_key: str) -> dict[str, Any]:
+    structured = dict(result.get("structured_results") or {})
+    scenario = dict(structured.get(scenario_key) or {})
+    if scenario_key != "original":
+        return scenario
+
+    recovered = (
+        dict(result.get("free_optimization_baseline") or {})
+        or dict(structured.get("free_optimization_baseline") or {})
+    )
+    if not recovered:
+        return scenario
+
+    merged = dict(scenario)
+    merged.update(recovered)
+    if not merged.get("output_html") and scenario.get("output_html"):
+        merged["output_html"] = scenario.get("output_html")
+    return merged
+
+
 def _resolve_job_map_artifact(
     job_record: dict[str, Any], artifact_key: str
 ) -> tuple[Path | None, str | None]:
@@ -2847,7 +2867,7 @@ def _resolve_job_map_artifact(
 
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
-    scenario = dict(structured.get(scenario_key) or {})
+    scenario = _job_result_scenario(result, scenario_key)
     output_paths = dict(structured.get("output_paths") or {})
     candidate_paths = [
         scenario.get("output_html"),
@@ -3503,9 +3523,9 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
     max_overrun_s = 0.0
     for route in list(payload.get("routes") or []):
         planned_drive_s = _float_or_none(route.get("duration_s"))
-        verified_drive_s = _float_or_none(route.get("display_duration_s"))
+        verified_drive_s = planned_drive_s
         stop_service_s = _float_or_none(route.get("stop_service_time_s")) or 0.0
-        source = str(route.get("display_geometry_source") or "")
+        source = str(route.get("traffic_time_source") or "route_timing")
         gate: dict[str, Any] = {
             "target_arrival_minutes": target_minutes,
             "target_arrival_label": target_label,
@@ -3519,7 +3539,7 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
             "verified_source": source,
             "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
         }
-        if planned_drive_s is None or verified_drive_s is None or not source.startswith("amap"):
+        if planned_drive_s is None or verified_drive_s is None:
             unavailable += 1
             gate.update({"status": "unavailable", "passes": None})
         else:
@@ -4005,7 +4025,7 @@ def _build_job_map_payload(
 ) -> tuple[dict[str, Any] | None, str | None]:
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
-    scenario = dict(structured.get(scenario_key) or {})
+    scenario = _job_result_scenario(result, scenario_key)
     points = list(scenario.get("points") or [])
     routes = list(scenario.get("routes") or [])
     if not points or not routes:
@@ -4106,9 +4126,9 @@ def _build_job_map_payload(
                 "max_stops": _int_or_none(route.get("max_stops")),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
                 "duration_s": float(
-                    display_duration_s
-                    or route.get("traffic_api_duration_s")
+                    route.get("traffic_api_duration_s")
                     or route.get("traffic_adjusted_drive_time_s")
+                    or display_duration_s
                     or route.get("time_s")
                     or 0.0
                 ),
@@ -4476,13 +4496,7 @@ def _build_scenario_template_export(
     scenario_key = MAP_ARTIFACT_KEYS.get(normalized_key, normalized_key)
     scenario_label = MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
     result = dict(job_record.get("result") or {})
-    structured = dict(result.get("structured_results") or {})
-    scenario = dict(structured.get(scenario_key) or {})
-    if scenario_key == "original" and not scenario:
-        scenario = (
-            dict(result.get("free_optimization_baseline") or {})
-            or dict(structured.get("free_optimization_baseline") or {})
-        )
+    scenario = _job_result_scenario(result, scenario_key)
     if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
         return None, f"{scenario_label} has no route table to export."
     planner_config = dict(

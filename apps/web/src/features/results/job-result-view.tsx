@@ -2977,8 +2977,24 @@ function dataRouteCountForSummary(summaries: MapScenarioSummary[], key: string) 
   return summaries.find((summary) => summary.key === key)?.routeCount ?? 0;
 }
 
-function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
+function scenarioForMapSurface(result: Record<string, unknown>, key: string): Record<string, unknown> {
   const structured = asRecord(result.structured_results);
+  const legacy = asRecord(structured[key]);
+  if (key !== "original") {
+    return legacy;
+  }
+  const recovered = asRecord(result.free_optimization_baseline || structured.free_optimization_baseline);
+  if (!Object.keys(recovered).length) {
+    return legacy;
+  }
+  return {
+    ...legacy,
+    ...recovered,
+    output_html: recovered.output_html || legacy.output_html,
+  };
+}
+
+function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
   const keys = [
     ["current_plan", "Current Plan"],
     ["original", "Free Optimization Baseline"],
@@ -2990,7 +3006,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
   ] as const;
   return keys
     .map(([key, name]) => {
-      const scenario = asRecord(structured[key]);
+      const scenario = scenarioForMapSurface(result, key);
       const path = stringValue(scenario.output_html);
       const hasRenderableMap = Boolean(
         scenario.enabled !== false &&
@@ -3011,9 +3027,8 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
 }
 
 function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: MapOutput[]): MapScenarioSummary[] {
-  const structured = asRecord(result.structured_results);
   return mapOutputs.map((output) => {
-    const scenario = asRecord(structured[output.key]);
+    const scenario = scenarioForMapSurface(result, output.key);
     const routes = asRecordArray(scenario.routes);
     return {
       key: output.key,

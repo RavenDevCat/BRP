@@ -36,6 +36,29 @@ export function formatDurationMinFromSeconds(value: unknown): string {
   return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(numericValue / 60)} min`;
 }
 
+export function formatRuntime(startedAt: unknown, finishedAt: unknown): string {
+  if (!startedAt || typeof startedAt !== "string") {
+    return "Not recorded";
+  }
+  const start = new Date(startedAt).getTime();
+  const finish = typeof finishedAt === "string" && finishedAt ? new Date(finishedAt).getTime() : Date.now();
+  if (Number.isNaN(start) || Number.isNaN(finish) || finish < start) {
+    return "Not recorded";
+  }
+  const totalSeconds = Math.round((finish - start) / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 1) {
+    return `${seconds} sec`;
+  }
+  if (minutes < 60) {
+    return seconds ? `${minutes} min ${seconds} sec` : `${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} hr ${remainingMinutes} min` : `${hours} hr`;
+}
+
 export function formatPercent(value: unknown, scale = 1): string {
   const numericValue = toFiniteNumber(value);
   if (!Number.isFinite(numericValue)) {

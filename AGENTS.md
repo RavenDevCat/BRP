@@ -40,10 +40,6 @@ Codex session, then ask the operator for the current handoff.
   and it keeps a separate Kakao Navi usage counter that must be preserved with
   runtime state. Do not switch this back to Google Routes for Seoul driving
   profiles; production diagnostics returned empty routes for KR/Seoul.
-- KR production traffic profiles are refreshed as one weekly Sunday 08:00 server
-  local batch for the upcoming Monday-Friday AM, PM, and off-peak profiles.
-  Keep Kakao daily and per-refresh safety caps high enough for the full batch
-  and preserve the server-local job or baseline inputs in `ops/env/local.env`.
 
 ## Repository Hygiene
 

@@ -197,11 +197,8 @@ KR production Windows wrapper:
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
 ```
 
-If `BRP-KR-Weekly-Traffic-Profile` exists on KR production, remove it with:
-
-```powershell
-.\ops\scripts\install_live_traffic_kr_timer.ps1
-```
+Do not install a KR weekly traffic Scheduled Task; use the wrappers above only
+for manual diagnostics.
 
 On KR Windows production, keep the backend under the `BRP Backend` Scheduled
 Task. If a deploy appears to update Git and frontend assets but backend feature

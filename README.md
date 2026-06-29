@@ -203,12 +203,6 @@ not be scheduled for normal production operation.
 .\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
 ```
 
-If the retired weekly Windows task exists on KR production, remove it with:
-
-```powershell
-.\ops\scripts\install_live_traffic_kr_timer.ps1
-```
-
 ## Documentation
 
 - `docs/architecture.md`: stable system design and module boundaries

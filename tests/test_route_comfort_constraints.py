@@ -84,35 +84,32 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self.assertLessEqual(max(route["stop_count"] for route in routes), 10)
         self.assertTrue(all(route["max_stops"] == 10 for route in routes))
 
-    def test_solver_uses_physical_capacity_and_reports_comfort_target(self) -> None:
+    def test_solver_uses_comfort_capacity_when_enabled(self) -> None:
         self._setattr("VEHICLE_FIXED_COST", {"Large Bus": 10000})
         points = [_point(0)] + [_point(index, 20) for index in range(1, 5)]
         matrix = _simple_matrix(len(points))
 
-        self.assertEqual(self.planner._minimum_vehicle_count_for_demand(80, self.planner.build_vehicle_fleet()), 2)
+        self.assertEqual(self.planner._minimum_vehicle_count_for_demand(80, self.planner.build_vehicle_fleet()), 3)
 
         routes = self.planner.solve_routes(points, matrix, matrix)
 
-        self.assertEqual(len(routes), 2)
-        self.assertEqual(sorted(route["load"] for route in routes), [40, 40])
+        self.assertEqual(len(routes), 4)
+        self.assertEqual(sorted(route["load"] for route in routes), [20, 20, 20, 20])
         self.assertTrue(all(route["bus_capacity"] == 42 for route in routes))
         self.assertTrue(all(route["comfort_capacity"] == 35 for route in routes))
-        self.assertTrue(all(route["load"] <= route["bus_capacity"] for route in routes))
-        self.assertTrue(any(route["load"] > route["comfort_capacity"] for route in routes))
+        self.assertTrue(all(route["load"] <= route["comfort_capacity"] for route in routes))
 
-    def test_stop_within_physical_capacity_is_not_split_for_comfort_target(self) -> None:
+    def test_stop_over_comfort_capacity_is_split_when_comfort_enabled(self) -> None:
         points = [_point(0), _point(1, 38)]
 
-        expanded = self.planner.split_oversized_demand_points(points, 42)
+        max_batch_size = max(self.planner.solver_capacity_for_vehicle(item) for item in self.planner.build_vehicle_fleet())
+        expanded = self.planner.split_oversized_demand_points(points, max_batch_size)
         matrix = _simple_matrix(len(expanded))
         routes = self.planner.solve_routes(expanded, matrix, matrix)
 
-        self.assertEqual([point["passenger_count"] for point in expanded[1:]], [38])
-        self.assertEqual(len(routes), 1)
-        self.assertEqual(routes[0]["load"], 38)
-        self.assertEqual(routes[0]["bus_capacity"], 42)
-        self.assertEqual(routes[0]["comfort_capacity"], 35)
-        self.assertGreater(routes[0]["load"], routes[0]["comfort_capacity"])
+        self.assertEqual([point["passenger_count"] for point in expanded[1:]], [19, 19])
+        self.assertEqual(len(routes), 2)
+        self.assertTrue(all(route["load"] <= route["comfort_capacity"] for route in routes))
 
     def test_min_solver_vehicle_count_forces_active_routes(self) -> None:
         self._setattr("BUS_TYPE_CONFIGS", [{"name": "Large Bus", "capacity": 42, "max_count": 4}])

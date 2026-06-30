@@ -165,10 +165,10 @@ export function NewJobPage() {
   });
 
   const jobNamePreview = useMemo(() => {
+    const customName = jobCustomName.trim().replace(/\s+/g, " ");
+    if (customName) return customName;
     const fallback = file?.name ? file.name.replace(/\.[^.]+$/, "") : t("Untitled job");
-    const baseName = preview?.job_default_name || fallback;
-    const suffix = jobCustomName.trim().replace(/\s+/g, " ");
-    return suffix ? `${baseName} - ${suffix}` : baseName;
+    return preview?.job_default_name || fallback;
   }, [file?.name, jobCustomName, preview?.job_default_name, t]);
 
   async function handleFileChange(nextFile: File | null) {

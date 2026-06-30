@@ -159,6 +159,13 @@ class FastApiThinShellTests(unittest.TestCase):
     def setUp(self) -> None:
         self.client = TestClient(api_app.app)
 
+    def test_job_display_name_uses_custom_name_when_present(self) -> None:
+        self.assertEqual(backend_service._build_job_display_name("routes.xlsx"), "routes")
+        self.assertEqual(
+            backend_service._build_job_display_name("routes.xlsx", "  June   test  "),
+            "June test",
+        )
+
     def test_health_is_available_with_and_without_api_prefix_without_auth(self) -> None:
         with patched_backend(SERVICE_TOKEN="secret"):
             self.assertEqual(self.client.get("/health").json(), {"status": "ok"})

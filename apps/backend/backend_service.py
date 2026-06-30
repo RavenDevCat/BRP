@@ -397,7 +397,7 @@ def _build_job_display_name(source_label: str, custom_name: str = "") -> str:
     normalized_custom_name = " ".join(str(custom_name or "").strip().split())
     if not normalized_custom_name:
         return default_name
-    return f"{default_name} - {normalized_custom_name}"
+    return normalized_custom_name
 
 
 def _decode_workbook_bytes(payload: dict[str, Any]) -> tuple[str, bytes]:

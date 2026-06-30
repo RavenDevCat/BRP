@@ -1221,7 +1221,10 @@ def comfort_capacity_for_vehicle(capacity: int) -> int:
 
 
 def solver_capacity_for_vehicle(vehicle: dict[str, Any]) -> int:
-    return max(0, int(vehicle.get("capacity", 0) or 0))
+    capacity = max(0, int(vehicle.get("capacity", 0) or 0))
+    if capacity <= 0:
+        return 0
+    return max(1, min(capacity, int(vehicle.get("comfort_capacity") or comfort_capacity_for_vehicle(capacity))))
 
 
 def route_stop_limit() -> int:

@@ -70,6 +70,71 @@ class ChinaGeocodeValidationTests(unittest.TestCase):
         self.assertEqual(point["adcode"], "310107")
         self.assertEqual(point["requested_city_param"], "310000")
 
+    def test_shanghai_rejects_city_level_fallback(self) -> None:
+        self.assertFalse(
+            runtime.is_plausible_geocode_result(
+                "China",
+                "Shanghai",
+                31.230525,
+                121.473667,
+                "上海市",
+                "310000",
+            )
+        )
+        self.assertTrue(
+            runtime.is_plausible_geocode_result(
+                "China",
+                "Shanghai",
+                31.196,
+                121.317,
+                "上海市松江区九杜路1001号",
+                "310117",
+            )
+        )
+
+    def test_amap_geocode_falls_back_to_poi_after_city_level_result(self) -> None:
+        original_request_json = runtime.amap_request_json
+        calls: list[str] = []
+
+        def fake_request_json(endpoint: str, params: dict[str, object], limiter: object) -> dict[str, object]:
+            calls.append(endpoint)
+            if endpoint == "/v3/geocode/geo":
+                return {
+                    "geocodes": [
+                        {
+                            "formatted_address": "上海市",
+                            "location": "121.473667,31.230525",
+                            "adcode": "310000",
+                        }
+                    ]
+                }
+            self.assertEqual(endpoint, "/v3/place/text")
+            self.assertEqual(params.get("city"), "310000")
+            self.assertEqual(params.get("citylimit"), "true")
+            return {
+                "pois": [
+                    {
+                        "pname": "上海市",
+                        "cityname": "上海市",
+                        "adname": "松江区",
+                        "address": "九杜路附近",
+                        "name": "TODTOWN天荟悦麓",
+                        "location": "121.319000,31.135000",
+                        "adcode": "310117",
+                    }
+                ]
+            }
+
+        try:
+            runtime.amap_request_json = fake_request_json  # type: ignore[assignment]
+            point = runtime.amap_geocode_query("China", "Shanghai", "TODTOWN天荟悦麓")
+        finally:
+            runtime.amap_request_json = original_request_json  # type: ignore[assignment]
+
+        self.assertIn("/v3/place/text", calls)
+        self.assertEqual(point["adcode"], "310117")
+        self.assertIn("松江区", point["formatted_address"])
+
     def test_far_from_school_warning_is_review_not_reject(self) -> None:
         school = {"lat": 31.2300, "lng": 121.4300, "address": "School"}
         point = {

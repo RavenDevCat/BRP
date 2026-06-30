@@ -4069,6 +4069,26 @@ def _build_job_map_payload(
             for connector in connectors:
                 for lng, lat in list(connector.get("geometry") or []):
                     all_coordinates.append((lat, lng))
+        traffic_gate = dict(route.get("final_route_traffic_gate") or {})
+        arrival_check = dict(route.get("arrival_reverse_check") or {})
+        verified_drive_duration_s = _float_or_none(arrival_check.get("verified_drive_duration_s"))
+        if verified_drive_duration_s is None:
+            verified_drive_duration_s = _float_or_none(traffic_gate.get("verified_drive_duration_s"))
+        verified_total_duration_s = _float_or_none(arrival_check.get("verified_total_duration_s"))
+        if verified_total_duration_s is None:
+            verified_total_duration_s = _float_or_none(traffic_gate.get("verified_total_duration_s"))
+        route_duration_s = (
+            verified_drive_duration_s
+            if verified_drive_duration_s is not None
+            else _float_or_none(route.get("traffic_api_duration_s"))
+        )
+        if route_duration_s is None:
+            route_duration_s = (
+                _float_or_none(route.get("traffic_adjusted_drive_time_s"))
+                or display_duration_s
+                or _float_or_none(route.get("time_s"))
+                or 0.0
+            )
         leg_details = list(route.get("leg_details") or [])
         cumulative_duration_s = 0.0
         cumulative_distance_m = 0.0
@@ -4125,15 +4145,11 @@ def _build_job_map_payload(
                 or max(0, len(nodes) - 1),
                 "max_stops": _int_or_none(route.get("max_stops")),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
-                "duration_s": float(
-                    route.get("traffic_api_duration_s")
-                    or route.get("traffic_adjusted_drive_time_s")
-                    or display_duration_s
-                    or route.get("time_s")
-                    or 0.0
-                ),
+                "duration_s": float(route_duration_s),
                 "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
                 "stop_service_time_s": float(route.get("stop_service_time_s", 0.0) or 0.0),
+                "verified_drive_duration_s": verified_drive_duration_s,
+                "verified_total_duration_s": verified_total_duration_s,
                 "traffic_time_source": str(
                     route.get("traffic_time_source") or ""
                 ).strip(),

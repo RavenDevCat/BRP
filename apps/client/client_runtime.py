@@ -478,6 +478,17 @@ def _is_within_china_city_bbox(city: str, lat: float, lng: float) -> bool:
     return south <= lat <= north and west <= lng <= east
 
 
+def _compact_china_location_text(value: str) -> str:
+    return "".join(str(value or "").strip().lower().split())
+
+
+def _is_china_city_only_result(config: dict[str, Any], formatted_address: str) -> bool:
+    text = _compact_china_location_text(formatted_address)
+    if not text:
+        return False
+    return text in {_compact_china_location_text(alias) for alias in config["aliases"]}
+
+
 def is_plausible_china_geocode_result(
     country: str,
     city: str,
@@ -491,6 +502,9 @@ def is_plausible_china_geocode_result(
     config = _china_city_config(city)
     if config is None:
         return True
+
+    if _is_china_city_only_result(config, formatted_address):
+        return False
 
     adcode_text = str(adcode).strip()
     if adcode_text:

@@ -489,6 +489,28 @@ def _is_china_city_only_result(config: dict[str, Any], formatted_address: str) -
     return text in {_compact_china_location_text(alias) for alias in config["aliases"]}
 
 
+def _distinctive_address_tokens(requested_address: str) -> list[str]:
+    tokens: list[str] = []
+    for match in re.finditer(r"[A-Za-z0-9]+", str(requested_address or "")):
+        token = match.group(0)
+        has_alpha = any(char.isalpha() for char in token)
+        has_digit = any(char.isdigit() for char in token)
+        is_upper_brand = token.isupper() and len(token) >= 4
+        if has_alpha and ((has_digit and len(token) >= 2) or is_upper_brand):
+            normalized = token.lower()
+            if normalized not in tokens:
+                tokens.append(normalized)
+    return tokens
+
+
+def _preserves_distinctive_address_tokens(requested_address: str, candidate_text: str) -> bool:
+    tokens = _distinctive_address_tokens(requested_address)
+    if not tokens:
+        return True
+    normalized_candidate = str(candidate_text or "").lower()
+    return all(token in normalized_candidate for token in tokens)
+
+
 def is_plausible_china_geocode_result(
     country: str,
     city: str,
@@ -496,6 +518,7 @@ def is_plausible_china_geocode_result(
     lng: float,
     formatted_address: str,
     adcode: str = "",
+    requested_address: str = "",
 ) -> bool:
     if not is_china_country(country):
         return True
@@ -504,6 +527,9 @@ def is_plausible_china_geocode_result(
         return True
 
     if _is_china_city_only_result(config, formatted_address):
+        return False
+
+    if not _preserves_distinctive_address_tokens(requested_address, formatted_address):
         return False
 
     adcode_text = str(adcode).strip()
@@ -538,7 +564,9 @@ def is_plausible_geocode_result(
     if is_bangkok_market_country(country):
         return is_plausible_bangkok_market_geocode_result(country, city, lat, lng, formatted_address, requested_address)
     if is_china_country(country):
-        return is_plausible_china_geocode_result(country, city, lat, lng, formatted_address, adcode)
+        return is_plausible_china_geocode_result(
+            country, city, lat, lng, formatted_address, adcode, requested_address
+        )
     return True
 
 
@@ -1122,11 +1150,15 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
             lng_str, lat_str = str(candidate["location"]).split(",")
             lat = float(lat_str)
             lng = float(lng_str)
+            candidate_address = str(candidate.get("address", "") or "").strip()
+            candidate_name = str(candidate.get("name", "") or "").strip()
             formatted_parts = [
                 str(candidate.get("pname", "") or "").strip(),
                 str(candidate.get("cityname", "") or "").strip(),
                 str(candidate.get("adname", "") or "").strip(),
-                str(candidate.get("address", "") or candidate.get("name", "") or address.strip()).strip(),
+                candidate_address,
+                "" if candidate_name == candidate_address else candidate_name,
+                address.strip() if not candidate_address and not candidate_name else "",
             ]
             formatted_address = "".join(part for index, part in enumerate(formatted_parts) if part and part not in formatted_parts[:index])
             adcode = str(candidate.get("adcode", "") or "").strip()

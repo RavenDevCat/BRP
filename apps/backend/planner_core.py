@@ -457,6 +457,7 @@ class PlannerConfig:
     nearby_output_name: str = "school_bus_routes_nearby_aggregated.html"
     time_constrained_output_name: str = "school_bus_routes_time_constrained.html"
     exception_preserving_output_name: str = "school_bus_routes_exception_preserving.html"
+    ep15min_output_name: str = "school_bus_routes_ep15min.html"
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
@@ -2655,6 +2656,7 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
         "nearby": str(output_dir / config.nearby_output_name),
         "time_constrained": str(output_dir / config.time_constrained_output_name),
         "exception_preserving": str(output_dir / config.exception_preserving_output_name),
+        "ep15min": str(output_dir / config.ep15min_output_name),
         "further_most": str(output_dir / config.further_most_output_name),
         "further_most_nearby": str(output_dir / config.further_most_nearby_output_name),
     }
@@ -3250,6 +3252,7 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
         "nearby",
         "time_constrained",
         "exception_preserving",
+        "ep15min",
         "further_most",
         "further_most_nearby",
     ):
@@ -3328,6 +3331,7 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
         "nearby",
         "time_constrained",
         "exception_preserving",
+        "ep15min",
         "further_most",
         "further_most_nearby",
     ):
@@ -7284,6 +7288,10 @@ def build_exception_preserving_scenario(
     standard_scenarios: list[dict[str, Any]],
     route_traffic_attribution_context: dict[str, Any] | None = None,
     route_traffic_fallback_multiplier: float | None = None,
+    node_time_upper_bounds_builder: Any | None = None,
+    time_constraint_metadata: dict[str, Any] | None = None,
+    baseline_name: str = "exception_preserving_optimization",
+    scenario_label: str = "Exception preserving optimization",
 ) -> dict[str, Any]:
     if any(_scenario_feasibility_passed(result) for result in standard_scenarios):
         return _build_skipped_scenario_result("A standard scenario already passed the final traffic gate.")
@@ -7325,6 +7333,8 @@ def build_exception_preserving_scenario(
                     f"Exception preserving remainder ({frozen_count} frozen)",
                     bus_type_configs=_bus_type_configs_after_frozen_routes(bus_type_configs, frozen_routes),
                     reduced_vehicle_limit=remaining_limit,
+                    node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+                    time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                     route_traffic_attribution_context=route_traffic_attribution_context,
                     route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
                 )
@@ -7341,14 +7351,21 @@ def build_exception_preserving_scenario(
             combined_routes = frozen_routes + optimized_routes
             candidate = planner.build_scenario_result(original_points, combined_routes, "")
             candidate["output_html"] = ""
-            candidate["baseline_name"] = "exception_preserving_optimization"
+            candidate["baseline_name"] = baseline_name
+            if node_time_upper_bounds_builder is not None:
+                candidate["time_constraint"] = {
+                    **deepcopy(time_constraint_metadata or {}),
+                    **dict(optimized.get("time_constraint") or {}),
+                    "applies_to": "exception_preserving_remainder",
+                    "frozen_route_count": frozen_count,
+                }
             attach_final_route_traffic_gate(
                 planner,
                 candidate,
                 original_points,
                 config,
                 input_records,
-                "Exception preserving optimization",
+                scenario_label,
             )
             candidate_summary = _scenario_exception_summary(candidate)
             accepted = _exception_candidate_accepted(
@@ -7800,6 +7817,31 @@ def run_backend_planner_with_prepared_data(
             route_traffic_attribution_context=route_traffic_attribution_context,
             route_traffic_fallback_multiplier=traffic_time_multiplier,
         )
+        if time_constraint_builder is not None:
+            ep15min_result = build_exception_preserving_scenario(
+                planner,
+                original_points,
+                current_plan_scenario,
+                config,
+                input_records,
+                free_baseline_bus_type_configs,
+                reduced_vehicle_limit,
+                standard_scenarios=[free_optimization_baseline, time_constrained_result],
+                route_traffic_attribution_context=route_traffic_attribution_context,
+                route_traffic_fallback_multiplier=traffic_time_multiplier,
+                node_time_upper_bounds_builder=time_constraint_builder,
+                time_constraint_metadata={
+                    **deepcopy(time_constraint_metadata),
+                    "source": "exception_preserving_remainder",
+                },
+                baseline_name="ep15min_optimization",
+                scenario_label="EP 15-minute optimization",
+            )
+        else:
+            ep15min_result = _build_skipped_scenario_result(
+                str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
+                {"time_constraint": time_constraint_metadata},
+            )
         route_reallocation_analysis = analyze_route_reallocation_opportunities(
             planner,
             current_plan,
@@ -7840,6 +7882,7 @@ def run_backend_planner_with_prepared_data(
                 ("nearby", nearby_result),
                 ("time_constrained", time_constrained_result),
                 ("exception_preserving", exception_preserving_result),
+                ("ep15min", ep15min_result),
             ):
                 route_attribution = dict((scenario_result or {}).get("traffic_route_attribution") or {})
                 if route_attribution:
@@ -7870,6 +7913,7 @@ def run_backend_planner_with_prepared_data(
         "nearby": nearby_result,
         "time_constrained": time_constrained_result,
         "exception_preserving": exception_preserving_result,
+        "ep15min": ep15min_result,
         "further_most": further_most_result,
         "further_most_nearby": further_most_nearby_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
@@ -7883,6 +7927,7 @@ def run_backend_planner_with_prepared_data(
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "exception_preserving_optimization": exception_preserving_result,
+        "ep15min_optimization": ep15min_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
@@ -7910,6 +7955,7 @@ def run_backend_planner_with_prepared_data(
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "exception_preserving_optimization": exception_preserving_result,
+        "ep15min_optimization": ep15min_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,

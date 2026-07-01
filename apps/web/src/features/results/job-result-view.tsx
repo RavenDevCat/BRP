@@ -2514,6 +2514,7 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
     scenarioFromScenario("Exception Preserving", "Preserves current-plan exception routes, then regroups the remaining stops", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
+    scenarioFromScenario("EP 15-Minute", "Exception-preserving optimization with the 15-minute time-impact limit", asRecord(result.ep15min_optimization || structured.ep15min)),
   ];
 }
 
@@ -2524,6 +2525,7 @@ function buildArrivalReverseChecks(result: Record<string, unknown>, selectedScen
     original: ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
     time_constrained: ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
     exception_preserving: ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
+    ep15min: ["EP 15-Minute", asRecord(result.ep15min_optimization || structured.ep15min)],
     subway: ["Subway Aggregated", asRecord(structured.subway || result.subway)],
     nearby: ["Nearby Aggregated", asRecord(structured.nearby || result.nearby)],
     further_most: ["Further Most", asRecord(structured.further_most || result.further_most)],
@@ -2717,6 +2719,7 @@ function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
   const scenarios: Array<[string, Record<string, unknown>]> = [
     ["Free Optimization", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
     ["15-Minute Constrained", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+    ["EP 15-Minute", asRecord(asRecord(result.ep15min_optimization).traffic_gate)],
   ];
   return scenarios.flatMap(([label, gate]) => {
     const status = stringValue(gate.status);
@@ -3038,6 +3041,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
     ["original", "Free Optimization Baseline"],
     ["time_constrained", "15-Minute Constrained"],
     ["exception_preserving", "Exception Preserving"],
+    ["ep15min", "EP 15-Minute"],
     ["subway", "Subway Aggregated"],
     ["nearby", "Nearby Aggregated"],
     ["further_most", "Further Most"],
@@ -3381,6 +3385,7 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
   const scenarios: Array<[string, Record<string, unknown>]> = [
     ["Free", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
     ["15-min", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+    ["EP15", asRecord(asRecord(result.ep15min_optimization).traffic_gate)],
   ];
   return scenarios
     .filter(([, gate]) => Object.keys(gate).length > 0 && stringValue(gate.status) !== "not_applicable")
@@ -3404,6 +3409,7 @@ function buildSolveProcessRows(result: Record<string, unknown>) {
   const scenarios: Array<[string, Record<string, unknown>]> = [
     ["Free Optimization Baseline", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
     ["15-Minute Constrained", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
+    ["EP 15-Minute", asRecord(asRecord(result.ep15min_optimization).traffic_gate)],
   ];
   return scenarios.map(([label, gate]) => buildSolveProcessRow(label, gate));
 }

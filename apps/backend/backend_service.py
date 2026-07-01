@@ -152,6 +152,8 @@ MAP_ARTIFACT_KEYS = {
     "time_constrained_optimization": "time_constrained",
     "exception_preserving": "exception_preserving",
     "exception_preserving_optimization": "exception_preserving",
+    "ep15min": "ep15min",
+    "ep15min_optimization": "ep15min",
     "further_most": "further_most",
     "further_most_nearby": "further_most_nearby",
 }
@@ -162,6 +164,7 @@ MAP_SCENARIO_LABELS = {
     "nearby": "Nearby Aggregated",
     "time_constrained": "15-Minute Constrained",
     "exception_preserving": "Exception Preserving",
+    "ep15min": "EP 15-Minute",
     "further_most": "Further Most",
     "further_most_nearby": "Further Most + Nearby Aggregate",
 }
@@ -172,6 +175,7 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "nearby": "nearby_html",
     "time_constrained": "time_constrained_html",
     "exception_preserving": "exception_preserving_html",
+    "ep15min": "ep15min_html",
     "further_most": "further_most_html",
     "further_most_nearby": "further_most_nearby_html",
 }

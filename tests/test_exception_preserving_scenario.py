@@ -141,3 +141,83 @@ def test_exception_preserving_skips_when_standard_scenario_passed():
 
     assert result["enabled"] is False
     assert "standard scenario" in result["skipped_reason"]
+
+
+def test_ep15min_passes_time_constraints_into_exception_remainder(monkeypatch):
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "failed current stop"},
+        {"node_id": 2, "address": "remaining stop"},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 3,
+        "routes": [
+            {
+                "route_id": "R12",
+                "nodes": [1, 0],
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 12,
+                },
+            },
+            {"route_id": "R1", "nodes": [2, 0], "final_route_traffic_gate": {"status": "passed"}},
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R12"],
+            "max_time_window_overrun_minutes": 12,
+        },
+    }
+    captured = {}
+
+    def fake_compute(_planner, subset_points, *_args, node_time_upper_bounds_builder=None, time_constraint_metadata=None, **_kwargs):
+        bounds = node_time_upper_bounds_builder(subset_points)
+        captured["bounds"] = bounds
+        captured["time_constraint_metadata"] = time_constraint_metadata
+        return {
+            "points": subset_points,
+            "routes": [{"route_id": "Bus 1", "nodes": [1, 0], "final_route_traffic_gate": {"status": "passed"}}],
+            "time_constraint": {"enabled": True, "bounded_solver_stop_count": len(bounds)},
+        }
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R12"],
+            "max_time_window_overrun_minutes": 12,
+        }
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = (
+                {"status": "failed", "time_window_overrun_minutes": 12}
+                if route["route_id"] == "R12"
+                else {"status": "passed"}
+            )
+        return scenario["traffic_gate"]
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(),
+        [{"address": "Shanghai", "passenger_count": 1}],
+        [{"name": "30-fbus", "capacity": 30, "max_count": 2}],
+        2,
+        standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+        node_time_upper_bounds_builder=lambda solver_points: {1: 900} if len(solver_points) > 1 else {},
+        time_constraint_metadata={"enabled": True, "source": "exception_preserving_remainder"},
+        baseline_name="ep15min_optimization",
+        scenario_label="EP 15-minute optimization",
+    )
+
+    assert result["baseline_name"] == "ep15min_optimization"
+    assert result["exception_preserving"]["accepted"] is True
+    assert captured["bounds"] == {1: 900}
+    assert captured["time_constraint_metadata"]["source"] == "exception_preserving_remainder"
+    assert result["time_constraint"]["applies_to"] == "exception_preserving_remainder"
+    assert result["time_constraint"]["bounded_solver_stop_count"] == 1

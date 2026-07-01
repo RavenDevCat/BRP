@@ -281,11 +281,24 @@ function PlansPanel({
   scenarios: ScenarioRow[];
   currentComparison: Record<string, unknown>;
 }) {
-  const arrivalReverseChecks = useMemo(() => buildArrivalReverseChecks(result), [result]);
+  const [selectedMapKey, setSelectedMapKey] = useState("");
+  const activeMapKey = mapOutputs.find((item) => item.key === selectedMapKey)?.key || mapOutputs[0]?.key || "";
+  const arrivalReverseChecks = useMemo(
+    () => buildArrivalReverseChecks(result, activeMapKey),
+    [activeMapKey, result],
+  );
 
   return (
     <div className="space-y-4">
-      <MapsPanel jobId={jobId} jobName={jobName} mapOutputs={mapOutputs} result={result} diagnostics={diagnostics} />
+      <MapsPanel
+        jobId={jobId}
+        jobName={jobName}
+        mapOutputs={mapOutputs}
+        result={result}
+        diagnostics={diagnostics}
+        selectedKey={activeMapKey}
+        onSelectKey={setSelectedMapKey}
+      />
       {arrivalReverseChecks.length ? <ArrivalReverseCheckPanel checks={arrivalReverseChecks} /> : null}
       <CollapsibleSection title="Scenario tables">
         <BaselinePanel scenarios={scenarios} currentComparison={currentComparison} />
@@ -1818,15 +1831,18 @@ function MapsPanel({
   mapOutputs,
   result,
   diagnostics,
+  selectedKey,
+  onSelectKey,
 }: {
   jobId: string;
   jobName: string;
   mapOutputs: MapOutput[];
   result: Record<string, unknown>;
   diagnostics: Diagnostics;
+  selectedKey: string;
+  onSelectKey: (key: string) => void;
 }) {
   const t = useT();
-  const [selectedKey, setSelectedKey] = useState("");
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
   const scenarioSummaries = useMemo(() => buildMapScenarioSummaries(result, mapOutputs), [mapOutputs, result]);
@@ -1916,7 +1932,7 @@ function MapsPanel({
                   ? "border-primary bg-primary/10"
                   : "border-border bg-surface hover:bg-muted",
               )}
-              onClick={() => setSelectedKey(summary.key)}
+              onClick={() => onSelectKey(summary.key)}
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="truncate text-sm font-semibold">{t(summary.name)}</div>
@@ -2501,15 +2517,20 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
   ];
 }
 
-function buildArrivalReverseChecks(result: Record<string, unknown>): ArrivalReverseCheck[] {
+function buildArrivalReverseChecks(result: Record<string, unknown>, selectedScenarioKey = ""): ArrivalReverseCheck[] {
   const structured = asRecord(result.structured_results);
-  const scenarios: Array<[string, Record<string, unknown>]> = [
-    ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
-    ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
-    ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
-    ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
-  ];
-  return scenarios
+  const scenarios: Record<string, [string, Record<string, unknown>]> = {
+    current_plan: ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
+    original: ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
+    time_constrained: ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
+    exception_preserving: ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
+    subway: ["Subway Aggregated", asRecord(structured.subway || result.subway)],
+    nearby: ["Nearby Aggregated", asRecord(structured.nearby || result.nearby)],
+    further_most: ["Further Most", asRecord(structured.further_most || result.further_most)],
+    further_most_nearby: ["Further Most + Nearby Aggregate", asRecord(structured.further_most_nearby || result.further_most_nearby)],
+  };
+  const selected = scenarios[selectedScenarioKey];
+  return (selected ? [selected] : Object.values(scenarios))
     .map(([scenarioName, scenario]) => buildArrivalReverseCheck(scenarioName, scenario))
     .filter((check): check is ArrivalReverseCheck => Boolean(check));
 }

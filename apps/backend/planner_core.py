@@ -456,6 +456,7 @@ class PlannerConfig:
     subway_output_name: str = "school_bus_routes_subway_aggregated.html"
     nearby_output_name: str = "school_bus_routes_nearby_aggregated.html"
     time_constrained_output_name: str = "school_bus_routes_time_constrained.html"
+    exception_preserving_output_name: str = "school_bus_routes_exception_preserving.html"
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
@@ -2653,6 +2654,7 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
         "subway": str(output_dir / config.subway_output_name),
         "nearby": str(output_dir / config.nearby_output_name),
         "time_constrained": str(output_dir / config.time_constrained_output_name),
+        "exception_preserving": str(output_dir / config.exception_preserving_output_name),
         "further_most": str(output_dir / config.further_most_output_name),
         "further_most_nearby": str(output_dir / config.further_most_nearby_output_name),
     }
@@ -3247,6 +3249,7 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
         "subway",
         "nearby",
         "time_constrained",
+        "exception_preserving",
         "further_most",
         "further_most_nearby",
     ):
@@ -3324,6 +3327,7 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
         "subway",
         "nearby",
         "time_constrained",
+        "exception_preserving",
         "further_most",
         "further_most_nearby",
     ):
@@ -7112,6 +7116,311 @@ def _recover_free_baseline_from_time_constrained(
     return _attach_free_baseline_metadata(recovered, config, bus_type_configs)
 
 
+def _route_display_id(route: dict[str, Any], fallback_index: int) -> str:
+    return str(route.get("route_id") or route.get("id") or f"Bus {fallback_index}").strip()
+
+
+def _route_time_window_overrun_minutes(route: dict[str, Any]) -> float:
+    gate = dict(route.get("final_route_traffic_gate") or route.get("am_arrival_gate") or {})
+    reverse = dict(route.get("arrival_reverse_check") or {})
+    return float(
+        gate.get("time_window_overrun_minutes")
+        or gate.get("estimated_arrival_delay_minutes")
+        or gate.get("route_duration_overrun_minutes")
+        or reverse.get("departure_window_overrun_minutes")
+        or 0.0
+    )
+
+
+def _route_failed_final_gate(route: dict[str, Any], failed_ids: set[str], fallback_index: int) -> bool:
+    route_id = _route_display_id(route, fallback_index)
+    gate = dict(route.get("final_route_traffic_gate") or route.get("am_arrival_gate") or {})
+    reverse = dict(route.get("arrival_reverse_check") or {})
+    status = str(gate.get("status") or reverse.get("status") or "").strip().lower()
+    if route_id in failed_ids:
+        return True
+    if gate.get("passes") is False:
+        return True
+    return status == "failed" or bool(reverse.get("before_earliest_departure"))
+
+
+def _scenario_exception_summary(scenario: dict[str, Any] | None) -> dict[str, Any]:
+    scenario = dict(scenario or {})
+    gate = dict(scenario.get("traffic_gate") or {})
+    failed_ids = {str(item) for item in list(gate.get("failed_route_ids") or [])}
+    failed_routes: list[dict[str, Any]] = []
+    affected_riders = 0
+    max_overrun_minutes = float(gate.get("max_time_window_overrun_minutes") or 0.0)
+    for route_index, route in enumerate(list(scenario.get("routes") or []), start=1):
+        route = dict(route or {})
+        if not _route_failed_final_gate(route, failed_ids, route_index):
+            continue
+        overrun_minutes = _route_time_window_overrun_minutes(route)
+        max_overrun_minutes = max(max_overrun_minutes, overrun_minutes)
+        affected_riders += int(route.get("load") or route.get("passenger_count") or route.get("passengers") or 0)
+        failed_routes.append(
+            {
+                "route_id": _route_display_id(route, route_index),
+                "rider_count": int(route.get("load") or route.get("passenger_count") or route.get("passengers") or 0),
+                "service_stop_count": max(0, len(list(route.get("nodes") or [])) - 1),
+                "overrun_minutes": overrun_minutes,
+            }
+        )
+    return {
+        "route_count": int(scenario.get("bus_count") or len(list(scenario.get("routes") or [])) or 0),
+        "failed_route_count": len(failed_routes),
+        "failed_route_ids": [str(item["route_id"]) for item in failed_routes],
+        "affected_rider_count": affected_riders,
+        "max_overrun_minutes": max_overrun_minutes,
+        "failed_routes": failed_routes,
+    }
+
+
+def _build_exception_subset_points(
+    original_points: list[dict[str, Any]],
+    frozen_node_ids: set[int],
+) -> tuple[list[dict[str, Any]], dict[int, int]]:
+    if not original_points:
+        return [], {}
+    subset_points = [dict(original_points[0])]
+    subset_points[0]["node_id"] = 0
+    subset_points[0]["_exception_original_node_id"] = 0
+    subset_to_original = {0: 0}
+    for original_index, point in enumerate(original_points[1:], start=1):
+        if original_index in frozen_node_ids:
+            continue
+        subset_index = len(subset_points)
+        copied = dict(point)
+        copied["node_id"] = subset_index
+        copied["_exception_original_node_id"] = original_index
+        subset_points.append(copied)
+        subset_to_original[subset_index] = original_index
+    return subset_points, subset_to_original
+
+
+def _remap_exception_route_nodes(
+    route: dict[str, Any],
+    subset_points: list[dict[str, Any]],
+    route_id: str,
+) -> dict[str, Any]:
+    remapped = deepcopy(route)
+
+    def original_node_id(subset_index: Any) -> int:
+        try:
+            index = int(subset_index)
+        except (TypeError, ValueError):
+            return 0
+        if 0 <= index < len(subset_points):
+            point = dict(subset_points[index] or {})
+            return int(point.get("_exception_original_node_id", index) or 0)
+        return index
+
+    remapped["route_id"] = route_id
+    remapped["exception_role"] = "optimized_remainder"
+    remapped["nodes"] = [original_node_id(node_id) for node_id in list(remapped.get("nodes") or [])]
+    for leg in list(remapped.get("leg_details") or []):
+        if isinstance(leg, dict):
+            leg["from_node"] = original_node_id(leg.get("from_node"))
+            leg["to_node"] = original_node_id(leg.get("to_node"))
+    return remapped
+
+
+def _bus_type_configs_after_frozen_routes(
+    bus_type_configs: list[dict[str, Any]],
+    frozen_routes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    frozen_counts = Counter(
+        str(route.get("bus_type_name") or route.get("bus_type") or "").strip()
+        for route in frozen_routes
+        if str(route.get("bus_type_name") or route.get("bus_type") or "").strip()
+    )
+    adjusted: list[dict[str, Any]] = []
+    for item in list(bus_type_configs or []):
+        copied = deepcopy(item)
+        name = str(copied.get("name") or "").strip()
+        copied["max_count"] = max(0, int(copied.get("max_count", 0) or 0) - int(frozen_counts.get(name, 0)))
+        adjusted.append(copied)
+    return adjusted
+
+
+def _route_service_node_ids(route: dict[str, Any]) -> set[int]:
+    node_ids: set[int] = set()
+    for node_id in list(route.get("nodes") or []):
+        try:
+            parsed = int(node_id)
+        except (TypeError, ValueError):
+            continue
+        if parsed != 0:
+            node_ids.add(parsed)
+    return node_ids
+
+
+def _exception_candidate_accepted(
+    candidate_summary: dict[str, Any],
+    current_summary: dict[str, Any],
+    candidate_route_count: int,
+    current_route_count: int,
+) -> bool:
+    return (
+        candidate_route_count < current_route_count
+        and int(candidate_summary.get("failed_route_count", 0) or 0)
+        <= int(current_summary.get("failed_route_count", 0) or 0)
+        and int(candidate_summary.get("affected_rider_count", 0) or 0)
+        <= int(current_summary.get("affected_rider_count", 0) or 0)
+        and float(candidate_summary.get("max_overrun_minutes", 0.0) or 0.0)
+        <= float(current_summary.get("max_overrun_minutes", 0.0) or 0.0) + 0.5
+    )
+
+
+def build_exception_preserving_scenario(
+    planner: Any,
+    original_points: list[dict[str, Any]],
+    current_plan_scenario: dict[str, Any] | None,
+    config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+    bus_type_configs: list[dict[str, Any]],
+    reduced_vehicle_limit: int | None,
+    *,
+    standard_scenarios: list[dict[str, Any]],
+    route_traffic_attribution_context: dict[str, Any] | None = None,
+    route_traffic_fallback_multiplier: float | None = None,
+) -> dict[str, Any]:
+    if any(_scenario_feasibility_passed(result) for result in standard_scenarios):
+        return _build_skipped_scenario_result("A standard scenario already passed the final traffic gate.")
+    if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
+        return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
+
+    current_routes = [dict(route) for route in list(current_plan_scenario.get("routes") or [])]
+    current_summary = _scenario_exception_summary(current_plan_scenario)
+    failed_route_ids = set(current_summary.get("failed_route_ids") or [])
+    if not failed_route_ids:
+        return _build_skipped_scenario_result("Current plan has no failed time-window routes to preserve.")
+
+    failed_routes = [
+        route
+        for index, route in enumerate(current_routes, start=1)
+        if _route_display_id(route, index) in failed_route_ids
+    ]
+    failed_routes.sort(key=_route_time_window_overrun_minutes, reverse=True)
+    current_route_count = int(current_plan_scenario.get("bus_count") or len(current_routes) or 0)
+    attempts: list[dict[str, Any]] = []
+    best_candidate: dict[str, Any] | None = None
+
+    for frozen_count in range(1, len(failed_routes) + 1):
+        frozen_routes = [deepcopy(route) for route in failed_routes[:frozen_count]]
+        frozen_node_ids = set().union(*[_route_service_node_ids(route) for route in frozen_routes])
+        subset_points, _subset_to_original = _build_exception_subset_points(original_points, frozen_node_ids)
+        remaining_service_count = max(0, len(subset_points) - 1)
+        remaining_limit = None
+        if reduced_vehicle_limit is not None:
+            remaining_limit = max(0, int(reduced_vehicle_limit or 0) - frozen_count)
+            if remaining_service_count:
+                remaining_limit = max(1, remaining_limit)
+
+        try:
+            if remaining_service_count:
+                optimized = _compute_scenario_without_render(
+                    planner,
+                    subset_points,
+                    f"Exception preserving remainder ({frozen_count} frozen)",
+                    bus_type_configs=_bus_type_configs_after_frozen_routes(bus_type_configs, frozen_routes),
+                    reduced_vehicle_limit=remaining_limit,
+                    route_traffic_attribution_context=route_traffic_attribution_context,
+                    route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                )
+                optimized_points = list(optimized.get("points") or subset_points)
+                optimized_routes = [
+                    _remap_exception_route_nodes(route, optimized_points, f"Opt Bus {index}")
+                    for index, route in enumerate(list(optimized.get("routes") or []), start=1)
+                ]
+            else:
+                optimized = {}
+                optimized_routes = []
+            for route in frozen_routes:
+                route["exception_role"] = "frozen_current"
+            combined_routes = frozen_routes + optimized_routes
+            candidate = planner.build_scenario_result(original_points, combined_routes, "")
+            candidate["output_html"] = ""
+            candidate["baseline_name"] = "exception_preserving_optimization"
+            attach_final_route_traffic_gate(
+                planner,
+                candidate,
+                original_points,
+                config,
+                input_records,
+                "Exception preserving optimization",
+            )
+            candidate_summary = _scenario_exception_summary(candidate)
+            accepted = _exception_candidate_accepted(
+                candidate_summary,
+                current_summary,
+                int(candidate.get("bus_count") or len(combined_routes) or 0),
+                current_route_count,
+            )
+            attempt = {
+                "frozen_route_count": frozen_count,
+                "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
+                "remaining_stop_count": remaining_service_count,
+                "route_count": int(candidate.get("bus_count") or len(combined_routes) or 0),
+                "accepted": accepted,
+                "candidate_failure_summary": candidate_summary,
+            }
+            attempts.append(attempt)
+            candidate["exception_preserving"] = {
+                "enabled": True,
+                "accepted": accepted,
+                "frozen_route_count": frozen_count,
+                "frozen_route_ids": list(attempt["frozen_route_ids"]),
+                "current_failure_summary": current_summary,
+                "candidate_failure_summary": candidate_summary,
+                "attempts": attempts,
+            }
+            candidate["exception_feasible"] = accepted
+            candidate["feasibility_report"] = build_route_feasibility_report(
+                candidate,
+                dict(candidate.get("traffic_gate") or {}),
+                config,
+                current_min_active_vehicle_count=0,
+                max_vehicle_count=max(0, int(reduced_vehicle_limit or 0)),
+            )
+            if accepted:
+                return candidate
+            if best_candidate is None:
+                best_candidate = candidate
+        except Exception as exc:
+            attempts.append(
+                {
+                    "frozen_route_count": frozen_count,
+                    "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
+                    "remaining_stop_count": remaining_service_count,
+                    "accepted": False,
+                    "error": str(exc),
+                }
+            )
+            planner.log(f"[WARN] Exception-preserving attempt with {frozen_count} frozen route(s) failed: {exc}")
+
+    if best_candidate is not None:
+        best_candidate["exception_preserving"] = {
+            **dict(best_candidate.get("exception_preserving") or {}),
+            "enabled": True,
+            "accepted": False,
+            "current_failure_summary": current_summary,
+            "attempts": attempts,
+        }
+        return best_candidate
+    return _build_skipped_scenario_result(
+        "Exception-preserving optimization could not produce a candidate.",
+        {
+            "exception_preserving": {
+                "enabled": True,
+                "accepted": False,
+                "current_failure_summary": current_summary,
+                "attempts": attempts,
+            }
+        },
+    )
+
+
 def _normalize_time_constraint_text(value: Any) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
@@ -7479,6 +7788,18 @@ def run_backend_planner_with_prepared_data(
             free_baseline_bus_type_configs,
         )
         original_result = free_optimization_baseline
+        exception_preserving_result = build_exception_preserving_scenario(
+            planner,
+            original_points,
+            current_plan_scenario,
+            config,
+            input_records,
+            free_baseline_bus_type_configs,
+            reduced_vehicle_limit,
+            standard_scenarios=[free_optimization_baseline, time_constrained_result],
+            route_traffic_attribution_context=route_traffic_attribution_context,
+            route_traffic_fallback_multiplier=traffic_time_multiplier,
+        )
         route_reallocation_analysis = analyze_route_reallocation_opportunities(
             planner,
             current_plan,
@@ -7518,6 +7839,7 @@ def run_backend_planner_with_prepared_data(
                 ("subway", subway_result),
                 ("nearby", nearby_result),
                 ("time_constrained", time_constrained_result),
+                ("exception_preserving", exception_preserving_result),
             ):
                 route_attribution = dict((scenario_result or {}).get("traffic_route_attribution") or {})
                 if route_attribution:
@@ -7547,6 +7869,7 @@ def run_backend_planner_with_prepared_data(
         "subway": subway_result,
         "nearby": nearby_result,
         "time_constrained": time_constrained_result,
+        "exception_preserving": exception_preserving_result,
         "further_most": further_most_result,
         "further_most_nearby": further_most_nearby_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
@@ -7559,6 +7882,7 @@ def run_backend_planner_with_prepared_data(
         "current_plan_scenario": current_plan_scenario,
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
+        "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
@@ -7585,6 +7909,7 @@ def run_backend_planner_with_prepared_data(
         "current_plan_scenario": current_plan_scenario,
         "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
+        "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,

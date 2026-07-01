@@ -2455,6 +2455,7 @@ type ScenarioRow = {
   enabled: boolean;
   skippedReason: string;
   trafficGate: Record<string, unknown>;
+  exceptionAccepted: boolean;
   routeCount: unknown;
   stopCount: unknown;
   avgDistanceM: unknown;
@@ -2496,6 +2497,7 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     currentPlanRow,
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
+    scenarioFromScenario("Exception Preserving", "Preserves current-plan exception routes, then regroups the remaining stops", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
   ];
 }
 
@@ -2505,6 +2507,7 @@ function buildArrivalReverseChecks(result: Record<string, unknown>): ArrivalReve
     ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
     ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
     ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
+    ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
   ];
   return scenarios
     .map(([scenarioName, scenario]) => buildArrivalReverseCheck(scenarioName, scenario))
@@ -2606,6 +2609,7 @@ function scenarioFromAssessment(name: string, detail: string, assessment: Record
     enabled: Object.keys(assessment).length > 0,
     skippedReason: "",
     trafficGate: {},
+    exceptionAccepted: false,
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
     avgDistanceM: assessment.avg_route_distance_m,
@@ -2622,6 +2626,7 @@ function scenarioFromScenario(name: string, detail: string, scenario: Record<str
     enabled: Object.keys(scenario).length > 0 && scenario.enabled !== false,
     skippedReason: stringValue(scenario.skipped_reason),
     trafficGate: asRecord(scenario.traffic_gate),
+    exceptionAccepted: Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
     avgDistanceM: scenario.avg_route_distance_m,
@@ -2647,9 +2652,12 @@ function trafficGateFailureText(gate: Record<string, unknown>): string {
   return trafficGateType(gate) === "route_duration" ? "route(s) over route-duration budget" : "route(s) outside final time window";
 }
 
-function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">): string {
+function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">): string {
   const status = stringValue(scenario.trafficGate.status);
   const checkName = trafficGateCheckName(scenario.trafficGate);
+  if (status === "failed" && scenario.exceptionAccepted) {
+    return "Exception contained";
+  }
   if (status === "passed") {
     return trafficGateType(scenario.trafficGate) === "route_duration" ? "Route duration passed" : "Time window passed";
   }
@@ -2662,16 +2670,19 @@ function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate">):
   return "";
 }
 
-function scenarioCardDetail(scenario: Pick<ScenarioRow, "trafficGate">, detail: string): string {
+function scenarioCardDetail(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">, detail: string): string {
   const status = scenarioTrafficStatusLabel(scenario);
   return status ? `${status}. ${detail}` : detail;
 }
 
 function scenarioTrafficTone(
-  scenario: Pick<ScenarioRow, "trafficGate">,
+  scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">,
   fallback: "neutral" | "success" | "warning" | "info",
 ): "neutral" | "success" | "warning" | "info" {
   const status = stringValue(scenario.trafficGate.status);
+  if (status === "failed" && scenario.exceptionAccepted) {
+    return "info";
+  }
   if (status === "passed") {
     return "success";
   }
@@ -2974,6 +2985,7 @@ type MapScenarioSummary = {
   passengerCount: number;
   totalDistanceM: number;
   longestDurationS: number;
+  exceptionAccepted: boolean;
   trafficStatusLabel: string;
   trafficStatusTone: "neutral" | "success" | "warning" | "info";
 };
@@ -3004,6 +3016,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
     ["current_plan", "Current Plan"],
     ["original", "Free Optimization Baseline"],
     ["time_constrained", "15-Minute Constrained"],
+    ["exception_preserving", "Exception Preserving"],
     ["subway", "Subway Aggregated"],
     ["nearby", "Nearby Aggregated"],
     ["further_most", "Further Most"],
@@ -3035,6 +3048,7 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
   return mapOutputs.map((output) => {
     const scenario = scenarioForMapSurface(result, output.key);
     const routes = asRecordArray(scenario.routes);
+    const exceptionAccepted = Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible);
     return {
       key: output.key,
       name: output.name,
@@ -3043,8 +3057,9 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       passengerCount: routes.reduce((total, route) => total + Number(routePassengerCount(route) || 0), 0),
       totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
       longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
-      trafficStatusLabel: scenarioTrafficStatusLabel({ trafficGate: asRecord(scenario.traffic_gate) }),
-      trafficStatusTone: scenarioTrafficTone({ trafficGate: asRecord(scenario.traffic_gate) }, "neutral"),
+      exceptionAccepted,
+      trafficStatusLabel: scenarioTrafficStatusLabel({ trafficGate: asRecord(scenario.traffic_gate), exceptionAccepted }),
+      trafficStatusTone: scenarioTrafficTone({ trafficGate: asRecord(scenario.traffic_gate), exceptionAccepted }, "neutral"),
     };
   });
 }

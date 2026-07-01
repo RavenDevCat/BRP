@@ -150,6 +150,8 @@ MAP_ARTIFACT_KEYS = {
     "nearby": "nearby",
     "time_constrained": "time_constrained",
     "time_constrained_optimization": "time_constrained",
+    "exception_preserving": "exception_preserving",
+    "exception_preserving_optimization": "exception_preserving",
     "further_most": "further_most",
     "further_most_nearby": "further_most_nearby",
 }
@@ -159,6 +161,7 @@ MAP_SCENARIO_LABELS = {
     "subway": "Subway Aggregated",
     "nearby": "Nearby Aggregated",
     "time_constrained": "15-Minute Constrained",
+    "exception_preserving": "Exception Preserving",
     "further_most": "Further Most",
     "further_most_nearby": "Further Most + Nearby Aggregate",
 }
@@ -168,6 +171,7 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "subway": "subway_html",
     "nearby": "nearby_html",
     "time_constrained": "time_constrained_html",
+    "exception_preserving": "exception_preserving_html",
     "further_most": "further_most_html",
     "further_most_nearby": "further_most_nearby_html",
 }

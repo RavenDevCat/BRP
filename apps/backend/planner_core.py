@@ -4391,6 +4391,29 @@ def build_current_plan_map_scenario(
     return result
 
 
+def attach_current_plan_traffic_gate(
+    planner: Any,
+    current_plan_scenario: dict[str, Any] | None,
+    points: list[dict[str, Any]],
+    config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if (
+        not current_plan_scenario
+        or current_plan_scenario.get("enabled") is False
+        or not current_plan_scenario.get("routes")
+    ):
+        return None
+    return attach_final_route_traffic_gate(
+        planner,
+        current_plan_scenario,
+        points,
+        config,
+        input_records,
+        "Current Plan",
+    )
+
+
 def compare_current_plan_to_like_for_like_baseline(
     current_plan_assessment: dict[str, Any] | None,
     like_for_like_baseline: dict[str, Any] | None,
@@ -7391,6 +7414,13 @@ def run_backend_planner_with_prepared_data(
             planner,
             current_plan_assessment,
             original_points,
+        )
+        attach_current_plan_traffic_gate(
+            planner,
+            current_plan_scenario,
+            original_points,
+            config,
+            input_records,
         )
         time_constraint_builder, time_constraint_metadata = _build_time_acceptance_constraint_builder(
             current_plan_assessment,

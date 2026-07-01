@@ -2488,8 +2488,12 @@ type ArrivalReverseRoute = {
 
 function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
   const structured = asRecord(result.structured_results);
+  const currentPlanScenario = asRecord(structured.current_plan || result.current_plan_scenario);
+  const currentPlanRow = Object.keys(currentPlanScenario).length
+    ? scenarioFromScenario("Current Plan", "Imported supplier route order", currentPlanScenario)
+    : scenarioFromAssessment("Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment));
   return [
-    scenarioFromAssessment("Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment)),
+    currentPlanRow,
     scenarioFromScenario("Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("15-Minute Constrained", "Optimized with a 15-minute time-impact limit", asRecord(result.time_constrained_optimization || structured.time_constrained)),
   ];
@@ -2498,6 +2502,7 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
 function buildArrivalReverseChecks(result: Record<string, unknown>): ArrivalReverseCheck[] {
   const structured = asRecord(result.structured_results);
   const scenarios: Array<[string, Record<string, unknown>]> = [
+    ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
     ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
     ["15-Minute Constrained", asRecord(result.time_constrained_optimization || structured.time_constrained)],
   ];

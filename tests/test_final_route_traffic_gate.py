@@ -712,3 +712,44 @@ def test_pm_final_route_gate_caps_duration_at_two_hour_window(monkeypatch):
     assert gate["status"] == "failed"
     assert gate["target_duration_minutes"] == 120
     assert round(gate["max_route_duration_overrun_minutes"]) == 5
+
+
+def test_current_plan_scenario_reuses_final_route_gate(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 0)
+
+    def fake_amap_route_stats(_planner, _points, _cache, state):
+        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        return {"duration_s": 55 * 60, "distance_m": 1234, "source": "fake_amap"}
+
+    monkeypatch.setattr(planner_core, "_amap_route_stats", fake_amap_route_stats)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+        MAX_ROUTE_DURATION_SECONDS = 60 * 60
+
+    scenario = {
+        "enabled": True,
+        "routes": [
+            {"route_id": "1-toschool", "nodes": [0, 1], "time_s": 55 * 60, "stop_service_time_s": 60},
+        ],
+    }
+    points = [
+        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+    ]
+
+    gate = planner_core.attach_current_plan_traffic_gate(
+        FakePlanner(),
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Shanghai"}],
+    )
+
+    assert gate is scenario["traffic_gate"]
+    assert gate["scenario"] == "Current Plan"
+    assert gate["status"] == "passed"
+    assert scenario["traffic_feasible"] is True
+    assert scenario["routes"][0]["final_route_traffic_gate"]["scenario"] == "Current Plan"

@@ -1522,6 +1522,198 @@ def _suggest_planner_config_from_current_plan(
     return suggested
 
 
+def _client_geocode_cache_key(
+    client_core: Any,
+    country: str,
+    city: str,
+    address: str,
+) -> str:
+    runtime = getattr(client_core, "runtime", None)
+    key_func = getattr(runtime, "geocode_cache_key", None)
+    if callable(key_func):
+        try:
+            return str(key_func(country, city, address))
+        except Exception:
+            pass
+    return f"{country.strip()}|{city.strip()}|{address.strip()}"
+
+
+def _client_geocode_cache_lookup_keys(
+    client_core: Any,
+    country: str,
+    city: str,
+    address: str,
+) -> list[str]:
+    runtime = getattr(client_core, "runtime", None)
+    lookup_func = getattr(runtime, "geocode_cache_lookup_keys", None)
+    if callable(lookup_func):
+        try:
+            return [str(item) for item in list(lookup_func(country, city, address) or []) if str(item)]
+        except Exception:
+            pass
+    key = _client_geocode_cache_key(client_core, country, city, address)
+    return [key] if key else []
+
+
+def _address_review_record_key(client_core: Any, item: dict[str, Any]) -> str:
+    return _client_geocode_cache_key(
+        client_core,
+        str(item.get("country") or item.get("requested_country") or "").strip(),
+        str(item.get("city") or item.get("requested_city") or "").strip(),
+        str(item.get("address") or item.get("requested_address") or item.get("display_address") or "").strip(),
+    )
+
+
+def _address_review_rows_label(rows: list[int]) -> str:
+    values = sorted({int(row) for row in rows if int(row) > 0})
+    return ", ".join(str(row) for row in values)
+
+
+def _address_review_failure_warnings(
+    input_records: list[dict[str, Any]],
+    reason: str,
+) -> list[dict[str, str]]:
+    warnings: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for item in input_records:
+        country = str(item.get("country") or "").strip()
+        city = str(item.get("city") or "").strip()
+        address = str(item.get("address") or "").strip()
+        key = (country, city, address)
+        if not address or key in seen:
+            continue
+        seen.add(key)
+        warnings.append(
+            {
+                "country": country,
+                "city": city,
+                "address": address,
+                "warning": reason,
+                "suggestion": "Correct the workbook address or clear the cached geocode, then upload again.",
+            }
+        )
+    return warnings
+
+
+def _build_address_review(
+    client_core: Any,
+    input_records: list[dict[str, Any]],
+    prepared_payload: dict[str, Any],
+    geocode_warnings: list[dict[str, Any]],
+) -> dict[str, Any]:
+    records: dict[str, dict[str, Any]] = {}
+    ordered_keys: list[str] = []
+    address_to_keys: dict[str, list[str]] = {}
+    for item in input_records:
+        country = str(item.get("country") or "").strip()
+        city = str(item.get("city") or "").strip()
+        address = str(item.get("address") or "").strip()
+        if not address:
+            continue
+        key = _client_geocode_cache_key(client_core, country, city, address)
+        if key not in records:
+            records[key] = {
+                "country": country,
+                "city": city,
+                "address": address,
+                "source_excel_rows": [],
+            }
+            ordered_keys.append(key)
+            address_to_keys.setdefault(address.lower(), []).append(key)
+        source_row = item.get("source_excel_row")
+        if source_row not in (None, "", 0):
+            records[key]["source_excel_rows"].append(int(source_row))
+
+    points_by_key: dict[str, dict[str, Any]] = {}
+    for point in list(prepared_payload.get("original_points") or []):
+        point_dict = dict(point or {})
+        key = _address_review_record_key(client_core, point_dict)
+        if key and key not in points_by_key:
+            points_by_key[key] = point_dict
+
+    warnings_by_key: dict[str, dict[str, Any]] = {}
+    for warning in geocode_warnings:
+        warning_dict = dict(warning or {})
+        key = _address_review_record_key(client_core, warning_dict)
+        if key not in records:
+            candidates = address_to_keys.get(str(warning_dict.get("address") or "").strip().lower(), [])
+            if len(candidates) == 1:
+                key = candidates[0]
+        if key:
+            warnings_by_key[key] = warning_dict
+
+    items: list[dict[str, Any]] = []
+    for key in ordered_keys:
+        record = records[key]
+        point = points_by_key.get(key)
+        warning = warnings_by_key.get(key)
+        warning_text = str((warning or {}).get("warning") or (warning or {}).get("reason") or "").strip()
+        status = "ok"
+        reason = ""
+        suggestion = ""
+        if point is None:
+            status = "blocking"
+            reason = warning_text or "This address could not be resolved to coordinates."
+            suggestion = str((warning or {}).get("suggestion") or "Correct the workbook address or clear the cached geocode, then upload again.").strip()
+        else:
+            point_status = str(point.get("geocode_status") or point.get("validation_status") or "").strip().lower()
+            warning_status = str((warning or {}).get("status") or "").strip().lower()
+            if point_status == "needs_review" or warning_status == "needs_review":
+                status = "needs_review"
+            reason = warning_text or str(point.get("warning") or "").strip()
+            suggestion = str((warning or {}).get("suggestion") or "").strip()
+
+        cache_keys = _client_geocode_cache_lookup_keys(
+            client_core,
+            str(record.get("country") or ""),
+            str(record.get("city") or ""),
+            str(record.get("address") or ""),
+        )
+        item = {
+            "id": key,
+            "status": status,
+            "severity": "error" if status == "blocking" else "warning" if status == "needs_review" else "ok",
+            "country": str(record.get("country") or ""),
+            "city": str(record.get("city") or ""),
+            "address": str(record.get("address") or ""),
+            "source_excel_rows": _address_review_rows_label(list(record.get("source_excel_rows") or [])),
+            "provider": str((point or {}).get("provider") or ""),
+            "formatted_address": str((point or warning or {}).get("formatted_address") or ""),
+            "lat": (point or {}).get("lat"),
+            "lng": (point or {}).get("lng"),
+            "adcode": str((point or {}).get("adcode") or ""),
+            "reason": reason,
+            "suggestion": suggestion,
+            "cache_keys": cache_keys,
+        }
+        if warning and warning.get("distance_to_school_km") is not None:
+            item["distance_to_school_km"] = warning.get("distance_to_school_km")
+        items.append(item)
+
+    blocking_count = sum(1 for item in items if item["status"] == "blocking")
+    review_count = sum(1 for item in items if item["status"] == "needs_review")
+    ok_count = sum(1 for item in items if item["status"] == "ok")
+    return {
+        "status": "blocked" if blocking_count else "needs_review" if review_count else "ok",
+        "blocking_count": blocking_count,
+        "review_count": review_count,
+        "ok_count": ok_count,
+        "total_count": len(items),
+        "requires_acknowledgement": review_count > 0,
+        "items": items,
+    }
+
+
+def _address_review_block_message(address_review: dict[str, Any]) -> str:
+    blocking_count = int(address_review.get("blocking_count") or 0)
+    review_count = int(address_review.get("review_count") or 0)
+    if blocking_count:
+        return f"Address review has {blocking_count} unresolved address(es). Correct the workbook or clear cached geocodes before running audit."
+    if review_count:
+        return f"Address review has {review_count} warning(s). Review and acknowledge them before running audit."
+    return ""
+
+
 def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
     config_payload = dict(payload.get("config") or {})
@@ -1534,11 +1726,34 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if block_reason:
         suggested_config["include_subway_aggregation_scenario"] = False
-    auto_route_budget = _auto_route_budget_from_current_plan(
-        client_core,
-        current_plan,
-        suggested_config,
-    )
+    auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
+    address_review: dict[str, Any]
+    try:
+        client_config = _build_client_planner_config(client_core, suggested_config)
+        client_prep = client_core.prepare_client_payload(
+            input_records,
+            current_plan_data=current_plan,
+            config=client_config,
+        )
+        prepared_payload = dict(client_prep["prepared_payload"])
+        auto_route_budget = _auto_current_plan_route_budget_details(
+            current_plan,
+            prepared_payload,
+        ) or {"status": "unavailable", "reason": "no_measurable_current_routes"}
+        address_review = _build_address_review(
+            client_core,
+            input_records,
+            prepared_payload,
+            [dict(item) for item in list(client_prep.get("geocode_warnings") or [])],
+        )
+    except Exception as exc:
+        auto_route_budget = {"status": "unavailable", "reason": exc.__class__.__name__}
+        address_review = _build_address_review(
+            client_core,
+            input_records,
+            {},
+            _address_review_failure_warnings(input_records, str(exc) or exc.__class__.__name__),
+        )
     auto_route_budget_minutes = auto_route_budget.get("minutes")
     if auto_route_budget_minutes is not None:
         suggested_config["max_route_duration_minutes"] = int(auto_route_budget_minutes)
@@ -1551,6 +1766,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "input_record_count": _service_input_record_count(input_records),
         "subway_aggregation_block_reason": block_reason,
         "auto_route_budget": auto_route_budget,
+        "address_review": address_review,
         "suggested_config": suggested_config,
     }
 
@@ -1807,6 +2023,16 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         current_plan_data=current_plan,
         config=client_config,
     )
+    address_review = _build_address_review(
+        client_core,
+        input_records,
+        dict(client_prep["prepared_payload"]),
+        [dict(item) for item in list(client_prep.get("geocode_warnings") or [])],
+    )
+    if int(address_review.get("blocking_count") or 0) > 0:
+        raise ValueError(_address_review_block_message(address_review))
+    if bool(address_review.get("requires_acknowledgement")) and not bool(payload.get("address_review_acknowledged")):
+        raise ValueError(_address_review_block_message(address_review))
     auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
     auto_route_budget_minutes: int | None = None
     try:
@@ -1849,6 +2075,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
             "logs": str(client_prep.get("logs", "") or ""),
             "auto_route_budget": auto_route_budget,
             "auto_route_budget_minutes": auto_route_budget_minutes,
+            "address_review": address_review,
         },
     }
     summary = JOB_STORE.create_job(
@@ -1871,6 +2098,90 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         "summary": dict(current_plan.get("summary") or {}),
         "client_prep": metadata["client_prep"],
         "subway_aggregation_block_reason": block_reason,
+        "address_review": address_review,
+    }
+
+
+def _normalized_cache_text(value: object) -> str:
+    return " ".join(str(value or "").strip().split()).lower()
+
+
+def _remove_geocode_cache_entries(
+    cache: dict[str, Any],
+    keys: list[str],
+    *,
+    address: str,
+) -> list[str]:
+    target_address = _normalized_cache_text(address)
+    key_set = {str(key) for key in keys if str(key)}
+    removed: list[str] = []
+    for key in list(cache.keys()):
+        entry = cache.get(key)
+        key_address = str(key).split("|")[-1] if "|" in str(key) else ""
+        entry_address = ""
+        if isinstance(entry, dict):
+            entry_address = str(
+                entry.get("requested_address")
+                or entry.get("address")
+                or entry.get("display_address")
+                or ""
+            )
+        if key in key_set or (target_address and _normalized_cache_text(key_address) == target_address) or (
+            target_address and _normalized_cache_text(entry_address) == target_address
+        ):
+            cache.pop(key, None)
+            removed.append(str(key))
+    return removed
+
+
+def _handle_geocode_cache_clear(payload: dict[str, Any]) -> dict[str, Any]:
+    country = str(payload.get("country") or "").strip()
+    city = str(payload.get("city") or "").strip()
+    address = str(payload.get("address") or "").strip()
+    if not address:
+        raise ValueError("Address is required.")
+
+    removed: dict[str, list[str]] = {"client": [], "backend": []}
+    client_core = _client_core_module()
+    runtime = getattr(client_core, "runtime", None)
+    client_cache = getattr(runtime, "GEOCODE_CACHE", None)
+    client_keys = _client_geocode_cache_lookup_keys(client_core, country, city, address)
+    if isinstance(client_cache, dict):
+        removed["client"] = _remove_geocode_cache_entries(
+            client_cache,
+            client_keys,
+            address=address,
+        )
+        if removed["client"]:
+            save_func = getattr(runtime, "save_json_cache", None)
+            cache_path = getattr(runtime, "GEOCODE_CACHE_PATH", None)
+            if callable(save_func) and cache_path is not None:
+                save_func(cache_path, client_cache)
+
+    planner = load_legacy_planner()
+    backend_cache = getattr(planner, "GEOCODE_CACHE", None)
+    backend_key_func = getattr(planner, "geocode_cache_key", None)
+    backend_keys: list[str] = []
+    if callable(backend_key_func):
+        backend_keys.append(str(backend_key_func(country, city, address)))
+    if isinstance(backend_cache, dict):
+        removed["backend"] = _remove_geocode_cache_entries(
+            backend_cache,
+            backend_keys,
+            address=address,
+        )
+        if removed["backend"]:
+            save_func = getattr(planner, "save_json_cache", None)
+            cache_path = getattr(planner, "GEOCODE_CACHE_PATH", None)
+            if callable(save_func) and cache_path is not None:
+                save_func(cache_path, backend_cache)
+
+    return {
+        "cleared": sum(len(items) for items in removed.values()),
+        "removed": removed,
+        "country": country,
+        "city": city,
+        "address": address,
     }
 
 

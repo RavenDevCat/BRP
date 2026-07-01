@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Upload } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -13,10 +13,12 @@ import {
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
 import {
+  clearGeocodeCache,
   getDeploymentFeatures,
   getWorkbookTemplateUrl,
   previewWorkbook,
   submitWorkbookJob,
+  type AddressReviewItem,
   type PlannerConfigPayload,
   type WorkbookPreview,
 } from "@/lib/api";
@@ -68,6 +70,7 @@ export function NewJobPage() {
   const [scheduledJob, setScheduledJob] = useState(false);
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
+  const [addressReviewAcknowledged, setAddressReviewAcknowledged] = useState(false);
   const [routeBudgetRetryAttempts, setRouteBudgetRetryAttempts] = useState(0);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
   const featuresQuery = useQuery({
@@ -132,9 +135,25 @@ export function NewJobPage() {
     onSuccess: (payload) => {
       setPreview(payload);
       setConfig(configFromPreview(payload));
+      setAddressReviewAcknowledged(false);
       if (payload.auto_route_budget?.status === "ready") {
         setRouteBudgetRetryAttempts(0);
       }
+    },
+  });
+
+  const clearAddressCacheMutation = useMutation({
+    mutationFn: clearGeocodeCache,
+    onSuccess: () => {
+      setAddressReviewAcknowledged(false);
+      if (!file || !fileBase64) {
+        return;
+      }
+      previewMutation.reset();
+      setFileError("");
+      setPreview(null);
+      setRouteBudgetRetryAttempts(0);
+      previewMutation.mutate({ file, fileBase64, config });
     },
   });
 
@@ -156,6 +175,7 @@ export function NewJobPage() {
         config: submitConfig,
         job_custom_name: jobCustomName,
         scheduled_job: scheduledJobsEnabled && scheduledJob,
+        address_review_acknowledged: addressReviewAcknowledged,
       });
     },
     onSuccess: async (payload) => {
@@ -175,6 +195,7 @@ export function NewJobPage() {
     previewMutation.reset();
     setFile(nextFile);
     setPreview(null);
+    setAddressReviewAcknowledged(false);
     setRouteBudgetRetryAttempts(0);
     configOverridesRef.current = {};
     setConfig(defaultConfig);
@@ -204,11 +225,18 @@ export function NewJobPage() {
     previewMutation.reset();
     setFileError("");
     setPreview(null);
+    setAddressReviewAcknowledged(false);
     setRouteBudgetRetryAttempts(0);
     previewMutation.mutate({ file, fileBase64, config });
   }
 
   const autoRouteBudget = preview?.auto_route_budget;
+  const addressReview = preview?.address_review;
+  const addressReviewBlocking = Boolean((addressReview?.blocking_count ?? 0) > 0);
+  const addressReviewNeedsAcknowledgement = Boolean(addressReview?.requires_acknowledgement);
+  const addressReviewReady = Boolean(
+    !addressReview || (!addressReviewBlocking && (!addressReviewNeedsAcknowledgement || addressReviewAcknowledged)),
+  );
   const routeBudgetPending = previewMutation.isPending && !preview;
   const routeBudgetReady = Boolean(
     preview && autoRouteBudget?.status === "ready" && Number.isFinite(Number(autoRouteBudget.minutes)),
@@ -224,7 +252,7 @@ export function NewJobPage() {
       : autoRouteBudget?.amap_route_status === "unavailable"
         ? `${t("AMap drive time")}: ${t("Unavailable")}`
         : "";
-  const busy = previewMutation.isPending || submitMutation.isPending;
+  const busy = previewMutation.isPending || submitMutation.isPending || clearAddressCacheMutation.isPending;
   const routeBudgetUnavailableRetryable = Boolean(
     preview &&
     autoRouteBudget?.status !== "ready" &&
@@ -256,7 +284,7 @@ export function NewJobPage() {
       : preview
         ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
         : t("Upload a workbook to calculate the route budget from the current plan.");
-  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && !busy);
+  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
     fileBase64 &&
@@ -264,6 +292,9 @@ export function NewJobPage() {
     routeBudgetRetryExhausted,
   );
   const controlsLocked = previewMutation.isPending || submitMutation.isPending;
+  const submitDisabledTitle = !addressReviewReady
+    ? t("Review address warnings before running audit.")
+    : t("Run audit will unlock after workbook validation and route-budget calculation finish.");
 
   useEffect(() => {
     if (!routeBudgetAutoRetrying || !file || !fileBase64) {
@@ -339,6 +370,23 @@ export function NewJobPage() {
               ) : null}
             </CardContent>
           </Card>
+
+          {preview?.address_review ? (
+            <AddressReviewPanel
+              review={preview.address_review}
+              acknowledged={addressReviewAcknowledged}
+              clearPending={clearAddressCacheMutation.isPending}
+              onAcknowledge={setAddressReviewAcknowledged}
+              onClearCache={(item) =>
+                clearAddressCacheMutation.mutate({
+                  country: item.country,
+                  city: item.city,
+                  address: item.address,
+                })
+              }
+            />
+          ) : null}
+          {clearAddressCacheMutation.error ? <InlineError message={(clearAddressCacheMutation.error as Error).message} /> : null}
 
           <Card>
             <CardHeader>
@@ -564,7 +612,7 @@ export function NewJobPage() {
                 <Button
                   type="button"
                   disabled={!canSubmit}
-                  title={canSubmit ? undefined : t("Run audit will unlock after workbook validation and route-budget calculation finish.")}
+                  title={canSubmit ? undefined : submitDisabledTitle}
                   icon={submitMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                   onClick={() => submitMutation.mutate()}
                 >
@@ -610,6 +658,110 @@ const fieldClassName =
 
 const toggleClassName =
   "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
+
+function AddressReviewPanel({
+  review,
+  acknowledged,
+  clearPending,
+  onAcknowledge,
+  onClearCache,
+}: {
+  review: NonNullable<WorkbookPreview["address_review"]>;
+  acknowledged: boolean;
+  clearPending: boolean;
+  onAcknowledge: (value: boolean) => void;
+  onClearCache: (item: AddressReviewItem) => void;
+}) {
+  const t = useT();
+  const [showAll, setShowAll] = useState(false);
+  const flagged = review.items.filter((item) => item.status !== "ok");
+  const visibleItems = showAll ? review.items : flagged.slice(0, 8);
+  const blocked = review.blocking_count > 0;
+  const needsReview = review.review_count > 0;
+  const toneClass = blocked
+    ? "border-red-200 bg-red-50 text-red-900"
+    : needsReview
+      ? "border-amber-200 bg-amber-50 text-amber-900"
+      : "border-emerald-200 bg-emerald-50 text-emerald-900";
+  const Icon = blocked || needsReview ? AlertTriangle : CheckCircle2;
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Icon className="h-4 w-4 text-primary" aria-hidden="true" />
+          <h2 className="text-sm font-semibold">{t("Address review")}</h2>
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className={`rounded-md border px-3 py-2 text-sm ${toneClass}`}>
+          {blocked
+            ? t("Some workbook addresses could not be resolved. Clear bad cache entries or correct the workbook before running audit.")
+            : needsReview
+              ? t("Some resolved addresses need human review before running audit.")
+              : t("No address issues were detected.")}
+          <div className="mt-1 text-xs opacity-80">
+            {formatNumber(review.total_count)} {t("addresses")} · {formatNumber(review.review_count)} {t("review")} · {formatNumber(review.blocking_count)} {t("blocked")}
+          </div>
+        </div>
+
+        {visibleItems.length ? (
+          <div className="max-h-96 space-y-2 overflow-auto pr-1">
+            {visibleItems.map((item) => (
+              <div key={item.id} className="rounded-md border border-border bg-surface p-3 text-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge tone={item.status === "blocking" ? "danger" : item.status === "needs_review" ? "warning" : "success"}>
+                        {t(item.status)}
+                      </Badge>
+                      {item.source_excel_rows ? (
+                        <span className="text-xs text-muted-foreground">{t("Rows")} {item.source_excel_rows}</span>
+                      ) : null}
+                      {item.provider ? <span className="text-xs text-muted-foreground">{item.provider}</span> : null}
+                    </div>
+                    <div className="mt-2 font-medium text-foreground">{item.address}</div>
+                    {item.formatted_address ? (
+                      <div className="mt-1 text-xs text-muted-foreground">{t("Resolved")}: {item.formatted_address}</div>
+                    ) : null}
+                    {item.reason ? <div className="mt-1 text-xs text-muted-foreground">{item.reason}</div> : null}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-8 shrink-0 text-xs"
+                    disabled={clearPending}
+                    icon={clearPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    onClick={() => onClearCache(item)}
+                  >
+                    {t("Clear cache")}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <Button type="button" variant="secondary" className="h-8 text-xs" onClick={() => setShowAll((value) => !value)}>
+            {showAll ? t("Show flagged only") : t("Show all resolved addresses")}
+          </Button>
+          {review.requires_acknowledgement ? (
+            <label className="flex items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={acknowledged}
+                disabled={blocked}
+                onChange={(event) => onAcknowledge(event.target.checked)}
+              />
+              <span>{t("I reviewed these address warnings")}</span>
+            </label>
+          ) : null}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function ToggleOption({ tooltip, children }: { tooltip: string; children: ReactNode }) {
   const t = useT();

@@ -936,6 +936,19 @@ def workbook_submit(
     )
 
 
+@_api_route(
+    "POST",
+    "/geocode-cache/clear",
+    dependencies=[Depends(require_authorized_request)],
+)
+def geocode_cache_clear(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_geocode_cache_clear(_payload_dict(payload))
+    )
+
+
 @_api_route("POST", "/jobs", dependencies=[Depends(require_authorized_request)])
 def create_job(
     payload: CreateJobRequest | None = Body(default=None),

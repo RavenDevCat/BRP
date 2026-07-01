@@ -460,7 +460,37 @@ export type WorkbookPreview = {
         route_count?: number;
         reason?: string;
     };
+    address_review?: AddressReview;
     suggested_config: PlannerConfigPayload;
+};
+
+export type AddressReviewItem = {
+    id: string;
+    status: "ok" | "needs_review" | "blocking" | string;
+    severity?: "ok" | "warning" | "error" | string;
+    country: string;
+    city: string;
+    address: string;
+    source_excel_rows?: string;
+    provider?: string;
+    formatted_address?: string;
+    lat?: number;
+    lng?: number;
+    adcode?: string;
+    reason?: string;
+    suggestion?: string;
+    distance_to_school_km?: string;
+    cache_keys?: string[];
+};
+
+export type AddressReview = {
+    status: "ok" | "needs_review" | "blocked" | string;
+    blocking_count: number;
+    review_count: number;
+    ok_count: number;
+    total_count: number;
+    requires_acknowledgement?: boolean;
+    items: AddressReviewItem[];
 };
 
 export type WorkbookSubmitResponse = {
@@ -874,8 +904,21 @@ export function submitWorkbookJob(payload: {
     config: PlannerConfigPayload;
     job_custom_name?: string;
     scheduled_job?: boolean;
+    address_review_acknowledged?: boolean;
 }) {
     return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+}
+
+export function clearGeocodeCache(payload: {
+    country?: string;
+    city?: string;
+    address: string;
+}) {
+    return apiFetch<{ cleared: number; removed: Record<string, string[]> }>("/geocode-cache/clear", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

@@ -110,6 +110,49 @@ class UploadAddressReviewGateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Review and acknowledge"):
                 backend_service._handle_workbook_submit({"config": {}}, user_email="user@example.com")
 
+    def test_preview_includes_current_plan_map_when_available(self) -> None:
+        client_core = self.fake_client_core(
+            prepared_payload={
+                "original_points": [
+                    {
+                        "requested_country": "China",
+                        "requested_city": "Shanghai",
+                        "requested_address": "Questionable stop",
+                        "lat": 31.2,
+                        "lng": 121.4,
+                    }
+                ]
+            },
+        )
+        map_payload = {
+            "job_id": "workbook-preview",
+            "scenario_key": "current_plan",
+            "scenario_name": "Current Plan",
+            "routes": [],
+            "stops": [],
+            "private_links": [],
+            "summary": {
+                "route_count": 0,
+                "stop_count": 0,
+                "passenger_count": 0,
+                "distance_m": 0,
+                "duration_s": 0,
+            },
+        }
+        patches = {
+            "_read_current_plan_upload": lambda _payload: (client_core, "routes.xlsx", self.current_plan()),
+            "_find_subway_aggregation_block_reason": lambda *_args, **_kwargs: "",
+            "_build_client_planner_config": lambda *_args, **_kwargs: object(),
+            "_auto_current_plan_route_budget_details": lambda *_args, **_kwargs: None,
+            "_current_plan_preview_map": lambda *_args, **_kwargs: (map_payload, None),
+        }
+
+        with mock.patch.multiple(backend_service, **patches):
+            preview = backend_service._workbook_preview_response({"config": {}})
+
+        self.assertEqual(preview["current_plan_map"], map_payload)
+        self.assertIsNone(preview["current_plan_map_error"])
+
     def test_cache_clear_removes_client_and_backend_entries(self) -> None:
         client_core = self.fake_client_core()
         client_core.runtime.GEOCODE_CACHE = {

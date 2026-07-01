@@ -12,6 +12,7 @@ import {
   SERVICE_DIRECTION_OPTIONS,
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
+import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import {
   clearGeocodeCache,
   getDeploymentFeatures,
@@ -372,8 +373,10 @@ export function NewJobPage() {
           </Card>
 
           {preview?.address_review ? (
-            <AddressReviewPanel
+            <CurrentPlanReviewPanel
               review={preview.address_review}
+              mapData={preview.current_plan_map}
+              mapError={preview.current_plan_map_error}
               acknowledged={addressReviewAcknowledged}
               clearPending={clearAddressCacheMutation.isPending}
               onAcknowledge={setAddressReviewAcknowledged}
@@ -659,14 +662,22 @@ const fieldClassName =
 const toggleClassName =
   "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
 
-function AddressReviewPanel({
+function normalizeReviewAddress(value?: string) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function CurrentPlanReviewPanel({
   review,
+  mapData,
+  mapError,
   acknowledged,
   clearPending,
   onAcknowledge,
   onClearCache,
 }: {
   review: NonNullable<WorkbookPreview["address_review"]>;
+  mapData?: WorkbookPreview["current_plan_map"];
+  mapError?: string | null;
   acknowledged: boolean;
   clearPending: boolean;
   onAcknowledge: (value: boolean) => void;
@@ -674,6 +685,18 @@ function AddressReviewPanel({
 }) {
   const t = useT();
   const [showAll, setShowAll] = useState(false);
+  const reviewByAddress = useMemo(() => {
+    const lookup = new Map<string, AddressReviewItem>();
+    for (const item of review.items) {
+      for (const value of [item.address, item.formatted_address]) {
+        const key = normalizeReviewAddress(value);
+        if (key && !lookup.has(key)) {
+          lookup.set(key, item);
+        }
+      }
+    }
+    return lookup;
+  }, [review.items]);
   const flagged = review.items.filter((item) => item.status !== "ok");
   const visibleItems = showAll ? review.items : flagged.slice(0, 8);
   const blocked = review.blocking_count > 0;
@@ -690,7 +713,7 @@ function AddressReviewPanel({
       <CardHeader>
         <div className="flex items-center gap-2">
           <Icon className="h-4 w-4 text-primary" aria-hidden="true" />
-          <h2 className="text-sm font-semibold">{t("Address review")}</h2>
+          <h2 className="text-sm font-semibold">{t("Current plan review")}</h2>
         </div>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -704,6 +727,42 @@ function AddressReviewPanel({
             {formatNumber(review.total_count)} {t("addresses")} · {formatNumber(review.review_count)} {t("review")} · {formatNumber(review.blocking_count)} {t("blocked")}
           </div>
         </div>
+
+        {mapData ? (
+          <div className="overflow-hidden rounded-md border border-border">
+            <InteractiveRouteMap
+              data={mapData}
+              renderStopActions={(stop) => {
+                const item =
+                  reviewByAddress.get(normalizeReviewAddress(stop.requested_address)) ||
+                  reviewByAddress.get(normalizeReviewAddress(stop.address));
+                if (!item || stop.is_depot) {
+                  return null;
+                }
+                return (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="h-8 text-xs"
+                    disabled={clearPending}
+                    icon={clearPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onClearCache(item);
+                    }}
+                  >
+                    {t("Clear cache")}
+                  </Button>
+                );
+              }}
+            />
+          </div>
+        ) : (
+          <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-3 text-sm text-muted-foreground">
+            {t("Current plan map preview is unavailable. Review the address list below.")}
+            {mapError ? <div className="mt-1 text-xs">{mapError}</div> : null}
+          </div>
+        )}
 
         {visibleItems.length ? (
           <div className="max-h-96 space-y-2 overflow-auto pr-1">

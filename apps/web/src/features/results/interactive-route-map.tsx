@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import MapView, {
     Layer,
     NavigationControl,
@@ -138,10 +138,12 @@ export function InteractiveRouteMap({
     data,
     fullscreen = false,
     focusKey = "",
+    renderStopActions,
 }: {
     data: JobMapData;
     fullscreen?: boolean;
     focusKey?: string;
+    renderStopActions?: (stop: JobMapStop) => ReactNode;
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapRef | null>(null);
@@ -1429,6 +1431,11 @@ export function InteractiveRouteMap({
                                     </div>
                                 ) : null}
                                 <StopTimeImpactBadge stop={selectedStop} />
+                                {renderStopActions ? (
+                                    <div className="pt-2">
+                                        {renderStopActions(selectedStop)}
+                                    </div>
+                                ) : null}
                             </div>
                         </Popup>
                     ) : null}

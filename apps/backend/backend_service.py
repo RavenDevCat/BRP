@@ -39,9 +39,12 @@ try:
     from .planner_core import (
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
+        _build_assessment_metric_matrices,
         _amap_route_stats,
         _route_amap_points,
+        assess_current_plan,
         build_baseline_template_workbook_bytes,
+        build_current_plan_map_scenario,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -65,9 +68,12 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from planner_core import (
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
+        _build_assessment_metric_matrices,
         _amap_route_stats,
         _route_amap_points,
+        assess_current_plan,
         build_baseline_template_workbook_bytes,
+        build_current_plan_map_scenario,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -1714,6 +1720,56 @@ def _address_review_block_message(address_review: dict[str, Any]) -> str:
     return ""
 
 
+def _current_plan_preview_map(
+    current_plan: dict[str, Any],
+    prepared_payload: dict[str, Any],
+    config_payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
+    if not points:
+        return None, "No geocoded points are available for map preview."
+    try:
+        planner = load_legacy_planner()
+        config = _build_planner_config(config_payload)
+        assessment_time, assessment_distance = _build_assessment_metric_matrices(
+            planner,
+            points,
+        )
+        current_plan_assessment = assess_current_plan(
+            planner,
+            current_plan,
+            points,
+            config,
+            solve_time=assessment_time,
+            solve_distance=assessment_distance,
+        )
+        scenario = build_current_plan_map_scenario(
+            planner,
+            current_plan_assessment,
+            points,
+        )
+        job_record = {
+            "job_id": "workbook-preview",
+            "result": {
+                "service_direction": str(
+                    getattr(config, "service_direction", "") or ""
+                ).strip(),
+                "traffic_profile_name": str(
+                    getattr(config, "traffic_profile_name", "") or ""
+                ).strip(),
+                "structured_results": {"current_plan": scenario},
+            },
+        }
+        return _build_job_map_payload(
+            job_record,
+            "current_plan",
+            "current_plan",
+            attach_impact=False,
+        )
+    except Exception as exc:
+        return None, str(exc) or exc.__class__.__name__
+
+
 def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
     config_payload = dict(payload.get("config") or {})
@@ -1728,6 +1784,8 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         suggested_config["include_subway_aggregation_scenario"] = False
     auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
     address_review: dict[str, Any]
+    current_plan_map: dict[str, Any] | None = None
+    current_plan_map_error: str | None = None
     try:
         client_config = _build_client_planner_config(client_core, suggested_config)
         client_prep = client_core.prepare_client_payload(
@@ -1746,8 +1804,14 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
             prepared_payload,
             [dict(item) for item in list(client_prep.get("geocode_warnings") or [])],
         )
+        current_plan_map, current_plan_map_error = _current_plan_preview_map(
+            current_plan,
+            prepared_payload,
+            suggested_config,
+        )
     except Exception as exc:
         auto_route_budget = {"status": "unavailable", "reason": exc.__class__.__name__}
+        current_plan_map_error = str(exc) or exc.__class__.__name__
         address_review = _build_address_review(
             client_core,
             input_records,
@@ -1767,6 +1831,8 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "subway_aggregation_block_reason": block_reason,
         "auto_route_budget": auto_route_budget,
         "address_review": address_review,
+        "current_plan_map": current_plan_map,
+        "current_plan_map_error": current_plan_map_error,
         "suggested_config": suggested_config,
     }
 

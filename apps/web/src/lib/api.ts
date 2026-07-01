@@ -461,6 +461,8 @@ export type WorkbookPreview = {
         reason?: string;
     };
     address_review?: AddressReview;
+    current_plan_map?: JobMapData | null;
+    current_plan_map_error?: string | null;
     suggested_config: PlannerConfigPayload;
 };
 

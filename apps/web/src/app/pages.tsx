@@ -159,7 +159,7 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
         refetchInterval: 15_000,
     });
     const jobs = jobsQuery.data || [];
-    const resolvedJobId = selectedJobId || jobs[0]?.job_id || "";
+    const resolvedJobId = selectedJobId || "";
     const selectedJob = jobs.find((job) => job.job_id === resolvedJobId);
 
     const historyDeleteMutation = useMutation({

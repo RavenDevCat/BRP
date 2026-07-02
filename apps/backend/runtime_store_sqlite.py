@@ -282,7 +282,10 @@ class SqliteRuntimeStore:
     def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         self.initialize()
         normalized_user = normalize_email(user_email)
-        sql = "SELECT * FROM jobs"
+        sql = (
+            "SELECT job_id, owner_email, shared_with_all, status, created_at, "
+            "started_at, finished_at, metadata_json, prepared_payload_summary_json, error FROM jobs"
+        )
         params: tuple[Any, ...] = ()
         if not include_all:
             sql += " WHERE shared_with_all = 1 OR owner_email = ?"

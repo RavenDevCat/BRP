@@ -7276,6 +7276,15 @@ def _exception_candidate_accepted(
     )
 
 
+def _exception_candidate_rank(candidate_summary: dict[str, Any], candidate_route_count: int) -> tuple[int, int, float, int]:
+    return (
+        int(candidate_summary.get("failed_route_count", 0) or 0),
+        int(candidate_summary.get("affected_rider_count", 0) or 0),
+        float(candidate_summary.get("max_overrun_minutes", 0.0) or 0.0),
+        int(candidate_route_count or 0),
+    )
+
+
 def build_exception_preserving_scenario(
     planner: Any,
     original_points: list[dict[str, Any]],
@@ -7292,6 +7301,7 @@ def build_exception_preserving_scenario(
     time_constraint_metadata: dict[str, Any] | None = None,
     baseline_name: str = "exception_preserving_optimization",
     scenario_label: str = "Exception preserving optimization",
+    allow_vehicle_limit_fallback: bool = False,
 ) -> dict[str, Any]:
     if any(_scenario_feasibility_passed(result) for result in standard_scenarios):
         return _build_skipped_scenario_result("A standard scenario already passed the final traffic gate.")
@@ -7324,97 +7334,123 @@ def build_exception_preserving_scenario(
             remaining_limit = max(0, int(reduced_vehicle_limit or 0) - frozen_count)
             if remaining_service_count:
                 remaining_limit = max(1, remaining_limit)
+        remaining_limits = [remaining_limit]
+        if (
+            allow_vehicle_limit_fallback
+            and reduced_vehicle_limit is not None
+            and remaining_service_count
+            and remaining_limit is not None
+        ):
+            max_remaining_limit = max(1, current_route_count - frozen_count)
+            remaining_limits.extend(range(int(remaining_limit) + 1, max_remaining_limit + 1))
 
-        try:
-            if remaining_service_count:
-                optimized = _compute_scenario_without_render(
+        for remaining_limit_candidate in remaining_limits:
+            try:
+                if remaining_service_count:
+                    optimized = _compute_scenario_without_render(
+                        planner,
+                        subset_points,
+                        f"Exception preserving remainder ({frozen_count} frozen)",
+                        bus_type_configs=_bus_type_configs_after_frozen_routes(bus_type_configs, frozen_routes),
+                        reduced_vehicle_limit=remaining_limit_candidate,
+                        node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+                        time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+                        route_traffic_attribution_context=route_traffic_attribution_context,
+                        route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                    )
+                    optimized_points = list(optimized.get("points") or subset_points)
+                    optimized_routes = [
+                        _remap_exception_route_nodes(route, optimized_points, f"Opt Bus {index}")
+                        for index, route in enumerate(list(optimized.get("routes") or []), start=1)
+                    ]
+                else:
+                    optimized = {}
+                    optimized_routes = []
+                for route in frozen_routes:
+                    route["exception_role"] = "frozen_current"
+                combined_routes = frozen_routes + optimized_routes
+                candidate = planner.build_scenario_result(original_points, combined_routes, "")
+                candidate["output_html"] = ""
+                candidate["baseline_name"] = baseline_name
+                if node_time_upper_bounds_builder is not None:
+                    candidate["time_constraint"] = {
+                        **deepcopy(time_constraint_metadata or {}),
+                        **dict(optimized.get("time_constraint") or {}),
+                        "applies_to": "exception_preserving_remainder",
+                        "frozen_route_count": frozen_count,
+                    }
+                attach_final_route_traffic_gate(
                     planner,
-                    subset_points,
-                    f"Exception preserving remainder ({frozen_count} frozen)",
-                    bus_type_configs=_bus_type_configs_after_frozen_routes(bus_type_configs, frozen_routes),
-                    reduced_vehicle_limit=remaining_limit,
-                    node_time_upper_bounds_builder=node_time_upper_bounds_builder,
-                    time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
-                    route_traffic_attribution_context=route_traffic_attribution_context,
-                    route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                    candidate,
+                    original_points,
+                    config,
+                    input_records,
+                    scenario_label,
                 )
-                optimized_points = list(optimized.get("points") or subset_points)
-                optimized_routes = [
-                    _remap_exception_route_nodes(route, optimized_points, f"Opt Bus {index}")
-                    for index, route in enumerate(list(optimized.get("routes") or []), start=1)
-                ]
-            else:
-                optimized = {}
-                optimized_routes = []
-            for route in frozen_routes:
-                route["exception_role"] = "frozen_current"
-            combined_routes = frozen_routes + optimized_routes
-            candidate = planner.build_scenario_result(original_points, combined_routes, "")
-            candidate["output_html"] = ""
-            candidate["baseline_name"] = baseline_name
-            if node_time_upper_bounds_builder is not None:
-                candidate["time_constraint"] = {
-                    **deepcopy(time_constraint_metadata or {}),
-                    **dict(optimized.get("time_constraint") or {}),
-                    "applies_to": "exception_preserving_remainder",
-                    "frozen_route_count": frozen_count,
-                }
-            attach_final_route_traffic_gate(
-                planner,
-                candidate,
-                original_points,
-                config,
-                input_records,
-                scenario_label,
-            )
-            candidate_summary = _scenario_exception_summary(candidate)
-            accepted = _exception_candidate_accepted(
-                candidate_summary,
-                current_summary,
-                int(candidate.get("bus_count") or len(combined_routes) or 0),
-                current_route_count,
-            )
-            attempt = {
-                "frozen_route_count": frozen_count,
-                "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
-                "remaining_stop_count": remaining_service_count,
-                "route_count": int(candidate.get("bus_count") or len(combined_routes) or 0),
-                "accepted": accepted,
-                "candidate_failure_summary": candidate_summary,
-            }
-            attempts.append(attempt)
-            candidate["exception_preserving"] = {
-                "enabled": True,
-                "accepted": accepted,
-                "frozen_route_count": frozen_count,
-                "frozen_route_ids": list(attempt["frozen_route_ids"]),
-                "current_failure_summary": current_summary,
-                "candidate_failure_summary": candidate_summary,
-                "attempts": attempts,
-            }
-            candidate["exception_feasible"] = accepted
-            candidate["feasibility_report"] = build_route_feasibility_report(
-                candidate,
-                dict(candidate.get("traffic_gate") or {}),
-                config,
-                current_min_active_vehicle_count=0,
-                max_vehicle_count=max(0, int(reduced_vehicle_limit or 0)),
-            )
-            if accepted:
-                return candidate
-            if best_candidate is None:
-                best_candidate = candidate
-        except Exception as exc:
-            attempts.append(
-                {
+                candidate_summary = _scenario_exception_summary(candidate)
+                candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
+                accepted = _exception_candidate_accepted(
+                    candidate_summary,
+                    current_summary,
+                    candidate_route_count,
+                    current_route_count,
+                )
+                attempt = {
                     "frozen_route_count": frozen_count,
                     "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
                     "remaining_stop_count": remaining_service_count,
-                    "accepted": False,
-                    "error": str(exc),
+                    "remaining_vehicle_limit": remaining_limit_candidate,
+                    "route_count": candidate_route_count,
+                    "accepted": accepted,
+                    "candidate_failure_summary": candidate_summary,
+                    "vehicle_limit_relaxed": remaining_limit_candidate != remaining_limit,
                 }
-            )
-            planner.log(f"[WARN] Exception-preserving attempt with {frozen_count} frozen route(s) failed: {exc}")
+                attempts.append(attempt)
+                candidate["exception_preserving"] = {
+                    "enabled": True,
+                    "accepted": accepted,
+                    "frozen_route_count": frozen_count,
+                    "frozen_route_ids": list(attempt["frozen_route_ids"]),
+                    "current_failure_summary": current_summary,
+                    "candidate_failure_summary": candidate_summary,
+                    "attempts": attempts,
+                    "remaining_vehicle_limit": remaining_limit_candidate,
+                    "vehicle_limit_relaxed": remaining_limit_candidate != remaining_limit,
+                }
+                candidate["exception_feasible"] = accepted
+                candidate["feasibility_report"] = build_route_feasibility_report(
+                    candidate,
+                    dict(candidate.get("traffic_gate") or {}),
+                    config,
+                    current_min_active_vehicle_count=0,
+                    max_vehicle_count=max(0, int((remaining_limit_candidate or 0) + frozen_count)),
+                )
+                if accepted:
+                    return candidate
+                if best_candidate is None or _exception_candidate_rank(
+                    candidate_summary,
+                    candidate_route_count,
+                ) < _exception_candidate_rank(
+                    _scenario_exception_summary(best_candidate),
+                    int(best_candidate.get("bus_count") or len(list(best_candidate.get("routes") or [])) or 0),
+                ):
+                    best_candidate = candidate
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "frozen_route_count": frozen_count,
+                        "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
+                        "remaining_stop_count": remaining_service_count,
+                        "remaining_vehicle_limit": remaining_limit_candidate,
+                        "accepted": False,
+                        "vehicle_limit_relaxed": remaining_limit_candidate != remaining_limit,
+                        "error": str(exc),
+                    }
+                )
+                planner.log(
+                    f"[WARN] Exception-preserving attempt with {frozen_count} frozen route(s) "
+                    f"and remaining vehicle limit {remaining_limit_candidate} failed: {exc}"
+                )
 
     if best_candidate is not None:
         best_candidate["exception_preserving"] = {
@@ -7425,8 +7461,21 @@ def build_exception_preserving_scenario(
             "attempts": attempts,
         }
         return best_candidate
+    error_attempts = [dict(attempt) for attempt in attempts if attempt.get("error")]
+    tried_limits = [
+        str(attempt.get("remaining_vehicle_limit"))
+        for attempt in error_attempts
+        if attempt.get("remaining_vehicle_limit") is not None
+    ]
+    skip_reason = "Exception-preserving optimization could not produce a candidate."
+    if error_attempts:
+        skip_reason = (
+            "Exception-preserving optimization could not solve the unfrozen remainder"
+            + (f" after trying remaining vehicle limit(s): {', '.join(tried_limits)}." if tried_limits else ".")
+            + f" Last error: {error_attempts[-1].get('error')}"
+        )
     return _build_skipped_scenario_result(
-        "Exception-preserving optimization could not produce a candidate.",
+        skip_reason,
         {
             "exception_preserving": {
                 "enabled": True,
@@ -7836,6 +7885,7 @@ def run_backend_planner_with_prepared_data(
                 },
                 baseline_name="ep15min_optimization",
                 scenario_label="EP 15-minute optimization",
+                allow_vehicle_limit_fallback=True,
             )
         else:
             ep15min_result = _build_skipped_scenario_result(

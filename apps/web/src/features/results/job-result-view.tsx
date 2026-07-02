@@ -183,6 +183,8 @@ function SummaryPanel({
   const t = useT();
   const freeOptimization = scenarios.find((scenario) => scenario.name === "Free Optimization" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.name === "15-Minute Constrained" && scenario.enabled);
+  const exceptionPreserving = scenarios.find((scenario) => scenario.name === "Exception Preserving" && scenario.enabled);
+  const ep15 = scenarios.find((scenario) => scenario.name === "EP 15-Minute" && scenario.enabled);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
   const solveProcessRows = buildSolveProcessRows(result);
 
@@ -192,7 +194,7 @@ function SummaryPanel({
         <InputAddressWarningBanner count={diagnostics.inputAddressWarnings.length} onOpenReview={onOpenReview} />
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
         <MetricCard
           label="Free optimization"
@@ -205,6 +207,18 @@ function SummaryPanel({
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
           detail={timeConstrained ? scenarioCardDetail(timeConstrained, "Keeps stop-time changes within 15 minutes where possible; final provider timing is checked after routing.") : ""}
+        />
+        <MetricCard
+          label="EP"
+          value={exceptionPreserving ? formatNumber(exceptionPreserving.routeCount) : t("Skipped")}
+          tone={exceptionPreserving ? scenarioTrafficTone(exceptionPreserving, "success") : "warning"}
+          detail={exceptionPreserving ? scenarioCardDetail(exceptionPreserving, "Preserves exception routes, then optimizes the remaining stops.") : ""}
+        />
+        <MetricCard
+          label="EP 15-min"
+          value={ep15 ? formatNumber(ep15.routeCount) : t("Skipped")}
+          tone={ep15 ? scenarioTrafficTone(ep15, "info") : "warning"}
+          detail={ep15 ? scenarioCardDetail(ep15, "Preserves exception routes and applies the 15-minute time-impact limit.") : ""}
         />
         <MetricCard
           label="Data review"

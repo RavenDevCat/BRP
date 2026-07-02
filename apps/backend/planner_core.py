@@ -6605,6 +6605,7 @@ def _compute_scenario_without_render(
     bus_type_configs: list[dict[str, Any]] | None = None,
     reduced_vehicle_limit: int | None = None,
     node_time_upper_bounds_builder: Any | None = None,
+    node_time_soft_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
     route_traffic_attribution_context: dict[str, Any] | None = None,
     route_traffic_fallback_multiplier: float | None = None,
@@ -6618,6 +6619,7 @@ def _compute_scenario_without_render(
     planner.log(f"[BACKEND] Building {scenario_label} scenario with {len(points)} total points.")
     previous_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
     previous_node_time_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}))
+    previous_node_time_soft_upper_bounds = deepcopy(getattr(planner, "NODE_TIME_SOFT_UPPER_BOUNDS", {}))
     previous_min_solver_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
     previous_max_route_duration_seconds = float(getattr(planner, "MAX_ROUTE_DURATION_SECONDS", 0.0) or 0.0)
     previous_gate_route_duration_seconds = getattr(planner, "_BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS", None)
@@ -6654,9 +6656,12 @@ def _compute_scenario_without_render(
             planner.log(f"[WARN] OSRM full matrix failed for {scenario_label}; falling back to seed matrix: {exc}")
             solve_time, solve_distance = planner.seed_edge_metrics(points)
         scenario_constraint_metadata = deepcopy(time_constraint_metadata or {})
-        if node_time_upper_bounds_builder is not None:
-            node_time_upper_bounds = node_time_upper_bounds_builder(points)
-            planner.NODE_TIME_UPPER_BOUNDS = dict(node_time_upper_bounds)
+        time_bounds_builder = node_time_upper_bounds_builder or node_time_soft_upper_bounds_builder
+        if time_bounds_builder is not None:
+            node_time_upper_bounds = time_bounds_builder(points)
+            is_soft_constraint = node_time_upper_bounds_builder is None
+            planner.NODE_TIME_UPPER_BOUNDS = {} if is_soft_constraint else dict(node_time_upper_bounds)
+            planner.NODE_TIME_SOFT_UPPER_BOUNDS = dict(node_time_upper_bounds) if is_soft_constraint else {}
             planner.MIN_SOLVER_VEHICLE_COUNT = max(
                 0,
                 int(scenario_constraint_metadata.get("min_solver_vehicle_count", 0) or 0),
@@ -6664,6 +6669,8 @@ def _compute_scenario_without_render(
             scenario_constraint_metadata.update(
                 {
                     "enabled": bool(node_time_upper_bounds),
+                    "mode": "soft" if is_soft_constraint else "hard",
+                    "best_effort": bool(is_soft_constraint),
                     "bounded_solver_stop_count": len(node_time_upper_bounds),
                     "min_solver_vehicle_count": int(planner.MIN_SOLVER_VEHICLE_COUNT),
                     "reduced_vehicle_limit": reduced_vehicle_limit_int,
@@ -6672,7 +6679,8 @@ def _compute_scenario_without_render(
             if isinstance(time_constraint_metadata, dict):
                 time_constraint_metadata.update(scenario_constraint_metadata)
             planner.log(
-                f"[BACKEND] Applied {len(node_time_upper_bounds)} stop time-impact "
+                f"[BACKEND] Applied {len(node_time_upper_bounds)} "
+                f"{'soft' if is_soft_constraint else 'hard'} stop time-impact "
                 f"constraint(s) for {scenario_label}; solver vehicle floor "
                 f"{planner.MIN_SOLVER_VEHICLE_COUNT}."
             )
@@ -6680,6 +6688,7 @@ def _compute_scenario_without_render(
                 raise RuntimeError("No solver stops matched the current-plan time-impact constraints.")
         else:
             planner.NODE_TIME_UPPER_BOUNDS = {}
+            planner.NODE_TIME_SOFT_UPPER_BOUNDS = {}
             planner.MIN_SOLVER_VEHICLE_COUNT = 0
         original_scenario_bus_type_configs = deepcopy(getattr(planner, "BUS_TYPE_CONFIGS", []))
         active_config = getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig()
@@ -7052,6 +7061,7 @@ def _compute_scenario_without_render(
         planner.OSRM_BASE_URL = previous_osrm_base_url
         planner.BUS_TYPE_CONFIGS = previous_bus_type_configs
         planner.NODE_TIME_UPPER_BOUNDS = previous_node_time_upper_bounds
+        planner.NODE_TIME_SOFT_UPPER_BOUNDS = previous_node_time_soft_upper_bounds
         planner.MIN_SOLVER_VEHICLE_COUNT = previous_min_solver_vehicle_count
         planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
         if previous_gate_route_duration_seconds is None:
@@ -7298,6 +7308,7 @@ def build_exception_preserving_scenario(
     route_traffic_attribution_context: dict[str, Any] | None = None,
     route_traffic_fallback_multiplier: float | None = None,
     node_time_upper_bounds_builder: Any | None = None,
+    node_time_soft_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
     baseline_name: str = "exception_preserving_optimization",
     scenario_label: str = "Exception preserving optimization",
@@ -7354,6 +7365,7 @@ def build_exception_preserving_scenario(
                         bus_type_configs=_bus_type_configs_after_frozen_routes(bus_type_configs, frozen_routes),
                         reduced_vehicle_limit=remaining_limit_candidate,
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+                        node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         route_traffic_attribution_context=route_traffic_attribution_context,
                         route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
@@ -7372,7 +7384,7 @@ def build_exception_preserving_scenario(
                 candidate = planner.build_scenario_result(original_points, combined_routes, "")
                 candidate["output_html"] = ""
                 candidate["baseline_name"] = baseline_name
-                if node_time_upper_bounds_builder is not None:
+                if node_time_upper_bounds_builder is not None or node_time_soft_upper_bounds_builder is not None:
                     candidate["time_constraint"] = {
                         **deepcopy(time_constraint_metadata or {}),
                         **dict(optimized.get("time_constraint") or {}),
@@ -7474,17 +7486,22 @@ def build_exception_preserving_scenario(
             + (f" after trying remaining vehicle limit(s): {', '.join(tried_limits)}." if tried_limits else ".")
             + f" Last error: {error_attempts[-1].get('error')}"
         )
-    return _build_skipped_scenario_result(
-        skip_reason,
-        {
-            "exception_preserving": {
-                "enabled": True,
-                "accepted": False,
-                "current_failure_summary": current_summary,
-                "attempts": attempts,
-            }
-        },
-    )
+    skipped_extra: dict[str, Any] = {
+        "exception_preserving": {
+            "enabled": True,
+            "accepted": False,
+            "current_failure_summary": current_summary,
+            "attempts": attempts,
+        }
+    }
+    if node_time_upper_bounds_builder is not None or node_time_soft_upper_bounds_builder is not None:
+        skipped_extra["time_constraint"] = {
+            **deepcopy(time_constraint_metadata or {}),
+            "enabled": True,
+            "mode": "soft" if node_time_soft_upper_bounds_builder is not None else "hard",
+            "best_effort": node_time_soft_upper_bounds_builder is not None,
+        }
+    return _build_skipped_scenario_result(skip_reason, skipped_extra)
 
 
 def _normalize_time_constraint_text(value: Any) -> str:
@@ -7806,6 +7823,7 @@ def run_backend_planner_with_prepared_data(
         )
         if time_constraint_builder is not None:
             try:
+                hard_time_constraint_metadata = deepcopy(time_constraint_metadata)
                 time_constrained_result = _compute_scenario_without_render(
                     planner,
                     original_points,
@@ -7813,35 +7831,64 @@ def run_backend_planner_with_prepared_data(
                     bus_type_configs=free_baseline_bus_type_configs,
                     reduced_vehicle_limit=reduced_vehicle_limit,
                     node_time_upper_bounds_builder=time_constraint_builder,
-                    time_constraint_metadata=time_constraint_metadata,
+                    time_constraint_metadata=hard_time_constraint_metadata,
                     route_traffic_attribution_context=route_traffic_attribution_context,
                     route_traffic_fallback_multiplier=traffic_time_multiplier,
                 )
                 time_constrained_result["baseline_name"] = "time_constrained_optimization"
                 time_constrained_result["time_constraint"] = {
                     **dict(time_constrained_result.get("time_constraint") or {}),
-                    **time_constraint_metadata,
+                    **hard_time_constraint_metadata,
                     "enabled": True,
                     "bounded_solver_stop_count": int(
                         dict(time_constrained_result.get("time_constraint") or {}).get(
                             "bounded_solver_stop_count",
-                            time_constraint_metadata.get("bounded_solver_stop_count", 0),
+                            hard_time_constraint_metadata.get("bounded_solver_stop_count", 0),
                         )
                         or 0
                     ),
                 }
             except Exception as exc:
-                planner.log(f"[WARN] 15-minute time-impact constrained optimization skipped: {exc}")
-                time_constrained_result = _build_skipped_scenario_result(
-                    f"15-minute time-impact constrained optimization was infeasible: {exc}",
-                    {
-                        "time_constraint": {
-                            **time_constraint_metadata,
-                            "enabled": False,
-                            "error": str(exc),
-                        }
-                    },
+                planner.log(
+                    "[WARN] 15-minute time-impact constrained optimization hard constraints "
+                    f"failed; retrying best-effort soft constraints: {exc}"
                 )
+                soft_time_constraint_metadata = {
+                    **deepcopy(time_constraint_metadata),
+                    "strict_error": str(exc),
+                }
+                try:
+                    time_constrained_result = _compute_scenario_without_render(
+                        planner,
+                        original_points,
+                        "15-minute time-impact constrained optimization best effort",
+                        bus_type_configs=free_baseline_bus_type_configs,
+                        reduced_vehicle_limit=reduced_vehicle_limit,
+                        node_time_soft_upper_bounds_builder=time_constraint_builder,
+                        time_constraint_metadata=soft_time_constraint_metadata,
+                        route_traffic_attribution_context=route_traffic_attribution_context,
+                        route_traffic_fallback_multiplier=traffic_time_multiplier,
+                    )
+                    time_constrained_result["baseline_name"] = "time_constrained_optimization"
+                    time_constrained_result["time_constraint"] = {
+                        **dict(time_constrained_result.get("time_constraint") or {}),
+                        **soft_time_constraint_metadata,
+                        "enabled": True,
+                        "strict_satisfied": False,
+                    }
+                except Exception as soft_exc:
+                    planner.log(f"[WARN] 15-minute time-impact constrained optimization skipped: {soft_exc}")
+                    time_constrained_result = _build_skipped_scenario_result(
+                        f"15-minute time-impact constrained optimization was infeasible: {soft_exc}",
+                        {
+                            "time_constraint": {
+                                **time_constraint_metadata,
+                                "enabled": False,
+                                "strict_error": str(exc),
+                                "error": str(soft_exc),
+                            }
+                        },
+                    )
         else:
             time_constrained_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
@@ -7867,6 +7914,10 @@ def run_backend_planner_with_prepared_data(
             route_traffic_fallback_multiplier=traffic_time_multiplier,
         )
         if time_constraint_builder is not None:
+            ep15_time_constraint_metadata = {
+                **deepcopy(time_constraint_metadata),
+                "source": "exception_preserving_remainder",
+            }
             ep15min_result = build_exception_preserving_scenario(
                 planner,
                 original_points,
@@ -7879,14 +7930,32 @@ def run_backend_planner_with_prepared_data(
                 route_traffic_attribution_context=route_traffic_attribution_context,
                 route_traffic_fallback_multiplier=traffic_time_multiplier,
                 node_time_upper_bounds_builder=time_constraint_builder,
-                time_constraint_metadata={
-                    **deepcopy(time_constraint_metadata),
-                    "source": "exception_preserving_remainder",
-                },
+                time_constraint_metadata=ep15_time_constraint_metadata,
                 baseline_name="ep15min_optimization",
                 scenario_label="EP 15-minute optimization",
                 allow_vehicle_limit_fallback=True,
             )
+            if ep15min_result.get("enabled") is False:
+                ep15min_result = build_exception_preserving_scenario(
+                    planner,
+                    original_points,
+                    current_plan_scenario,
+                    config,
+                    input_records,
+                    free_baseline_bus_type_configs,
+                    reduced_vehicle_limit,
+                    standard_scenarios=[free_optimization_baseline, time_constrained_result],
+                    route_traffic_attribution_context=route_traffic_attribution_context,
+                    route_traffic_fallback_multiplier=traffic_time_multiplier,
+                    node_time_soft_upper_bounds_builder=time_constraint_builder,
+                    time_constraint_metadata={
+                        **ep15_time_constraint_metadata,
+                        "strict_skipped_reason": str(ep15min_result.get("skipped_reason") or ""),
+                    },
+                    baseline_name="ep15min_optimization",
+                    scenario_label="EP 15-minute optimization best effort",
+                    allow_vehicle_limit_fallback=True,
+                )
         else:
             ep15min_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),

@@ -354,3 +354,84 @@ def test_ep15min_skip_reason_names_unfrozen_remainder_limits(monkeypatch):
     assert result["enabled"] is False
     assert "unfrozen remainder" in result["skipped_reason"]
     assert "1, 2" in result["skipped_reason"]
+
+
+def test_ep15min_best_effort_uses_soft_time_bounds(monkeypatch):
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "frozen failed stop"},
+        {"node_id": 2, "address": "remaining stop"},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 3,
+        "routes": [
+            {
+                "route_id": "R12",
+                "nodes": [1, 0],
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 12,
+                },
+            },
+            {"route_id": "R1", "nodes": [2, 0], "final_route_traffic_gate": {"status": "passed"}},
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R12"],
+            "max_time_window_overrun_minutes": 12,
+        },
+    }
+    captured = {}
+
+    def fake_compute(
+        _planner,
+        subset_points,
+        *_args,
+        node_time_upper_bounds_builder=None,
+        node_time_soft_upper_bounds_builder=None,
+        **_kwargs,
+    ):
+        captured["hard"] = node_time_upper_bounds_builder
+        captured["soft_bounds"] = node_time_soft_upper_bounds_builder(subset_points)
+        return {
+            "points": subset_points,
+            "routes": [{"route_id": "Bus 1", "nodes": [1, 0], "final_route_traffic_gate": {"status": "passed"}}],
+            "time_constraint": {"enabled": True, "mode": "soft", "best_effort": True},
+        }
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {
+            "status": "passed",
+            "failed_route_count": 0,
+            "failed_route_ids": [],
+            "max_time_window_overrun_minutes": 0,
+        }
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = {"status": "passed"}
+        return scenario["traffic_gate"]
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(),
+        [],
+        [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
+        2,
+        standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+        node_time_soft_upper_bounds_builder=lambda solver_points: {1: 900},
+        time_constraint_metadata={"enabled": True, "source": "exception_preserving_remainder"},
+        baseline_name="ep15min_optimization",
+        scenario_label="EP 15-minute optimization best effort",
+        allow_vehicle_limit_fallback=True,
+    )
+
+    assert captured["hard"] is None
+    assert captured["soft_bounds"] == {1: 900}
+    assert result["time_constraint"]["mode"] == "soft"
+    assert result["time_constraint"]["best_effort"] is True

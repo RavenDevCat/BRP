@@ -147,6 +147,7 @@ NEARBY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_nearby_aggreg
 CURRENT_CURRENCY_CODE = "USD"
 LAST_RUN_RESULTS: dict[str, Any] = {}
 NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
+NODE_TIME_SOFT_UPPER_BOUNDS: dict[int, int] = {}
 MIN_SOLVER_VEHICLE_COUNT = 0
 
 HUGE_TIME_SECONDS = 6 * 3600
@@ -158,6 +159,9 @@ VEHICLE_FIXED_COST = {"Large Bus": 0, "Mid Bus": 1200, "Small Bus": 2600}
 MIN_LOAD_TARGET = {"Large Bus": 21, "Mid Bus": 18, "Small Bus": 10}
 MIN_LOAD_PENALTY = {"Large Bus": 140, "Mid Bus": 100, "Small Bus": 40}
 ROUTE_DURATION_SOFT_PENALTY_PER_SECOND = 80
+NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND = int(
+    os.environ.get("BRP_NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND", "240") or 240
+)
 
 
 class RateLimiter:
@@ -1535,6 +1539,7 @@ def solve_routes_for_fleet(
     distance_matrix: list[list[int]],
     fleet: list[dict[str, Any]],
     node_time_upper_bounds: dict[int, int] | None = None,
+    node_time_soft_upper_bounds: dict[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -1593,6 +1598,19 @@ def solve_routes_for_fleet(
             continue
         time_dimension.CumulVar(manager.NodeToIndex(node_int)).SetMax(
             max(0, min(hard_route_duration_seconds, upper_bound_int))
+        )
+    for node, upper_bound in dict(node_time_soft_upper_bounds or {}).items():
+        try:
+            node_int = int(node)
+            upper_bound_int = int(upper_bound)
+        except (TypeError, ValueError):
+            continue
+        if node_int <= 0 or node_int >= len(points):
+            continue
+        time_dimension.SetCumulVarSoftUpperBound(
+            manager.NodeToIndex(node_int),
+            max(0, min(hard_route_duration_seconds, upper_bound_int)),
+            NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND,
         )
 
     def demand_callback(index: int) -> int:
@@ -1745,7 +1763,8 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     express_fleet: list[dict[str, Any]] = []
     regular_fleet = trim_fleet_for_demand(points, full_fleet)
     global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
-    if remote_nodes and RESERVED_EXPRESS_BUSES > 0 and not global_time_upper_bounds:
+    global_time_soft_upper_bounds = dict(NODE_TIME_SOFT_UPPER_BOUNDS or {})
+    if remote_nodes and RESERVED_EXPRESS_BUSES > 0 and not global_time_upper_bounds and not global_time_soft_upper_bounds:
         sorted_for_express = sort_express_preference(full_fleet)
         candidate_express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
         express_ids = {id(item) for item in candidate_express_fleet}
@@ -1782,6 +1801,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
                 subset_distance,
                 express_fleet,
                 subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
+                subset_node_time_upper_bounds(global_time_soft_upper_bounds, subset_nodes),
             )
             combined_routes.extend(remap_subset_routes(express_routes, subset_nodes))
             served_remote_nodes = {
@@ -1809,6 +1829,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
             subset_distance,
             regular_fleet or full_fleet,
             subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
+            subset_node_time_upper_bounds(global_time_soft_upper_bounds, subset_nodes),
         )
         combined_routes.extend(remap_subset_routes(regular_routes, subset_nodes))
 

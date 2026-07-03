@@ -416,6 +416,18 @@ def _parse_minimum_vehicle_reduction_payload(value: Any) -> int:
     return reduction
 
 
+def _parse_time_impact_limit_payload(value: Any) -> int:
+    if value is None or value == "":
+        return int(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("time_impact_limit_minutes must be a whole number.") from exc
+    if minutes < 0 or minutes > 240:
+        raise ValueError("time_impact_limit_minutes must be between 0 and 240.")
+    return minutes
+
+
 def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
     normalized_input = dict(config_payload or {})
     window_start, start_minutes = _parse_clock_payload(
@@ -437,6 +449,9 @@ def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
     )
     normalized_input["minimum_vehicle_reduction"] = _parse_minimum_vehicle_reduction_payload(
         normalized_input.get("minimum_vehicle_reduction")
+    )
+    normalized_input["time_impact_limit_minutes"] = _parse_time_impact_limit_payload(
+        normalized_input.get("time_impact_limit_minutes")
     )
     payload = asdict(_build_planner_config(normalized_input))
     payload["traffic_coefficient_mode"] = normalize_traffic_coefficient_mode(
@@ -3336,6 +3351,55 @@ def _job_result_scenario(result: dict[str, Any], scenario_key: str) -> dict[str,
     return merged
 
 
+def _format_time_impact_limit_minutes(value: Any) -> str:
+    try:
+        numeric = max(0.0, float(value))
+    except (TypeError, ValueError):
+        numeric = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}".rstrip("0").rstrip(".")
+
+
+def _job_time_impact_limit_minutes(
+    job_record: dict[str, Any],
+    result: dict[str, Any] | None = None,
+    scenario_key: str = "",
+) -> float:
+    result = dict(result if result is not None else job_record.get("result") or {})
+    scenario = _job_result_scenario(result, scenario_key) if scenario_key else {}
+    time_constraint = dict(scenario.get("time_constraint") or {})
+    config = _job_planner_config_payload(job_record)
+    for value in (
+        scenario.get("time_impact_limit_minutes"),
+        time_constraint.get("time_impact_limit_minutes"),
+        time_constraint.get("threshold_minutes"),
+        config.get("time_impact_limit_minutes"),
+    ):
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            continue
+    return float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+
+
+def _job_map_scenario_label(
+    job_record: dict[str, Any],
+    result: dict[str, Any],
+    scenario_key: str,
+) -> str:
+    scenario = _job_result_scenario(result, scenario_key)
+    for key in ("display_name", "scenario_label"):
+        label = str(scenario.get(key) or "").strip()
+        if label:
+            return label
+    if scenario_key == "time_constrained":
+        return f"{_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Constrained"
+    if scenario_key == "ep15min":
+        return f"EP {_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute"
+    return MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
+
+
 def _resolve_job_map_artifact(
     job_record: dict[str, Any], artifact_key: str
 ) -> tuple[Path | None, str | None]:
@@ -4175,7 +4239,10 @@ def _time_impact_top_stops(
     return items
 
 
-def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
+def _time_impact_summary(
+    stops: list[dict[str, Any]],
+    acceptance_threshold: float | None = None,
+) -> dict[str, Any]:
     service_stops = [stop for stop in stops if not bool(stop.get("is_depot"))]
     compared = [
         stop
@@ -4226,7 +4293,11 @@ def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
         for stop in compared
     )
     high_risk_levels = {"severe", "critical"}
-    acceptance_threshold = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    acceptance_threshold = (
+        float(acceptance_threshold)
+        if acceptance_threshold is not None
+        else float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    )
     within_acceptance = [
         stop
         for stop in compared
@@ -4353,10 +4424,15 @@ def _time_impact_summary(stops: list[dict[str, Any]]) -> dict[str, Any]:
 def _attach_schedule_impact(
     payload: dict[str, Any],
     current_payload: dict[str, Any] | None,
+    *,
+    acceptance_threshold: float | None = None,
 ) -> None:
     stops = list(payload.get("stops") or [])
     if not current_payload:
-        payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(stops)
+        payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(
+            stops,
+            acceptance_threshold,
+        )
         return
 
     current_lookup: dict[str, dict[str, Any]] = {}
@@ -4429,8 +4505,12 @@ def _attach_schedule_impact(
         benefit_delta_minutes = (
             absolute_delta_minutes if impact_direction == "better" else 0.0
         )
-        acceptance_threshold = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
-        within_acceptance = adverse_delta_minutes <= acceptance_threshold
+        stop_acceptance_threshold = (
+            float(acceptance_threshold)
+            if acceptance_threshold is not None
+            else float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+        )
+        within_acceptance = adverse_delta_minutes <= stop_acceptance_threshold
         stop["time_impact"] = {
             "comparison_available": True,
             "comparison_status": "matched",
@@ -4451,10 +4531,10 @@ def _attach_schedule_impact(
             "delta_minutes": delta_minutes,
             "absolute_delta_minutes": absolute_delta_minutes,
             "adverse_delta_minutes": adverse_delta_minutes,
-            "acceptance_threshold_minutes": acceptance_threshold,
+            "acceptance_threshold_minutes": stop_acceptance_threshold,
             "within_acceptance": within_acceptance,
             "acceptance_status": "within" if within_acceptance else "over",
-            "over_acceptance_minutes": max(0.0, adverse_delta_minutes - acceptance_threshold),
+            "over_acceptance_minutes": max(0.0, adverse_delta_minutes - stop_acceptance_threshold),
             "benefit_delta_minutes": benefit_delta_minutes,
             "adverse_direction": adverse_direction,
             "change_direction": _time_impact_change_direction(delta_minutes),
@@ -4467,7 +4547,7 @@ def _attach_schedule_impact(
             "route_changed": route_changed,
         }
 
-    summary = _time_impact_summary(stops)
+    summary = _time_impact_summary(stops, acceptance_threshold)
     payload.setdefault("summary", {})["time_impact"] = summary
 
     stops_by_route: dict[str, list[dict[str, Any]]] = {}
@@ -4475,7 +4555,8 @@ def _attach_schedule_impact(
         stops_by_route.setdefault(str(stop.get("route_id") or ""), []).append(stop)
     for route in list(payload.get("routes") or []):
         route["time_impact"] = _time_impact_summary(
-            stops_by_route.get(str(route.get("id") or ""), [])
+            stops_by_route.get(str(route.get("id") or ""), []),
+            acceptance_threshold,
         )
 
 
@@ -4704,7 +4785,7 @@ def _build_job_map_payload(
     payload = {
         "job_id": str(job_record.get("job_id") or ""),
         "scenario_key": scenario_key,
-        "scenario_name": MAP_SCENARIO_LABELS.get(scenario_key, scenario_key),
+        "scenario_name": _job_map_scenario_label(job_record, result, scenario_key),
         "service_direction": str(
             result.get("service_direction") or structured.get("service_direction") or ""
         ).strip(),
@@ -4734,6 +4815,7 @@ def _build_job_map_payload(
     }
     _apply_schedule_times(payload, job_record)
     _attach_am_arrival_gate(payload, job_record)
+    acceptance_threshold = _job_time_impact_limit_minutes(job_record, result, scenario_key)
     if attach_impact and scenario_key != "current_plan":
         current_payload, _current_error = _build_job_map_payload(
             job_record,
@@ -4742,10 +4824,15 @@ def _build_job_map_payload(
             attach_impact=False,
         )
         if current_payload:
-            _attach_schedule_impact(payload, current_payload)
+            _attach_schedule_impact(
+                payload,
+                current_payload,
+                acceptance_threshold=acceptance_threshold,
+            )
     else:
         payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(
-            list(payload.get("stops") or [])
+            list(payload.get("stops") or []),
+            acceptance_threshold,
         )
     return payload, None
 
@@ -4988,8 +5075,8 @@ def _build_scenario_template_export(
 ) -> tuple[bytes | None, str | None]:
     normalized_key = str(scenario_key or "").strip().lower() or "original"
     scenario_key = MAP_ARTIFACT_KEYS.get(normalized_key, normalized_key)
-    scenario_label = MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
     result = dict(job_record.get("result") or {})
+    scenario_label = _job_map_scenario_label(job_record, result, scenario_key)
     scenario = _job_result_scenario(result, scenario_key)
     if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
         return None, f"{scenario_label} has no route table to export."

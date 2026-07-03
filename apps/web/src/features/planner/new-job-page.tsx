@@ -597,7 +597,7 @@ export function NewJobPage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-3 md:grid-cols-4">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
                 <Field label="Window Start">
                   <input
                     className={fieldClassName}
@@ -647,6 +647,24 @@ export function NewJobPage() {
                   />
                   <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
                     {t("Required vehicle reduction versus current plan.")}
+                  </div>
+                </Field>
+                <Field label="Time Impact Limit">
+                  <input
+                    className={fieldClassName}
+                    type="number"
+                    min={0}
+                    max={240}
+                    step={1}
+                    value={config.time_impact_limit_minutes}
+                    onChange={(event) =>
+                      updateUserConfig({
+                        time_impact_limit_minutes: Math.max(0, Math.min(240, Number(event.target.value || 0))),
+                      })
+                    }
+                  />
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {t("Used by the X-minute time-impact scenarios.")}
                   </div>
                 </Field>
               </div>

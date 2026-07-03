@@ -17,6 +17,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   reserved_express_buses: 4,
   express_skip_inner_km: 8,
   max_route_duration_minutes: 60,
+  time_impact_limit_minutes: 15,
   stop_service_minutes: 1,
   subway_search_radius_m: 1500,
   max_subway_walk_distance_m: 800,

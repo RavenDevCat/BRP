@@ -389,8 +389,32 @@ const en: Translations = {
     "Schedule enabled": "Schedule enabled",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "Queue this audit for the fixed traffic window instead of running it immediately.",
-    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
-        "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.",
+    "When enabled, audits release on selected dates at the time-window start.":
+        "When enabled, audits release on selected dates at the time-window start.",
+    "Schedule dates": "Schedule dates",
+    "Add date": "Add date",
+    "Remove schedule date": "Remove schedule date",
+    "Each selected date creates one scheduled audit.":
+        "Each selected date creates one scheduled audit.",
+    "Window Start": "Window Start",
+    "Window End": "Window End",
+    "Stops Limit": "Stops Limit",
+    "Minimum Saving": "Minimum Saving",
+    "Time Impact Limit": "Time Impact Limit",
+    "Used by the X-minute time-impact scenarios.":
+        "Used by the X-minute time-impact scenarios.",
+    "Time-impact constrained": "Time-impact constrained",
+    "EP time-impact": "EP time-impact",
+    "No limit": "No limit",
+    "Leave blank for no per-route stop cap.":
+        "Leave blank for no per-route stop cap.",
+    "Required vehicle reduction versus current plan.":
+        "Required vehicle reduction versus current plan.",
+    "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
+        "Compare the imported supplier plan against free optimization and the time-impact constrained plan.",
+    "Time window start must be before end.":
+        "Time window start must be before end.",
+    "Select at least one schedule date.": "Select at least one schedule date.",
     "Calculating current-plan longest route. Please wait before running the audit.":
         "Calculating current-plan longest route. Please wait before running the audit.",
     "Auto-filled from longest current-plan route":
@@ -412,6 +436,10 @@ const en: Translations = {
     Export: "Export",
     Delete: "Delete",
     Cancel: "Cancel",
+    Select: "Select",
+    "Delete selected": "Delete selected",
+    "Delete selected history items? This cannot be undone.":
+        "Delete selected history items? This cannot be undone.",
     Save: "Save",
     "Loading…": "Loading…",
     Error: "Error",

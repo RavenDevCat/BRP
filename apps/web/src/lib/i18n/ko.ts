@@ -388,8 +388,32 @@ const ko: Translations = {
     "Schedule enabled": "예약 사용",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "즉시 실행하지 않고 고정 교통 시간대에 실행되도록 감사 작업을 대기열에 넣습니다.",
-    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
-        "켜면 등교 감사는 현지 시간 06:00, 하교 감사는 15:40에 실행 대기열로 전환됩니다.",
+    "When enabled, audits release on selected dates at the time-window start.":
+        "켜면 선택한 날짜의 시간 창 시작 시각에 감사 작업이 실행 대기열로 전환됩니다.",
+    "Schedule dates": "예약 날짜",
+    "Add date": "날짜 추가",
+    "Remove schedule date": "예약 날짜 제거",
+    "Each selected date creates one scheduled audit.":
+        "선택한 각 날짜마다 예약 감사 작업이 하나 생성됩니다.",
+    "Window Start": "시간 창 시작",
+    "Window End": "시간 창 종료",
+    "Stops Limit": "정류장 상한",
+    "Minimum Saving": "최소 차량 절감",
+    "Time Impact Limit": "시간 영향 상한",
+    "Used by the X-minute time-impact scenarios.":
+        "X분 시간 영향 시나리오에 사용됩니다.",
+    "Time-impact constrained": "시간 영향 제약",
+    "EP time-impact": "EP 시간 영향",
+    "No limit": "제한 없음",
+    "Leave blank for no per-route stop cap.":
+        "노선별 정류장 수 제한이 없으면 비워 둡니다.",
+    "Required vehicle reduction versus current plan.":
+        "현재 계획 대비 반드시 줄여야 하는 차량 수입니다.",
+    "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
+        "가져온 공급업체 계획을 자유 최적화 및 시간 영향 제약 계획과 비교합니다.",
+    "Time window start must be before end.":
+        "시간 창 시작은 종료보다 빨라야 합니다.",
+    "Select at least one schedule date.": "예약 날짜를 하나 이상 선택하세요.",
     "Cancel is available only while a job is scheduled, queued, or running.":
         "예약됨, 대기 중 또는 실행 중인 작업만 취소할 수 있습니다.",
     Name: "이름",
@@ -715,6 +739,10 @@ const ko: Translations = {
     Export: "내보내기",
     Delete: "삭제",
     Cancel: "취소",
+    Select: "선택",
+    "Delete selected": "선택 삭제",
+    "Delete selected history items? This cannot be undone.":
+        "선택한 기록을 삭제하시겠습니까? 되돌릴 수 없습니다.",
     Save: "저장",
     "Loading…": "로딩 중…",
     Error: "오류",

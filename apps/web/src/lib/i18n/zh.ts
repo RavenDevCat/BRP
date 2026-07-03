@@ -339,11 +339,35 @@ const zh: Translations = {
     Scheduled: "已定时",
     "Run now": "立即执行",
     "Not enabled": "未启用",
-    "Schedule enabled": "启用 Schedule",
+    "Schedule enabled": "启用定时",
     "Queue this audit for the fixed traffic window instead of running it immediately.":
         "将本次审计放入固定交通窗口队列，而不是立即执行。",
-    "When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.":
-        "开启后，上学任务在本地时间 06:00 释放，放学任务在本地时间 15:40 释放。",
+    "When enabled, audits release on selected dates at the time-window start.":
+        "开启后，任务会在所选日期的时间窗口起点释放。",
+    "Schedule dates": "定时日期",
+    "Add date": "添加日期",
+    "Remove schedule date": "移除定时日期",
+    "Each selected date creates one scheduled audit.":
+        "每个所选日期都会创建一个定时审计任务。",
+    "Window Start": "窗口开始",
+    "Window End": "窗口结束",
+    "Stops Limit": "站点上限",
+    "Minimum Saving": "最少省车",
+    "Time Impact Limit": "时间影响上限",
+    "Used by the X-minute time-impact scenarios.":
+        "用于 X 分钟时间影响约束方案。",
+    "Time-impact constrained": "时间影响约束",
+    "EP time-impact": "EP 时间影响",
+    "No limit": "无上限",
+    "Leave blank for no per-route stop cap.":
+        "留空表示不限制每条线路站点数。",
+    "Required vehicle reduction versus current plan.":
+        "相对当前方案要求至少减少的车辆数。",
+    "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
+        "对比导入的供应商方案、自由优化和时间影响约束方案。",
+    "Time window start must be before end.":
+        "时间窗口开始必须早于结束。",
+    "Select at least one schedule date.": "请至少选择一个定时日期。",
     "Calculating current-plan longest route. Please wait before running the audit.":
         "正在计算当前计划最长路线，请等待完成后再运行审计。",
     "Auto-filled from longest current-plan route":
@@ -364,6 +388,10 @@ const zh: Translations = {
     "Release this scheduled job now?": "现在释放这个定时任务吗？",
     "Cancel is available only while a job is scheduled, queued, or running.":
         "只有定时、排队或运行中的任务可以取消。",
+    Select: "选择",
+    "Delete selected": "删除所选",
+    "Delete selected history items? This cannot be undone.":
+        "删除所选历史记录？此操作无法撤销。",
 };
 
 export default zh;

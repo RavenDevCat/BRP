@@ -437,6 +437,7 @@ class PlannerConfig:
     reserved_express_buses: int = 4
     express_skip_inner_km: float = 8.0
     max_route_duration_minutes: int = 60
+    time_impact_limit_minutes: int = int(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
     stop_service_minutes: int = 1
     subway_search_radius_m: int = 1500
     max_subway_walk_distance_m: int = 800
@@ -7908,6 +7909,16 @@ def _build_time_acceptance_constraint_builder(
     return build_node_time_upper_bounds, metadata
 
 
+def _format_time_impact_limit_minutes(value: Any) -> str:
+    try:
+        numeric = max(0.0, float(value))
+    except (TypeError, ValueError):
+        numeric = float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}".rstrip("0").rstrip(".")
+
+
 def run_backend_planner_with_prepared_data(
     prepared_payload: dict[str, Any],
     config: PlannerConfig | None = None,
@@ -8096,12 +8107,33 @@ def run_backend_planner_with_prepared_data(
             config,
             input_records,
         )
+        time_impact_limit_minutes = max(
+            0.0,
+            float(
+                config.time_impact_limit_minutes
+                if config.time_impact_limit_minutes is not None
+                else TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES
+            ),
+        )
+        time_impact_limit_label = _format_time_impact_limit_minutes(time_impact_limit_minutes)
+        time_constrained_display_label = f"{time_impact_limit_label}-Minute Constrained"
+        ep15min_display_label = f"EP {time_impact_limit_label}-Minute"
+        time_constrained_solver_label = (
+            f"{time_impact_limit_label}-minute time-impact constrained optimization"
+        )
+        ep15min_solver_label = f"EP {time_impact_limit_label}-minute optimization"
         time_constraint_builder, time_constraint_metadata = _build_time_acceptance_constraint_builder(
             current_plan_assessment,
             original_points,
             assessment_time,
             config.service_direction,
-            TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES,
+            time_impact_limit_minutes,
+        )
+        time_constraint_metadata.update(
+            {
+                "display_name": time_constrained_display_label,
+                "time_impact_limit_minutes": time_impact_limit_minutes,
+            }
         )
         if time_constraint_builder is not None:
             try:
@@ -8109,7 +8141,7 @@ def run_backend_planner_with_prepared_data(
                 time_constrained_result = _solve_vehicle_ladder_scenario(
                     planner,
                     original_points,
-                    "15-minute time-impact constrained optimization",
+                    time_constrained_solver_label,
                     current_route_count=current_plan_route_count_for_reduction,
                     minimum_vehicle_reduction=minimum_vehicle_reduction,
                     bus_type_configs=free_baseline_bus_type_configs,
@@ -8119,6 +8151,9 @@ def run_backend_planner_with_prepared_data(
                     route_traffic_fallback_multiplier=traffic_time_multiplier,
                 )
                 time_constrained_result["baseline_name"] = "time_constrained_optimization"
+                time_constrained_result["display_name"] = time_constrained_display_label
+                time_constrained_result["scenario_label"] = time_constrained_display_label
+                time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
                 time_constrained_result["time_constraint"] = {
                     **dict(time_constrained_result.get("time_constraint") or {}),
                     **hard_time_constraint_metadata,
@@ -8133,7 +8168,7 @@ def run_backend_planner_with_prepared_data(
                 }
             except Exception as exc:
                 planner.log(
-                    "[WARN] 15-minute time-impact constrained optimization hard constraints "
+                    f"[WARN] {time_constrained_solver_label} hard constraints "
                     f"failed; retrying best-effort soft constraints: {exc}"
                 )
                 soft_time_constraint_metadata = {
@@ -8144,7 +8179,7 @@ def run_backend_planner_with_prepared_data(
                     time_constrained_result = _solve_vehicle_ladder_scenario(
                         planner,
                         original_points,
-                        "15-minute time-impact constrained optimization best effort",
+                        f"{time_constrained_solver_label} best effort",
                         current_route_count=current_plan_route_count_for_reduction,
                         minimum_vehicle_reduction=minimum_vehicle_reduction,
                         bus_type_configs=free_baseline_bus_type_configs,
@@ -8154,6 +8189,9 @@ def run_backend_planner_with_prepared_data(
                         route_traffic_fallback_multiplier=traffic_time_multiplier,
                     )
                     time_constrained_result["baseline_name"] = "time_constrained_optimization"
+                    time_constrained_result["display_name"] = time_constrained_display_label
+                    time_constrained_result["scenario_label"] = time_constrained_display_label
+                    time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
                     time_constrained_result["time_constraint"] = {
                         **dict(time_constrained_result.get("time_constraint") or {}),
                         **soft_time_constraint_metadata,
@@ -8161,10 +8199,14 @@ def run_backend_planner_with_prepared_data(
                         "strict_satisfied": False,
                     }
                 except Exception as soft_exc:
-                    planner.log(f"[WARN] 15-minute time-impact constrained optimization skipped: {soft_exc}")
+                    planner.log(f"[WARN] {time_constrained_solver_label} skipped: {soft_exc}")
                     time_constrained_result = _build_skipped_scenario_result(
-                        f"15-minute time-impact constrained optimization was infeasible: {soft_exc}",
+                        f"{time_constrained_solver_label} was infeasible: {soft_exc}",
                         {
+                            "baseline_name": "time_constrained_optimization",
+                            "display_name": time_constrained_display_label,
+                            "scenario_label": time_constrained_display_label,
+                            "time_impact_limit_minutes": time_impact_limit_minutes,
                             "time_constraint": {
                                 **time_constraint_metadata,
                                 "enabled": False,
@@ -8176,7 +8218,13 @@ def run_backend_planner_with_prepared_data(
         else:
             time_constrained_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
-                {"time_constraint": time_constraint_metadata},
+                {
+                    "baseline_name": "time_constrained_optimization",
+                    "display_name": time_constrained_display_label,
+                    "scenario_label": time_constrained_display_label,
+                    "time_impact_limit_minutes": time_impact_limit_minutes,
+                    "time_constraint": time_constraint_metadata,
+                },
             )
         original_result = free_optimization_baseline
         exception_preserving_result = build_exception_preserving_scenario(
@@ -8195,6 +8243,7 @@ def run_backend_planner_with_prepared_data(
             ep15_time_constraint_metadata = {
                 **deepcopy(time_constraint_metadata),
                 "source": "exception_preserving_remainder",
+                "display_name": ep15min_display_label,
             }
             ep15min_result = build_exception_preserving_scenario(
                 planner,
@@ -8210,9 +8259,12 @@ def run_backend_planner_with_prepared_data(
                 node_time_upper_bounds_builder=time_constraint_builder,
                 time_constraint_metadata=ep15_time_constraint_metadata,
                 baseline_name="ep15min_optimization",
-                scenario_label="EP 15-minute optimization",
+                scenario_label=ep15min_solver_label,
                 allow_vehicle_limit_fallback=True,
             )
+            ep15min_result["display_name"] = ep15min_display_label
+            ep15min_result["scenario_label"] = ep15min_display_label
+            ep15min_result["time_impact_limit_minutes"] = time_impact_limit_minutes
             if ep15min_result.get("enabled") is False:
                 ep15min_result = build_exception_preserving_scenario(
                     planner,
@@ -8231,13 +8283,22 @@ def run_backend_planner_with_prepared_data(
                         "strict_skipped_reason": str(ep15min_result.get("skipped_reason") or ""),
                     },
                     baseline_name="ep15min_optimization",
-                    scenario_label="EP 15-minute optimization best effort",
+                    scenario_label=f"{ep15min_solver_label} best effort",
                     allow_vehicle_limit_fallback=True,
                 )
+                ep15min_result["display_name"] = ep15min_display_label
+                ep15min_result["scenario_label"] = ep15min_display_label
+                ep15min_result["time_impact_limit_minutes"] = time_impact_limit_minutes
         else:
             ep15min_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
-                {"time_constraint": time_constraint_metadata},
+                {
+                    "baseline_name": "ep15min_optimization",
+                    "display_name": ep15min_display_label,
+                    "scenario_label": ep15min_display_label,
+                    "time_impact_limit_minutes": time_impact_limit_minutes,
+                    "time_constraint": time_constraint_metadata,
+                },
             )
         route_reallocation_analysis = analyze_route_reallocation_opportunities(
             planner,
@@ -8339,6 +8400,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_calibration": traffic_calibration,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
+        "planner_config": asdict(config),
     }
     structured_results = attach_output_paths_to_structured_results(structured_results, config)
     service_input_record_count = len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0])
@@ -8367,6 +8429,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_calibration": traffic_calibration,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
+        "planner_config": asdict(config),
     }
 
 

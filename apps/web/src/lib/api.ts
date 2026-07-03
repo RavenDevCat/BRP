@@ -411,6 +411,7 @@ export type PlannerConfigPayload = {
     reserved_express_buses: number;
     express_skip_inner_km: number;
     max_route_duration_minutes: number;
+    time_impact_limit_minutes: number;
     stop_service_minutes: number;
     subway_search_radius_m: number;
     max_subway_walk_distance_m: number;
@@ -421,6 +422,10 @@ export type PlannerConfigPayload = {
     service_direction: string;
     to_school_arrival_time: string;
     from_school_departure_time: string;
+    time_window_start: string;
+    time_window_end: string;
+    route_stop_limit: number | null;
+    minimum_vehicle_reduction: number;
     include_subway_aggregation_scenario: boolean;
     include_nearby_aggregation_scenario: boolean;
     operating_cost_per_km: number;
@@ -906,6 +911,7 @@ export function submitWorkbookJob(payload: {
     config: PlannerConfigPayload;
     job_custom_name?: string;
     scheduled_job?: boolean;
+    scheduled_date?: string;
     address_review_acknowledged?: boolean;
 }) {
     return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {

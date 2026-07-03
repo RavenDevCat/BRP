@@ -64,7 +64,8 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         original_compute = planner_core._compute_scenario_without_render
         try:
             def fake_compute(*args, **kwargs):
-                target = int(kwargs["forced_vehicle_count"])
+                self.assertNotIn("forced_vehicle_count", kwargs)
+                target = int(kwargs["reduced_vehicle_limit"])
                 calls.append(target)
                 passed = target >= 19
                 return {

@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import live_traffic_sampler  # noqa: E402
 from quota_store_sqlite import SqliteQuotaStore  # noqa: E402
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 
 class LiveTrafficSamplerTests(unittest.TestCase):
@@ -175,6 +176,27 @@ class LiveTrafficSamplerTests(unittest.TestCase):
             live_traffic_sampler._raw_osrm_seconds({"leg_details": [{"duration_s": 100}, {"duration_s": 50}]}),
             150,
         )
+
+    def test_load_job_requires_sqlite_for_job_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            jobs_dir = root / "jobs"
+            jobs_dir.mkdir()
+            (jobs_dir / "old.json").write_text(
+                json.dumps({"job_id": "old", "status": "succeeded"}),
+                encoding="utf-8",
+            )
+            sqlite_path = root / "runtime.sqlite"
+
+            with self.assertRaisesRegex(FileNotFoundError, "SQLite"):
+                live_traffic_sampler._load_job("old", jobs_dir, sqlite_path)
+
+            SqliteRuntimeStore(sqlite_path).upsert_job({"job_id": "old", "status": "succeeded"})
+
+            self.assertEqual(
+                live_traffic_sampler._load_job("old", jobs_dir, sqlite_path)["job_id"],
+                "old",
+            )
 
     def test_to_school_schedule_backsolves_from_target_arrival(self) -> None:
         args = argparse.Namespace(

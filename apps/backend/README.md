@@ -10,7 +10,7 @@ AI Audit integration.
 
 - expose `/api/*` routes consumed by `apps/web`
 - validate and submit Route Audit workbooks
-- persist job records under `BRP_BACKEND_JOBS_DIR` or `state/jobs`
+- persist job records in the runtime SQLite DB (`BRP_RUNTIME_DB_PATH`)
 - persist side tool history under `BRP_SIDE_TOOLS_DIR` or `state/side_tools`
 - run planner workers and enrich route results
 - select OSRM endpoints from environment configuration
@@ -58,6 +58,12 @@ Health check:
 ```bash
 curl -s http://127.0.0.1:8001/health
 ```
+
+## Job State
+
+Runtime job state is SQLite-authoritative. Use the API or read-only SQLite
+queries against `BRP_RUNTIME_DB_PATH`; `state/jobs/*.json` is a legacy archive
+for migration/debug only and must not be used to find current jobs by id.
 
 ## Runtime Data
 

@@ -462,18 +462,13 @@ def _runtime_store(sqlite_path: Path = DEFAULT_RUNTIME_DB_PATH) -> SqliteRuntime
 
 
 def _load_job(job_id: str, jobs_dir: Path, sqlite_path: Path = DEFAULT_RUNTIME_DB_PATH) -> dict[str, Any]:
-    store = _runtime_store(sqlite_path)
-    if store is not None:
-        payload = store.get_job(job_id)
-        if payload:
-            if payload.get("status") != "succeeded":
-                raise ValueError(f"Job {job_id} is not succeeded: {payload.get('status')}")
-            return payload
-
-    path = jobs_dir / f"{job_id}.json"
-    if not path.exists():
-        raise FileNotFoundError(f"Job file not found: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    _ = jobs_dir
+    db_path = sqlite_path.expanduser()
+    if not db_path.exists():
+        raise FileNotFoundError(f"Runtime SQLite database not found: {db_path}")
+    payload = SqliteRuntimeStore(db_path).get_job(job_id)
+    if not payload:
+        raise FileNotFoundError(f"Job not found in runtime SQLite store: {job_id}")
     if payload.get("status") != "succeeded":
         raise ValueError(f"Job {job_id} is not succeeded: {payload.get('status')}")
     return payload

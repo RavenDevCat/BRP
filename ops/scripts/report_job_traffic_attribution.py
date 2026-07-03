@@ -73,7 +73,7 @@ def _sqlite_store(sqlite_path: Path | None) -> SqliteRuntimeStore | None:
         return None
     path = sqlite_path.expanduser()
     if not path.exists():
-        return None
+        raise FileNotFoundError(f"Runtime SQLite database not found: {path}")
     return SqliteRuntimeStore(path)
 
 
@@ -88,8 +88,7 @@ def _load_job(job: str, job_dir: Path, sqlite_path: Path | None = None) -> dict[
         if payload:
             payload["_resolved_path"] = f"sqlite:{store.db_path}:{job}"
             return payload
-
-    return _load_job_json(job, job_dir)
+    raise FileNotFoundError(f"Job not found in runtime SQLite store: {job}")
 
 
 def _normal_key(value: Any) -> str:
@@ -150,35 +149,7 @@ def _job_index_candidates(
         entries = [entry for entry in entries if str(entry.get("job_id") or "").strip()]
         entries.sort(key=_job_sort_key, reverse=True)
         return entries[: max(1, limit)]
-
-    index_path = job_dir / "index.json"
-    entries: list[dict[str, Any]] = []
-    if index_path.exists():
-        try:
-            payload = json.loads(index_path.read_text(encoding="utf-8"))
-            if isinstance(payload, list):
-                entries = [_as_dict(item) for item in payload]
-        except Exception:
-            entries = []
-    if not entries:
-        for path in job_dir.glob("*.json"):
-            if path.name == "index.json":
-                continue
-            try:
-                stat = path.stat()
-            except OSError:
-                continue
-            entries.append(
-                {
-                    "job_id": path.stem,
-                    "created_at": "",
-                    "finished_at": "",
-                    "mtime": f"{stat.st_mtime:.6f}",
-                }
-            )
-    entries = [entry for entry in entries if str(entry.get("job_id") or "").strip()]
-    entries.sort(key=_job_sort_key, reverse=True)
-    return entries[: max(1, limit)]
+    raise FileNotFoundError("Runtime SQLite database path is required to list jobs")
 
 
 def _result_sections(job: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:

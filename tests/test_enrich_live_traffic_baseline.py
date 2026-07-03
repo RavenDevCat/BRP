@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ops" / "scripts"))
+sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import enrich_live_traffic_baseline as enrich  # noqa: E402
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 
 class EnrichLiveTrafficBaselineTests(unittest.TestCase):
@@ -75,6 +78,24 @@ class EnrichLiveTrafficBaselineTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Baseline/job mismatch"):
             enrich.enrich_baseline_from_job(baseline, job, job_id="abc123")
+
+    def test_load_runtime_job_requires_sqlite_for_job_id(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            jobs_dir = root / "jobs"
+            jobs_dir.mkdir()
+            (jobs_dir / "old.json").write_text('{"job_id":"old"}', encoding="utf-8")
+            sqlite_path = root / "runtime.sqlite"
+
+            with self.assertRaisesRegex(FileNotFoundError, "SQLite"):
+                enrich._load_runtime_job("old", jobs_dir, sqlite_path)
+
+            SqliteRuntimeStore(sqlite_path).upsert_job({"job_id": "old", "status": "succeeded"})
+
+            self.assertEqual(
+                enrich._load_runtime_job("old", jobs_dir, sqlite_path)["job_id"],
+                "old",
+            )
 
 
 if __name__ == "__main__":

@@ -38,12 +38,14 @@ def _load_json(path: Path) -> Any:
 
 
 def _load_runtime_job(job_id: str, jobs_dir: Path, sqlite_path: Path) -> dict[str, Any]:
+    _ = jobs_dir
     db_path = sqlite_path.expanduser()
-    if db_path.exists():
-        payload = SqliteRuntimeStore(db_path).get_job(job_id)
-        if payload:
-            return payload
-    return _load_json(jobs_dir / f"{job_id}.json")
+    if not db_path.exists():
+        raise FileNotFoundError(f"Runtime SQLite database not found: {db_path}")
+    payload = SqliteRuntimeStore(db_path).get_job(job_id)
+    if not payload:
+        raise FileNotFoundError(f"Job not found in runtime SQLite store: {job_id}")
+    return payload
 
 
 def _sorted_stops(route: dict[str, Any]) -> list[dict[str, Any]]:

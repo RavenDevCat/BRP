@@ -77,7 +77,7 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            summary = report_job_traffic_attribution.summarize_job("legacy", job_dir)
+            summary = report_job_traffic_attribution.summarize_job(job_dir / "legacy.json", job_dir)
             requirements = report_job_traffic_attribution.evaluate_requirements(
                 summary,
                 require_attribution=True,
@@ -91,6 +91,21 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
         self.assertEqual(requirements[0]["reason"], "missing_traffic_attribution")
         self.assertFalse(requirements[1]["passed"])
         self.assertEqual(requirements[1]["reason"], "missing_scenario_attribution")
+
+    def test_job_id_does_not_fall_back_to_legacy_json(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            job_dir = Path(tmpdir)
+            (job_dir / "legacy.json").write_text(
+                json.dumps({"job_id": "legacy", "status": "succeeded"}),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(FileNotFoundError, "SQLite"):
+                report_job_traffic_attribution.summarize_job(
+                    "legacy",
+                    job_dir,
+                    Path(tmpdir) / "missing.sqlite",
+                )
 
     def test_reports_geo_route_attribution_from_structured_results(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -181,9 +196,9 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            summary = report_job_traffic_attribution.summarize_job("geo", job_dir)
+            summary = report_job_traffic_attribution.summarize_job(job_dir / "geo.json", job_dir)
             evidence_summary = report_job_traffic_attribution.summarize_job(
-                "geo",
+                job_dir / "geo.json",
                 job_dir,
                 include_route_evidence=True,
                 include_top_matches=True,
@@ -263,7 +278,7 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            summary = report_job_traffic_attribution.summarize_job("scenario", job_dir)
+            summary = report_job_traffic_attribution.summarize_job(job_dir / "scenario.json", job_dir)
 
         self.assertEqual(summary["scenario_count"], 1)
         self.assertEqual(summary["scenarios"][0]["scenario"], "free_optimization_baseline")
@@ -271,12 +286,16 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
 
     def test_find_latest_job_applies_filters(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            job_dir = Path(tmpdir)
-            (job_dir / "older.json").write_text(
-                json.dumps(
+            root = Path(tmpdir)
+            job_dir = root / "jobs"
+            job_dir.mkdir()
+            sqlite_path = root / "runtime.sqlite"
+            store = SqliteRuntimeStore(sqlite_path)
+            for record in [
                     {
                         "job_id": "older",
                         "status": "succeeded",
+                        "finished_at": "2026-06-18T01:00:00+00:00",
                         "metadata": {
                             "job_name": "DEMH-To School - temporary",
                             "source_label": "DEMH-To School.xlsx",
@@ -287,12 +306,7 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                                 "traffic_coefficient_mode": "legacy",
                             }
                         },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (job_dir / "newer.json").write_text(
-                json.dumps(
+                    },
                     {
                         "job_id": "newer",
                         "status": "succeeded",
@@ -313,30 +327,13 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
                                 },
                             }
                         },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (job_dir / "index.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "job_id": "older",
-                            "status": "succeeded",
-                            "finished_at": "2026-06-18T01:00:00+00:00",
-                        },
-                        {
-                            "job_id": "newer",
-                            "status": "succeeded",
-                            "finished_at": "2026-06-18T02:00:00+00:00",
-                        },
-                    ]
-                ),
-                encoding="utf-8",
-            )
+                    },
+            ]:
+                store.upsert_job(record)
 
             job_id, selection = report_job_traffic_attribution.find_latest_job(
                 job_dir,
+                sqlite_path,
                 status="succeeded",
                 service_direction="From School",
                 traffic_coefficient_mode="attributed",
@@ -353,49 +350,38 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
 
     def test_find_latest_job_rejects_metadata_mismatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            job_dir = Path(tmpdir)
-            (job_dir / "newer.json").write_text(
-                json.dumps(
-                    {
-                            "job_id": "newer",
-                            "status": "succeeded",
-                            "created_at": "2026-06-18T01:59:00+00:00",
-                            "finished_at": "2026-06-18T02:00:00+00:00",
-                            "metadata": {
-                                "job_name": "DEMH-From School - rollout",
-                                "source_label": "DEMH-From School.xlsx",
-                        },
-                        "result": {
-                            "structured_results": {
-                                "service_direction": "From School",
-                                "traffic_coefficient_mode": "attributed",
-                                "traffic_attribution": {
-                                    "enabled": True,
-                                    "succeeded": True,
-                                    "route_level_applied": True,
-                                },
+            root = Path(tmpdir)
+            job_dir = root / "jobs"
+            job_dir.mkdir()
+            sqlite_path = root / "runtime.sqlite"
+            SqliteRuntimeStore(sqlite_path).upsert_job(
+                {
+                    "job_id": "newer",
+                    "status": "succeeded",
+                    "created_at": "2026-06-18T01:59:00+00:00",
+                    "finished_at": "2026-06-18T02:00:00+00:00",
+                    "metadata": {
+                        "job_name": "DEMH-From School - rollout",
+                        "source_label": "DEMH-From School.xlsx",
+                    },
+                    "result": {
+                        "structured_results": {
+                            "service_direction": "From School",
+                            "traffic_coefficient_mode": "attributed",
+                            "traffic_attribution": {
+                                "enabled": True,
+                                "succeeded": True,
+                                "route_level_applied": True,
                             }
                         },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (job_dir / "index.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "job_id": "newer",
-                            "status": "succeeded",
-                            "finished_at": "2026-06-18T02:00:00+00:00",
-                        },
-                    ]
-                ),
-                encoding="utf-8",
+                    },
+                }
             )
 
             with self.assertRaises(LookupError):
                 report_job_traffic_attribution.find_latest_job(
                     job_dir,
+                    sqlite_path,
                     status="succeeded",
                     service_direction="From School",
                     traffic_coefficient_mode="attributed",
@@ -405,45 +391,34 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
 
     def test_find_latest_job_rejects_too_old_finished_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            job_dir = Path(tmpdir)
-            (job_dir / "old.json").write_text(
-                json.dumps(
-                    {
-                        "job_id": "old",
-                        "status": "succeeded",
-                        "created_at": "2026-06-18T01:00:00+00:00",
-                        "finished_at": "2026-06-18T01:10:00+00:00",
-                        "result": {
-                            "structured_results": {
-                                "service_direction": "From School",
-                                "traffic_coefficient_mode": "attributed",
-                                "traffic_attribution": {
-                                    "enabled": True,
-                                    "succeeded": True,
-                                    "route_level_applied": True,
-                                },
+            root = Path(tmpdir)
+            job_dir = root / "jobs"
+            job_dir.mkdir()
+            sqlite_path = root / "runtime.sqlite"
+            SqliteRuntimeStore(sqlite_path).upsert_job(
+                {
+                    "job_id": "old",
+                    "status": "succeeded",
+                    "created_at": "2026-06-18T01:00:00+00:00",
+                    "finished_at": "2026-06-18T01:10:00+00:00",
+                    "result": {
+                        "structured_results": {
+                            "service_direction": "From School",
+                            "traffic_coefficient_mode": "attributed",
+                            "traffic_attribution": {
+                                "enabled": True,
+                                "succeeded": True,
+                                "route_level_applied": True,
                             }
                         },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (job_dir / "index.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "job_id": "old",
-                            "status": "succeeded",
-                            "finished_at": "2026-06-18T01:10:00+00:00",
-                        }
-                    ]
-                ),
-                encoding="utf-8",
+                    },
+                }
             )
 
             with self.assertRaises(LookupError):
                 report_job_traffic_attribution.find_latest_job(
                     job_dir,
+                    sqlite_path,
                     status="succeeded",
                     service_direction="From School",
                     traffic_coefficient_mode="attributed",
@@ -453,38 +428,28 @@ class JobTrafficAttributionReportTests(unittest.TestCase):
 
     def test_find_latest_job_reports_no_match(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            job_dir = Path(tmpdir)
-            (job_dir / "legacy.json").write_text(
-                json.dumps(
-                    {
-                        "job_id": "legacy",
-                        "status": "succeeded",
-                        "result": {
-                            "structured_results": {
-                                "service_direction": "To School",
-                                "traffic_coefficient_mode": "legacy",
-                            }
+            root = Path(tmpdir)
+            job_dir = root / "jobs"
+            job_dir.mkdir()
+            sqlite_path = root / "runtime.sqlite"
+            SqliteRuntimeStore(sqlite_path).upsert_job(
+                {
+                    "job_id": "legacy",
+                    "status": "succeeded",
+                    "finished_at": "2026-06-18T01:00:00+00:00",
+                    "result": {
+                        "structured_results": {
+                            "service_direction": "To School",
+                            "traffic_coefficient_mode": "legacy",
                         },
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (job_dir / "index.json").write_text(
-                json.dumps(
-                    [
-                        {
-                            "job_id": "legacy",
-                            "status": "succeeded",
-                            "finished_at": "2026-06-18T01:00:00+00:00",
-                        }
-                    ]
-                ),
-                encoding="utf-8",
+                    },
+                }
             )
 
             with self.assertRaises(LookupError):
                 report_job_traffic_attribution.find_latest_job(
                     job_dir,
+                    sqlite_path,
                     traffic_coefficient_mode="attributed",
                     require_attribution=True,
                 )

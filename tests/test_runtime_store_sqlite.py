@@ -184,6 +184,52 @@ def test_backend_service_job_store_uses_sqlite_as_source_of_truth(
     assert sqlite_store.get_job(created["job_id"]) is None
 
 
+def test_backend_service_reconcile_keeps_live_running_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    running = job_record("job1", "alice@example.com")
+    running["status"] = "running"
+    running["worker_pid"] = 12345
+    SqliteRuntimeStore(sqlite_path).upsert_job(running)
+
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+    monkeypatch.setattr(backend_service, "pid_is_alive", lambda pid: pid == 12345)
+
+    backend_service.JobStore(tmp_path / "jobs")
+
+    stored = SqliteRuntimeStore(sqlite_path).get_job("job1")
+    assert stored["status"] == "running"
+    assert stored["worker_pid"] == 12345
+    assert stored["error"] is None
+
+
+def test_backend_service_reconcile_fails_dead_running_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    running = job_record("job1", "alice@example.com")
+    running["status"] = "running"
+    running["worker_pid"] = 12345
+    SqliteRuntimeStore(sqlite_path).upsert_job(running)
+
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+    monkeypatch.setattr(backend_service, "pid_is_alive", lambda pid: False)
+
+    backend_service.JobStore(tmp_path / "jobs")
+
+    stored = SqliteRuntimeStore(sqlite_path).get_job("job1")
+    assert stored["status"] == "failed"
+    assert stored["worker_pid"] is None
+    assert stored["error"] == "Job was interrupted because the backend service restarted."
+
+
 def test_backend_service_side_tool_store_uses_sqlite_as_source_of_truth(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -28,6 +28,8 @@ from openpyxl import Workbook
 try:
     from .job_queue import (
         JobQueueManager,
+        pid_is_alive,
+        safe_int,
         terminate_worker_process,
         worker_creation_flags,
     )
@@ -57,6 +59,8 @@ try:
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from job_queue import (
         JobQueueManager,
+        pid_is_alive,
+        safe_int,
         terminate_worker_process,
         worker_creation_flags,
     )
@@ -3060,6 +3064,9 @@ class JobStore:
                     self._save_job_unlocked(job_id, record)
                     continue
                 if status == "running":
+                    worker_pid = safe_int(record.get("worker_pid"), 0)
+                    if pid_is_alive(worker_pid):
+                        continue
                     record["status"] = "failed"
                     record["finished_at"] = utc_now_iso()
                     record["error"] = (

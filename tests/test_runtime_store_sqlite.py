@@ -164,7 +164,8 @@ def test_backend_service_job_store_uses_sqlite_as_source_of_truth(
     stored = sqlite_store.get_job(created["job_id"])
     assert stored is not None
     assert stored["owner_email"] == "alice@example.com"
-    assert stored["metadata"] == {"job_name": "sqlite only"}
+    assert stored["metadata"]["job_name"] == "sqlite only"
+    assert stored["metadata"]["job_queue_scope"]
     assert not (tmp_path / "jobs" / f"{created['job_id']}.json").exists()
     assert not (tmp_path / "jobs" / "index.json").exists()
 
@@ -184,6 +185,53 @@ def test_backend_service_job_store_uses_sqlite_as_source_of_truth(
     assert sqlite_store.get_job(created["job_id"]) is None
 
 
+def test_backend_service_job_store_marks_queue_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+    monkeypatch.setattr(backend_service, "JOB_QUEUE_SCOPE", "staging")
+
+    job_store = backend_service.JobStore(tmp_path / "jobs")
+    created = job_store.create_job(
+        {"service_direction": "To School"},
+        {"rows": []},
+        metadata={"job_name": "scoped"},
+        owner_email="alice@example.com",
+    )
+
+    stored = SqliteRuntimeStore(sqlite_path).get_job(created["job_id"])
+    assert stored["metadata"]["job_queue_scope"] == "staging"
+
+
+def test_backend_service_job_store_filters_queued_jobs_by_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import backend_service  # noqa: WPS433
+
+    sqlite_path = tmp_path / "runtime.sqlite"
+    sqlite_store = SqliteRuntimeStore(sqlite_path)
+    staging_job = job_record("job1", "alice@example.com")
+    staging_job["status"] = "queued"
+    staging_job["metadata"] = {"job_queue_scope": "staging"}
+    prod_job = job_record("job2", "alice@example.com")
+    prod_job["status"] = "queued"
+    prod_job["metadata"] = {"job_queue_scope": "prod"}
+    sqlite_store.upsert_job(staging_job)
+    sqlite_store.upsert_job(prod_job)
+
+    monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
+    monkeypatch.setattr(backend_service, "_RUNTIME_SQLITE_STORE", None)
+    monkeypatch.setattr(backend_service, "JOB_QUEUE_SCOPE", "staging")
+
+    job_store = backend_service.JobStore(tmp_path / "jobs")
+
+    assert [entry["job_id"] for entry in job_store.list_queued_jobs()] == ["job1"]
+
+
 def test_backend_service_reconcile_keeps_live_running_worker(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -193,6 +241,7 @@ def test_backend_service_reconcile_keeps_live_running_worker(
     running = job_record("job1", "alice@example.com")
     running["status"] = "running"
     running["worker_pid"] = 12345
+    running["metadata"] = {"job_queue_scope": "staging"}
     SqliteRuntimeStore(sqlite_path).upsert_job(running)
 
     monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)
@@ -216,6 +265,7 @@ def test_backend_service_reconcile_fails_dead_running_worker(
     running = job_record("job1", "alice@example.com")
     running["status"] = "running"
     running["worker_pid"] = 12345
+    running["metadata"] = {"job_queue_scope": "staging"}
     SqliteRuntimeStore(sqlite_path).upsert_job(running)
 
     monkeypatch.setattr(backend_service, "RUNTIME_DB_PATH", sqlite_path)

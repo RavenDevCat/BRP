@@ -226,11 +226,27 @@ def _default_scheduled_jobs_enabled() -> bool:
     return "/staging/" in root_text or "/prod/" in root_text
 
 
+def _default_job_queue_scope() -> str:
+    root_text = str(BASE_DIR).replace("\\", "/").lower()
+    if "/staging/" in root_text:
+        return "staging"
+    if "/prod/" in root_text:
+        return "prod"
+    return "default"
+
+
+def _normalize_job_queue_scope(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
 GOOGLE_GEOCODE_USAGE_VISIBLE = _env_flag("BRP_SHOW_GOOGLE_GEOCODE_USAGE", False)
 ENABLE_LANGUAGE_SWITCH = not _env_flag("BRP_DISABLE_LANGUAGE_SWITCH", False)
 SCHEDULED_JOBS_ENABLED = _env_flag(
     "BRP_ENABLE_SCHEDULED_JOBS",
     _default_scheduled_jobs_enabled(),
+)
+JOB_QUEUE_SCOPE = _normalize_job_queue_scope(
+    os.environ.get("BRP_JOB_QUEUE_SCOPE") or _default_job_queue_scope()
 )
 DEFAULT_TRAFFIC_COEFFICIENT_MODE = normalize_traffic_coefficient_mode(
     os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy")
@@ -2852,6 +2868,15 @@ class JobStore:
         record["job_id"] = str(record.get("job_id") or job_id).strip()
         _save_runtime_job(record)
 
+    def _matches_queue_scope(self, record: dict[str, Any]) -> bool:
+        metadata = dict(record.get("metadata") or {})
+        scope = _normalize_job_queue_scope(
+            metadata.get("job_queue_scope") or record.get("job_queue_scope")
+        )
+        if not scope:
+            return JOB_QUEUE_SCOPE in {"", "default"}
+        return scope == JOB_QUEUE_SCOPE
+
     def create_job(
         self,
         config_payload: dict[str, Any],
@@ -2866,6 +2891,8 @@ class JobStore:
         created_at = utc_now_iso()
         normalized_owner_email = _normalize_email(owner_email)
         initial_status = str(status or "queued").strip().lower() or "queued"
+        metadata_payload = deepcopy(metadata or {})
+        metadata_payload["job_queue_scope"] = JOB_QUEUE_SCOPE
         record = {
             "job_id": job_id,
             "owner_email": normalized_owner_email,
@@ -2882,7 +2909,7 @@ class JobStore:
             "prepared_payload_summary": _summarize_prepared_payload(
                 prepared_payload or {}
             ),
-            "metadata": deepcopy(metadata or {}),
+            "metadata": metadata_payload,
             "result": None,
             "error": None,
             "traceback": None,
@@ -2898,7 +2925,7 @@ class JobStore:
             "finished_at": None,
             "scheduled_start_at": scheduled_start_at,
             "scheduled_trigger_label": scheduled_trigger_label,
-            "metadata": deepcopy(metadata or {}),
+            "metadata": deepcopy(metadata_payload),
             "prepared_payload_summary": record["prepared_payload_summary"],
             "error": None,
         }
@@ -2988,6 +3015,8 @@ class JobStore:
                 if not job_id:
                     continue
                 record = self._load_job_unlocked(job_id)
+                if not record or not self._matches_queue_scope(record):
+                    continue
                 if record and str(record.get("status", "")).strip().lower() == "queued":
                     records.append(deepcopy(record))
             records.sort(key=lambda item: str(item.get("created_at") or ""))
@@ -3006,6 +3035,8 @@ class JobStore:
                     continue
                 record = self._load_job_unlocked(job_id)
                 if not record or str(record.get("status", "")).strip().lower() != "scheduled":
+                    continue
+                if not self._matches_queue_scope(record):
                     continue
                 scheduled_at = _parse_iso_datetime(
                     record.get("scheduled_start_at")
@@ -3031,6 +3062,8 @@ class JobStore:
             record = self._load_job_unlocked(normalized_job_id)
             if not record:
                 return None
+            if not self._matches_queue_scope(record):
+                return deepcopy(record)
             if str(record.get("status", "")).strip().lower() != "scheduled":
                 return deepcopy(record)
             metadata = dict(record.get("metadata") or {})
@@ -3056,6 +3089,8 @@ class JobStore:
                     continue
                 record = self._load_job_unlocked(job_id)
                 if not record:
+                    continue
+                if not self._matches_queue_scope(record):
                     continue
                 status = str(record.get("status", "")).strip().lower()
                 if status == "queued":

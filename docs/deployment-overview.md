@@ -228,19 +228,21 @@ separate access-control plan.
 ```bash
 export BRP_BACKEND_HOST="127.0.0.1"
 export BRP_BACKEND_PORT="8001"
+export BRP_RUNTIME_DB_PATH="/srv/brp/runtime/brp_runtime.sqlite"
 export BRP_BACKEND_JOBS_DIR="/srv/brp/runtime/jobs"
 export BRP_SIDE_TOOLS_DIR="/srv/brp/runtime/side_tools"
 export BRP_CLIENT_CACHE_DIR="/srv/brp/runtime/client_cache"
 export BRP_BACKEND_CACHE_DIR="/srv/brp/runtime/backend_cache"
 ```
 
-`BRP_BACKEND_JOBS_DIR`, `BRP_SIDE_TOOLS_DIR`, `BRP_CLIENT_CACHE_DIR`, and
-`BRP_BACKEND_CACHE_DIR` should always point at server-local runtime storage, not
-at a Git-managed code directory. If omitted, the backend defaults to
-`state/jobs`, `state/side_tools`, `apps/client/cache`, and
-`apps/backend/cache` under the repository root. The backend also rebuilds the
-job `index.json` from existing job JSON files when the index is missing or
-empty.
+`BRP_RUNTIME_DB_PATH` is the authoritative Route Audit job store. Use API calls
+or read-only SQLite queries for job inspection; do not find current jobs by
+loading `BRP_BACKEND_JOBS_DIR/*.json`. `BRP_BACKEND_JOBS_DIR`,
+`BRP_SIDE_TOOLS_DIR`, `BRP_CLIENT_CACHE_DIR`, and `BRP_BACKEND_CACHE_DIR` should
+always point at server-local runtime storage, not at a Git-managed code
+directory. If omitted, the backend defaults to `state/jobs`,
+`state/side_tools`, `apps/client/cache`, and `apps/backend/cache` under the
+repository root.
 
 Planner worker concurrency is optional. Leave it unlimited on isolated local
 environments, but set it on memory-constrained or shared staging/production hosts:

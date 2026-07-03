@@ -33,6 +33,9 @@ Codex session, then ask the operator for the current handoff.
   promote only when the user explicitly approves.
 - For frontend changes, build React from CN staging and reuse that verified
   artifact for production targets.
+- When inspecting Route Audit jobs, use the API or read-only runtime SQLite
+  (`BRP_RUNTIME_DB_PATH`). Do not search legacy `state/jobs/*.json` files by
+  job id; those files are migration/archive material only.
 - Preserve runtime data and server-local env files unless the user explicitly
   asks for a cleanup.
 - KR traffic profile refresh is not the CN AMap live timer. It uses Kakao Navi

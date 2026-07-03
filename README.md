@@ -22,9 +22,9 @@ geocode, and demand routing flows.
 - Provider coordination: share Kakao, Google, AMap, and DeepSeek rate-limit
   state across worker processes.
 - Runtime continuity: preserve job history, caches, generated outputs, usage
-  counters, and server-local env files outside normal Git sync. Job queue
-  claims, API request validation, and JSON cache writes use standard shared
-  runtime helpers rather than per-endpoint handwritten file handling.
+  counters, and server-local env files outside normal Git sync. Route Audit job
+  records are SQLite-authoritative through `BRP_RUNTIME_DB_PATH`; `state/jobs`
+  is a legacy archive/migration path, not the active job lookup source.
 
 ## Repository Layout
 
@@ -134,7 +134,8 @@ Do not commit:
 
 - `ops/env/local.env` or any real `.env` file
 - provider keys, passwords, tunnel tokens, or service credentials
-- `state/jobs` or a server's `BRP_BACKEND_JOBS_DIR`
+- runtime job SQLite stores such as `BRP_RUNTIME_DB_PATH`
+- legacy job JSON archives such as `state/jobs` or `BRP_BACKEND_JOBS_DIR`
 - `state/side_tools` or a server's `BRP_SIDE_TOOLS_DIR`
 - runtime SQLite stores such as `BRP_RUNTIME_DB_PATH`, `BRP_QUOTA_DB_PATH`,
   or `BRP_OSRM_MANAGER_DB_PATH`
@@ -144,7 +145,7 @@ Do not commit:
 
 Important runtime files to preserve during server moves:
 
-- job history
+- job history in `BRP_RUNTIME_DB_PATH`
 - client/backend caches
 - generated map/report outputs
 - server-local env files

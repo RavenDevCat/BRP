@@ -219,6 +219,14 @@ Provider safety checks:
 - Do not publish OSRM through Cloudflare Tunnel or DNS. Application services
   should call local `127.0.0.1` OSRM endpoints directly.
 
+Runtime job reads:
+
+- Route Audit jobs are authoritative in `BRP_RUNTIME_DB_PATH`.
+- For ad-hoc inspection, use the API or a read-only SQLite connection. Example:
+  `sqlite3 "file:$BRP_RUNTIME_DB_PATH?mode=ro" "select job_id,status,created_at from jobs order by coalesce(created_at,started_at,finished_at,'') desc limit 10;"`
+- Do not find current jobs by grepping or loading `state/jobs/*.json`.
+  `BRP_BACKEND_JOBS_DIR` is retained only as a legacy archive/migration input.
+
 The React web frontend in `apps/web` runs locally through Vite on port `5173`.
 It proxies `/api` to the backend on `127.0.0.1:8001`. Production-style serving
 uses Nginx as the static/proxy host instead of the Vite dev server. KR has
@@ -291,10 +299,12 @@ storage:
 
 ```bash
 echo "$BRP_BACKEND_JOBS_DIR"
+echo "$BRP_RUNTIME_DB_PATH"
 ```
 
 If unset, the run scripts default it to `state/jobs` under the repository root.
-Do not rely on `apps/backend/jobs` for real history.
+Do not rely on `apps/backend/jobs` or `state/jobs/*.json` for current job
+lookup; use runtime SQLite.
 
 Deploy:
 

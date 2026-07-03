@@ -227,10 +227,22 @@ def save_json_cache(path: Path, payload: dict[str, Any]) -> None:
 
 GEOCODE_CACHE = load_json_cache(GEOCODE_CACHE_PATH)
 SUBWAY_CACHE = load_json_cache(SUBWAY_CACHE_PATH)
+_LOG_STDOUT_AVAILABLE = True
 
 
 def log(message: str) -> None:
-    print(message, flush=True)
+    global _LOG_STDOUT_AVAILABLE
+    if not _LOG_STDOUT_AVAILABLE:
+        return
+    try:
+        print(message, flush=True)
+    except BrokenPipeError:
+        _LOG_STDOUT_AVAILABLE = False
+    except OSError as exc:
+        if getattr(exc, "errno", None) == 32:
+            _LOG_STDOUT_AVAILABLE = False
+            return
+        raise
 
 
 def determine_currency_code(input_records: list[dict[str, Any]]) -> str:

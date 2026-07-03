@@ -69,6 +69,8 @@ export function NewJobPage() {
   const [fileError, setFileError] = useState("");
   const [jobCustomName, setJobCustomName] = useState("");
   const [scheduledJob, setScheduledJob] = useState(false);
+  const [scheduledDateInput, setScheduledDateInput] = useState("");
+  const [scheduledDates, setScheduledDates] = useState<string[]>([]);
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const [addressReviewAcknowledged, setAddressReviewAcknowledged] = useState(false);
@@ -114,6 +116,26 @@ export function NewJobPage() {
         ? buildConfigWithOverrides(preview.suggested_config, Boolean(preview.subway_aggregation_block_reason), nextOverrides)
         : buildConfigWithOverrides(defaultConfig, false, nextOverrides),
     );
+  }
+
+  function applyServiceDirection(direction: string) {
+    const patch: Partial<PlannerConfigPayload> =
+      direction === "To School"
+        ? { service_direction: direction, time_window_start: "06:30", time_window_end: "08:00" }
+        : { service_direction: direction, time_window_start: "15:40", time_window_end: "17:40" };
+    updateUserConfig(patch);
+  }
+
+  function addScheduledDate() {
+    if (!scheduledDateInput) {
+      return;
+    }
+    setScheduledDates((dates) => Array.from(new Set([...dates, scheduledDateInput])).sort());
+    setScheduledDateInput("");
+  }
+
+  function removeScheduledDate(date: string) {
+    setScheduledDates((dates) => dates.filter((item) => item !== date));
   }
 
   function configFromPreview(payload: WorkbookPreview) {
@@ -170,14 +192,23 @@ export function NewJobPage() {
         setPreview(payload);
         setConfig(submitConfig);
       }
-      return submitWorkbookJob({
-        file_name: file.name,
-        file_base64: fileBase64,
-        config: submitConfig,
-        job_custom_name: jobCustomName,
-        scheduled_job: scheduledJobsEnabled && scheduledJob,
-        address_review_acknowledged: addressReviewAcknowledged,
-      });
+      const dates = scheduledJobsEnabled && scheduledJob ? scheduledDates : [undefined];
+      let lastPayload = null;
+      for (const scheduledDate of dates) {
+        lastPayload = await submitWorkbookJob({
+          file_name: file.name,
+          file_base64: fileBase64,
+          config: submitConfig,
+          job_custom_name: jobCustomName,
+          scheduled_job: scheduledJobsEnabled && scheduledJob,
+          scheduled_date: scheduledDate,
+          address_review_acknowledged: addressReviewAcknowledged,
+        });
+      }
+      if (!lastPayload) {
+        throw new Error(t("Select at least one schedule date."));
+      }
+      return lastPayload;
     },
     onSuccess: async (payload) => {
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -254,6 +285,8 @@ export function NewJobPage() {
         ? `${t("AMap drive time")}: ${t("Unavailable")}`
         : "";
   const busy = previewMutation.isPending || submitMutation.isPending || clearAddressCacheMutation.isPending;
+  const timeWindowReady = Boolean(config.time_window_start && config.time_window_end && config.time_window_start < config.time_window_end);
+  const scheduledReady = Boolean(!scheduledJob || !scheduledJobsEnabled || scheduledDates.length > 0);
   const routeBudgetUnavailableRetryable = Boolean(
     preview &&
     autoRouteBudget?.status !== "ready" &&
@@ -285,7 +318,7 @@ export function NewJobPage() {
       : preview
         ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
         : t("Upload a workbook to calculate the route budget from the current plan.");
-  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && !busy);
+  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
     fileBase64 &&
@@ -293,9 +326,13 @@ export function NewJobPage() {
     routeBudgetRetryExhausted,
   );
   const controlsLocked = previewMutation.isPending || submitMutation.isPending;
-  const submitDisabledTitle = !addressReviewReady
-    ? t("Review address warnings before running audit.")
-    : t("Run audit will unlock after workbook validation and route-budget calculation finish.");
+  const submitDisabledTitle = !timeWindowReady
+    ? t("Time window start must be before end.")
+    : !scheduledReady
+      ? t("Select at least one schedule date.")
+      : !addressReviewReady
+        ? t("Review address warnings before running audit.")
+        : t("Run audit will unlock after workbook validation and route-budget calculation finish.");
 
   useEffect(() => {
     if (!routeBudgetAutoRetrying || !file || !fileBase64) {
@@ -412,7 +449,7 @@ export function NewJobPage() {
                     role="switch"
                     aria-checked={scheduledJob}
                     className="grid h-9 w-full max-w-[240px] shrink-0 grid-cols-2 rounded-full border border-border bg-surface p-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
-                    title={t("When enabled, To School audits release at 06:00 and From School audits release at 15:40 local time.")}
+                    title={t("When enabled, audits release on selected dates at the time-window start.")}
                     onClick={() => setScheduledJob((value) => !value)}
                   >
                     <span
@@ -440,9 +477,7 @@ export function NewJobPage() {
                   <select
                     className={fieldClassName}
                     value={config.service_direction}
-                    onChange={(event) => {
-                      updateUserConfig({ service_direction: event.target.value });
-                    }}
+                    onChange={(event) => applyServiceDirection(event.target.value)}
                   >
                     {SERVICE_DIRECTION_OPTIONS.map((option) => (
                       <option key={option} value={option}>
@@ -457,7 +492,12 @@ export function NewJobPage() {
                       className={fieldClassName}
                       type="time"
                       value={config.to_school_arrival_time}
-                      onChange={(event) => updateUserConfig({ to_school_arrival_time: event.target.value })}
+                      onChange={(event) =>
+                        updateUserConfig({
+                          to_school_arrival_time: event.target.value,
+                          time_window_end: event.target.value,
+                        })
+                      }
                     />
                   </Field>
                 ) : (
@@ -466,7 +506,14 @@ export function NewJobPage() {
                       className={fieldClassName}
                       type="time"
                       value={config.from_school_departure_time}
-                      onChange={(event) => updateUserConfig({ from_school_departure_time: event.target.value })}
+                      onChange={(event) => {
+                        const start = event.target.value;
+                        updateUserConfig({
+                          from_school_departure_time: start,
+                          time_window_start: start,
+                          time_window_end: addMinutesToTime(start, 120),
+                        });
+                      }}
                     />
                   </Field>
                 )}
@@ -512,6 +559,99 @@ export function NewJobPage() {
                   ) : null}
                 </Field>
               </div>
+
+              {scheduledJobsEnabled && scheduledJob ? (
+                <div className="rounded-lg border border-border bg-surface p-3">
+                  <div className="mb-2 text-sm font-medium">{t("Schedule dates")}</div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      className={fieldClassName}
+                      type="date"
+                      value={scheduledDateInput}
+                      onChange={(event) => setScheduledDateInput(event.target.value)}
+                    />
+                    <Button type="button" variant="secondary" onClick={addScheduledDate}>
+                      {t("Add date")}
+                    </Button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {scheduledDates.length ? (
+                      scheduledDates.map((date) => (
+                        <button
+                          key={date}
+                          type="button"
+                          className="rounded-full border border-border bg-muted px-3 py-1 text-xs"
+                          title={t("Remove schedule date")}
+                          onClick={() => removeScheduledDate(date)}
+                        >
+                          {date} x
+                        </button>
+                      ))
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{t("Select at least one schedule date.")}</span>
+                    )}
+                  </div>
+                  <div className="mt-2 text-xs text-muted-foreground">
+                    {t("Each selected date creates one scheduled audit.")}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="grid gap-3 md:grid-cols-4">
+                <Field label="Window Start">
+                  <input
+                    className={fieldClassName}
+                    type="time"
+                    value={config.time_window_start}
+                    onChange={(event) => updateUserConfig({ time_window_start: event.target.value })}
+                  />
+                </Field>
+                <Field label="Window End">
+                  <input
+                    className={fieldClassName}
+                    type="time"
+                    value={config.time_window_end}
+                    onChange={(event) => updateUserConfig({ time_window_end: event.target.value })}
+                  />
+                </Field>
+                <Field label="Stops Limit">
+                  <input
+                    className={fieldClassName}
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={config.route_stop_limit ?? ""}
+                    placeholder={t("No limit")}
+                    onChange={(event) =>
+                      updateUserConfig({
+                        route_stop_limit: event.target.value ? Number(event.target.value) : null,
+                      })
+                    }
+                  />
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {t("Leave blank for no per-route stop cap.")}
+                  </div>
+                </Field>
+                <Field label="Minimum Saving">
+                  <input
+                    className={fieldClassName}
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={config.minimum_vehicle_reduction}
+                    onChange={(event) =>
+                      updateUserConfig({
+                        minimum_vehicle_reduction: Math.max(0, Number(event.target.value || 0)),
+                      })
+                    }
+                  />
+                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                    {t("Required vehicle reduction versus current plan.")}
+                  </div>
+                </Field>
+              </div>
+
+              {!timeWindowReady ? <InlineError message={t("Time window start must be before end.")} /> : null}
 
               <Field label="Custom Job Name">
                 <input
@@ -980,6 +1120,12 @@ function FleetSlot({ label, seats, count }: { label: string; seats: number; coun
 
 function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{message}</div>;
+}
+
+function addMinutesToTime(value: string, minutesToAdd: number) {
+  const [hoursText, minutesText] = value.split(":");
+  const total = ((Number(hoursText) || 0) * 60 + (Number(minutesText) || 0) + minutesToAdd) % (24 * 60);
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
 function updateConfig(

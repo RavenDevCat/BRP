@@ -14,7 +14,7 @@ import time
 import traceback
 from copy import deepcopy
 from dataclasses import asdict, fields
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -295,15 +295,27 @@ def _parse_iso_datetime(value: object) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def _next_scheduled_job_trigger(config_payload: dict[str, Any]) -> tuple[str, str]:
+def _next_scheduled_job_trigger(config_payload: dict[str, Any], scheduled_date: Any = None) -> tuple[str, str]:
     direction = str(config_payload.get("service_direction") or "").strip().lower()
-    if direction == "from school":
-        hour, minute, label = 15, 40, "15:40 PM peak"
-    else:
-        hour, minute, label = 6, 0, "06:00 AM peak"
+    window_start, _ = _parse_clock_payload(
+        config_payload.get("time_window_start"),
+        "time_window_start",
+        "15:40" if direction == "from school" else "06:30",
+    )
+    hour, minute = (int(part) for part in window_start.split(":", 1))
+    label = f"{window_start} {'PM' if direction == 'from school' else 'AM'} window"
     now = datetime.now(BRP_LOCAL_TZ).replace(microsecond=0)
-    target = now.replace(hour=hour, minute=minute, second=0)
+    if scheduled_date:
+        try:
+            target_day = date.fromisoformat(str(scheduled_date).strip())
+        except ValueError as exc:
+            raise ValueError("scheduled_date must use YYYY-MM-DD format.") from exc
+        target = datetime.combine(target_day, datetime_time(hour, minute), BRP_LOCAL_TZ)
+    else:
+        target = now.replace(hour=hour, minute=minute, second=0)
     if target <= now:
+        if scheduled_date:
+            raise ValueError("Scheduled date/time has already passed.")
         target += timedelta(days=1)
     return target.isoformat(), label
 
@@ -365,8 +377,68 @@ def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
     return PlannerConfig(**filtered_payload)
 
 
+def _parse_clock_payload(value: Any, field_name: str, default_value: str) -> tuple[str, int]:
+    raw = str(value or default_value).strip()
+    parts = raw.split(":")
+    if len(parts) < 2:
+        raise ValueError(f"{field_name} must use HH:MM format.")
+    try:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must use HH:MM format.") from exc
+    if hours < 0 or hours > 23 or minutes < 0 or minutes > 59:
+        raise ValueError(f"{field_name} must use HH:MM format.")
+    return f"{hours:02d}:{minutes:02d}", hours * 60 + minutes
+
+
+def _parse_route_stop_limit_payload(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("route_stop_limit must be a whole number.") from exc
+    if limit < 1 or limit > 200:
+        raise ValueError("route_stop_limit must be between 1 and 200.")
+    return limit
+
+
+def _parse_minimum_vehicle_reduction_payload(value: Any) -> int:
+    if value is None or value == "":
+        return 2
+    try:
+        reduction = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("minimum_vehicle_reduction must be a whole number.") from exc
+    if reduction < 0 or reduction > 200:
+        raise ValueError("minimum_vehicle_reduction must be between 0 and 200.")
+    return reduction
+
+
 def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
-    payload = asdict(_build_planner_config(config_payload))
+    normalized_input = dict(config_payload or {})
+    window_start, start_minutes = _parse_clock_payload(
+        normalized_input.get("time_window_start"),
+        "time_window_start",
+        "06:30",
+    )
+    window_end, end_minutes = _parse_clock_payload(
+        normalized_input.get("time_window_end"),
+        "time_window_end",
+        "08:00",
+    )
+    if end_minutes <= start_minutes:
+        raise ValueError("time_window_start must be before time_window_end.")
+    normalized_input["time_window_start"] = window_start
+    normalized_input["time_window_end"] = window_end
+    normalized_input["route_stop_limit"] = _parse_route_stop_limit_payload(
+        normalized_input.get("route_stop_limit")
+    )
+    normalized_input["minimum_vehicle_reduction"] = _parse_minimum_vehicle_reduction_payload(
+        normalized_input.get("minimum_vehicle_reduction")
+    )
+    payload = asdict(_build_planner_config(normalized_input))
     payload["traffic_coefficient_mode"] = normalize_traffic_coefficient_mode(
         payload.get("traffic_coefficient_mode")
     )
@@ -1522,13 +1594,32 @@ def _suggest_planner_config_from_current_plan(
             or suggested.get("to_school_arrival_time")
             or "08:00"
         )
+        suggested["time_window_start"] = str(config_payload.get("time_window_start") or "06:30")
+        suggested["time_window_end"] = str(config_payload.get("time_window_end") or "08:00")
     else:
         suggested["traffic_profile_name"] = "PM Peak"
-        suggested["from_school_departure_time"] = str(
+        departure_time = str(
             config_payload.get("from_school_departure_time")
             or suggested.get("from_school_departure_time")
             or "15:40"
         )
+        suggested["from_school_departure_time"] = departure_time
+        raw_window = (
+            str(config_payload.get("time_window_start") or ""),
+            str(config_payload.get("time_window_end") or ""),
+        )
+        if raw_window in {("", ""), ("06:30", "08:00")}:
+            departure_label, departure_minutes = _parse_clock_payload(
+                departure_time,
+                "from_school_departure_time",
+                "15:40",
+            )
+            window_end_minutes = departure_minutes + 120
+            suggested["time_window_start"] = departure_label
+            suggested["time_window_end"] = f"{(window_end_minutes // 60) % 24:02d}:{window_end_minutes % 60:02d}"
+        else:
+            suggested["time_window_start"] = raw_window[0]
+            suggested["time_window_end"] = raw_window[1]
     if "include_subway_aggregation_scenario" not in config_payload:
         suggested["include_subway_aggregation_scenario"] = False
     if "include_nearby_aggregation_scenario" not in config_payload:
@@ -2130,7 +2221,8 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
     scheduled_trigger_label = None
     if scheduled_requested:
         scheduled_start_at, scheduled_trigger_label = _next_scheduled_job_trigger(
-            config_payload
+            config_payload,
+            payload.get("scheduled_date"),
         )
     metadata = {
         "job_name": job_name,
@@ -2139,6 +2231,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
         "scheduled_job": scheduled_requested,
+        "scheduled_date": payload.get("scheduled_date") if scheduled_requested else None,
         "scheduled_start_at": scheduled_start_at,
         "scheduled_trigger_label": scheduled_trigger_label,
         "planner_config": dict(config_payload),

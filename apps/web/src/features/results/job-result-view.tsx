@@ -2691,9 +2691,14 @@ function trafficGateFailureText(gate: Record<string, unknown>): string {
 
 function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">): string {
   const status = stringValue(scenario.trafficGate.status);
+  const savingTarget = asRecord(scenario.trafficGate.vehicle_saving_target);
+  const savingStatus = stringValue(savingTarget.status);
   const checkName = trafficGateCheckName(scenario.trafficGate);
   if (status === "failed" && scenario.exceptionAccepted) {
     return "Exception contained";
+  }
+  if (status === "passed" && savingStatus === "failed") {
+    return "Vehicle saving target failed";
   }
   if (status === "passed") {
     return trafficGateType(scenario.trafficGate) === "route_duration" ? "Route duration passed" : "Time window passed";
@@ -2717,8 +2722,12 @@ function scenarioTrafficTone(
   fallback: "neutral" | "success" | "warning" | "info",
 ): "neutral" | "success" | "warning" | "info" {
   const status = stringValue(scenario.trafficGate.status);
+  const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
   if (status === "failed" && scenario.exceptionAccepted) {
     return "info";
+  }
+  if (status === "passed" && savingStatus === "failed") {
+    return "warning";
   }
   if (status === "passed") {
     return "success";
@@ -3421,16 +3430,39 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
 
 function buildSolveProcessRows(result: Record<string, unknown>) {
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    ["Free Optimization Baseline", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
-    ["15-Minute Constrained", asRecord(asRecord(result.time_constrained_optimization).traffic_gate)],
-    ["EP 15-Minute", asRecord(asRecord(result.ep15min_optimization).traffic_gate)],
+    ["Free Optimization Baseline", asRecord(result.free_optimization_baseline)],
+    ["15-Minute Constrained", asRecord(result.time_constrained_optimization)],
+    ["Exception Preserving", asRecord(result.exception_preserving_optimization)],
+    ["EP 15-Minute", asRecord(result.ep15min_optimization)],
   ];
-  return scenarios.map(([label, gate]) => buildSolveProcessRow(label, gate));
+  return scenarios.map(([label, scenario]) => buildSolveProcessRow(label, scenario));
 }
 
-function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
+function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) {
+  const gate = asRecord(scenario.traffic_gate);
   const status = stringValue(gate.status);
+  const exceptionAttempts = asRecordArray(asRecord(scenario.exception_preserving).attempts);
   if (!status || status === "not_applicable") {
+    if (exceptionAttempts.length) {
+      const acceptedAttempt = exceptionAttempts.find((attempt) => Boolean(attempt.accepted));
+      const steps = exceptionAttempts.map((attempt, index) => {
+        const remainingLimit = Number(attempt.remaining_vehicle_limit || 0);
+        const routeCount = Number(attempt.route_count || 0);
+        const frozen = Number(attempt.frozen_route_count || 0);
+        const accepted = Boolean(attempt.accepted);
+        return accepted
+          ? `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), accepted ${formatNumber(routeCount)} total route(s).`
+          : `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), not accepted.`;
+      });
+      return {
+        label,
+        status: acceptedAttempt ? "Passed" : "Failed",
+        passed: Boolean(acceptedAttempt),
+        neutral: false,
+        summary: `${formatNumber(exceptionAttempts.length)} EP ladder attempt(s); ${acceptedAttempt ? "accepted a candidate" : "no accepted candidate"}.`,
+        steps,
+      };
+    }
     return {
       label,
       status: status === "not_applicable" ? "Not applicable" : "No record",
@@ -3442,6 +3474,10 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
   }
   const attempts = asRecordArray(gate.replan_attempts);
   const vehicleAttempts = asRecordArray(gate.vehicle_search_attempts);
+  const ladder = asRecord(gate.vehicle_ladder_search);
+  const ladderAttempts = asRecordArray(ladder.attempts);
+  const savingTarget = asRecord(gate.vehicle_saving_target);
+  const savingStatus = stringValue(savingTarget.status);
   const checkName = trafficGateCheckName(gate);
   const failureText = trafficGateFailureText(gate);
   const finalFailed = Number(gate.failed_route_count || 0);
@@ -3469,20 +3505,49 @@ function buildSolveProcessRow(label: string, gate: Record<string, unknown>) {
         : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over.`
     );
   });
+  ladderAttempts.forEach((attempt, index) => {
+    const target = Number(attempt.target_vehicle_count || 0);
+    const routeCount = Number(attempt.route_count || 0);
+    const saved = Number(attempt.saved_route_count || 0);
+    const attemptStatus = stringValue(attempt.status);
+    const failed = Number(attempt.failed_route_count || 0);
+    const delay = Number(attempt.max_overrun_minutes || 0);
+    steps.push(
+      attemptStatus === "passed"
+        ? `Vehicle ladder ${index + 1}: tested ${formatNumber(target || routeCount)} route(s), passed, saved ${formatNumber(saved)}.`
+        : `Vehicle ladder ${index + 1}: tested ${formatNumber(target)} route(s), failed; ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over.`
+    );
+  });
+  exceptionAttempts.forEach((attempt, index) => {
+    const remainingLimit = Number(attempt.remaining_vehicle_limit || 0);
+    const routeCount = Number(attempt.route_count || 0);
+    const frozen = Number(attempt.frozen_route_count || 0);
+    const accepted = Boolean(attempt.accepted);
+    steps.push(
+      accepted
+        ? `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), accepted ${formatNumber(routeCount)} total route(s).`
+        : `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), not accepted.`
+    );
+  });
   steps.push(
-    status === "passed"
+    status === "passed" && savingStatus !== "failed"
       ? `Final check passed: all checked routes passed the final ${checkName}.`
+      : status === "passed" && savingStatus === "failed"
+        ? `Final check failed: saved ${formatNumber(Number(savingTarget.saved_route_count || 0))} route(s), below the required ${formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0))}.`
       : `Final check failed: ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`
   );
+  const effectivePassed = status === "passed" && savingStatus !== "failed";
   return {
     label,
-    status: status === "passed" ? "Passed" : toTitle(status.replace(/_/g, " ")),
-    passed: status === "passed",
+    status: effectivePassed ? "Passed" : savingStatus === "failed" ? "Failed" : toTitle(status.replace(/_/g, " ")),
+    passed: effectivePassed,
     neutral: false,
     summary:
-      status === "passed"
-        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); final ${checkName} passed.`
-        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`,
+      effectivePassed
+        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(ladderAttempts.length)} ladder attempt(s); final ${checkName} passed.`
+        : savingStatus === "failed"
+          ? `${formatNumber(ladderAttempts.length + exceptionAttempts.length)} ladder attempt(s); saved ${formatNumber(Number(savingTarget.saved_route_count || 0))}, required ${formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0))}.`
+        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length + exceptionAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`,
     steps,
   };
 }

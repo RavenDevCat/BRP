@@ -190,9 +190,40 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
             }
         },
     });
+    const bulkHistoryDeleteMutation = useMutation({
+        mutationFn: async (jobIds: string[]) => {
+            for (const jobId of jobIds) {
+                await deleteJob(jobId);
+            }
+            return jobIds;
+        },
+        onSuccess: async (deletedJobIds) => {
+            const deletedSet = new Set(deletedJobIds);
+            for (const jobId of deletedJobIds) {
+                queryClient.removeQueries({ queryKey: ["jobs", jobId] });
+            }
+            await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+            if (deletedSet.has(resolvedJobId)) {
+                const replacementJobId =
+                    jobs.find((job) => !deletedSet.has(job.job_id))?.job_id ??
+                    "";
+                if (replacementJobId) {
+                    await navigate({
+                        to: "/jobs/$jobId",
+                        params: { jobId: replacementJobId },
+                    });
+                } else {
+                    await navigate({ to: "/jobs" });
+                }
+            }
+        },
+    });
     const deletingJobId = historyDeleteMutation.isPending
         ? (historyDeleteMutation.variables ?? null)
         : null;
+    const deleteError =
+        (historyDeleteMutation.error as Error | null) ||
+        (bulkHistoryDeleteMutation.error as Error | null);
 
     useEffect(() => {
         if (selectedJobId) {
@@ -281,8 +312,12 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                     onOpenChange={setMobileHistoryOpen}
                     onRefresh={() => void jobsQuery.refetch()}
                     onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
+                    onBulkDelete={(jobIds) =>
+                        bulkHistoryDeleteMutation.mutate(jobIds)
+                    }
                     deletingJobId={deletingJobId}
-                    deleteError={historyDeleteMutation.error as Error | null}
+                    bulkDeleting={bulkHistoryDeleteMutation.isPending}
+                    deleteError={deleteError}
                 />
 
                 <div
@@ -299,8 +334,12 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                         onCollapsedChange={setDesktopHistoryCollapsed}
                         onRefresh={() => void jobsQuery.refetch()}
                         onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
+                        onBulkDelete={(jobIds) =>
+                            bulkHistoryDeleteMutation.mutate(jobIds)
+                        }
                         deletingJobId={deletingJobId}
-                        deleteError={historyDeleteMutation.error as Error | null}
+                        bulkDeleting={bulkHistoryDeleteMutation.isPending}
+                        deleteError={deleteError}
                     />
                 </div>
 
@@ -338,7 +377,9 @@ function JobHistoryMobilePanel({
     onOpenChange,
     onRefresh,
     onDelete,
+    onBulkDelete,
     deletingJobId,
+    bulkDeleting,
     deleteError,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
@@ -351,7 +392,9 @@ function JobHistoryMobilePanel({
     onOpenChange: (open: boolean) => void;
     onRefresh: () => void;
     onDelete: (jobId: string) => void;
+    onBulkDelete: (jobIds: string[]) => void;
     deletingJobId?: string | null;
+    bulkDeleting?: boolean;
     deleteError?: Error | null;
 }) {
     const t = useT();
@@ -420,7 +463,9 @@ function JobHistoryMobilePanel({
                     isLoading={isLoading}
                     error={error}
                     onDelete={onDelete}
+                    onBulkDelete={onBulkDelete}
                     deletingJobId={deletingJobId}
+                    bulkDeleting={bulkDeleting}
                     deleteError={deleteError}
                 />
             </CardContent>
@@ -439,7 +484,9 @@ function JobHistoryDesktopPanel({
     onCollapsedChange,
     onRefresh,
     onDelete,
+    onBulkDelete,
     deletingJobId,
+    bulkDeleting,
     deleteError,
 }: {
     className?: string;
@@ -452,7 +499,9 @@ function JobHistoryDesktopPanel({
     onCollapsedChange: (collapsed: boolean) => void;
     onRefresh: () => void;
     onDelete: (jobId: string) => void;
+    onBulkDelete: (jobIds: string[]) => void;
     deletingJobId?: string | null;
+    bulkDeleting?: boolean;
     deleteError?: Error | null;
 }) {
     const t = useT();
@@ -555,7 +604,9 @@ function JobHistoryDesktopPanel({
                     isLoading={isLoading}
                     error={error}
                     onDelete={onDelete}
+                    onBulkDelete={onBulkDelete}
                     deletingJobId={deletingJobId}
+                    bulkDeleting={bulkDeleting}
                     deleteError={deleteError}
                 />
             </CardContent>
@@ -569,7 +620,9 @@ function JobHistoryContent({
     isLoading,
     error,
     onDelete,
+    onBulkDelete,
     deletingJobId,
+    bulkDeleting,
     deleteError,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
@@ -577,7 +630,9 @@ function JobHistoryContent({
     isLoading: boolean;
     error?: Error | null;
     onDelete: (jobId: string) => void;
+    onBulkDelete: (jobIds: string[]) => void;
     deletingJobId?: string | null;
+    bulkDeleting?: boolean;
     deleteError?: Error | null;
 }) {
     const t = useT();
@@ -616,7 +671,9 @@ function JobHistoryContent({
                 jobs={jobs}
                 selectedJobId={selectedJobId}
                 onDelete={onDelete}
+                onBulkDelete={onBulkDelete}
                 deletingJobId={deletingJobId}
+                bulkDeleting={bulkDeleting}
             />
         </>
     );
@@ -626,17 +683,91 @@ function JobHistorySubList({
     jobs,
     selectedJobId,
     onDelete,
+    onBulkDelete,
     deletingJobId,
+    bulkDeleting,
 }: {
     jobs: Awaited<ReturnType<typeof listJobs>>;
     selectedJobId: string;
     onDelete: (jobId: string) => void;
+    onBulkDelete: (jobIds: string[]) => void;
     deletingJobId?: string | null;
+    bulkDeleting?: boolean;
 }) {
     const t = useT();
+    const [selecting, setSelecting] = useState(false);
+    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+    const selectedCount = selectedIds.size;
+
+    useEffect(() => {
+        const jobIds = new Set(jobs.map((job) => job.job_id));
+        setSelectedIds((previous) => {
+            const next = new Set([...previous].filter((jobId) => jobIds.has(jobId)));
+            return next.size === previous.size ? previous : next;
+        });
+    }, [jobs]);
+
+    function toggleSelected(jobId: string) {
+        setSelectedIds((previous) => {
+            const next = new Set(previous);
+            if (next.has(jobId)) {
+                next.delete(jobId);
+            } else {
+                next.add(jobId);
+            }
+            return next;
+        });
+    }
+
     return (
-        <div className="max-h-72 space-y-2 overflow-auto pr-1 xl:max-h-[calc(100vh-220px)]">
-            {jobs.map((job) => {
+        <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+                <button
+                    type="button"
+                    className={buttonClassName("ghost")}
+                    onClick={() => {
+                        setSelecting(!selecting);
+                        setSelectedIds(new Set());
+                    }}
+                >
+                    {selecting ? t("Cancel") : t("Select")}
+                </button>
+                {selecting ? (
+                    <button
+                        type="button"
+                        className={buttonClassName("secondary")}
+                        disabled={!selectedCount || bulkDeleting}
+                        onClick={() => {
+                            const jobIds = [...selectedIds];
+                            if (
+                                jobIds.length &&
+                                window.confirm(
+                                    t(
+                                        "Delete selected history items? This cannot be undone.",
+                                    ),
+                                )
+                            ) {
+                                onBulkDelete(jobIds);
+                                setSelectedIds(new Set());
+                                setSelecting(false);
+                            }
+                        }}
+                    >
+                        {bulkDeleting ? (
+                            <Loader2
+                                className="h-4 w-4 animate-spin"
+                                aria-hidden="true"
+                            />
+                        ) : (
+                            <Trash2 className="h-4 w-4" aria-hidden="true" />
+                        )}
+                        {t("Delete selected")}{" "}
+                        {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
+                    </button>
+                ) : null}
+            </div>
+            <div className="max-h-72 space-y-2 overflow-auto pr-1 xl:max-h-[calc(100vh-260px)]">
+                {jobs.map((job) => {
                 const active = job.job_id === selectedJobId;
                 const isDeleting = deletingJobId === job.job_id;
                 const summary = job.prepared_payload_summary || {};
@@ -649,8 +780,17 @@ function JobHistorySubList({
                             active
                                 ? "border-primary bg-primary text-primary-foreground"
                                 : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
-                        ].join(" ")}
-                    >
+                            ].join(" ")}
+                        >
+                        {selecting ? (
+                            <input
+                                type="checkbox"
+                                className="mt-2 h-4 w-4 shrink-0 accent-primary"
+                                checked={selectedIds.has(job.job_id)}
+                                aria-label={`${t("Select")} ${getJobName(job)}`}
+                                onChange={() => toggleSelected(job.job_id)}
+                            />
+                        ) : null}
                         <Link
                             to="/jobs/$jobId"
                             params={{ jobId: job.job_id }}
@@ -709,7 +849,8 @@ function JobHistorySubList({
                                 </span>
                             </div>
                         </Link>
-                        <button
+                        {!selecting ? (
+                            <button
                             type="button"
                             className={[
                                 "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
@@ -740,10 +881,12 @@ function JobHistorySubList({
                             ) : (
                                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                             )}
-                        </button>
+                            </button>
+                        ) : null}
                     </div>
                 );
-            })}
+                })}
+            </div>
         </div>
     );
 }

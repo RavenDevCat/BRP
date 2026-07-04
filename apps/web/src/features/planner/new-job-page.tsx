@@ -2,7 +2,7 @@ import type { Dispatch, ReactNode, SetStateAction } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, RefreshCw, Send, SlidersHorizontal, Trash2, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -69,8 +69,10 @@ export function NewJobPage() {
   const [fileError, setFileError] = useState("");
   const [jobCustomName, setJobCustomName] = useState("");
   const [scheduledJob, setScheduledJob] = useState(false);
-  const [scheduledDateInput, setScheduledDateInput] = useState("");
   const [scheduledDates, setScheduledDates] = useState<string[]>([]);
+  const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
+  const [scheduleDraftDates, setScheduleDraftDates] = useState<string[]>([]);
+  const [scheduleMonth, setScheduleMonth] = useState(() => monthKey(new Date()));
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
   const [addressReviewAcknowledged, setAddressReviewAcknowledged] = useState(false);
@@ -93,7 +95,11 @@ export function NewJobPage() {
     if (subwayAggregationBlocked) {
       delete safeOverrides.include_subway_aggregation_scenario;
     }
-    return { ...baseConfig, ...safeOverrides, traffic_coefficient_mode: DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode };
+    const merged = { ...baseConfig, ...safeOverrides, traffic_coefficient_mode: DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode };
+    if (!Object.prototype.hasOwnProperty.call(safeOverrides, "route_stop_limit") && merged.route_stop_limit == null) {
+      merged.route_stop_limit = DEFAULT_PLANNER_CONFIG.route_stop_limit;
+    }
+    return merged;
   }
 
   function updateUserConfig(patch: Partial<PlannerConfigPayload>) {
@@ -126,16 +132,29 @@ export function NewJobPage() {
     updateUserConfig(patch);
   }
 
-  function addScheduledDate() {
-    if (!scheduledDateInput) {
-      return;
-    }
-    setScheduledDates((dates) => Array.from(new Set([...dates, scheduledDateInput])).sort());
-    setScheduledDateInput("");
-  }
-
   function removeScheduledDate(date: string) {
     setScheduledDates((dates) => dates.filter((item) => item !== date));
+  }
+
+  function openSchedulePicker() {
+    setScheduleDraftDates(scheduledDates);
+    setScheduleMonth(scheduledDates[0]?.slice(0, 7) || monthKey(new Date()));
+    setSchedulePickerOpen(true);
+  }
+
+  function confirmScheduleDates() {
+    const nextDates = Array.from(new Set(scheduleDraftDates)).sort();
+    setScheduledDates(nextDates);
+    setScheduledJob(nextDates.length > 0);
+    setSchedulePickerOpen(false);
+  }
+
+  function toggleScheduledJob() {
+    if (scheduledJob) {
+      setScheduledJob(false);
+      return;
+    }
+    openSchedulePicker();
   }
 
   function configFromPreview(payload: WorkbookPreview) {
@@ -450,7 +469,7 @@ export function NewJobPage() {
                     aria-checked={scheduledJob}
                     className="grid h-9 w-full max-w-[240px] shrink-0 grid-cols-2 rounded-full border border-border bg-surface p-1 text-xs font-medium transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
                     title={t("When enabled, audits release on selected dates at the time-window start.")}
-                    onClick={() => setScheduledJob((value) => !value)}
+                    onClick={toggleScheduledJob}
                   >
                     <span
                       className={[
@@ -562,16 +581,16 @@ export function NewJobPage() {
 
               {scheduledJobsEnabled && scheduledJob ? (
                 <div className="rounded-lg border border-border bg-surface p-3">
-                  <div className="mb-2 text-sm font-medium">{t("Schedule dates")}</div>
-                  <div className="flex flex-col gap-2 sm:flex-row">
-                    <input
-                      className={fieldClassName}
-                      type="date"
-                      value={scheduledDateInput}
-                      onChange={(event) => setScheduledDateInput(event.target.value)}
-                    />
-                    <Button type="button" variant="secondary" onClick={addScheduledDate}>
-                      {t("Add date")}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-sm font-medium">{t("Schedule dates")}</div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="h-8 text-xs"
+                      icon={<CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />}
+                      onClick={openSchedulePicker}
+                    >
+                      {t("Edit dates")}
                     </Button>
                   </div>
                   <div className="mt-2 flex flex-wrap gap-2">
@@ -595,6 +614,21 @@ export function NewJobPage() {
                     {t("Each selected date creates one scheduled audit.")}
                   </div>
                 </div>
+              ) : null}
+
+              {schedulePickerOpen ? (
+                <ScheduleDatePickerDialog
+                  month={scheduleMonth}
+                  selectedDates={scheduleDraftDates}
+                  onMonthChange={setScheduleMonth}
+                  onToggleDate={(date) =>
+                    setScheduleDraftDates((dates) =>
+                      dates.includes(date) ? dates.filter((item) => item !== date) : [...dates, date],
+                    )
+                  }
+                  onCancel={() => setSchedulePickerOpen(false)}
+                  onConfirm={confirmScheduleDates}
+                />
               ) : null}
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -992,6 +1026,103 @@ function ToggleOption({ tooltip, children }: { tooltip: string; children: ReactN
   );
 }
 
+function ScheduleDatePickerDialog({
+  month,
+  selectedDates,
+  onMonthChange,
+  onToggleDate,
+  onCancel,
+  onConfirm,
+}: {
+  month: string;
+  selectedDates: string[];
+  onMonthChange: (month: string) => void;
+  onToggleDate: (date: string) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const t = useT();
+  const selectedSet = new Set(selectedDates);
+  const days = calendarDays(month);
+  const visibleMonth = parseMonthKey(month);
+  const monthLabel = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" }).format(visibleMonth);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
+      <div className="w-full max-w-xl rounded-lg border border-border bg-surface p-4 shadow-xl">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h3 className="text-base font-semibold text-foreground">{t("Select schedule dates")}</h3>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {formatNumber(selectedDates.length)} {t("selected")}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onMonthChange(addMonthsToMonthKey(month, -1))}>
+              <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+            </Button>
+            <div className="min-w-36 text-center text-sm font-medium">{monthLabel}</div>
+            <Button type="button" variant="secondary" className="h-8 px-3" onClick={() => onMonthChange(addMonthsToMonthKey(month, 1))}>
+              <ChevronRight className="h-4 w-4" aria-hidden="true" />
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-4 grid grid-cols-7 gap-1 text-center text-xs font-medium uppercase text-muted-foreground">
+          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+            <div key={day}>{t(day)}</div>
+          ))}
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-1">
+          {days.map((item) => {
+            const selected = selectedSet.has(item.key);
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={[
+                  "h-10 rounded-md border text-sm font-medium transition",
+                  item.inMonth ? "border-border bg-surface text-foreground" : "border-transparent bg-muted/40 text-muted-foreground",
+                  selected ? "border-primary bg-primary text-primary-foreground" : "hover:border-primary/60",
+                ].join(" ")}
+                onClick={() => onToggleDate(item.key)}
+              >
+                {item.day}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {selectedDates.length ? (
+            [...selectedDates].sort().map((date) => (
+              <button
+                key={date}
+                type="button"
+                className="rounded-full border border-border bg-muted px-3 py-1 text-xs"
+                onClick={() => onToggleDate(date)}
+              >
+                {date} x
+              </button>
+            ))
+          ) : (
+            <span className="text-xs text-muted-foreground">{t("Select at least one schedule date.")}</span>
+          )}
+        </div>
+
+        <div className="mt-4 flex justify-end gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel}>
+            {t("Cancel")}
+          </Button>
+          <Button type="button" disabled={!selectedDates.length} onClick={onConfirm}>
+            {t("Confirm")}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   const t = useT();
   return (
@@ -1138,6 +1269,40 @@ function FleetSlot({ label, seats, count }: { label: string; seats: number; coun
 
 function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{message}</div>;
+}
+
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function parseMonthKey(value: string) {
+  const [yearText, monthText] = value.split("-");
+  return new Date(Number(yearText) || new Date().getFullYear(), Math.max(0, (Number(monthText) || 1) - 1), 1);
+}
+
+function addMonthsToMonthKey(value: string, delta: number) {
+  const date = parseMonthKey(value);
+  date.setMonth(date.getMonth() + delta);
+  return monthKey(date);
+}
+
+function dateKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function calendarDays(value: string) {
+  const monthStart = parseMonthKey(value);
+  const firstVisible = new Date(monthStart);
+  firstVisible.setDate(firstVisible.getDate() - firstVisible.getDay());
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(firstVisible);
+    date.setDate(firstVisible.getDate() + index);
+    return {
+      key: dateKey(date),
+      day: date.getDate(),
+      inMonth: date.getMonth() === monthStart.getMonth(),
+    };
+  });
 }
 
 function addMinutesToTime(value: string, minutesToAdd: number) {

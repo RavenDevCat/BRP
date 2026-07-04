@@ -164,6 +164,18 @@ FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS", "1") or 1),
 )
+VEHICLE_LADDER_MAX_ATTEMPTS = max(
+    1,
+    int(os.environ.get("BRP_VEHICLE_LADDER_MAX_ATTEMPTS", "8") or 8),
+)
+EXCEPTION_PRESERVING_MAX_CANDIDATE_ATTEMPTS = max(
+    1,
+    int(os.environ.get("BRP_EXCEPTION_PRESERVING_MAX_CANDIDATE_ATTEMPTS", "2") or 2),
+)
+EXCEPTION_PRESERVING_REPLAN_ATTEMPTS = max(
+    0,
+    int(os.environ.get("BRP_EXCEPTION_PRESERVING_REPLAN_ATTEMPTS", "0") or 0),
+)
 FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES = max(
     1.0,
     float(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", "5") or 5),
@@ -548,7 +560,13 @@ def _build_slot_policy_maps(config: PlannerConfig) -> tuple[dict[str, int], dict
 
 
 def effective_route_duration_limit_minutes(config: PlannerConfig) -> int:
-    return max(1, int(config.max_route_duration_minutes) + ROUTE_DURATION_GRACE_MINUTES)
+    configured_limit = max(1, int(config.max_route_duration_minutes) + ROUTE_DURATION_GRACE_MINUTES)
+    if normalize_service_direction(config.service_direction) == "To School":
+        window_start = _parse_minutes_clock(config.time_window_start, 6 * 60 + 30)
+        window_end = _parse_minutes_clock(config.time_window_end, AM_LATEST_ARRIVAL_MINUTES)
+        if window_end > window_start:
+            return max(1, min(configured_limit, window_end - window_start))
+    return configured_limit
 
 
 def normalize_service_direction(service_direction: str | None) -> str:
@@ -1764,10 +1782,15 @@ def _to_school_time_window(config: PlannerConfig) -> tuple[int, int]:
 
 
 def _from_school_time_window(config: PlannerConfig) -> tuple[int, int]:
-    start_minutes = _parse_minutes_clock(config.time_window_start, 15 * 60 + 40)
-    end_minutes = _parse_minutes_clock(config.time_window_end, start_minutes + int(config.max_route_duration_minutes))
+    departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
+    raw_start = str(config.time_window_start or "").strip()
+    raw_end = str(config.time_window_end or "").strip()
+    if raw_start == "06:30" and raw_end == "08:00":
+        return departure_minutes, departure_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES)
+    start_minutes = _parse_minutes_clock(config.time_window_start, departure_minutes)
+    end_minutes = _parse_minutes_clock(config.time_window_end, start_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES))
     if end_minutes <= start_minutes:
-        return start_minutes, start_minutes + int(config.max_route_duration_minutes)
+        return start_minutes, start_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES)
     return start_minutes, end_minutes
 
 
@@ -2125,7 +2148,11 @@ def attach_final_route_traffic_gate(
     is_to_school = service_direction == "To School"
     earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
     from_school_departure_minutes, from_school_latest_minutes = _from_school_time_window(config)
-    gate_type = "arrival_window" if is_to_school else "service_window"
+    gate_type = "arrival_window" if is_to_school else "route_duration"
+    default_from_school_window = (
+        str(config.time_window_start or "").strip() == "06:30"
+        and str(config.time_window_end or "").strip() == "08:00"
+    )
     traffic_policy = resolve_final_route_traffic_policy(planner, config, input_records)
     country, city = traffic_policy.country, traffic_policy.city
     routes = list(scenario.get("routes") or [])
@@ -2138,6 +2165,9 @@ def attach_final_route_traffic_gate(
     if not is_to_school:
         pm_window_s = PM_MAX_ROUTE_WINDOW_MINUTES * 60.0
         final_route_duration_limit_s = min(route_duration_limit_s, pm_window_s) if route_duration_limit_s > 0 else pm_window_s
+        if default_from_school_window:
+            from_school_departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
+            from_school_latest_minutes = from_school_departure_minutes + (final_route_duration_limit_s / 60.0)
     gate: dict[str, Any] = {
         "enabled": bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
         "scenario": scenario_label,
@@ -2150,9 +2180,7 @@ def attach_final_route_traffic_gate(
         "target_arrival_label": _format_minutes_clock(latest_arrival_minutes if is_to_school else from_school_latest_minutes),
         "target_departure_label": _format_minutes_clock(earliest_departure_minutes if is_to_school else from_school_departure_minutes),
         "target_duration_minutes": (
-            max(0, from_school_latest_minutes - from_school_departure_minutes)
-            if not is_to_school
-            else final_route_duration_limit_s / 60.0 if final_route_duration_limit_s > 0 else None
+            final_route_duration_limit_s / 60.0 if final_route_duration_limit_s > 0 else None
         ),
         "pm_max_route_window_minutes": PM_MAX_ROUTE_WINDOW_MINUTES if not is_to_school else None,
         "solver_target_duration_minutes": (
@@ -2688,8 +2716,6 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
         "time_constrained": str(output_dir / config.time_constrained_output_name),
         "exception_preserving": str(output_dir / config.exception_preserving_output_name),
         "ep15min": str(output_dir / config.ep15min_output_name),
-        "further_most": str(output_dir / config.further_most_output_name),
-        "further_most_nearby": str(output_dir / config.further_most_nearby_output_name),
     }
 
 
@@ -3159,6 +3185,8 @@ def summarize_logs(log_text: str, uploaded_address_count: int) -> dict[str, Any]
 
 def summarize_structured_results(results: dict[str, Any], uploaded_address_count: int) -> dict[str, Any]:
     original = results.get("original", {})
+    if not original or original.get("enabled") is False:
+        original = results.get("time_constrained", {}) or original
     subway = results.get("subway", {})
     nearby = results.get("nearby", {})
     currency_code = str(results.get("currency_code", "USD"))
@@ -3285,8 +3313,6 @@ def apply_pricing_to_structured_results(results: dict[str, Any], config: Planner
         "time_constrained",
         "exception_preserving",
         "ep15min",
-        "further_most",
-        "further_most_nearby",
     ):
         scenario = repriced.get(scenario_key) or {}
         routes = scenario.get("routes") or []
@@ -3365,8 +3391,6 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
         "time_constrained",
         "exception_preserving",
         "ep15min",
-        "further_most",
-        "further_most_nearby",
     ):
         scenario = hydrated.get(scenario_key) or {}
         points = scenario.get("points")
@@ -6643,6 +6667,8 @@ def _compute_scenario_without_render(
     time_constraint_metadata: dict[str, Any] | None = None,
     route_traffic_attribution_context: dict[str, Any] | None = None,
     route_traffic_fallback_multiplier: float | None = None,
+    traffic_replan_attempt_limit: int | None = None,
+    enable_vehicle_search: bool = True,
 ) -> dict[str, Any]:
     if len(points) <= 1:
         routes: list[dict[str, Any]] = []
@@ -6788,7 +6814,6 @@ def _compute_scenario_without_render(
                                 else max(
                                     FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS,
                                     FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS,
-                                    max_vehicle_count,
                                 )
                             )
                         ):
@@ -6807,7 +6832,6 @@ def _compute_scenario_without_render(
                                 else max(
                                     FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS,
                                     FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS,
-                                    max_vehicle_count,
                                 )
                             )
                             if (
@@ -6925,7 +6949,6 @@ def _compute_scenario_without_render(
                     replan_limit = max(
                         replan_limit,
                         FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS,
-                        max_vehicle_count,
                     )
                 if replan_attempt_index >= replan_limit:
                     break
@@ -7018,11 +7041,11 @@ def _compute_scenario_without_render(
         planner.BUS_TYPE_CONFIGS = deepcopy(original_scenario_bus_type_configs)
         planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
         planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_max_route_duration_seconds
-        result = solve_with_current_settings()
+        result = solve_with_current_settings(traffic_replan_attempt_limit)
         route_attribution_estimates = list(result.pop("_route_attribution_estimates", []) or [])
 
         vehicle_search_attempts: list[dict[str, Any]] = []
-        if forced_vehicle_count_int is None and _scenario_feasibility_passed(result):
+        if enable_vehicle_search and forced_vehicle_count_int is None and _scenario_feasibility_passed(result):
             min_vehicle_count = _minimum_solver_vehicle_count(planner, points)
             selected_bus_count = int(result.get("bus_count", 0) or 0)
             target_bus_count = selected_bus_count - 1
@@ -7268,50 +7291,74 @@ def _solve_vehicle_ladder_scenario(
         )
         return _apply_vehicle_saving_target(result, current_route_count, minimum_vehicle_reduction)
 
+    required_target_vehicle_count = (
+        max(1, current_route_count - minimum_vehicle_reduction)
+        if minimum_vehicle_reduction > 0
+        else max(1, current_route_count - 1)
+    )
+    required_target_vehicle_count = min(required_target_vehicle_count, current_route_count)
+    target_phases = (
+        ("target_or_better", list(range(required_target_vehicle_count, 0, -1))),
+        ("fallback_more_vehicles", list(range(required_target_vehicle_count + 1, current_route_count + 1))),
+    )
     attempts: list[dict[str, Any]] = []
     best_target_result: dict[str, Any] | None = None
-    best_below_target_result: dict[str, Any] | None = None
+    best_hard_pass_result: dict[str, Any] | None = None
     first_failed_result: dict[str, Any] | None = None
-    for target_vehicle_count in range(current_route_count - 1, 0, -1):
-        try:
-            candidate = _compute_scenario_without_render(
-                planner,
-                points,
-                scenario_label,
-                bus_type_configs=bus_type_configs,
-                reduced_vehicle_limit=target_vehicle_count,
-                node_time_upper_bounds_builder=node_time_upper_bounds_builder,
-                node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
-                time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
-                route_traffic_attribution_context=route_traffic_attribution_context,
-                route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
-            )
-        except Exception as exc:
-            attempts.append(
-                {
-                    "target_vehicle_count": target_vehicle_count,
-                    "status": "error",
-                    "error": str(exc),
-                }
-            )
+    for phase_name, phase_targets in target_phases:
+        for target_vehicle_count in phase_targets:
+            if len(attempts) >= VEHICLE_LADDER_MAX_ATTEMPTS:
+                break
+            try:
+                candidate = _compute_scenario_without_render(
+                    planner,
+                    points,
+                    scenario_label,
+                    bus_type_configs=bus_type_configs,
+                    reduced_vehicle_limit=target_vehicle_count,
+                    node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+                    node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
+                    time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+                    route_traffic_attribution_context=route_traffic_attribution_context,
+                    route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                )
+            except Exception as exc:
+                attempts.append(
+                    {
+                        "target_vehicle_count": target_vehicle_count,
+                        "phase": phase_name,
+                        "status": "error",
+                        "error": str(exc),
+                    }
+                )
+                if phase_name == "target_or_better":
+                    break
+                continue
+
+            hard_passed = _scenario_feasibility_passed(candidate)
+            candidate = _apply_vehicle_saving_target(candidate, current_route_count, minimum_vehicle_reduction)
+            all_constraints_passed = _scenario_feasibility_passed(candidate)
+            attempt = _vehicle_ladder_attempt(candidate, target_vehicle_count)
+            attempt["phase"] = phase_name
+            attempt["hard_constraints_passed"] = hard_passed
+            attempt["all_constraints_passed"] = all_constraints_passed
+            attempt["required_target_vehicle_count"] = required_target_vehicle_count
+            attempts.append(attempt)
+
+            if all_constraints_passed:
+                best_target_result = candidate
+                continue
+            if hard_passed and best_hard_pass_result is None:
+                best_hard_pass_result = candidate
+                if phase_name == "fallback_more_vehicles":
+                    break
+            first_failed_result = candidate
+            if phase_name == "target_or_better":
+                break
+        if best_target_result is not None or best_hard_pass_result is not None:
             break
 
-        hard_passed = _scenario_feasibility_passed(candidate)
-        candidate = _apply_vehicle_saving_target(candidate, current_route_count, minimum_vehicle_reduction)
-        attempt = _vehicle_ladder_attempt(candidate, target_vehicle_count)
-        attempt["hard_constraints_passed"] = hard_passed
-        attempts.append(attempt)
-
-        if hard_passed:
-            if str(dict(candidate.get("vehicle_saving_target") or {}).get("status") or "") == "passed":
-                best_target_result = candidate
-            else:
-                best_below_target_result = candidate
-            continue
-        first_failed_result = candidate
-        break
-
-    result = best_target_result or best_below_target_result or first_failed_result
+    result = best_target_result or best_hard_pass_result or first_failed_result
     if result is None:
         try:
             result = _compute_scenario_without_render(
@@ -7606,11 +7653,14 @@ def build_exception_preserving_scenario(
         subset_points, _subset_to_original = _build_exception_subset_points(original_points, frozen_node_ids)
         remaining_service_count = max(0, len(subset_points) - 1)
         remaining_current_count = max(0, current_route_count - frozen_count)
-        remaining_limits = (
-            [remaining_current_count] + list(range(max(1, remaining_current_count - 1), 0, -1))
-            if remaining_service_count
-            else [0]
-        )
+        if remaining_service_count:
+            remaining_target = max(1, min(remaining_current_count, target_vehicle_count - frozen_count))
+            remaining_limits = list(range(remaining_target, 0, -1)) + list(
+                range(remaining_target + 1, remaining_current_count + 1)
+            )
+        else:
+            remaining_limits = [0]
+        remaining_limits = remaining_limits[:EXCEPTION_PRESERVING_MAX_CANDIDATE_ATTEMPTS]
 
         for remaining_limit_candidate in remaining_limits:
             try:
@@ -7626,6 +7676,8 @@ def build_exception_preserving_scenario(
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         route_traffic_attribution_context=route_traffic_attribution_context,
                         route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                        traffic_replan_attempt_limit=EXCEPTION_PRESERVING_REPLAN_ATTEMPTS,
+                        enable_vehicle_search=False,
                     )
                     optimized_points = list(optimized.get("points") or subset_points)
                     optimized_routes = [
@@ -7669,8 +7721,8 @@ def build_exception_preserving_scenario(
                     candidate_remainder_summary,
                     candidate_route_count,
                     current_route_count,
-                    target_vehicle_count,
                 )
+                relaxed_vehicle_limit = bool(remaining_limit_candidate > max(1, target_vehicle_count - frozen_count))
                 attempt = {
                     "frozen_route_count": frozen_count,
                     "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
@@ -7680,7 +7732,7 @@ def build_exception_preserving_scenario(
                     "accepted": accepted,
                     "candidate_failure_summary": candidate_summary,
                     "candidate_remainder_failure_summary": candidate_remainder_summary,
-                    "vehicle_limit_relaxed": False,
+                    "vehicle_limit_relaxed": relaxed_vehicle_limit,
                     "vehicle_saving_target": dict(candidate.get("vehicle_saving_target") or {}),
                 }
                 attempts.append(attempt)
@@ -7694,7 +7746,7 @@ def build_exception_preserving_scenario(
                     "candidate_remainder_failure_summary": candidate_remainder_summary,
                     "attempts": attempts,
                     "remaining_vehicle_limit": remaining_limit_candidate,
-                    "vehicle_limit_relaxed": False,
+                    "vehicle_limit_relaxed": relaxed_vehicle_limit,
                 }
                 candidate["exception_feasible"] = accepted
                 candidate["feasibility_report"] = build_route_feasibility_report(
@@ -7712,7 +7764,7 @@ def build_exception_preserving_scenario(
                 )
                 if accepted:
                     best_candidate = candidate
-                    continue
+                    break
                 if best_candidate is not None and dict(best_candidate.get("exception_preserving") or {}).get("accepted"):
                     break
                 if best_candidate is None or _exception_candidate_rank(
@@ -7739,7 +7791,9 @@ def build_exception_preserving_scenario(
                     f"[WARN] Exception-preserving attempt with {frozen_count} frozen route(s) "
                     f"and remaining vehicle limit {remaining_limit_candidate} failed: {exc}"
                 )
-                break
+                if not allow_vehicle_limit_fallback:
+                    break
+                continue
 
     if best_candidate is not None:
         if dict(best_candidate.get("exception_preserving") or {}).get("accepted"):
@@ -8037,18 +8091,15 @@ def run_backend_planner_with_prepared_data(
             if current_plan_route_count_for_reduction > 0 and minimum_vehicle_reduction > 0
             else None
         )
-        original_result = _solve_vehicle_ladder_scenario(
-            planner,
-            original_points,
-            "Free optimization baseline",
-            current_route_count=current_plan_route_count_for_reduction,
-            minimum_vehicle_reduction=minimum_vehicle_reduction,
-            bus_type_configs=free_baseline_bus_type_configs,
-            route_traffic_attribution_context=route_traffic_attribution_context,
-            route_traffic_fallback_multiplier=traffic_time_multiplier,
-        )
+        planner.log("[BACKEND] Free optimization baseline solve paused; X-minute constrained is the primary baseline.")
         free_optimization_baseline = _attach_free_baseline_metadata(
-            original_result,
+            _build_skipped_scenario_result(
+                "Free optimization baseline solve is paused; use the X-minute constrained result as the primary baseline.",
+                {
+                    "display_name": "Free Optimization Baseline",
+                    "scenario_label": "Free Optimization Baseline",
+                },
+            ),
             config,
             free_baseline_bus_type_configs,
         )
@@ -8167,54 +8218,21 @@ def run_backend_planner_with_prepared_data(
                     ),
                 }
             except Exception as exc:
-                planner.log(
-                    f"[WARN] {time_constrained_solver_label} hard constraints "
-                    f"failed; retrying best-effort soft constraints: {exc}"
+                planner.log(f"[WARN] {time_constrained_solver_label} skipped: {exc}")
+                time_constrained_result = _build_skipped_scenario_result(
+                    f"{time_constrained_solver_label} was infeasible: {exc}",
+                    {
+                        "baseline_name": "time_constrained_optimization",
+                        "display_name": time_constrained_display_label,
+                        "scenario_label": time_constrained_display_label,
+                        "time_impact_limit_minutes": time_impact_limit_minutes,
+                        "time_constraint": {
+                            **time_constraint_metadata,
+                            "enabled": False,
+                            "strict_error": str(exc),
+                        }
+                    },
                 )
-                soft_time_constraint_metadata = {
-                    **deepcopy(time_constraint_metadata),
-                    "strict_error": str(exc),
-                }
-                try:
-                    time_constrained_result = _solve_vehicle_ladder_scenario(
-                        planner,
-                        original_points,
-                        f"{time_constrained_solver_label} best effort",
-                        current_route_count=current_plan_route_count_for_reduction,
-                        minimum_vehicle_reduction=minimum_vehicle_reduction,
-                        bus_type_configs=free_baseline_bus_type_configs,
-                        node_time_soft_upper_bounds_builder=time_constraint_builder,
-                        time_constraint_metadata=soft_time_constraint_metadata,
-                        route_traffic_attribution_context=route_traffic_attribution_context,
-                        route_traffic_fallback_multiplier=traffic_time_multiplier,
-                    )
-                    time_constrained_result["baseline_name"] = "time_constrained_optimization"
-                    time_constrained_result["display_name"] = time_constrained_display_label
-                    time_constrained_result["scenario_label"] = time_constrained_display_label
-                    time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
-                    time_constrained_result["time_constraint"] = {
-                        **dict(time_constrained_result.get("time_constraint") or {}),
-                        **soft_time_constraint_metadata,
-                        "enabled": True,
-                        "strict_satisfied": False,
-                    }
-                except Exception as soft_exc:
-                    planner.log(f"[WARN] {time_constrained_solver_label} skipped: {soft_exc}")
-                    time_constrained_result = _build_skipped_scenario_result(
-                        f"{time_constrained_solver_label} was infeasible: {soft_exc}",
-                        {
-                            "baseline_name": "time_constrained_optimization",
-                            "display_name": time_constrained_display_label,
-                            "scenario_label": time_constrained_display_label,
-                            "time_impact_limit_minutes": time_impact_limit_minutes,
-                            "time_constraint": {
-                                **time_constraint_metadata,
-                                "enabled": False,
-                                "strict_error": str(exc),
-                                "error": str(soft_exc),
-                            }
-                        },
-                    )
         else:
             time_constrained_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
@@ -8235,7 +8253,7 @@ def run_backend_planner_with_prepared_data(
             input_records,
             free_baseline_bus_type_configs,
             reduced_vehicle_limit,
-            standard_scenarios=[free_optimization_baseline, time_constrained_result],
+            standard_scenarios=[time_constrained_result],
             route_traffic_attribution_context=route_traffic_attribution_context,
             route_traffic_fallback_multiplier=traffic_time_multiplier,
         )
@@ -8253,7 +8271,7 @@ def run_backend_planner_with_prepared_data(
                 input_records,
                 free_baseline_bus_type_configs,
                 reduced_vehicle_limit,
-                standard_scenarios=[free_optimization_baseline, time_constrained_result],
+                standard_scenarios=[time_constrained_result],
                 route_traffic_attribution_context=route_traffic_attribution_context,
                 route_traffic_fallback_multiplier=traffic_time_multiplier,
                 node_time_upper_bounds_builder=time_constraint_builder,
@@ -8266,29 +8284,13 @@ def run_backend_planner_with_prepared_data(
             ep15min_result["scenario_label"] = ep15min_display_label
             ep15min_result["time_impact_limit_minutes"] = time_impact_limit_minutes
             if ep15min_result.get("enabled") is False:
-                ep15min_result = build_exception_preserving_scenario(
-                    planner,
-                    original_points,
-                    current_plan_scenario,
-                    config,
-                    input_records,
-                    free_baseline_bus_type_configs,
-                    reduced_vehicle_limit,
-                    standard_scenarios=[free_optimization_baseline, time_constrained_result],
-                    route_traffic_attribution_context=route_traffic_attribution_context,
-                    route_traffic_fallback_multiplier=traffic_time_multiplier,
-                    node_time_soft_upper_bounds_builder=time_constraint_builder,
-                    time_constraint_metadata={
-                        **ep15_time_constraint_metadata,
-                        "strict_skipped_reason": str(ep15min_result.get("skipped_reason") or ""),
-                    },
-                    baseline_name="ep15min_optimization",
-                    scenario_label=f"{ep15min_solver_label} best effort",
-                    allow_vehicle_limit_fallback=True,
-                )
-                ep15min_result["display_name"] = ep15min_display_label
-                ep15min_result["scenario_label"] = ep15min_display_label
-                ep15min_result["time_impact_limit_minutes"] = time_impact_limit_minutes
+                ep15min_result["time_constraint"] = {
+                    **dict(ep15min_result.get("time_constraint") or {}),
+                    **ep15_time_constraint_metadata,
+                    "enabled": False,
+                    "strict_satisfied": False,
+                    "strict_skipped_reason": str(ep15min_result.get("skipped_reason") or ""),
+                }
         else:
             ep15min_result = _build_skipped_scenario_result(
                 str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
@@ -8309,7 +8311,7 @@ def run_backend_planner_with_prepared_data(
             solve_time=assessment_time,
             solve_distance=assessment_distance,
         )
-        current_plan_comparison = compare_current_plan_to_baseline(current_plan_assessment, free_optimization_baseline)
+        current_plan_comparison = compare_current_plan_to_baseline(current_plan_assessment, time_constrained_result)
         nearby_private_access_analysis = analyze_nearby_private_access(
             planner,
             original_points,
@@ -8320,18 +8322,6 @@ def run_backend_planner_with_prepared_data(
             (nearby_private_access_analysis or {}).get("rows") or []
         )
         service_direction = normalize_service_direction(config.service_direction)
-        further_most_result, further_most_private_access_analysis = build_further_most_stop_scenario(
-            planner,
-            original_points,
-            original_result,
-            service_direction=service_direction,
-        )
-        further_most_nearby_result, further_most_nearby_private_access_analysis = build_further_most_stop_scenario(
-            planner,
-            nearby_points,
-            nearby_result,
-            service_direction=service_direction,
-        )
         if traffic_attribution.get("succeeded"):
             scenario_route_estimates: dict[str, Any] = {}
             for scenario_key, scenario_result in (
@@ -8372,8 +8362,6 @@ def run_backend_planner_with_prepared_data(
         "time_constrained": time_constrained_result,
         "exception_preserving": exception_preserving_result,
         "ep15min": ep15min_result,
-        "further_most": further_most_result,
-        "further_most_nearby": further_most_nearby_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
         "input_point_count": len(input_records),
         "valid_stop_count": len(service_original_points),
@@ -8389,8 +8377,6 @@ def run_backend_planner_with_prepared_data(
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
-        "further_most_private_access_analysis": further_most_private_access_analysis,
-        "further_most_nearby_private_access_analysis": further_most_nearby_private_access_analysis,
         "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,
@@ -8418,8 +8404,6 @@ def run_backend_planner_with_prepared_data(
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
         "nearby_private_access_analysis": nearby_private_access_analysis,
-        "further_most_private_access_analysis": further_most_private_access_analysis,
-        "further_most_nearby_private_access_analysis": further_most_nearby_private_access_analysis,
         "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_time_multiplier": traffic_time_multiplier,

@@ -156,6 +156,22 @@ export function DistanceCheckerPage() {
     },
     onSettled: () => setDeletingRunId(""),
   });
+  const bulkDeleteHistoryMutation = useMutation({
+    mutationFn: async ({ toolMode, runIds }: { toolMode: DistanceCheckerToolMode; runIds: string[] }) => {
+      for (const runId of runIds) {
+        await deleteDistanceCheckerHistory(toolMode, runId);
+      }
+      return { toolMode, runIds };
+    },
+    onSuccess: async ({ runIds, toolMode }) => {
+      if (runIds.includes(loadedHistoryRecord?.run_id || "")) {
+        setLoadedHistoryRecord(null);
+        setResult(null);
+        setRouteCostResult(null);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["distance-checker-history", toolMode] });
+    },
+  });
 
   const runMutation = useMutation({
     mutationFn: async () => {
@@ -455,8 +471,9 @@ export function DistanceCheckerPage() {
             jobs={historyQuery.data || []}
             activeRunId={activeLoadedRunId || activeSavedRunId}
             deletingRunId={deletingRunId}
-            isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending}
-            error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null)}
+            bulkDeleting={bulkDeleteHistoryMutation.isPending}
+            isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending || bulkDeleteHistoryMutation.isPending}
+            error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null) || (bulkDeleteHistoryMutation.error as Error | null)}
             collapsed={historyCollapsed}
             onCollapsedChange={setHistoryCollapsed}
             onRefresh={() => void historyQuery.refetch()}
@@ -465,6 +482,7 @@ export function DistanceCheckerPage() {
               openHistoryMutation.mutate({ toolMode: activeTool, runId });
             }}
             onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
+            onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate({ toolMode: activeTool, runIds })}
           />
         </div>
 
@@ -817,6 +835,7 @@ function DistanceCheckerHistoryPanel({
   jobs,
   activeRunId,
   deletingRunId,
+  bulkDeleting,
   isLoading,
   error,
   collapsed,
@@ -824,6 +843,7 @@ function DistanceCheckerHistoryPanel({
   onRefresh,
   onOpen,
   onDelete,
+  onBulkDelete,
 }: {
   className?: string;
   title: string;
@@ -832,6 +852,7 @@ function DistanceCheckerHistoryPanel({
   jobs: DistanceCheckerHistorySummary[];
   activeRunId?: string;
   deletingRunId?: string;
+  bulkDeleting?: boolean;
   isLoading: boolean;
   error?: Error | null;
   collapsed: boolean;
@@ -839,7 +860,32 @@ function DistanceCheckerHistoryPanel({
   onRefresh: () => void;
   onOpen: (runId: string) => void;
   onDelete: (runId: string) => void;
+  onBulkDelete: (runIds: string[]) => void;
 }) {
+  const [selecting, setSelecting] = useState(false);
+  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
+  const selectedCount = selectedRunIds.size;
+
+  useEffect(() => {
+    const runIds = new Set(jobs.map((job) => job.run_id));
+    setSelectedRunIds((previous) => {
+      const next = new Set([...previous].filter((runId) => runIds.has(runId)));
+      return next.size === previous.size ? previous : next;
+    });
+  }, [jobs]);
+
+  function toggleSelected(runId: string) {
+    setSelectedRunIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+      }
+      return next;
+    });
+  }
+
   if (collapsed) {
     return (
       <Card className={cn("overflow-hidden", className)}>
@@ -906,6 +952,38 @@ function DistanceCheckerHistoryPanel({
             {emptyMessage}
           </div>
         ) : null}
+        {jobs.length ? (
+          <div className="flex items-center justify-between gap-2">
+            <button
+              type="button"
+              className={buttonClassName("ghost")}
+              onClick={() => {
+                setSelecting(!selecting);
+                setSelectedRunIds(new Set());
+              }}
+            >
+              {selecting ? "Cancel" : "Select"}
+            </button>
+            {selecting ? (
+              <button
+                type="button"
+                className={buttonClassName("secondary")}
+                disabled={!selectedCount || bulkDeleting}
+                onClick={() => {
+                  const runIds = [...selectedRunIds];
+                  if (runIds.length && window.confirm("Delete selected Distance & Cost history runs? This cannot be undone.")) {
+                    onBulkDelete(runIds);
+                    setSelectedRunIds(new Set());
+                    setSelecting(false);
+                  }
+                }}
+              >
+                {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                Delete selected {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
           {jobs.map((job) => {
             const summary = job.summary || {};
@@ -921,6 +999,15 @@ function DistanceCheckerHistoryPanel({
                   isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
                 )}
               >
+                {selecting ? (
+                  <input
+                    type="checkbox"
+                    className="mt-2 h-4 w-4 shrink-0 accent-primary"
+                    checked={selectedRunIds.has(job.run_id)}
+                    aria-label={`Select ${job.title || "Distance & Cost Run"}`}
+                    onChange={() => toggleSelected(job.run_id)}
+                  />
+                ) : null}
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
@@ -948,7 +1035,8 @@ function DistanceCheckerHistoryPanel({
                     )}
                   </div>
                 </button>
-                <button
+                {!selecting ? (
+                  <button
                   type="button"
                   className={cn(
                     "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
@@ -965,7 +1053,8 @@ function DistanceCheckerHistoryPanel({
                   }}
                 >
                   {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                </button>
+                  </button>
+                ) : null}
               </div>
             );
           })}

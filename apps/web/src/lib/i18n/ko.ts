@@ -391,6 +391,17 @@ const ko: Translations = {
     "When enabled, audits release on selected dates at the time-window start.":
         "켜면 선택한 날짜의 시간 창 시작 시각에 감사 작업이 실행 대기열로 전환됩니다.",
     "Schedule dates": "예약 날짜",
+    "Edit dates": "날짜 편집",
+    "Select schedule dates": "예약 날짜 선택",
+    selected: "선택됨",
+    Confirm: "확인",
+    Sun: "일",
+    Mon: "월",
+    Tue: "화",
+    Wed: "수",
+    Thu: "목",
+    Fri: "금",
+    Sat: "토",
     "Add date": "날짜 추가",
     "Remove schedule date": "예약 날짜 제거",
     "Each selected date creates one scheduled audit.":
@@ -411,6 +422,10 @@ const ko: Translations = {
         "현재 계획 대비 반드시 줄여야 하는 차량 수입니다.",
     "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
         "가져온 공급업체 계획을 자유 최적화 및 시간 영향 제약 계획과 비교합니다.",
+    "Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.":
+        "가져온 공급업체 계획을 시간 영향 제약 및 예외 보존 계획과 비교합니다.",
+    "Interactive map data is not available for this scenario yet. Try another scenario or refresh this job.":
+        "이 시나리오의 인터랙티브 지도 데이터는 아직 사용할 수 없습니다. 다른 시나리오를 선택하거나 작업을 새로고침하세요.",
     "Time window start must be before end.":
         "시간 창 시작은 종료보다 빨라야 합니다.",
     "Select at least one schedule date.": "예약 날짜를 하나 이상 선택하세요.",
@@ -441,6 +456,7 @@ const ko: Translations = {
     "Route budget": "노선 시간 예산",
     "Solver route budget before final traffic verification.":
         "최종 교통 검증 전에 solver가 사용하는 노선 시간 예산입니다.",
+    "Time window": "시간 창",
     Comfort: "승차감",
     On: "켜짐",
     Off: "꺼짐",

@@ -366,7 +366,7 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
     assert metadata["min_solver_vehicle_count"] == 0
 
 
-def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):
+def test_am_arrival_gate_fails_routes_outside_default_six_thirty_to_eight_window(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(planner_core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 0)
@@ -411,17 +411,17 @@ def test_am_arrival_gate_fails_routes_outside_six_to_eight_window(monkeypatch):
     assert gate["failed_route_ids"] == ["Bus 1"]
     assert gate["traffic_policy"]["provider"] == "amap"
     assert gate["traffic_policy"]["status"] == "ready"
-    assert round(gate["max_time_window_overrun_minutes"]) == 30
+    assert round(gate["max_time_window_overrun_minutes"]) == 60
     route_gate = result["routes"][0]["final_route_traffic_gate"]
-    assert route_gate["verified_departure_label"] == "06:00"
-    assert route_gate["verified_arrival_label"] == "08:30"
+    assert route_gate["verified_departure_label"] == "06:30"
+    assert route_gate["verified_arrival_label"] == "09:00"
     reverse_check = result["arrival_reverse_check"]
     assert reverse_check["target_arrival_label"] == "08:00"
-    assert reverse_check["earliest_departure_label"] == "06:00"
+    assert reverse_check["earliest_departure_label"] == "06:30"
     assert reverse_check["warning_route_count"] == 1
     assert reverse_check["warning_route_ids"] == ["Bus 1"]
     assert reverse_check["earliest_required_departure_label"] == "05:30"
-    assert round(reverse_check["max_departure_window_overrun_minutes"]) == 30
+    assert round(reverse_check["max_departure_window_overrun_minutes"]) == 60
     route_reverse_check = result["routes"][0]["arrival_reverse_check"]
     assert route_reverse_check["required_departure_label"] == "05:30"
     assert route_reverse_check["before_earliest_departure"] is True

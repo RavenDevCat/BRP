@@ -259,6 +259,7 @@ const en: Translations = {
     "Route budget": "Route budget",
     "Solver route budget before final traffic verification.":
         "Solver route budget before final traffic verification.",
+    "Time window": "Time window",
     Comfort: "Comfort",
     On: "On",
     Off: "Off",
@@ -392,6 +393,17 @@ const en: Translations = {
     "When enabled, audits release on selected dates at the time-window start.":
         "When enabled, audits release on selected dates at the time-window start.",
     "Schedule dates": "Schedule dates",
+    "Edit dates": "Edit dates",
+    "Select schedule dates": "Select schedule dates",
+    selected: "selected",
+    Confirm: "Confirm",
+    Sun: "Sun",
+    Mon: "Mon",
+    Tue: "Tue",
+    Wed: "Wed",
+    Thu: "Thu",
+    Fri: "Fri",
+    Sat: "Sat",
     "Add date": "Add date",
     "Remove schedule date": "Remove schedule date",
     "Each selected date creates one scheduled audit.":
@@ -412,6 +424,10 @@ const en: Translations = {
         "Required vehicle reduction versus current plan.",
     "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
         "Compare the imported supplier plan against free optimization and the time-impact constrained plan.",
+    "Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.":
+        "Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.",
+    "Interactive map data is not available for this scenario yet. Try another scenario or refresh this job.":
+        "Interactive map data is not available for this scenario yet. Try another scenario or refresh this job.",
     "Time window start must be before end.":
         "Time window start must be before end.",
     "Select at least one schedule date.": "Select at least one schedule date.",

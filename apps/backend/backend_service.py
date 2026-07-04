@@ -158,8 +158,6 @@ MAP_ARTIFACT_KEYS = {
     "exception_preserving_optimization": "exception_preserving",
     "ep15min": "ep15min",
     "ep15min_optimization": "ep15min",
-    "further_most": "further_most",
-    "further_most_nearby": "further_most_nearby",
 }
 MAP_SCENARIO_LABELS = {
     "current_plan": "Current Plan",
@@ -169,8 +167,6 @@ MAP_SCENARIO_LABELS = {
     "time_constrained": "15-Minute Constrained",
     "exception_preserving": "Exception Preserving",
     "ep15min": "EP 15-Minute",
-    "further_most": "Further Most",
-    "further_most_nearby": "Further Most + Nearby Aggregate",
 }
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
@@ -180,8 +176,6 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "time_constrained": "time_constrained_html",
     "exception_preserving": "exception_preserving_html",
     "ep15min": "ep15min_html",
-    "further_most": "further_most_html",
-    "further_most_nearby": "further_most_nearby_html",
 }
 WORKBOOK_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

@@ -90,10 +90,10 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         finally:
             planner_core._compute_scenario_without_render = original_compute
 
-        self.assertEqual(calls, [21, 20, 19, 18])
+        self.assertEqual(calls, [20, 19, 18])
         self.assertEqual(result["bus_count"], 19)
         self.assertEqual(result["vehicle_saving_target"]["status"], "passed")
-        self.assertEqual(len(result["vehicle_ladder_search"]["attempts"]), 4)
+        self.assertEqual(len(result["vehicle_ladder_search"]["attempts"]), 3)
 
 
 if __name__ == "__main__":

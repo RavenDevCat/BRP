@@ -38,7 +38,6 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
                         }
                     ],
                 },
-                "free_optimization_baseline": {"route_count": 1, "points": []},
                 "time_constrained_optimization": {
                     "route_count": 2,
                     "time_impact": {
@@ -100,7 +99,7 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
                     "observed_route_sample_count": 20,
                     "geo_route_sample_count": 18,
                     "scenario_route_estimates": {
-                        "free_optimization_baseline": {
+                        "time_constrained": {
                             "route_estimates": [
                                 {
                                     "route_id": "R1",

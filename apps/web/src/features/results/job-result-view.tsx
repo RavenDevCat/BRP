@@ -181,7 +181,6 @@ function SummaryPanel({
   onOpenReview: () => void;
 }) {
   const t = useT();
-  const freeOptimization = scenarios.find((scenario) => scenario.key === "original" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.key === "time_constrained" && scenario.enabled);
   const exceptionPreserving = scenarios.find((scenario) => scenario.key === "exception_preserving" && scenario.enabled);
   const ep15 = scenarios.find((scenario) => scenario.key === "ep15min" && scenario.enabled);
@@ -196,12 +195,6 @@ function SummaryPanel({
 
       <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
-        <MetricCard
-          label="Free optimization"
-          value={freeOptimization ? formatNumber(freeOptimization.routeCount) : t("Skipped")}
-          tone={freeOptimization ? scenarioTrafficTone(freeOptimization, "success") : "warning"}
-          detail={freeOptimization ? scenarioCardDetail(freeOptimization, "Prioritizes vehicle savings first; final provider timing is checked after routing.") : ""}
-        />
         <MetricCard
           label={timeConstrained?.name || "Time-impact constrained"}
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
@@ -725,7 +718,7 @@ function BaselinePanel({
         <div>
           <h2 className="text-sm font-semibold">{t("Baseline scenarios")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("Compare the imported supplier plan against free optimization and the time-impact constrained plan.")}
+            {t("Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.")}
           </p>
         </div>
       </div>
@@ -1067,7 +1060,7 @@ function TimeImpactPanel({
   const [selectedRouteId, setSelectedRouteId] = useState("");
   const selected =
     scenarioOptions.find((item) => item.key === selectedKey) ||
-    scenarioOptions.find((item) => item.key === "original") ||
+    scenarioOptions.find((item) => item.key === "time_constrained") ||
     scenarioOptions[0];
   const impactQuery = useQuery({
     queryKey: ["job-map-data", jobId, "time-impact", selected?.key],
@@ -1908,7 +1901,7 @@ function MapsPanel({
     if (interactiveQuery.isError) {
       return (
         <div className="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          {t("Interactive map data is not available for this scenario yet. Download the map artifact if you need the original generated HTML.")}
+          {t("Interactive map data is not available for this scenario yet. Try another scenario or refresh this job.")}
         </div>
       );
     }
@@ -2563,7 +2556,6 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     : scenarioFromAssessment("current_plan", "Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment));
   return [
     currentPlanRow,
-    scenarioFromScenario("original", "Free Optimization", "Upper-bound regrouping benchmark", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)),
     scenarioFromScenario("time_constrained", timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), `Optimized with a ${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-minute time-impact limit`, timeConstrainedScenario),
     scenarioFromScenario("exception_preserving", "Exception Preserving", "Preserves current-plan exception routes, then regroups the remaining stops", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
     scenarioFromScenario("ep15min", timeImpactScenarioName(result, ep15Scenario, "ep15min"), `Exception-preserving optimization with the ${timeImpactLimitFromScenario(result, ep15Scenario)}-minute time-impact limit`, ep15Scenario),
@@ -2576,14 +2568,11 @@ function buildArrivalReverseChecks(result: Record<string, unknown>, selectedScen
   const ep15Scenario = asRecord(result.ep15min_optimization || structured.ep15min);
   const scenarios: Record<string, [string, Record<string, unknown>]> = {
     current_plan: ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
-    original: ["Free Optimization", asRecord(result.free_optimization_baseline || structured.free_optimization_baseline || structured.original)],
     time_constrained: [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), timeConstrainedScenario],
     exception_preserving: ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
     ep15min: [timeImpactScenarioName(result, ep15Scenario, "ep15min"), ep15Scenario],
     subway: ["Subway Aggregated", asRecord(structured.subway || result.subway)],
     nearby: ["Nearby Aggregated", asRecord(structured.nearby || result.nearby)],
-    further_most: ["Further Most", asRecord(structured.further_most || result.further_most)],
-    further_most_nearby: ["Further Most + Nearby Aggregate", asRecord(structured.further_most_nearby || result.further_most_nearby)],
   };
   const selected = scenarios[selectedScenarioKey];
   return (selected ? [selected] : Object.values(scenarios))
@@ -2784,7 +2773,6 @@ function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization);
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    ["Free Optimization", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
     [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), asRecord(timeConstrainedScenario.traffic_gate)],
     [timeImpactScenarioName(result, ep15Scenario, "ep15min"), asRecord(ep15Scenario.traffic_gate)],
   ];
@@ -3087,19 +3075,7 @@ function dataRouteCountForSummary(summaries: MapScenarioSummary[], key: string) 
 
 function scenarioForMapSurface(result: Record<string, unknown>, key: string): Record<string, unknown> {
   const structured = asRecord(result.structured_results);
-  const legacy = asRecord(structured[key]);
-  if (key !== "original") {
-    return legacy;
-  }
-  const recovered = asRecord(result.free_optimization_baseline || structured.free_optimization_baseline);
-  if (!Object.keys(recovered).length) {
-    return legacy;
-  }
-  return {
-    ...legacy,
-    ...recovered,
-    output_html: recovered.output_html || legacy.output_html,
-  };
+  return asRecord(structured[key]);
 }
 
 function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
@@ -3108,14 +3084,11 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
   const ep15Scenario = asRecord(result.ep15min_optimization || structured.ep15min);
   const keys = [
     ["current_plan", "Current Plan"],
-    ["original", "Free Optimization Baseline"],
     ["time_constrained", timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained")],
     ["exception_preserving", "Exception Preserving"],
     ["ep15min", timeImpactScenarioName(result, ep15Scenario, "ep15min")],
     ["subway", "Subway Aggregated"],
     ["nearby", "Nearby Aggregated"],
-    ["further_most", "Further Most"],
-    ["further_most_nearby", "Further Most + Nearby Aggregate"],
   ] as const;
   return keys
     .map(([key, name]) => {
@@ -3455,7 +3428,6 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization);
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    ["Free", asRecord(asRecord(result.free_optimization_baseline).traffic_gate)],
     [`${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-min`, asRecord(timeConstrainedScenario.traffic_gate)],
     [`EP${timeImpactLimitFromScenario(result, ep15Scenario)}`, asRecord(ep15Scenario.traffic_gate)],
   ];
@@ -3481,7 +3453,6 @@ function buildSolveProcessRows(result: Record<string, unknown>) {
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization);
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    ["Free Optimization Baseline", asRecord(result.free_optimization_baseline)],
     [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), timeConstrainedScenario],
     ["Exception Preserving", asRecord(result.exception_preserving_optimization)],
     [timeImpactScenarioName(result, ep15Scenario, "ep15min"), ep15Scenario],

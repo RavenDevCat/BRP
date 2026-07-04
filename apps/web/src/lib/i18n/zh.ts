@@ -104,6 +104,7 @@ const zh: Translations = {
     "Route budget": "路线预算",
     "Solver route budget before final traffic verification.":
         "最终交通校验前 solver 使用的路线时间预算。",
+    "Time window": "时间窗口",
     Comfort: "舒适度",
     On: "开启",
     Off: "关闭",
@@ -345,6 +346,17 @@ const zh: Translations = {
     "When enabled, audits release on selected dates at the time-window start.":
         "开启后，任务会在所选日期的时间窗口起点释放。",
     "Schedule dates": "定时日期",
+    "Edit dates": "编辑日期",
+    "Select schedule dates": "选择定时日期",
+    selected: "已选择",
+    Confirm: "确定",
+    Sun: "日",
+    Mon: "一",
+    Tue: "二",
+    Wed: "三",
+    Thu: "四",
+    Fri: "五",
+    Sat: "六",
     "Add date": "添加日期",
     "Remove schedule date": "移除定时日期",
     "Each selected date creates one scheduled audit.":
@@ -365,6 +377,10 @@ const zh: Translations = {
         "相对当前方案要求至少减少的车辆数。",
     "Compare the imported supplier plan against free optimization and the time-impact constrained plan.":
         "对比导入的供应商方案、自由优化和时间影响约束方案。",
+    "Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.":
+        "对比导入的供应商方案、时间影响约束方案和保留例外方案。",
+    "Interactive map data is not available for this scenario yet. Try another scenario or refresh this job.":
+        "该方案的交互地图数据暂不可用。请尝试其他方案或刷新任务。",
     "Time window start must be before end.":
         "时间窗口开始必须早于结束。",
     "Select at least one schedule date.": "请至少选择一个定时日期。",

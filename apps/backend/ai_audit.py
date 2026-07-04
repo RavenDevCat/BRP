@@ -291,10 +291,9 @@ def _traffic_confidence_summary(result: dict[str, Any]) -> dict[str, Any]:
 def _demand_batch_summary(result: dict[str, Any]) -> dict[str, Any]:
     structured = dict(result.get("structured_results") or {})
     scenarios = [
-        dict(result.get("free_optimization_baseline") or {}),
         dict(result.get("time_constrained_optimization") or {}),
-        dict(structured.get("free_optimization_baseline") or {}),
         dict(structured.get("time_constrained_optimization") or {}),
+        dict(structured.get("time_constrained") or {}),
     ]
     batch_points = []
     for scenario in scenarios:
@@ -342,10 +341,9 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     current_plan = dict(result.get("current_plan_assessment") or {})
     route_reallocation = dict(result.get("route_reallocation_analysis") or {})
     reallocation_summary = dict(route_reallocation.get("summary") or {})
-    free_baseline = dict(result.get("free_optimization_baseline") or {})
     time_constrained = dict(result.get("time_constrained_optimization") or {})
     structured = dict(result.get("structured_results") or {})
-    current_vs_free = dict(result.get("current_plan_comparison") or {})
+    current_vs_baseline = dict(result.get("current_plan_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
     route_summaries = list(current_plan.get("route_summaries") or [])
     route_summaries = sorted(
@@ -379,15 +377,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "weakest_routes": [_compact_route(dict(item)) for item in _take(route_summaries, 8)],
         },
         "benchmarks": {
-            "free_optimization": {
-                "route_count": free_baseline.get("route_count"),
-                "stop_count": _scenario_service_stop_count(free_baseline),
-                "avg_route_distance_km": _float_km(free_baseline.get("avg_route_distance_m")),
-                "avg_route_duration_min": _float_minutes(free_baseline.get("avg_route_duration_s")),
-                "avg_load_factor_pct": round(float(free_baseline.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
-                "bus_mix": free_baseline.get("bus_mix"),
-                "am_time_window": _compact_traffic_gate(free_baseline),
-            },
             "time_constrained": {
                 "route_count": time_constrained.get("route_count") or time_constrained.get("bus_count"),
                 "stop_count": _scenario_service_stop_count(time_constrained),
@@ -399,7 +388,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             },
         },
         "comparisons": {
-            "current_vs_free": current_vs_free,
+            "current_vs_baseline": current_vs_baseline,
         },
         "local_reallocation": {
             "summary": reallocation_summary,
@@ -414,7 +403,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         },
         "private_access": {
             "nearby": dict(result.get("nearby_private_access_analysis") or {}).get("summary"),
-            "further_most": dict(result.get("further_most_private_access_analysis") or {}).get("summary"),
         },
         "decision_review": {
             "time_impact": _compact_time_impact(

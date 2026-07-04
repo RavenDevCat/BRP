@@ -115,15 +115,6 @@ function buildRunParameterItems(job: JobRecord): RunParameterItem[] {
     items.push({ label: "Service direction", value: serviceDirection, translateValue: true });
   }
 
-  const routeBudget = finiteNumber(config.max_route_duration_minutes);
-  if (routeBudget !== null) {
-    items.push({
-      label: "Route budget",
-      value: `${formatNumber(routeBudget)} min`,
-      detail: "Solver route budget before final traffic verification.",
-    });
-  }
-
   const comfortLoadFactor = finiteNumber(config.comfort_load_factor);
   if (comfortLoadFactor !== null) {
     const comfortEnabled = comfortLoadFactor < 0.999;
@@ -140,17 +131,45 @@ function buildRunParameterItems(job: JobRecord): RunParameterItem[] {
     items.push({ label: "Traffic profile", value: trafficProfile, translateValue: true });
   }
 
-  const toSchoolArrival = stringValue(config.to_school_arrival_time);
+  const windowStart = stringValue(config.time_window_start);
+  const windowEnd = stringValue(config.time_window_end);
+  if (windowStart || windowEnd) {
+    items.push({ label: "Time window", value: [windowStart, windowEnd].filter(Boolean).join(" - ") });
+  }
+
   const fromSchoolDeparture = stringValue(config.from_school_departure_time);
-  if (serviceDirection === "To School" && toSchoolArrival) {
-    items.push({ label: "AM arrival", value: toSchoolArrival });
-  } else if (serviceDirection === "From School" && fromSchoolDeparture) {
+  if (serviceDirection === "From School" && fromSchoolDeparture) {
     items.push({ label: "PM departure", value: fromSchoolDeparture });
   }
 
   const dwellMinutes = finiteNumber(config.stop_service_minutes);
   if (dwellMinutes !== null) {
     items.push({ label: "Stop dwell", value: `${formatNumber(dwellMinutes)} min / stop` });
+  }
+
+  const stopLimit = finiteNumber(config.route_stop_limit);
+  items.push({
+    label: "Stops Limit",
+    value: stopLimit === null ? "No limit" : formatNumber(stopLimit),
+    translateValue: stopLimit === null,
+  });
+
+  const minimumSaving = finiteNumber(config.minimum_vehicle_reduction);
+  if (minimumSaving !== null) {
+    items.push({
+      label: "Minimum Saving",
+      value: formatNumber(minimumSaving),
+      detail: "Required vehicle reduction versus current plan.",
+    });
+  }
+
+  const timeImpactLimit = finiteNumber(config.time_impact_limit_minutes);
+  if (timeImpactLimit !== null) {
+    items.push({
+      label: "Time Impact Limit",
+      value: `${formatNumber(timeImpactLimit)} min`,
+      detail: "Used by the X-minute time-impact scenarios.",
+    });
   }
 
   items.push(

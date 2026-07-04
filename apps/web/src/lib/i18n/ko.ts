@@ -363,8 +363,8 @@ const ko: Translations = {
     "May audit before parent review": "학부모 검토 전 5월 감사",
     "Subway baseline": "지하철 기준선",
     "Nearby baseline": "근거리 기준선",
-    "Limits planned load to 85% of vehicle capacity so routes are less crowded; may require more buses.":
-        "계획 탑승률을 차량 정원의 85% 기준으로 표시해 혼잡도를 낮게 검토합니다. 더 많은 버스가 필요할 수 있습니다.",
+    "Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.":
+        "계획 탑승률을 차량 정원의 85%로 제한해 혼잡도를 낮추고 시간 배분이 더 균형 잡힌 노선을 만들 수 있습니다. 더 많은 버스가 필요할 수 있습니다.",
     "Adds a comparison scenario that groups eligible stops near subway stations before optimizing.":
         "최적화 전에 지하철역 근처의 적격 정류장을 묶는 비교 시나리오를 추가합니다.",
     "Adds a comparison scenario that clusters nearby stops before optimizing.":

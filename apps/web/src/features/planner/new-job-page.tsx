@@ -715,7 +715,7 @@ export function NewJobPage() {
               </Field>
 
               <div className="grid gap-3 md:grid-cols-2">
-                <ToggleOption tooltip="Limits planned load to 85% of vehicle capacity so routes are less crowded; may require more buses.">
+                <ToggleOption tooltip="Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.">
                   <input
                     type="checkbox"
                     checked={Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) < FULL_CAPACITY_LOAD_FACTOR}

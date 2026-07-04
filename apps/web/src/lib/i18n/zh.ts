@@ -42,6 +42,8 @@ const zh: Translations = {
     "Download template": "下载模板",
     "Run settings": "运行设置",
     "Improve comfort": "提升舒适度",
+    "Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.":
+        "将计划载客量限制在车辆容量的 85%，降低拥挤度，也可能让线路时间安排更均衡；可能需要更多车辆。",
     "Service direction": "服务方向",
     "Traffic profile": "交通场景",
     "Coefficient Logic": "系数逻辑",

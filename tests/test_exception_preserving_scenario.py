@@ -111,10 +111,7 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
         [{"address": "Shanghai", "passenger_count": 1}],
         [{"name": "30-fbus", "capacity": 30, "max_count": 2}],
         2,
-        standard_scenarios=[
-            {"traffic_gate": {"status": "failed"}},
-            {"enabled": False},
-        ],
+        standard_scenarios=[{"traffic_gate": {"status": "passed"}}],
     )
 
     assert result["exception_preserving"]["accepted"] is True
@@ -127,7 +124,7 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
     assert result["routes"][1]["nodes"] == [2, 3, 0]
 
 
-def test_exception_preserving_skips_when_standard_scenario_passed():
+def test_exception_preserving_skips_when_current_plan_has_no_failed_routes():
     result = planner_core.build_exception_preserving_scenario(
         FakePlanner(),
         [{"node_id": 0, "is_depot": True}],
@@ -140,7 +137,7 @@ def test_exception_preserving_skips_when_standard_scenario_passed():
     )
 
     assert result["enabled"] is False
-    assert "standard scenario" in result["skipped_reason"]
+    assert "no failed time-window routes" in result["skipped_reason"]
 
 
 def test_ep15min_passes_time_constraints_into_exception_remainder(monkeypatch):

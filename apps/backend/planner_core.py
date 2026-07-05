@@ -7622,8 +7622,6 @@ def build_exception_preserving_scenario(
     scenario_label: str = "Exception preserving optimization",
     allow_vehicle_limit_fallback: bool = False,
 ) -> dict[str, Any]:
-    if any(_scenario_feasibility_passed(result) for result in standard_scenarios):
-        return _build_skipped_scenario_result("A standard scenario already passed the final traffic gate.")
     if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
         return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
 

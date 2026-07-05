@@ -44,7 +44,7 @@ def test_time_impact_scenario_label_falls_back_to_config_limit():
             job_record["result"],
             "time_constrained",
         )
-        == "20-Minute Constrained"
+        == "20-Minute Balanced Plan"
     )
 
 

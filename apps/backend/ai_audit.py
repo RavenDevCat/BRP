@@ -207,6 +207,93 @@ def _compact_time_impact(summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _format_time_impact_limit_minutes(value: Any) -> str:
+    try:
+        numeric = max(0.0, float(value))
+    except (TypeError, ValueError):
+        numeric = 15.0
+    if numeric.is_integer():
+        return str(int(numeric))
+    return f"{numeric:.1f}".rstrip("0").rstrip(".")
+
+
+def _time_impact_limit_minutes(result: dict[str, Any], scenario: dict[str, Any], planner_config: dict[str, Any]) -> float:
+    constraint = dict(scenario.get("time_constraint") or {})
+    for value in (
+        scenario.get("time_impact_limit_minutes"),
+        constraint.get("time_impact_limit_minutes"),
+        constraint.get("threshold_minutes"),
+        dict(result.get("planner_config") or {}).get("time_impact_limit_minutes"),
+        planner_config.get("time_impact_limit_minutes"),
+    ):
+        try:
+            return max(0.0, float(value))
+        except (TypeError, ValueError):
+            continue
+    return 15.0
+
+
+def _scenario_display_name(key: str, result: dict[str, Any], scenario: dict[str, Any], planner_config: dict[str, Any]) -> str:
+    label = str(scenario.get("display_name") or scenario.get("scenario_label") or "").strip()
+    if key == "current_plan":
+        return "Current Plan"
+    if key == "time_constrained":
+        limit = _format_time_impact_limit_minutes(_time_impact_limit_minutes(result, scenario, planner_config))
+        if not label or label.endswith("-Minute Constrained"):
+            return f"{limit}-Minute Balanced Plan"
+    if key == "exception_preserving":
+        if not label or label == "Exception Preserving":
+            return "Protected Route Plan"
+    if key == "ep15min":
+        limit = _format_time_impact_limit_minutes(_time_impact_limit_minutes(result, scenario, planner_config))
+        if not label or (label.startswith("EP ") and label.endswith("-Minute")):
+            return f"Protected {limit}-Minute Plan"
+    return label or key
+
+
+def _scenario_summary(
+    key: str,
+    result: dict[str, Any],
+    scenario: dict[str, Any],
+    planner_config: dict[str, Any],
+) -> dict[str, Any]:
+    enabled = bool(scenario) and scenario.get("enabled") is not False
+    return {
+        "key": key,
+        "name": _scenario_display_name(key, result, scenario, planner_config),
+        "enabled": enabled,
+        "skipped_reason": scenario.get("skipped_reason"),
+        "route_count": scenario.get("route_count") or scenario.get("bus_count"),
+        "stop_count": _scenario_service_stop_count(scenario),
+        "avg_route_distance_km": _float_km(scenario.get("avg_route_distance_m")),
+        "avg_route_duration_min": _float_minutes(scenario.get("avg_route_duration_s")),
+        "avg_load_factor_pct": round(float(scenario.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
+        "bus_mix": scenario.get("bus_mix"),
+        "traffic_gate": _compact_traffic_gate(scenario),
+        "exception_accepted": bool(dict(scenario.get("exception_preserving") or {}).get("accepted") or scenario.get("exception_feasible")),
+        "time_impact": _compact_time_impact(
+            dict(scenario.get("time_impact") or {})
+            or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
+        ),
+    }
+
+
+def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
+    order = ["time_constrained", "ep15min", "exception_preserving"]
+    by_key = {str(item.get("key")): item for item in scenarios if item.get("enabled")}
+    for key in order:
+        item = by_key.get(key)
+        if not item:
+            continue
+        gate = dict(item.get("traffic_gate") or {})
+        if gate.get("status") == "passed" or (gate.get("status") == "failed" and item.get("exception_accepted")):
+            return item
+    for key in order:
+        if key in by_key:
+            return by_key[key]
+    return None
+
+
 def _input_address_review_summary(review: dict[str, Any]) -> dict[str, Any]:
     summary = dict(review.get("summary") or {})
     warnings = [dict(item) for item in list(review.get("warnings") or [])]
@@ -343,8 +430,29 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     reallocation_summary = dict(route_reallocation.get("summary") or {})
     time_constrained = dict(result.get("time_constrained_optimization") or {})
     structured = dict(result.get("structured_results") or {})
+    current_plan_scenario = dict(structured.get("current_plan") or result.get("current_plan_scenario") or {})
+    if not current_plan_scenario and current_plan:
+        current_plan_scenario = {
+            "enabled": True,
+            "route_count": current_plan.get("route_count"),
+            "service_stop_count": _assessment_service_stop_count(current_plan),
+            "avg_route_distance_m": current_plan.get("avg_route_distance_m"),
+            "avg_route_duration_s": current_plan.get("avg_route_duration_s"),
+            "avg_load_factor": current_plan.get("avg_load_factor"),
+            "bus_mix": current_plan.get("bus_mix"),
+        }
+    exception_preserving = dict(result.get("exception_preserving_optimization") or structured.get("exception_preserving") or {})
+    ep15min = dict(result.get("ep15min_optimization") or structured.get("ep15min") or {})
     current_vs_baseline = dict(result.get("current_plan_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
+    time_impact_limit_minutes = _time_impact_limit_minutes(result, time_constrained, planner_config)
+    scenario_outcomes = [
+        _scenario_summary("current_plan", result, current_plan_scenario, planner_config),
+        _scenario_summary("time_constrained", result, time_constrained, planner_config),
+        _scenario_summary("exception_preserving", result, exception_preserving, planner_config),
+        _scenario_summary("ep15min", result, ep15min, planner_config),
+    ]
+    recommended_scenario = _recommended_scenario(scenario_outcomes)
     route_summaries = list(current_plan.get("route_summaries") or [])
     route_summaries = sorted(
         route_summaries,
@@ -362,6 +470,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "service_direction": result.get("service_direction") or planner_config.get("service_direction"),
             "traffic_profile": result.get("traffic_profile_name") or planner_config.get("traffic_profile_name"),
             "target_route_duration_min": planner_config.get("max_route_duration_minutes"),
+            "time_impact_limit_minutes": time_impact_limit_minutes,
         },
         "current_plan": {
             "route_count": current_plan.get("route_count"),
@@ -389,7 +498,15 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         },
         "comparisons": {
             "current_vs_baseline": current_vs_baseline,
+            "current_vs_recommended": {
+                "recommended_scenario_key": recommended_scenario.get("key") if recommended_scenario else None,
+                "recommended_scenario_name": recommended_scenario.get("name") if recommended_scenario else None,
+                "current_route_count": current_plan.get("route_count"),
+                "recommended_route_count": recommended_scenario.get("route_count") if recommended_scenario else None,
+            },
         },
+        "scenario_outcomes": scenario_outcomes,
+        "recommended_scenario": recommended_scenario,
         "local_reallocation": {
             "summary": reallocation_summary,
             "priority_actions": [
@@ -440,8 +557,8 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "Do not invent addresses, route metrics, savings, timing changes, or decisions. "
         "Write a clean management briefing for operators. "
         "Prefer readable business language over template language. "
-        "Treat decision_review as deterministic evidence, not optional decoration. "
-        "Do not recommend adopting a benchmark whose am_time_window status is failed or unavailable. "
+        "Treat scenario_outcomes, recommended_scenario, and decision_review as deterministic evidence. "
+        "Do not recommend adopting a scenario whose traffic_gate status is failed or unavailable unless exception_accepted is true. "
         "Keep recommendations practical and clearly separate measured facts from interpretation."
     )
     user_prompt = (
@@ -455,6 +572,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "- Use route IDs only when present in the facts.\n"
         "- Make recommendations specific but do not repeat every candidate action.\n"
         "- Do not mention student names or full addresses.\n"
+        "- Prefer recommended_scenario when it is adoption-ready; explain why skipped or failed scenarios are not recommended.\n"
         "- Cover input address review, time impact, and traffic confidence when facts are available.\n"
         "- If evidence is insufficient, state the validation question plainly.\n\n"
         f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
@@ -501,21 +619,21 @@ def _ai_audit_section_headings(language: str) -> str:
     if "korean" in normalized or "한국" in normalized or "한글" in normalized:
         return "\n".join(
             [
-                "## 종합 결정",
-                "## 입력 품질 검토",
-                "## 현행 계획 상태",
-                "## 최적화 영향",
-                "## 시간 신뢰도",
-                "## 운영 조치",
+                "## 종합 결론",
+                "## 이 계획을 선택한 이유",
+                "## 시간창 영향",
+                "## 운영상 절충점",
+                "## 우선 검토 노선",
+                "## 유의 사항",
             ],
         )
     return "\n".join(
         [
-            "## Executive Decision",
-            "## Input Quality Review",
-            "## Current Plan Health",
-            "## Optimization Impact",
-            "## Timing Confidence",
-            "## Operator Actions",
+            "## Executive conclusion",
+            "## Why this plan",
+            "## Time-window impact",
+            "## Operational tradeoffs",
+            "## Routes to review",
+            "## Caveats",
         ],
     )

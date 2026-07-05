@@ -4559,15 +4559,15 @@ def compare_current_plan_to_assessment_baseline(
         ]
         if removable_now:
             recommendations.append(
-                f"The constrained-improvement baseline includes {len(removable_now)} package(s) that fully empty a route, creating immediate route-removal candidates."
+                f"The optimized improvement plan includes {len(removable_now)} package(s) that fully empty a route, creating immediate route-removal candidates."
             )
         elif removal_paths:
             recommendations.append(
-                f"The constrained-improvement baseline includes {len(removal_paths)} package(s) that leave a route with very limited residual demand, creating a strong removal path."
+                f"The optimized improvement plan includes {len(removal_paths)} package(s) that leave a route with very limited residual demand, creating a strong removal path."
             )
         elif consolidation_paths:
             recommendations.append(
-                f"The constrained-improvement baseline includes {len(consolidation_paths)} package(s) that move a route materially closer to consolidation."
+                f"The optimized improvement plan includes {len(consolidation_paths)} package(s) that move a route materially closer to consolidation."
             )
 
         top_package = constrained_package_summaries[0]
@@ -5284,19 +5284,19 @@ def compare_current_plan_to_baseline(
             else "did not complete AMap AM time-window verification"
         )
         recommendations.append(
-            f"The free-optimization baseline {gate_label}; do not treat the vehicle saving as adoption-ready."
+            f"The optimized plan {gate_label}; do not treat the vehicle saving as adoption-ready."
         )
     if route_gap > 0:
         recommendations.append(
-            f"The current plan uses {route_gap} more routes than the free-optimization baseline."
+            f"The current plan uses {route_gap} more routes than the optimized plan."
         )
     if avg_distance_gap_pct > 10:
         recommendations.append(
-            f"The current plan average route distance is {avg_distance_gap_pct:.1f}% above the free-optimization baseline."
+            f"The current plan average route distance is {avg_distance_gap_pct:.1f}% above the optimized plan."
         )
     if avg_duration_gap_pct > 10:
         recommendations.append(
-            f"The current plan average route duration is {avg_duration_gap_pct:.1f}% above the free-optimization baseline."
+            f"The current plan average route duration is {avg_duration_gap_pct:.1f}% above the optimized plan."
         )
     if current_avg_load_factor < 0.6:
         recommendations.append(
@@ -5307,7 +5307,7 @@ def compare_current_plan_to_baseline(
         baseline_count = int(baseline_bus_mix.get(bus_type, 0))
         if current_count > baseline_count:
             recommendations.append(
-                f"The current plan uses {current_count - baseline_count} more {bus_type} vehicles than the free-optimization baseline."
+                f"The current plan uses {current_count - baseline_count} more {bus_type} vehicles than the optimized plan."
             )
 
     return {
@@ -8167,8 +8167,8 @@ def run_backend_planner_with_prepared_data(
             ),
         )
         time_impact_limit_label = _format_time_impact_limit_minutes(time_impact_limit_minutes)
-        time_constrained_display_label = f"{time_impact_limit_label}-Minute Constrained"
-        ep15min_display_label = f"EP {time_impact_limit_label}-Minute"
+        time_constrained_display_label = f"{time_impact_limit_label}-Minute Balanced Plan"
+        ep15min_display_label = f"Protected {time_impact_limit_label}-Minute Plan"
         time_constrained_solver_label = (
             f"{time_impact_limit_label}-minute time-impact constrained optimization"
         )

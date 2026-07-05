@@ -181,9 +181,11 @@ function SummaryPanel({
   onOpenReview: () => void;
 }) {
   const t = useT();
+  const currentPlanRow = scenarios.find((scenario) => scenario.key === "current_plan" && scenario.enabled);
   const timeConstrained = scenarios.find((scenario) => scenario.key === "time_constrained" && scenario.enabled);
   const exceptionPreserving = scenarios.find((scenario) => scenario.key === "exception_preserving" && scenario.enabled);
   const ep15 = scenarios.find((scenario) => scenario.key === "ep15min" && scenario.enabled);
+  const recommended = pickRecommendedScenario(scenarios);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
   const solveProcessRows = buildSolveProcessRows(result);
 
@@ -193,8 +195,19 @@ function SummaryPanel({
         <InputAddressWarningBanner count={diagnostics.inputAddressWarnings.length} onOpenReview={onOpenReview} />
       ) : null}
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-        <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
+        <MetricCard
+          label="Current plan"
+          value={formatNumber(currentPlan.route_count)}
+          tone={currentPlanRow ? scenarioTrafficTone(currentPlanRow, "neutral") : "neutral"}
+          detail={currentPlanRow ? scenarioCardDetail(currentPlanRow, "Uploaded plan used as the control case.") : ""}
+        />
+        <MetricCard
+          label="Recommended plan"
+          value={recommended ? `${formatNumber(recommended.routeCount)} ${t("routes")}` : t("Needs review")}
+          tone={recommended ? scenarioTrafficTone(recommended, "info") : "warning"}
+          detail={recommended ? scenarioCardDetail(recommended, recommended.name) : "No adoption-ready optimized plan was produced."}
+        />
         <MetricCard
           label={timeConstrained?.name || "Time-impact constrained"}
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
@@ -202,13 +215,13 @@ function SummaryPanel({
           detail={timeConstrained ? scenarioCardDetail(timeConstrained, timeConstrained.detail) : ""}
         />
         <MetricCard
-          label="EP"
+          label="Protected route plan"
           value={exceptionPreserving ? formatNumber(exceptionPreserving.routeCount) : t("Skipped")}
           tone={exceptionPreserving ? scenarioTrafficTone(exceptionPreserving, "success") : "warning"}
-          detail={exceptionPreserving ? scenarioCardDetail(exceptionPreserving, "Preserves exception routes, then optimizes the remaining stops.") : ""}
+          detail={exceptionPreserving ? scenarioCardDetail(exceptionPreserving, "Keeps current exception routes protected, then optimizes the remaining stops.") : ""}
         />
         <MetricCard
-          label={ep15?.name || "EP time-impact"}
+          label={ep15?.name || "Protected time-impact plan"}
           value={ep15 ? formatNumber(ep15.routeCount) : t("Skipped")}
           tone={ep15 ? scenarioTrafficTone(ep15, "info") : "warning"}
           detail={ep15 ? scenarioCardDetail(ep15, ep15.detail) : ""}
@@ -716,9 +729,9 @@ function BaselinePanel({
     <div className="space-y-4">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
         <div>
-          <h2 className="text-sm font-semibold">{t("Baseline scenarios")}</h2>
+          <h2 className="text-sm font-semibold">{t("Optimization scenarios")}</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            {t("Compare the imported supplier plan against the time-impact constrained and exception-preserving plans.")}
+            {t("Compare the uploaded current plan against the balanced and protected-route optimization results.")}
           </p>
         </div>
       </div>
@@ -776,12 +789,12 @@ function BaselinePanel({
         <CardHeader>
           <div className="flex items-center gap-2">
             <GitCompareArrows className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{t("Current plan vs free optimization")}</h2>
+            <h2 className="text-sm font-semibold">{t("Current plan comparison")}</h2>
           </div>
         </CardHeader>
         <CardContent className="grid gap-3 md:grid-cols-4">
           <MetricCard label="Current route count" value={formatNumber(currentComparison.current_route_count)} />
-          <MetricCard label="Baseline route count" value={formatNumber(currentComparison.baseline_route_count)} />
+          <MetricCard label="Optimized route count" value={formatNumber(currentComparison.baseline_route_count)} />
           <MetricCard label="Distance gap" value={formatPercent(currentComparison.avg_distance_gap_pct)} tone="info" />
           <MetricCard label="Duration gap" value={formatPercent(currentComparison.avg_duration_gap_pct)} tone="info" />
         </CardContent>
@@ -2365,24 +2378,24 @@ function translateCurrentPlanRecommendation(
   t: (key: string, fallback?: string) => string,
 ) {
   const normalized = text.trim();
-  const moreRoutes = normalized.match(/^The current plan uses ([\d,.]+) more routes than the free-optimization baseline\.$/);
+  const moreRoutes = normalized.match(/^The current plan uses ([\d,.]+) more routes than the (?:free-optimization baseline|optimized plan)\.$/);
   if (moreRoutes) {
-    return `${t("The current plan uses")} ${moreRoutes[1]} ${t("more routes than the free-optimization baseline.")}`;
+    return `${t("The current plan uses")} ${moreRoutes[1]} ${t("more routes than the optimized plan.")}`;
   }
 
-  const routeDistanceGap = normalized.match(/^The current plan average route distance is ([\d,.]+)% above the free-optimization baseline\.$/);
+  const routeDistanceGap = normalized.match(/^The current plan average route distance is ([\d,.]+)% above the (?:free-optimization baseline|optimized plan)\.$/);
   if (routeDistanceGap) {
-    return `${t("The current plan average route distance is")} ${routeDistanceGap[1]}% ${t("above the free-optimization baseline.")}`;
+    return `${t("The current plan average route distance is")} ${routeDistanceGap[1]}% ${t("above the optimized plan.")}`;
   }
 
-  const routeDurationGap = normalized.match(/^The current plan average route duration is ([\d,.]+)% above the free-optimization baseline\.$/);
+  const routeDurationGap = normalized.match(/^The current plan average route duration is ([\d,.]+)% above the (?:free-optimization baseline|optimized plan)\.$/);
   if (routeDurationGap) {
-    return `${t("The current plan average route duration is")} ${routeDurationGap[1]}% ${t("above the free-optimization baseline.")}`;
+    return `${t("The current plan average route duration is")} ${routeDurationGap[1]}% ${t("above the optimized plan.")}`;
   }
 
-  const moreVehicles = normalized.match(/^The current plan uses ([\d,.]+) more (.+) vehicles than the free-optimization baseline\.$/);
+  const moreVehicles = normalized.match(/^The current plan uses ([\d,.]+) more (.+) vehicles than the (?:free-optimization baseline|optimized plan)\.$/);
   if (moreVehicles) {
-    return `${t("The current plan uses")} ${moreVehicles[1]} ${t("more")} ${moreVehicles[2]} ${t("vehicles than the free-optimization baseline.")}`;
+    return `${t("The current plan uses")} ${moreVehicles[1]} ${t("more")} ${moreVehicles[2]} ${t("vehicles than the optimized plan.")}`;
   }
 
   const routeCountDiff = normalized.match(/^The current plan route count differs from the (.+) by ([+-]?[\d,.]+)\.$/);
@@ -2405,19 +2418,19 @@ function translateCurrentPlanRecommendation(
     return `${t("Load factor remains unchanged in the")} ${t(unchangedLoad[1])}${t(", which confirms that this comparison isolates network design quality rather than vehicle capacity.")}`;
   }
 
-  const removablePackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that fully empty a route, creating immediate route-removal candidates\.$/);
+  const removablePackages = normalized.match(/^The (?:constrained-improvement baseline|optimized improvement plan) includes ([\d,.]+) package\(s\) that fully empty a route, creating immediate route-removal candidates\.$/);
   if (removablePackages) {
-    return `${t("The constrained-improvement baseline includes")} ${removablePackages[1]} ${t("package(s) that fully empty a route, creating immediate route-removal candidates.")}`;
+    return `${t("The optimized improvement plan includes")} ${removablePackages[1]} ${t("package(s) that fully empty a route, creating immediate route-removal candidates.")}`;
   }
 
-  const limitedDemandPackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that leave a route with very limited residual demand, creating a strong removal path\.$/);
+  const limitedDemandPackages = normalized.match(/^The (?:constrained-improvement baseline|optimized improvement plan) includes ([\d,.]+) package\(s\) that leave a route with very limited residual demand, creating a strong removal path\.$/);
   if (limitedDemandPackages) {
-    return `${t("The constrained-improvement baseline includes")} ${limitedDemandPackages[1]} ${t("package(s) that leave a route with very limited residual demand, creating a strong removal path.")}`;
+    return `${t("The optimized improvement plan includes")} ${limitedDemandPackages[1]} ${t("package(s) that leave a route with very limited residual demand, creating a strong removal path.")}`;
   }
 
-  const consolidationPackages = normalized.match(/^The constrained-improvement baseline includes ([\d,.]+) package\(s\) that move a route materially closer to consolidation\.$/);
+  const consolidationPackages = normalized.match(/^The (?:constrained-improvement baseline|optimized improvement plan) includes ([\d,.]+) package\(s\) that move a route materially closer to consolidation\.$/);
   if (consolidationPackages) {
-    return `${t("The constrained-improvement baseline includes")} ${consolidationPackages[1]} ${t("package(s) that move a route materially closer to consolidation.")}`;
+    return `${t("The optimized improvement plan includes")} ${consolidationPackages[1]} ${t("package(s) that move a route materially closer to consolidation.")}`;
   }
 
   const practicalMerge = normalized.match(/^The leading constrained package is a practical merge candidate because the receiving route still lands near ([\d,.]+) minutes and ([\d,.]+)% load\.$/);
@@ -2519,7 +2532,21 @@ function formatTimeImpactLimitMinutes(value: unknown): string {
 }
 
 function scenarioDisplayName(fallback: string, scenario: Record<string, unknown>): string {
-  return stringValue(scenario.display_name || scenario.scenario_label) || fallback;
+  return normalizeScenarioDisplayName(stringValue(scenario.display_name || scenario.scenario_label) || fallback);
+}
+
+function normalizeScenarioDisplayName(label: string): string {
+  if (label.endsWith("-Minute Constrained")) {
+    return `${label.slice(0, -"Minute Constrained".length)}Minute Balanced Plan`;
+  }
+  if (label === "Exception Preserving") {
+    return "Protected Route Plan";
+  }
+  if (label.startsWith("EP ") && label.endsWith("-Minute")) {
+    const limit = label.slice(3, -"Minute".length).trim();
+    return `Protected ${limit}Minute Plan`;
+  }
+  return label;
 }
 
 function timeImpactLimitFromScenario(result: Record<string, unknown>, scenario: Record<string, unknown>): string {
@@ -2541,8 +2568,8 @@ function timeImpactScenarioName(
 ): string {
   const fallback =
     kind === "ep15min"
-      ? `EP ${timeImpactLimitFromScenario(result, scenario)}-Minute`
-      : `${timeImpactLimitFromScenario(result, scenario)}-Minute Constrained`;
+      ? `Protected ${timeImpactLimitFromScenario(result, scenario)}-Minute Plan`
+      : `${timeImpactLimitFromScenario(result, scenario)}-Minute Balanced Plan`;
   return scenarioDisplayName(fallback, scenario);
 }
 
@@ -2556,9 +2583,9 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     : scenarioFromAssessment("current_plan", "Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment));
   return [
     currentPlanRow,
-    scenarioFromScenario("time_constrained", timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), `Optimized with a ${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-minute time-impact limit`, timeConstrainedScenario),
-    scenarioFromScenario("exception_preserving", "Exception Preserving", "Preserves current-plan exception routes, then regroups the remaining stops", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
-    scenarioFromScenario("ep15min", timeImpactScenarioName(result, ep15Scenario, "ep15min"), `Exception-preserving optimization with the ${timeImpactLimitFromScenario(result, ep15Scenario)}-minute time-impact limit`, ep15Scenario),
+    scenarioFromScenario("time_constrained", timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), `Balances vehicle saving, time window, and a ${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-minute time-impact limit.`, timeConstrainedScenario),
+    scenarioFromScenario("exception_preserving", "Protected Route Plan", "Keeps current exception routes protected, then optimizes the remaining stops.", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
+    scenarioFromScenario("ep15min", timeImpactScenarioName(result, ep15Scenario, "ep15min"), `Keeps current exception routes protected and applies the ${timeImpactLimitFromScenario(result, ep15Scenario)}-minute time-impact limit.`, ep15Scenario),
   ];
 }
 
@@ -2569,7 +2596,7 @@ function buildArrivalReverseChecks(result: Record<string, unknown>, selectedScen
   const scenarios: Record<string, [string, Record<string, unknown>]> = {
     current_plan: ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
     time_constrained: [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), timeConstrainedScenario],
-    exception_preserving: ["Exception Preserving", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
+    exception_preserving: ["Protected Route Plan", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
     ep15min: [timeImpactScenarioName(result, ep15Scenario, "ep15min"), ep15Scenario],
     subway: ["Subway Aggregated", asRecord(structured.subway || result.subway)],
     nearby: ["Nearby Aggregated", asRecord(structured.nearby || result.nearby)],
@@ -2767,6 +2794,23 @@ function scenarioTrafficTone(
     return "warning";
   }
   return fallback;
+}
+
+function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
+  const status = stringValue(scenario.trafficGate.status);
+  return status === "passed" || (status === "failed" && scenario.exceptionAccepted);
+}
+
+function pickRecommendedScenario(scenarios: ScenarioRow[]): ScenarioRow | undefined {
+  const optimized = ["time_constrained", "ep15min", "exception_preserving"];
+  return (
+    optimized
+      .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
+      .find((scenario): scenario is ScenarioRow => Boolean(scenario && scenarioIsAdoptionReady(scenario))) ||
+    optimized
+      .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
+      .find((scenario): scenario is ScenarioRow => Boolean(scenario))
+  );
 }
 
 function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
@@ -3085,7 +3129,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
   const keys = [
     ["current_plan", "Current Plan"],
     ["time_constrained", timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained")],
-    ["exception_preserving", "Exception Preserving"],
+    ["exception_preserving", "Protected Route Plan"],
     ["ep15min", timeImpactScenarioName(result, ep15Scenario, "ep15min")],
     ["subway", "Subway Aggregated"],
     ["nearby", "Nearby Aggregated"],
@@ -3428,8 +3472,8 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization);
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
-    [`${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-min`, asRecord(timeConstrainedScenario.traffic_gate)],
-    [`EP${timeImpactLimitFromScenario(result, ep15Scenario)}`, asRecord(ep15Scenario.traffic_gate)],
+    [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), asRecord(timeConstrainedScenario.traffic_gate)],
+    [timeImpactScenarioName(result, ep15Scenario, "ep15min"), asRecord(ep15Scenario.traffic_gate)],
   ];
   return scenarios
     .filter(([, gate]) => Object.keys(gate).length > 0 && stringValue(gate.status) !== "not_applicable")
@@ -3454,7 +3498,7 @@ function buildSolveProcessRows(result: Record<string, unknown>) {
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
     [timeImpactScenarioName(result, timeConstrainedScenario, "time_constrained"), timeConstrainedScenario],
-    ["Exception Preserving", asRecord(result.exception_preserving_optimization)],
+    ["Protected Route Plan", asRecord(result.exception_preserving_optimization)],
     [timeImpactScenarioName(result, ep15Scenario, "ep15min"), ep15Scenario],
   ];
   return scenarios.map(([label, scenario]) => buildSolveProcessRow(label, scenario));

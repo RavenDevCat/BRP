@@ -18,7 +18,7 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
             "job_id": "audit-123",
             "owner_email": "ops@example.com",
             "metadata": {"job_name": "Seoul AM test"},
-            "config": {"service_direction": "To School", "max_route_duration_minutes": 75},
+            "config": {"service_direction": "To School", "max_route_duration_minutes": 75, "time_impact_limit_minutes": 20},
             "result": {
                 "service_direction": "To School",
                 "traffic_profile_name": "AM Peak (Attributed)",
@@ -125,6 +125,9 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
     )
 
     review = payload["decision_review"]
+    assert payload["job"]["time_impact_limit_minutes"] == 20
+    assert payload["scenario_outcomes"][1]["name"] == "20-Minute Balanced Plan"
+    assert payload["recommended_scenario"]["key"] == "time_constrained"
     assert review["time_impact"]["decision"] == "review_needed"
     assert review["time_impact"]["acceptance_rider_pct"] == 76
     assert review["input_address_review"]["warning_count"] == 2
@@ -136,8 +139,9 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
 
 
 def test_ai_audit_prompt_headings_cover_new_sections() -> None:
-    assert "## Timing Confidence" in ai_audit._ai_audit_section_headings("English")
-    assert "## 입력 품질 검토" in ai_audit._ai_audit_section_headings("Korean")
+    assert "## Executive conclusion" in ai_audit._ai_audit_section_headings("English")
+    assert "## Time-window impact" in ai_audit._ai_audit_section_headings("English")
+    assert "## 이 계획을 선택한 이유" in ai_audit._ai_audit_section_headings("Korean")
 
 
 def test_backend_ai_audit_injects_time_impact_context(monkeypatch) -> None:

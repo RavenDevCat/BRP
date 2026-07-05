@@ -164,9 +164,9 @@ MAP_SCENARIO_LABELS = {
     "original": "Free Optimization Baseline",
     "subway": "Subway Aggregated",
     "nearby": "Nearby Aggregated",
-    "time_constrained": "15-Minute Constrained",
-    "exception_preserving": "Exception Preserving",
-    "ep15min": "EP 15-Minute",
+    "time_constrained": "15-Minute Balanced Plan",
+    "exception_preserving": "Protected Route Plan",
+    "ep15min": "Protected 15-Minute Plan",
 }
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
@@ -3428,11 +3428,19 @@ def _job_map_scenario_label(
     for key in ("display_name", "scenario_label"):
         label = str(scenario.get(key) or "").strip()
         if label:
+            if scenario_key == "time_constrained" and label.endswith("-Minute Constrained"):
+                limit_label = label[: -len("-Minute Constrained")].strip()
+                return f"{limit_label}-Minute Balanced Plan"
+            if scenario_key == "exception_preserving" and label == "Exception Preserving":
+                return "Protected Route Plan"
+            if scenario_key == "ep15min" and label.startswith("EP ") and label.endswith("-Minute"):
+                limit_label = label[len("EP ") : -len("-Minute")].strip()
+                return f"Protected {limit_label}-Minute Plan"
             return label
     if scenario_key == "time_constrained":
-        return f"{_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Constrained"
+        return f"{_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Balanced Plan"
     if scenario_key == "ep15min":
-        return f"EP {_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute"
+        return f"Protected {_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Plan"
     return MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
 
 

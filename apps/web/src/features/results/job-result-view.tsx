@@ -488,9 +488,10 @@ function AiAuditPanel({
   const t = useT();
   const { lang } = useLanguage();
   const queryClient = useQueryClient();
-  const requestedReportKey = lang === "ko" ? "ko" : "en";
+  const requestedReportKey = lang === "ko" ? "ko" : lang === "zh" ? "zh" : "en";
+  const requestedReportLanguage = lang === "ko" ? "Korean" : lang === "zh" ? "Chinese" : "English";
   const auditMutation = useMutation({
-    mutationFn: ({ force }: { force: boolean }) => generateAiAudit(job.job_id, { force, language: lang === "ko" ? "Korean" : "English" }),
+    mutationFn: ({ force }: { force: boolean }) => generateAiAudit(job.job_id, { force, language: requestedReportLanguage }),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["jobs", job.job_id] });
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
@@ -2471,8 +2472,18 @@ function collectAiAuditReports(
   return collected;
 }
 
-function getAiAuditLanguageKey(language: unknown): "en" | "ko" {
+function getAiAuditLanguageKey(language: unknown): "en" | "ko" | "zh" {
   const normalized = stringValue(language).trim().toLowerCase();
+  if (
+    normalized.startsWith("zh")
+    || normalized.startsWith("cn")
+    || normalized.includes("chinese")
+    || normalized.includes("中文")
+    || normalized.includes("汉语")
+    || normalized.includes("漢語")
+  ) {
+    return "zh";
+  }
   if (
     normalized.startsWith("ko")
     || normalized.startsWith("kr")

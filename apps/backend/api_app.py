@@ -1017,11 +1017,12 @@ def generate_job_ai_audit(
         str(payload_dict.get("language") or "").strip() or None
     )
     force_ai_audit = bool(payload_dict.get("force"))
-    required_languages = (
-        ["English", "Korean"]
-        if backend_service._is_korean_ai_audit_job(job_record)
-        else [requested_language]
-    )
+    if backend_service._is_korean_ai_audit_job(job_record):
+        required_languages = ["English", "Korean"]
+    elif requested_key == "zh" or backend_service._is_chinese_ai_audit_job(job_record):
+        required_languages = ["English", "Chinese"]
+    else:
+        required_languages = [requested_language]
     audit_state, audit_record = backend_service.JOB_STORE.begin_ai_audit(
         normalized_job_id,
         force=force_ai_audit,

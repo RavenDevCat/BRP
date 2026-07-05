@@ -2686,6 +2686,15 @@ def _normalize_ai_audit_language(language: Any) -> tuple[str, str]:
     raw = str(language or "").strip()
     normalized = raw.lower()
     if (
+        normalized.startswith("zh")
+        or normalized.startswith("cn")
+        or "chinese" in normalized
+        or "中文" in raw
+        or "汉语" in raw
+        or "漢語" in raw
+    ):
+        return "zh", "Chinese"
+    if (
         normalized.startswith("ko")
         or normalized.startswith("kr")
         or "korean" in normalized
@@ -2768,6 +2777,7 @@ def _select_ai_audit_report(
         reports_by_language.get(requested_key)
         or reports_by_language.get("en")
         or reports_by_language.get("ko")
+        or reports_by_language.get("zh")
         or {}
     )
 
@@ -2830,6 +2840,19 @@ def _is_korean_ai_audit_job(record: dict[str, Any]) -> bool:
     return any(
         token in marker_text
         for token in ("south korea", "korea", "seoul", "kr", "대한민국", "한국")
+    )
+
+
+def _is_chinese_ai_audit_job(record: dict[str, Any]) -> bool:
+    markers: list[str] = []
+    for section_key in ("prepared_payload_summary", "metadata", "config", "result"):
+        markers.extend(_collect_location_markers(record.get(section_key)))
+    marker_text = " | ".join(markers).lower()
+    if not marker_text:
+        return False
+    return any(
+        token in marker_text
+        for token in ("china", "shanghai", "beijing", "cn", "中国", "上海", "北京")
     )
 
 

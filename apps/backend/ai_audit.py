@@ -616,6 +616,24 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
 
 def _ai_audit_section_headings(language: str) -> str:
     normalized = language.strip().lower()
+    if (
+        normalized.startswith("zh")
+        or normalized.startswith("cn")
+        or "chinese" in normalized
+        or "中文" in language
+        or "汉语" in language
+        or "漢語" in language
+    ):
+        return "\n".join(
+            [
+                "## 执行结论",
+                "## 为什么选择这个方案",
+                "## 时间窗影响",
+                "## 运营取舍",
+                "## 优先复核线路",
+                "## 注意事项",
+            ],
+        )
     if "korean" in normalized or "한국" in normalized or "한글" in normalized:
         return "\n".join(
             [

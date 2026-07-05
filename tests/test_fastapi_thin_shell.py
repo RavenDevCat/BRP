@@ -737,6 +737,53 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertTrue(cached_response.json()["cached"])
         self.assertEqual(len(generated), 2)
 
+    def test_ai_audit_generates_dual_language_reports_for_chinese_jobs_and_uses_cache(self) -> None:
+        store = FakeJobStore()
+        store.records["cn-job"] = {
+            "job_id": "cn-job",
+            "owner_email": "admin@example.com",
+            "status": "succeeded",
+            "metadata": {"country": "CN"},
+            "result": {},
+        }
+        generated: list[tuple[str, bool, dict[str, Any] | None]] = []
+
+        def generate_report(
+            record: dict[str, Any], *, force: bool = False, language: str = "English"
+        ) -> dict[str, Any]:
+            prior_report = record.get("ai_audit_report")
+            generated.append((language, force, prior_report if isinstance(prior_report, dict) else None))
+            return {"language": language, "summary": f"{language} report"}
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=store,
+            generate_ai_audit_report=generate_report,
+            utc_now_iso=lambda: "2026-06-21T00:00:00Z",
+        ):
+            response = self.client.post(
+                "/api/jobs/cn-job/ai-audit",
+                headers=auth_headers(),
+                json={"language": "zh"},
+            )
+            cached_response = self.client.post(
+                "/api/jobs/cn-job/ai-audit",
+                headers=auth_headers(),
+                json={"language": "en"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["ai_audit_status"], "succeeded")
+        self.assertEqual(payload["ai_audit_report"]["language"], "Chinese")
+        self.assertEqual(set(payload["ai_audit_reports"].keys()), {"en", "zh"})
+        self.assertEqual([item[0] for item in generated], ["English", "Chinese"])
+        self.assertEqual(store.records["cn-job"]["ai_audit_status"], "succeeded")
+        self.assertEqual(cached_response.status_code, 200)
+        self.assertTrue(cached_response.json()["cached"])
+        self.assertEqual(len(generated), 2)
+
 
     def test_worker_termination_uses_os_kill_on_windows(self) -> None:
         with mock.patch.object(job_queue, "pid_is_alive", return_value=True), \

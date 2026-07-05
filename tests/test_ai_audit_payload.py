@@ -142,6 +142,7 @@ def test_ai_audit_prompt_headings_cover_new_sections() -> None:
     assert "## Executive conclusion" in ai_audit._ai_audit_section_headings("English")
     assert "## Time-window impact" in ai_audit._ai_audit_section_headings("English")
     assert "## 이 계획을 선택한 이유" in ai_audit._ai_audit_section_headings("Korean")
+    assert "## 为什么选择这个方案" in ai_audit._ai_audit_section_headings("Chinese")
 
 
 def test_backend_ai_audit_injects_time_impact_context(monkeypatch) -> None:

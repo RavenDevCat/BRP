@@ -7603,6 +7603,11 @@ def _exception_candidate_rank(candidate_summary: dict[str, Any], candidate_route
     )
 
 
+def _preserve_standard_pass_skip_for_market(input_records: list[dict[str, Any]]) -> bool:
+    country, _city = infer_traffic_location(input_records)
+    return country == "SOUTH KOREA"
+
+
 def build_exception_preserving_scenario(
     planner: Any,
     original_points: list[dict[str, Any]],
@@ -7622,6 +7627,10 @@ def build_exception_preserving_scenario(
     scenario_label: str = "Exception preserving optimization",
     allow_vehicle_limit_fallback: bool = False,
 ) -> dict[str, Any]:
+    if _preserve_standard_pass_skip_for_market(input_records) and any(
+        _scenario_feasibility_passed(result) for result in standard_scenarios
+    ):
+        return _build_skipped_scenario_result("A standard scenario already passed the final traffic gate.")
     if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
         return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
 

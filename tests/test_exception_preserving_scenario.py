@@ -140,6 +140,37 @@ def test_exception_preserving_skips_when_current_plan_has_no_failed_routes():
     assert "no failed time-window routes" in result["skipped_reason"]
 
 
+def test_exception_preserving_keeps_standard_pass_skip_for_kr():
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        [{"node_id": 0, "is_depot": True}],
+        {
+            "enabled": True,
+            "bus_count": 1,
+            "routes": [
+                {
+                    "route_id": "KR1",
+                    "nodes": [1, 0],
+                    "final_route_traffic_gate": {"status": "failed"},
+                }
+            ],
+            "traffic_gate": {
+                "status": "failed",
+                "failed_route_count": 1,
+                "failed_route_ids": ["KR1"],
+            },
+        },
+        planner_core.PlannerConfig(),
+        [{"country": "South Korea", "city": "Seoul"}],
+        [],
+        None,
+        standard_scenarios=[{"traffic_gate": {"status": "passed"}}],
+    )
+
+    assert result["enabled"] is False
+    assert "standard scenario" in result["skipped_reason"]
+
+
 def test_ep15min_passes_time_constraints_into_exception_remainder(monkeypatch):
     points = [
         {"node_id": 0, "address": "school", "is_depot": True},

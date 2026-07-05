@@ -181,10 +181,13 @@ function SummaryPanel({
   onOpenReview: () => void;
 }) {
   const t = useT();
-  const currentPlanRow = scenarios.find((scenario) => scenario.key === "current_plan" && scenario.enabled);
-  const timeConstrained = scenarios.find((scenario) => scenario.key === "time_constrained" && scenario.enabled);
-  const exceptionPreserving = scenarios.find((scenario) => scenario.key === "exception_preserving" && scenario.enabled);
-  const ep15 = scenarios.find((scenario) => scenario.key === "ep15min" && scenario.enabled);
+  const currentPlanRow = scenarios.find((scenario) => scenario.key === "current_plan");
+  const timeConstrainedRow = scenarios.find((scenario) => scenario.key === "time_constrained");
+  const exceptionPreservingRow = scenarios.find((scenario) => scenario.key === "exception_preserving");
+  const ep15Row = scenarios.find((scenario) => scenario.key === "ep15min");
+  const timeConstrained = timeConstrainedRow?.enabled ? timeConstrainedRow : undefined;
+  const exceptionPreserving = exceptionPreservingRow?.enabled ? exceptionPreservingRow : undefined;
+  const ep15 = ep15Row?.enabled ? ep15Row : undefined;
   const recommended = pickRecommendedScenario(scenarios);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
   const solveProcessRows = buildSolveProcessRows(result);
@@ -212,19 +215,40 @@ function SummaryPanel({
           label={timeConstrained?.name || "Time-impact constrained"}
           value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
           tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
-          detail={timeConstrained ? scenarioCardDetail(timeConstrained, timeConstrained.detail) : ""}
+          detail={
+            timeConstrained
+              ? scenarioCardDetail(timeConstrained, timeConstrained.detail)
+              : scenarioSkippedDetail(
+                  timeConstrainedRow,
+                  "Adjust the time-impact limit, time window, stop limit, minimum saving, or fleet settings, then rerun.",
+                )
+          }
         />
         <MetricCard
           label="Protected route plan"
           value={exceptionPreserving ? formatNumber(exceptionPreserving.routeCount) : t("Skipped")}
           tone={exceptionPreserving ? scenarioTrafficTone(exceptionPreserving, "success") : "warning"}
-          detail={exceptionPreserving ? scenarioCardDetail(exceptionPreserving, "Keeps current exception routes protected, then optimizes the remaining stops.") : ""}
+          detail={
+            exceptionPreserving
+              ? scenarioCardDetail(exceptionPreserving, "Keeps current exception routes protected, then optimizes the remaining stops.")
+              : scenarioSkippedDetail(
+                  exceptionPreservingRow,
+                  "Review current-plan failed routes or relax the optimization settings, then rerun.",
+                )
+          }
         />
         <MetricCard
           label={ep15?.name || "Protected time-impact plan"}
           value={ep15 ? formatNumber(ep15.routeCount) : t("Skipped")}
           tone={ep15 ? scenarioTrafficTone(ep15, "info") : "warning"}
-          detail={ep15 ? scenarioCardDetail(ep15, ep15.detail) : ""}
+          detail={
+            ep15
+              ? scenarioCardDetail(ep15, ep15.detail)
+              : scenarioSkippedDetail(
+                  ep15Row,
+                  "Adjust protected-route assumptions, the time-impact limit, or fleet settings, then rerun.",
+                )
+          }
         />
         <MetricCard
           label="Data review"
@@ -2784,6 +2808,11 @@ function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate" | 
 function scenarioCardDetail(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">, detail: string): string {
   const status = scenarioTrafficStatusLabel(scenario);
   return status ? `${status}. ${detail}` : detail;
+}
+
+function scenarioSkippedDetail(scenario: Pick<ScenarioRow, "skippedReason"> | undefined, adjustmentHint: string): string {
+  const reason = scenario?.skippedReason.trim();
+  return `Skipped: ${reason || "Scenario was not enabled for this run."} ${adjustmentHint}`;
 }
 
 function scenarioTrafficTone(

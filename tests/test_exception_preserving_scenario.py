@@ -107,7 +107,7 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
         FakePlanner(),
         points,
         current,
-        planner_core.PlannerConfig(service_direction="To School"),
+        planner_core.PlannerConfig(service_direction="To School", minimum_vehicle_reduction=1),
         [{"address": "Shanghai", "passenger_count": 1}],
         [{"name": "30-fbus", "capacity": 30, "max_count": 2}],
         2,
@@ -232,7 +232,7 @@ def test_ep15min_passes_time_constraints_into_exception_remainder(monkeypatch):
         FakePlanner(),
         points,
         current,
-        planner_core.PlannerConfig(),
+        planner_core.PlannerConfig(minimum_vehicle_reduction=1),
         [{"address": "Shanghai", "passenger_count": 1}],
         [{"name": "30-fbus", "capacity": 30, "max_count": 2}],
         2,
@@ -311,7 +311,7 @@ def test_ep15min_relaxes_remainder_vehicle_limit_after_saving_attempt_fails(monk
         FakePlanner(),
         points,
         current,
-        planner_core.PlannerConfig(),
+        planner_core.PlannerConfig(minimum_vehicle_reduction=1),
         [{"address": "Shanghai", "passenger_count": 1}],
         [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
         2,
@@ -328,6 +328,74 @@ def test_ep15min_relaxes_remainder_vehicle_limit_after_saving_attempt_fails(monk
     assert result["exception_preserving"]["accepted"] is True
     assert result["exception_preserving"]["vehicle_limit_relaxed"] is True
     assert result["exception_preserving"]["remaining_vehicle_limit"] == 2
+
+
+def test_exception_preserving_acceptance_requires_minimum_vehicle_saving(monkeypatch):
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "frozen failed stop"},
+        {"node_id": 2, "address": "remaining a"},
+        {"node_id": 3, "address": "remaining b"},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 4,
+        "routes": [
+            {
+                "route_id": "R12",
+                "nodes": [1, 0],
+                "final_route_traffic_gate": {"status": "failed", "time_window_overrun_minutes": 12},
+            },
+            {"route_id": "R1", "nodes": [2, 0], "final_route_traffic_gate": {"status": "passed"}},
+            {"route_id": "R2", "nodes": [3, 0], "final_route_traffic_gate": {"status": "passed"}},
+            {"route_id": "R3", "nodes": [0], "final_route_traffic_gate": {"status": "passed"}},
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R12"],
+            "max_time_window_overrun_minutes": 12,
+        },
+    }
+
+    def fake_compute(_planner, subset_points, *_args, **_kwargs):
+        return {
+            "points": subset_points,
+            "routes": [
+                {"route_id": "Bus 1", "nodes": [1, 0], "final_route_traffic_gate": {"status": "passed"}},
+                {"route_id": "Bus 2", "nodes": [2, 0], "final_route_traffic_gate": {"status": "passed"}},
+            ],
+        }
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {
+            "status": "passed",
+            "failed_route_count": 0,
+            "failed_route_ids": [],
+            "max_time_window_overrun_minutes": 0,
+        }
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = {"status": "passed"}
+        return scenario["traffic_gate"]
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(minimum_vehicle_reduction=2),
+        [{"address": "Shanghai", "passenger_count": 1}],
+        [{"name": "30-fbus", "capacity": 30, "max_count": 4}],
+        2,
+        standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+        allow_vehicle_limit_fallback=True,
+    )
+
+    assert result["bus_count"] == 3
+    assert result["exception_preserving"]["accepted"] is False
+    assert result["vehicle_saving_target"]["status"] == "failed"
 
 
 def test_ep15min_skip_reason_names_unfrozen_remainder_limits(monkeypatch):

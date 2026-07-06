@@ -7728,6 +7728,7 @@ def build_exception_preserving_scenario(
                     candidate_remainder_summary,
                     candidate_route_count,
                     current_route_count,
+                    target_vehicle_count,
                 )
                 relaxed_vehicle_limit = bool(remaining_limit_candidate > max(1, target_vehicle_count - frozen_count))
                 attempt = {

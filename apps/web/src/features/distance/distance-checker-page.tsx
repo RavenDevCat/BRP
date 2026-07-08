@@ -24,11 +24,10 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { useT } from "@/lib/i18n/context";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
-const textareaClassName =
-  "min-h-20 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm outline-none transition focus:border-primary";
 const routeCostProfiles = {
   china: {
     label: "China",
@@ -51,6 +50,7 @@ const routeCostProfiles = {
 };
 
 export function DistanceCheckerPage() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [activeTool, setActiveTool] = useState<DistanceCheckerToolMode>("reference");
   const [file, setFile] = useState<File | null>(null);
@@ -108,7 +108,7 @@ export function DistanceCheckerPage() {
   const previewMutation = useMutation({
     mutationFn: async (sheetName?: string) => {
       if (!file || !fileBase64) {
-        throw new Error("Select a workbook first.");
+        throw new Error(t("Select a workbook first."));
       }
       return previewDistanceWorkbook({
         file_name: file.name,
@@ -125,6 +125,7 @@ export function DistanceCheckerPage() {
       setBusTypeColumn(payload.suggested_columns.bus_type || "");
       setCityColumn(payload.suggested_columns.city || "");
       setCountryColumn(payload.suggested_columns.country || "");
+      applyPreviewDefaults(payload);
       setResult(null);
       setRouteCostResult(null);
       setLoadedHistoryRecord(null);
@@ -176,7 +177,7 @@ export function DistanceCheckerPage() {
   const runMutation = useMutation({
     mutationFn: async () => {
       if (!file || !fileBase64 || !preview) {
-        throw new Error("Preview a workbook first.");
+        throw new Error(t("Preview a workbook first."));
       }
       return runReferenceDistanceCheck({
         file_name: file.name,
@@ -204,7 +205,7 @@ export function DistanceCheckerPage() {
   const routeCostMutation = useMutation({
     mutationFn: async () => {
       if (!file || !fileBase64 || !preview) {
-        throw new Error("Preview a workbook first.");
+        throw new Error(t("Preview a workbook first."));
       }
       const profile = routeCostProfiles[routeCostProfileKey];
       return runCurrentPlanRouteCost({
@@ -241,15 +242,11 @@ export function DistanceCheckerPage() {
   }, [selectedSheet]);
 
   useEffect(() => {
-    if (loadedHistoryRecord) {
-      return;
+    if (file && fileBase64 && !loadedHistoryRecord) {
+      previewMutation.mutate(undefined);
     }
-    const profile = routeCostProfiles[routeCostProfileKey];
-    setRouteDefaultCity(profile.defaultCity);
-    setRouteDefaultCountry(profile.defaultCountry);
-    setDieselPrice(profile.dieselPrice);
-    setRouteCostResult(null);
-  }, [routeCostProfileKey, loadedHistoryRecord]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileBase64]);
 
   function clearDistanceResult() {
     setResult(null);
@@ -263,16 +260,31 @@ export function DistanceCheckerPage() {
     saveHistoryMutation.reset();
   }
 
-  function handleSheetChange(nextSheet: string) {
-    setSelectedSheet(nextSheet);
-    setResult(null);
-    setRouteCostResult(null);
+  function applyRouteCostProfileKey(nextKey: keyof typeof routeCostProfiles) {
+    const profile = routeCostProfiles[nextKey];
+    setRouteCostProfileKey(nextKey);
+    setRouteDefaultCity(profile.defaultCity);
+    setRouteDefaultCountry(profile.defaultCountry);
+    setDieselPrice(profile.dieselPrice);
+    clearRouteCostResult();
   }
 
-  function handleAddressColumnChange(nextColumn: string) {
-    setAddressColumn(nextColumn);
-    setResult(null);
-    setRouteCostResult(null);
+  function applyPreviewDefaults(payload: DistanceWorkbookPreview) {
+    const country = normalizeWorkbookCountry(firstPreviewValue(payload, payload.suggested_columns.country));
+    const city = firstPreviewValue(payload, payload.suggested_columns.city);
+    const profileKey = inferProfileKey(country, city);
+    if (country) {
+      setOriginCountry(country);
+      setRouteDefaultCountry(country);
+    }
+    if (city) {
+      setOriginCity(city);
+      setRouteDefaultCity(city);
+    }
+    if (profileKey) {
+      setRouteCostProfileKey(profileKey);
+      setDieselPrice(routeCostProfiles[profileKey].dieselPrice);
+    }
   }
 
   async function handleFileChange(nextFile: File | null) {
@@ -282,6 +294,7 @@ export function DistanceCheckerPage() {
     setRouteCostResult(null);
     setLoadedHistoryRecord(null);
     saveHistoryMutation.reset();
+    previewMutation.reset();
     setFileError("");
     setFileBase64("");
     if (!nextFile) {
@@ -289,13 +302,13 @@ export function DistanceCheckerPage() {
     }
     const suffix = nextFile.name.split(".").pop()?.toLowerCase();
     if (!suffix || !["xlsx", "xlsm"].includes(suffix)) {
-      setFileError("Use an .xlsx or .xlsm workbook.");
+      setFileError(t("Use an .xlsx or .xlsm workbook."));
       return;
     }
     try {
       setFileBase64(await fileToBase64(nextFile));
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
+    } catch {
+      setFileError(t("Workbook could not be read."));
     }
   }
 
@@ -491,18 +504,18 @@ export function DistanceCheckerPage() {
             <CardHeader>
               <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
                 <div>
-                  <p className="text-sm font-medium text-primary">Side tools</p>
-                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">Distance & Cost</h1>
+                  <p className="text-sm font-medium text-primary">{t("Side tools")}</p>
+                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{t("Distance & Cost")}</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                    Measure reference-stop distance or estimate current-plan route distance and one-way diesel cost.
+                    {t("Measure reference-stop distance or estimate current-plan route distance and one-way diesel cost.")}
                   </p>
                 </div>
                 <div className="inline-grid shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-1">
                   <ToolTab active={activeTool === "reference"} onClick={() => handleToolChange("reference")}>
-                    Reference Distance
+                    {t("Reference Distance")}
                   </ToolTab>
                   <ToolTab active={activeTool === "route_cost"} onClick={() => handleToolChange("route_cost")}>
-                    Route Cost
+                    {t("Route Cost")}
                   </ToolTab>
                 </div>
               </div>
@@ -515,13 +528,13 @@ export function DistanceCheckerPage() {
             <CardHeader>
               <div className="flex items-center gap-2">
                 <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
-                <h2 className="text-sm font-semibold">Workbook</h2>
+                <h2 className="text-sm font-semibold">{t("Workbook")}</h2>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
               <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
                 <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
-                <span className="text-sm font-medium">{file?.name || "Select address workbook"}</span>
+                <span className="text-sm font-medium">{file?.name || t("Select address workbook")}</span>
                 <span className="mt-1 text-xs text-muted-foreground">.xlsx or .xlsm</span>
                 <input
                   className="sr-only"
@@ -532,15 +545,16 @@ export function DistanceCheckerPage() {
               </label>
               {fileError ? <InlineError message={fileError} /> : null}
               {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={!fileBase64 || busy}
-                icon={previewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
-                onClick={() => previewMutation.mutate(undefined)}
-              >
-                Preview workbook
-              </Button>
+              {previewMutation.isPending ? (
+                <div className="flex items-center gap-2 rounded-md border border-border bg-muted/60 px-3 py-2 text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+                  {t("Reading workbook...")}
+                </div>
+              ) : preview ? (
+                <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                  {t("Workbook parameters detected automatically.")}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 
@@ -548,68 +562,21 @@ export function DistanceCheckerPage() {
             <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold">Columns</h2>
-                  <Badge tone="info">{formatNumber(preview.row_count)} rows</Badge>
+                  <h2 className="text-sm font-semibold">{t("Workbook preview")}</h2>
+                  <Badge tone="info">{template(t("{count} rows"), { count: formatNumber(preview.row_count) })}</Badge>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-2">
-                  <Field label="Sheet">
-                    <select className={fieldClassName} value={selectedSheet} onChange={(event) => handleSheetChange(event.target.value)}>
-                      {preview.sheet_names.map((sheet) => (
-                        <option key={sheet} value={sheet}>
-                          {sheet}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  {activeTool === "route_cost" ? (
-                    <Field label="Route Column">
-                      <select className={fieldClassName} value={routeColumn} onChange={(event) => {
-                        setRouteColumn(event.target.value);
-                        clearRouteCostResult();
-                      }}>
-                        <option value="">Select route column</option>
-                        {preview.columns.map((column) => (
-                          <option key={column} value={column}>
-                            {column}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                  ) : null}
-                  <Field label="Address Column">
-                    <select className={fieldClassName} value={addressColumn} onChange={(event) => handleAddressColumnChange(event.target.value)}>
-                      {preview.columns.map((column) => (
-                        <option key={column} value={column}>
-                          {column}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  {activeTool === "route_cost" ? (
-                    <>
-                      <OptionalColumnField label="Stop Order Column" value={sequenceColumn} columns={preview.columns} emptyLabel="Use row order" onChange={(value) => {
-                        setSequenceColumn(value);
-                        clearRouteCostResult();
-                      }} />
-                      <OptionalColumnField label="Bus Type Column" value={busTypeColumn} columns={preview.columns} emptyLabel="No bus type column" onChange={(value) => {
-                        setBusTypeColumn(value);
-                        clearRouteCostResult();
-                      }} />
-                    </>
-                  ) : null}
-                  <OptionalColumnField label="City Column" value={cityColumn} columns={preview.columns} onChange={(value) => {
-                    setCityColumn(value);
-                    setResult(null);
-                    setRouteCostResult(null);
-                  }} />
-                  <OptionalColumnField label="Country Column" value={countryColumn} columns={preview.columns} onChange={(value) => {
-                    setCountryColumn(value);
-                    setResult(null);
-                    setRouteCostResult(null);
-                  }} />
+              <CardContent className="space-y-3">
+                <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{t("Detected sheet")}:</span> {selectedSheet}
+                  <span className="mx-2 text-border">|</span>
+                  {activeTool === "route_cost"
+                    ? t("Route, address, order, city, and country columns are detected from the workbook.")
+                    : t("Address, city, and country columns are detected from the workbook.")}
                 </div>
+                {!addressColumn || (activeTool === "route_cost" && !routeColumn) ? (
+                  <InlineError message={t("Required workbook columns were not detected. Check the workbook headers.")} />
+                ) : null}
                 <DataPreview rows={preview.sample_rows} />
               </CardContent>
             </Card>
@@ -619,8 +586,8 @@ export function DistanceCheckerPage() {
             <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold">Results</h2>
-                  <Badge tone="success">{formatNumber(result.summary.resolved_count)} resolved</Badge>
+                  <h2 className="text-sm font-semibold">{t("Results")}</h2>
+                  <Badge tone="success">{template(t("{count} resolved"), { count: formatNumber(result.summary.resolved_count) })}</Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -645,8 +612,8 @@ export function DistanceCheckerPage() {
             <Card>
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <h2 className="text-sm font-semibold">Route Cost Results</h2>
-                  <Badge tone="success">{formatNumber(routeCostResult.summary.route_count)} routes</Badge>
+                  <h2 className="text-sm font-semibold">{t("Route Cost Results")}</h2>
+                  <Badge tone="success">{formatNumber(routeCostResult.summary.route_count)} {t("routes")}</Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -668,7 +635,7 @@ export function DistanceCheckerPage() {
                 <ResultTable rows={routeRows} columns={routeColumns} />
                 {legRows.length ? (
                   <details className="rounded-md border border-border bg-muted/40">
-                    <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Leg-by-leg details</summary>
+                    <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">{t("Leg-by-leg details")}</summary>
                     <div className="border-t border-border">
                       <ResultTable rows={legRows} columns={legColumns} />
                     </div>
@@ -686,7 +653,7 @@ export function DistanceCheckerPage() {
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Reference Stop</h2>
+                    <h2 className="text-sm font-semibold">{t("Distance Target")}</h2>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
@@ -702,12 +669,19 @@ export function DistanceCheckerPage() {
                       clearDistanceResult();
                     }} />
                   </Field>
-                  <Field label="Address">
-                    <textarea className={textareaClassName} value={originAddress} onChange={(event) => {
+                  <Field label="Target Address">
+                    <input
+                      className={fieldClassName}
+                      value={originAddress}
+                      placeholder={t("School gate or reference stop address")}
+                      onChange={(event) => {
                       setOriginAddress(event.target.value);
                       clearDistanceResult();
                     }} />
                   </Field>
+                  <p className="text-xs leading-5 text-muted-foreground">
+                    {t("Workbook addresses are measured to this target address.")}
+                  </p>
                 </CardContent>
               </Card>
 
@@ -715,7 +689,7 @@ export function DistanceCheckerPage() {
                 <CardHeader>
                   <div className="flex items-center gap-2">
                     <Ruler className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Mode</h2>
+                    <h2 className="text-sm font-semibold">{t("Mode")}</h2>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -724,13 +698,13 @@ export function DistanceCheckerPage() {
                       setDistanceMode("road");
                       clearDistanceResult();
                     }}>
-                      Road
+                      {t("Road")}
                     </ModeButton>
                     <ModeButton active={distanceMode === "straight_line"} onClick={() => {
                       setDistanceMode("straight_line");
                       clearDistanceResult();
                     }}>
-                      Straight
+                      {t("Straight")}
                     </ModeButton>
                   </div>
                   {runMutation.error ? <InlineError message={(runMutation.error as Error).message} /> : null}
@@ -740,7 +714,7 @@ export function DistanceCheckerPage() {
                     icon={runMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Ruler className="h-4 w-4" />}
                     onClick={() => runMutation.mutate()}
                   >
-                    Run check
+                    {t("Run check")}
                   </Button>
                 </CardContent>
               </Card>
@@ -750,14 +724,13 @@ export function DistanceCheckerPage() {
               <CardHeader>
                 <div className="flex items-center gap-2">
                   <Fuel className="h-4 w-4 text-primary" aria-hidden="true" />
-                  <h2 className="text-sm font-semibold">Route Cost Settings</h2>
+                  <h2 className="text-sm font-semibold">{t("Route Cost Settings")}</h2>
                 </div>
               </CardHeader>
               <CardContent className="space-y-3">
                 <Field label="Market">
                   <select className={fieldClassName} value={routeCostProfileKey} onChange={(event) => {
-                    setRouteCostProfileKey(event.target.value as keyof typeof routeCostProfiles);
-                    clearRouteCostResult();
+                    applyRouteCostProfileKey(event.target.value as keyof typeof routeCostProfiles);
                   }}>
                     {Object.entries(routeCostProfiles).map(([key, profile]) => (
                       <option key={key} value={key}>
@@ -862,6 +835,7 @@ function DistanceCheckerHistoryPanel({
   onDelete: (runId: string) => void;
   onBulkDelete: (runIds: string[]) => void;
 }) {
+  const t = useT();
   const [selecting, setSelecting] = useState(false);
   const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
   const selectedCount = selectedRunIds.size;
@@ -893,7 +867,7 @@ function DistanceCheckerHistoryPanel({
           <button
             type="button"
             className="group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30 lg:flex-col lg:justify-start lg:px-2 lg:py-3"
-            aria-label={`Open ${title}`}
+            aria-label={`${t("Open")} ${t(title)}`}
             onClick={() => onCollapsedChange(false)}
           >
             <span className="flex min-w-0 items-center gap-2 lg:flex-col">
@@ -902,9 +876,9 @@ function DistanceCheckerHistoryPanel({
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold text-foreground lg:[text-orientation:mixed] lg:[writing-mode:vertical-rl]">
-                  History
+                  {t("History")}
                 </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">Open saved runs</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">{t("Open saved runs")}</span>
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-2 lg:mt-3 lg:flex-col">
@@ -913,7 +887,7 @@ function DistanceCheckerHistoryPanel({
             </span>
           </button>
           <div className="flex items-center lg:mt-auto">
-            <button type="button" className={buttonClassName("ghost")} aria-label={`Refresh ${title}`} title="Refresh history" onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={`${t("Refresh")} ${t(title)}`} title={t("Refresh history")} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
           </div>
@@ -928,16 +902,16 @@ function DistanceCheckerHistoryPanel({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <h2 className="text-sm font-semibold">{t(title)}</h2>
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className={buttonClassName("ghost")} aria-label={`Refresh ${title}`} onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={`${t("Refresh")} ${t(title)}`} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
             <button
               type="button"
               className={buttonClassName("ghost")}
-              aria-label={`Collapse ${title}`}
+              aria-label={`${t("Collapse")} ${t(title)}`}
               onClick={() => onCollapsedChange(true)}
             >
               <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
@@ -962,7 +936,7 @@ function DistanceCheckerHistoryPanel({
                 setSelectedRunIds(new Set());
               }}
             >
-              {selecting ? "Cancel" : "Select"}
+              {t(selecting ? "Cancel" : "Select")}
             </button>
             {selecting ? (
               <button
@@ -971,7 +945,7 @@ function DistanceCheckerHistoryPanel({
                 disabled={!selectedCount || bulkDeleting}
                 onClick={() => {
                   const runIds = [...selectedRunIds];
-                  if (runIds.length && window.confirm("Delete selected Distance & Cost history runs? This cannot be undone.")) {
+                  if (runIds.length && window.confirm(t("Delete selected Distance & Cost history runs? This cannot be undone."))) {
                     onBulkDelete(runIds);
                     setSelectedRunIds(new Set());
                     setSelecting(false);
@@ -979,7 +953,7 @@ function DistanceCheckerHistoryPanel({
                 }}
               >
                 {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                Delete selected {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
+                {t("Delete selected")} {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
               </button>
             ) : null}
           </div>
@@ -1004,19 +978,19 @@ function DistanceCheckerHistoryPanel({
                     type="checkbox"
                     className="mt-2 h-4 w-4 shrink-0 accent-primary"
                     checked={selectedRunIds.has(job.run_id)}
-                    aria-label={`Select ${job.title || "Distance & Cost Run"}`}
+                    aria-label={`${t("Select")} ${job.title || t("Distance & Cost Run")}`}
                     onChange={() => toggleSelected(job.run_id)}
                   />
                 ) : null}
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{job.title || "Distance & Cost Run"}</div>
+                      <div className="truncate text-sm font-semibold">{job.title || t("Distance & Cost Run")}</div>
                       <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                         {formatDateTime(job.created_at)}
                       </div>
                       <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        Submitted by {job.owner_email || "Unknown"}
+                        {t("Submitted by")} {job.owner_email || t("Unknown")}
                       </div>
                     </div>
                     <Badge tone={isActive ? "neutral" : isReference ? "info" : "success"}>{badgeLabel}</Badge>
@@ -1024,12 +998,12 @@ function DistanceCheckerHistoryPanel({
                   <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                     {isReference ? (
                       <>
-                        <span>{formatNumber(summary.resolved_count)} resolved</span>
-                        <span>{formatNumber(summary.failed_count)} failed</span>
+                        <span>{formatNumber(summary.resolved_count)} {t("resolved")}</span>
+                        <span>{formatNumber(summary.failed_count)} {t("failed")}</span>
                       </>
                     ) : (
                       <>
-                        <span>{formatNumber(summary.route_count)} routes</span>
+                        <span>{formatNumber(summary.route_count)} {t("routes")}</span>
                         <span>{formatNumber(summary.total_one_way_distance_km)} km</span>
                       </>
                     )}
@@ -1044,10 +1018,10 @@ function DistanceCheckerHistoryPanel({
                       ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
                       : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
                   )}
-                  aria-label={`Delete ${job.title || "Distance & Cost Run"}`}
+                  aria-label={`${t("Delete")} ${job.title || t("Distance & Cost Run")}`}
                   disabled={isDeleting}
                   onClick={() => {
-                    if (window.confirm("Delete this Distance & Cost history run? This cannot be undone.")) {
+                    if (window.confirm(t("Delete this Distance & Cost history run? This cannot be undone."))) {
                       onDelete(job.run_id);
                     }
                   }}
@@ -1075,21 +1049,22 @@ function DistanceHistoryAutoSaveStatus({
   saveError?: Error | null;
   saveResult?: DistanceCheckerHistoryCreateResponse;
 }) {
+  const t = useT();
   if (isSaving) {
     return (
       <div className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
         <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-        Saving to {historyTitle}...
+        {t("Saving to")} {historyTitle}...
       </div>
     );
   }
   if (saveError) {
-    return <InlineError message={`History autosave failed: ${saveError.message}`} />;
+    return <InlineError message={`${t("History autosave failed")}: ${saveError.message}`} />;
   }
   if (saveResult?.job?.run_id) {
     return (
       <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        Saved to {historyTitle}.
+        {t("Saved to")} {historyTitle}.
       </div>
     );
   }
@@ -1097,9 +1072,10 @@ function DistanceHistoryAutoSaveStatus({
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
+  const t = useT();
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium text-muted-foreground">{t(label)}</span>
       {children}
     </label>
   );
@@ -1120,33 +1096,6 @@ function ToolTab({ active, children, onClick }: { active: boolean; children: Rea
   );
 }
 
-function OptionalColumnField({
-  label,
-  value,
-  columns,
-  emptyLabel = "Use reference value",
-  onChange,
-}: {
-  label: string;
-  value: string;
-  columns: string[];
-  emptyLabel?: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <Field label={label}>
-      <select className={fieldClassName} value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="">{emptyLabel}</option>
-        {columns.map((column) => (
-          <option key={column} value={column}>
-            {column}
-          </option>
-        ))}
-      </select>
-    </Field>
-  );
-}
-
 function ModeButton({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
   return (
     <button
@@ -1163,15 +1112,17 @@ function ModeButton({ active, children, onClick }: { active: boolean; children: 
 }
 
 function Metric({ label, value }: { label: string; value: ReactNode }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-muted/50 p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{t(label)}</div>
       <div className="mt-1 text-lg font-semibold">{typeof value === "number" ? formatNumber(value) : value}</div>
     </div>
   );
 }
 
 function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) {
+  const t = useT();
   if (!rows.length || !columns.length) {
     return null;
   }
@@ -1182,7 +1133,7 @@ function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; 
           <tr>
             {columns.map((column) => (
               <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
-                {column}
+                {t(column)}
               </th>
             ))}
           </tr>
@@ -1263,6 +1214,45 @@ function formatCell(value: unknown) {
     return formatNumber(value);
   }
   return String(value);
+}
+
+function template(text: string, values: Record<string, string | number>) {
+  return text.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match));
+}
+
+function firstPreviewValue(preview: DistanceWorkbookPreview, column?: string) {
+  if (!column) {
+    return "";
+  }
+  for (const row of preview.sample_rows) {
+    const value = row[column];
+    if (value !== null && value !== undefined && String(value).trim()) {
+      return String(value).trim();
+    }
+  }
+  return "";
+}
+
+function normalizeWorkbookCountry(value: string) {
+  const normalized = value.trim().toLowerCase();
+  if (["cn", "china", "中国", "中國"].includes(normalized)) {
+    return "China";
+  }
+  if (["kr", "korea", "south korea", "republic of korea", "韩国", "韓國", "대한민국", "한국"].includes(normalized)) {
+    return "South Korea";
+  }
+  return value.trim();
+}
+
+function inferProfileKey(country: string, city: string): keyof typeof routeCostProfiles | null {
+  const text = `${country} ${city}`.toLowerCase();
+  if (text.includes("china") || text.includes("中国") || text.includes("上海") || text.includes("shanghai")) {
+    return "china";
+  }
+  if (text.includes("korea") || text.includes("韩国") || text.includes("韓國") || text.includes("서울") || text.includes("seoul")) {
+    return "korea";
+  }
+  return null;
 }
 
 function defaultDistanceHistoryTitle(toolMode: "reference" | "route_cost") {

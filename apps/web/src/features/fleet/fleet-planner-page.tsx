@@ -33,6 +33,7 @@ import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import { downloadInteractiveMapHtml } from "@/features/results/job-result-view";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
+import { useT } from "@/lib/i18n/context";
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
@@ -61,6 +62,7 @@ type PreviewVariables = {
 };
 
 export function FleetPlannerPage() {
+  const t = useT();
   const queryClient = useQueryClient();
   const [market, setMarket] = useState<FleetMarket>("KR");
   const [mode, setMode] = useState<FleetMode>("balanced");
@@ -183,7 +185,7 @@ export function FleetPlannerPage() {
   const geocodeMutation = useMutation({
     mutationFn: async () => {
       if (!file || !fileBase64) {
-        throw new Error("Upload a demand workbook before running geocode preview.");
+        throw new Error(t("Upload a demand workbook before running geocode preview."));
       }
       return geocodeFleetPlannerDemand({
         file_name: file.name,
@@ -200,7 +202,7 @@ export function FleetPlannerPage() {
     mutationFn: async () => {
       const geocodeResult = geocodeMutation.data;
       if (!geocodeResult) {
-        throw new Error("Run demand geocode before building clusters.");
+        throw new Error(t("Run demand geocode before building clusters."));
       }
       return buildFleetPlannerClusters({
         market,
@@ -226,7 +228,7 @@ export function FleetPlannerPage() {
     mutationFn: async () => {
       const clusterResult = clusterMutation.data;
       if (!clusterResult) {
-        throw new Error("Build clusters before running route preview.");
+        throw new Error(t("Build clusters before running route preview."));
       }
       return buildFleetPlannerRoutePreview({
         market,
@@ -253,7 +255,7 @@ export function FleetPlannerPage() {
     mutationFn: async () => {
       const geocodeResult = geocodeMutation.data;
       if (!geocodeResult) {
-        throw new Error("Run demand geocode before building a global plan.");
+        throw new Error(t("Run demand geocode before building a global plan."));
       }
       return buildFleetPlannerGlobalPlan({
         market,
@@ -280,11 +282,11 @@ export function FleetPlannerPage() {
   const saveHistoryMutation = useMutation({
     mutationFn: async (globalPlanOverride?: FleetPlannerRoutePreviewResponse) => {
       if (!result) {
-        throw new Error("Run Fleet preview before saving history.");
+        throw new Error(t("Run Fleet preview before saving history."));
       }
       const planToSave = globalPlanOverride || globalPlanResult;
       if (!planToSave) {
-        throw new Error("Build an optimized plan before saving history.");
+        throw new Error(t("Build an optimized plan before saving history."));
       }
       return saveFleetPlannerHistory({
         title: historyTitle.trim() || defaultFleetHistoryTitle(),
@@ -412,15 +414,15 @@ export function FleetPlannerPage() {
     }
     const suffix = nextFile.name.split(".").pop()?.toLowerCase();
     if (suffix !== "xlsx") {
-      setFileError("Use an .xlsx demand workbook.");
+      setFileError(t("Use an .xlsx demand workbook."));
       return;
     }
     try {
       const encoded = await fileToBase64(nextFile);
       setFileBase64(encoded);
       previewMutation.mutate({ file: nextFile, fileBase64: encoded });
-    } catch (error) {
-      setFileError(error instanceof Error ? error.message : "Workbook could not be read.");
+    } catch {
+      setFileError(t("Workbook could not be read."));
     }
   }
 
@@ -564,20 +566,20 @@ export function FleetPlannerPage() {
             <CardHeader>
               <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
                 <div>
-                  <p className="text-sm font-medium text-primary">Side tools</p>
-                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">Fleet Planner Preview</h1>
+                  <p className="text-sm font-medium text-primary">{t("Side tools")}</p>
+                  <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{t("Fleet Planner Preview")}</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                    Create a demand-based fleet plan, validate addresses, and save the optimized result to Fleet Planner History.
+                    {t("Create a demand-based fleet plan, validate addresses, and save the optimized result to Fleet Planner History.")}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap gap-2">
                   <button type="button" className={buttonClassName("secondary")} onClick={() => setHowToUseOpen(true)}>
                     <CircleHelp className="h-4 w-4" aria-hidden="true" />
-                    How to use
+                    {t("How to use")}
                   </button>
                   <a href={getDemandTemplateUrl()} className={buttonClassName("secondary")}>
                     <Download className="h-4 w-4" aria-hidden="true" />
-                    Demand template
+                    {t("Demand template")}
                   </a>
                 </div>
               </div>
@@ -587,14 +589,14 @@ export function FleetPlannerPage() {
                 <section className="flex h-full flex-col rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Demand source</h2>
+                    <h2 className="text-sm font-semibold">{t("Demand source")}</h2>
                   </div>
                   <div className="flex flex-1 flex-col justify-center space-y-3 pt-3">
                     <label className="flex min-h-20 cursor-pointer items-center justify-center gap-3 rounded-md border border-dashed border-border bg-surface px-4 py-4 text-center transition hover:border-primary/60 hover:bg-muted">
                       <Upload className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
                       <span className="min-w-0 text-left">
-                        <span className="block truncate text-sm font-medium">{file?.name || "Select demand workbook"}</span>
-                        <span className="mt-1 block text-xs text-muted-foreground">Upload an .xlsx demand workbook to parse city, school, address count, and students.</span>
+                        <span className="block truncate text-sm font-medium">{file?.name || t("Select demand workbook")}</span>
+                        <span className="mt-1 block text-xs text-muted-foreground">{t("Upload an .xlsx demand workbook to parse city, school, address count, and students.")}</span>
                       </span>
                       <input
                         className="sr-only"
@@ -628,10 +630,10 @@ export function FleetPlannerPage() {
                       <Field label="Service Direction">
                         <div className="grid grid-cols-2 gap-2">
                           <ModeButton active={globalDirection === "to_school"} onClick={() => handleGlobalDirectionChange("to_school")}>
-                            To School
+                            {t("To School")}
                           </ModeButton>
                           <ModeButton active={globalDirection === "from_school"} onClick={() => handleGlobalDirectionChange("from_school")}>
-                            From School
+                            {t("From School")}
                           </ModeButton>
                         </div>
                       </Field>
@@ -644,16 +646,16 @@ export function FleetPlannerPage() {
                 <section className="space-y-3 rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <SlidersHorizontal className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Run settings</h2>
+                    <h2 className="text-sm font-semibold">{t("Run settings")}</h2>
                   </div>
                   <div className="block space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-muted-foreground">Fleet Setting</span>
+                      <span className="text-xs font-medium text-muted-foreground">{t("Fleet Setting")}</span>
                       <button
                         type="button"
                         className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface text-muted-foreground transition hover:border-primary/50 hover:text-primary"
-                        aria-label="Fleet Setting guide"
-                        title="Fleet Setting guide"
+                        aria-label={t("Fleet Setting guide")}
+                        title={t("Fleet Setting guide")}
                         onClick={() => setFleetSettingHelpOpen(true)}
                       >
                         <CircleHelp className="h-4 w-4" aria-hidden="true" />
@@ -680,9 +682,9 @@ export function FleetPlannerPage() {
                   <div className="grid gap-3 lg:grid-cols-2 xl:grid-cols-1">
                     <Field label="Planning Mode">
                       <select className={fieldClassName} value={mode} onChange={(event) => handleModeChange(event.target.value as typeof mode)}>
-                        <option value="balanced">Balanced</option>
-                        <option value="cost_saver">Cost Saver</option>
-                        <option value="comfort_saver">Comfort Saver</option>
+                        <option value="balanced">{t("Balanced")}</option>
+                        <option value="cost_saver">{t("Cost Saver")}</option>
+                        <option value="comfort_saver">{t("Comfort Saver")}</option>
                       </select>
                     </Field>
                     <Field label="Route Time Target">
@@ -696,7 +698,7 @@ export function FleetPlannerPage() {
                 <section className="flex h-full flex-col rounded-md border border-border bg-muted/30 p-3">
                   <div className="flex items-center gap-2">
                     <Route className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">Run workflow</h2>
+                    <h2 className="text-sm font-semibold">{t("Run workflow")}</h2>
                   </div>
                   <div className="flex flex-1 flex-col justify-center space-y-3 pt-3">
                     {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
@@ -747,16 +749,16 @@ export function FleetPlannerPage() {
               </div>
 
               <details className="rounded-md border border-border bg-muted/40">
-                <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Advanced diagnostics</summary>
+                <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">{t("Advanced diagnostics")}</summary>
                 <div className="grid gap-3 border-t border-border p-3 lg:grid-cols-[minmax(0,1fr)_minmax(220px,280px)_minmax(220px,280px)]">
                   <p className="text-xs leading-5 text-muted-foreground">
-                    Directional grouping is only a diagnostic preview. It is not used by the optimized plan.
+                    {t("Directional grouping is only a diagnostic preview. It is not used by the optimized plan.")}
                   </p>
                   <Field label="Grouping Granularity">
                     <select className={fieldClassName} value={sectorCount} onChange={(event) => handleSectorCountChange(Number(event.target.value) as 4 | 8 | 12)}>
-                      <option value={4}>4 sectors</option>
-                      <option value={8}>8 sectors</option>
-                      <option value={12}>12 sectors</option>
+                      <option value={4}>{t("4 sectors")}</option>
+                      <option value={8}>{t("8 sectors")}</option>
+                      <option value={12}>{t("12 sectors")}</option>
                     </select>
                   </Field>
                   <Button
@@ -771,16 +773,16 @@ export function FleetPlannerPage() {
                       clusterMutation.mutate();
                     }}
                   >
-                    Preview groups
+                    {t("Preview groups")}
                   </Button>
                   <div className="lg:col-start-2">
                     <Field label="Grouped Route Direction">
                       <div className="grid grid-cols-2 gap-2">
                         <ModeButton active={routeDirection === "to_school"} onClick={() => handleRouteDirectionChange("to_school")}>
-                          To School
+                          {t("To School")}
                         </ModeButton>
                         <ModeButton active={routeDirection === "from_school"} onClick={() => handleRouteDirectionChange("from_school")}>
-                          From School
+                          {t("From School")}
                         </ModeButton>
                       </div>
                     </Field>
@@ -792,7 +794,7 @@ export function FleetPlannerPage() {
                     icon={routePreviewMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Route className="h-4 w-4" />}
                     onClick={() => routePreviewMutation.mutate()}
                   >
-                    Preview grouped routes
+                    {t("Preview grouped routes")}
                   </Button>
                 </div>
               </details>
@@ -846,11 +848,12 @@ function DemandWorkbookSummaryCard({
   fileName?: string;
   isLoading: boolean;
 }) {
+  const t = useT();
   if (isLoading) {
     return (
       <div className="flex min-h-24 items-center justify-center rounded-md border border-border bg-surface px-3 py-4 text-sm text-muted-foreground">
         <Loader2 className="mr-2 h-4 w-4 animate-spin text-primary" aria-hidden="true" />
-        Parsing workbook
+        {t("Parsing workbook")}
       </div>
     );
   }
@@ -858,7 +861,7 @@ function DemandWorkbookSummaryCard({
   if (!workbook) {
     return (
       <div className="rounded-md border border-dashed border-border bg-surface px-3 py-4 text-sm text-muted-foreground">
-        Upload a demand workbook to review its parsed city, school, address count, and total students.
+        {t("Upload a demand workbook to review its parsed city, school, address count, and total students.")}
       </div>
     );
   }
@@ -874,10 +877,10 @@ function DemandWorkbookSummaryCard({
     <div className="space-y-3 rounded-md border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">{fileName || workbook.source_label || "Demand workbook"}</div>
-          <div className="mt-1 text-xs text-muted-foreground">Parsed workbook summary</div>
+          <div className="truncate text-sm font-semibold">{fileName || workbook.source_label || t("Demand workbook")}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{t("Parsed workbook summary")}</div>
         </div>
-        <Badge tone="success">Ready</Badge>
+        <Badge tone="success">{t("Ready")}</Badge>
       </div>
       <div className="grid gap-2 text-sm sm:grid-cols-2">
         <WorkbookSummaryItem label="City" value={city} />
@@ -893,9 +896,10 @@ function DemandWorkbookSummaryCard({
 }
 
 function WorkbookSummaryItem({ label, value }: { label: string; value: ReactNode }) {
+  const t = useT();
   return (
     <div className="min-w-0 rounded-md border border-border bg-muted/40 px-3 py-2">
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{t(label)}</div>
       <div className="mt-1 truncate font-semibold text-foreground">{value}</div>
     </div>
   );
@@ -918,6 +922,7 @@ function VehicleProfileSummary({
   onManage: () => void;
   onReset: () => void;
 }) {
+  const t = useT();
   const enabledConfigs = configs.filter((config) => config.enabled);
   const totalAvailable = enabledConfigs.reduce((sum, config) => sum + Math.max(0, Number(config.available_count) || 0), 0);
   const maxSeats = Math.max(0, ...enabledConfigs.map((config) => Number(config.listed_seats) || 0));
@@ -927,23 +932,27 @@ function VehicleProfileSummary({
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Bus className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h3 className="text-sm font-semibold">Vehicle profile</h3>
-            <Badge tone={edited ? "warning" : "neutral"}>{mode === "manual" ? "manual" : edited ? "custom default" : "default"}</Badge>
+            <h3 className="text-sm font-semibold">{t("Vehicle profile")}</h3>
+            <Badge tone={edited ? "warning" : "neutral"}>{mode === "manual" ? t("manual") : edited ? t("custom default") : t("default")}</Badge>
           </div>
           <p className="mt-1 text-xs leading-5 text-muted-foreground">
             {isLoading
-              ? "Loading market defaults."
-              : `${formatNumber(enabledConfigs.length)} vehicle types, ${formatNumber(totalAvailable)} available vehicles, largest ${formatNumber(maxSeats)} seats.`}
+              ? t("Loading market defaults.")
+              : template(t("{types} vehicle types, {available} available vehicles, largest {seats} seats."), {
+                  types: formatNumber(enabledConfigs.length),
+                  available: formatNumber(totalAvailable),
+                  seats: formatNumber(maxSeats),
+                })}
           </p>
         </div>
         <div className="flex shrink-0 gap-1">
           {edited ? (
-            <button type="button" className={buttonClassName("ghost")} aria-label="Reset vehicle profile" onClick={onReset}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={t("Reset vehicle profile")} onClick={onReset}>
               <RotateCcw className="h-4 w-4" aria-hidden="true" />
             </button>
           ) : null}
           <button type="button" className={buttonClassName("secondary")} onClick={onManage}>
-            Manage
+            {t("Manage")}
           </button>
         </div>
       </div>
@@ -981,6 +990,7 @@ function FleetPreviewResult({
   activeView: FleetResultView;
   onActiveViewChange: (view: FleetResultView) => void;
 }) {
+  const t = useT();
   const assumptions = result.assumptions || {};
   const previewSummary = result.summary || {};
   const demandWorkbookSummary = result.demand_workbook?.summary || {};
@@ -993,19 +1003,19 @@ function FleetPreviewResult({
     {
       key: "plan",
       label: "Plan",
-      badge: globalPlanResult ? `${formatNumber(globalPlanSummary.route_count)} routes` : undefined,
+      badge: globalPlanResult ? template(t("{count} routes"), { count: formatNumber(globalPlanSummary.route_count) }) : undefined,
       available: Boolean(globalPlanResult),
     },
     {
       key: "map",
       label: "Map",
-      badge: mapOutputs.length ? `${formatNumber(globalPlanSummary.route_count || mapOutputs[0]?.mapData?.summary.route_count || 0)} routes` : undefined,
+      badge: mapOutputs.length ? template(t("{count} routes"), { count: formatNumber(globalPlanSummary.route_count || mapOutputs[0]?.mapData?.summary.route_count || 0) }) : undefined,
       available: mapOutputs.length > 0,
     },
     {
       key: "review",
       label: "Review",
-      badge: result.demand_workbook ? `${formatNumber(previewSummary.total_riders)} riders` : undefined,
+      badge: result.demand_workbook ? template(t("{count} riders"), { count: formatNumber(previewSummary.total_riders) }) : undefined,
       available: true,
     },
   ];
@@ -1015,17 +1025,17 @@ function FleetPreviewResult({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
-            <h2 className="text-sm font-semibold">Results workspace</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Review the optimized plan, route map, and supporting input checks in one workspace.</p>
+            <h2 className="text-sm font-semibold">{t("Results workspace")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("Review the optimized plan, route map, and supporting input checks in one workspace.")}</p>
             {historyRecord || saveHistoryResult?.job ? (
               <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 {runId ? <span className="font-mono">{runId}</span> : null}
-                <span>Submitted by {submittedBy || "Unknown"}</span>
-                <span>Saved {formatDateTime(savedAt)}</span>
+                <span>{template(t("Submitted by {owner}"), { owner: submittedBy || t("Unknown") })}</span>
+                <span>{template(t("Saved {time}"), { time: formatDateTime(savedAt) })}</span>
               </div>
             ) : null}
           </div>
-          <Badge tone={globalPlanResult ? "success" : "info"}>{globalPlanResult ? "Plan ready" : "Preview mode"}</Badge>
+          <Badge tone={globalPlanResult ? "success" : "info"}>{globalPlanResult ? t("Plan ready") : t("Preview mode")}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1045,7 +1055,7 @@ function FleetPreviewResult({
         {activeView === "plan" ? (
           globalPlanResult ? (
             <div className="space-y-4">
-              <RoutePreviewResult result={globalPlanResult} title="Optimized Plan" framed={false} />
+              <RoutePreviewResult result={globalPlanResult} title={t("Optimized Plan")} framed={false} />
               <FleetHistoryAutoSaveStatus
                 saveResult={saveHistoryResult}
                 saveError={saveHistoryError}
@@ -1080,13 +1090,13 @@ function FleetPreviewResult({
               />
               {mixRows.length ? (
                 <div>
-                  <h3 className="mb-2 text-sm font-semibold">Estimated Mix</h3>
+                  <h3 className="mb-2 text-sm font-semibold">{t("Estimated Mix")}</h3>
                   <ResultTable rows={mixRows} columns={["vehicle", "count"]} />
                 </div>
               ) : null}
             </section>
             <details className="group rounded-md border border-border bg-muted/30" open={Boolean(geocodeResult || clusterResult)}>
-              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">Input and address review</summary>
+              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">{t("Input and address review")}</summary>
               <div className="space-y-4 border-t border-border px-3 py-3">
                 {result.demand_workbook ? (
                   <div className="space-y-4">
@@ -1094,7 +1104,7 @@ function FleetPreviewResult({
                       <Metric label="Rows" value={formatNumber(demandWorkbookSummary.row_count)} />
                       <Metric label="Students" value={formatNumber(demandWorkbookSummary.student_count)} />
                       <Metric label="Unique Addresses" value={formatNumber(demandWorkbookSummary.unique_address_count)} />
-                      <Metric label="City" value={String(demandWorkbookSummary.city || "N/A")} />
+                    <Metric label="City" value={String(demandWorkbookSummary.city || t("N/A"))} />
                     </div>
                     {(result.demand_workbook.warnings || []).map((warning) => (
                       <InlineError key={warning} message={warning} />
@@ -1108,15 +1118,15 @@ function FleetPreviewResult({
               </div>
             </details>
             <details className="group rounded-md border border-border bg-muted/30">
-              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">Diagnostics and vehicle catalog</summary>
+              <summary className="cursor-pointer list-none px-3 py-3 text-sm font-semibold marker:hidden">{t("Diagnostics and vehicle catalog")}</summary>
               <div className="space-y-4 border-t border-border px-3 py-3">
                 {clusterResult ? <DemandClusterPreview result={clusterResult} framed={false} /> : null}
-                {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title="Grouped Route Preview" framed={false} /> : null}
+                {routePreviewResult ? <RoutePreviewResult result={routePreviewResult} title={t("Grouped Route Preview")} framed={false} /> : null}
                 {!clusterResult && !routePreviewResult ? (
                   <EmptyResultState title="No diagnostic preview yet" detail="Open Advanced diagnostics and run Preview groups if you need spatial grouping diagnostics." />
                 ) : null}
                 <div>
-                  <h3 className="mb-2 text-sm font-semibold">Vehicle Catalog</h3>
+                  <h3 className="mb-2 text-sm font-semibold">{t("Vehicle Catalog")}</h3>
                   <ResultTable rows={result.catalog} columns={["vehicle", "category", "propulsion", "listed_seats", "monitor_seats", "student_capacity", "available_count", "notes"]} />
                 </div>
               </div>
@@ -1129,6 +1139,7 @@ function FleetPreviewResult({
 }
 
 function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerGeocodeResponse; framed?: boolean }) {
+  const t = useT();
   const summary = result.summary || {};
   const content = (
     <>
@@ -1137,10 +1148,10 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-              <h2 className="text-sm font-semibold">Address Validation</h2>
+              <h2 className="text-sm font-semibold">{t("Address Validation")}</h2>
             </div>
             <Badge tone={summary.failed_student_rows ? "warning" : "success"}>
-              {formatNumber(summary.resolved_student_rows)} resolved
+              {template(t("{count} resolved"), { count: formatNumber(summary.resolved_student_rows) })}
             </Badge>
           </div>
         </CardHeader>
@@ -1148,10 +1159,10 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Address Validation</h2>
+            <h2 className="text-sm font-semibold">{t("Address Validation")}</h2>
           </div>
           <Badge tone={summary.failed_student_rows ? "warning" : "success"}>
-            {formatNumber(summary.resolved_student_rows)} resolved
+            {template(t("{count} resolved"), { count: formatNumber(summary.resolved_student_rows) })}
           </Badge>
         </div>
       )}
@@ -1174,6 +1185,7 @@ function DemandGeocodePreview({ result, framed = true }: { result: FleetPlannerG
 }
 
 function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerClusterResponse; framed?: boolean }) {
+  const t = useT();
   const summary = result.summary || {};
   const content = (
     <>
@@ -1182,18 +1194,18 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-              <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
+              <h2 className="text-sm font-semibold">{t("Demand Grouping Diagnostics")}</h2>
             </div>
-            <Badge tone="success">{formatNumber(summary.cluster_count)} groups</Badge>
+            <Badge tone="success">{template(t("{count} groups"), { count: formatNumber(summary.cluster_count) })}</Badge>
           </div>
         </CardHeader>
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MapPinned className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Demand Grouping Diagnostics</h2>
+            <h2 className="text-sm font-semibold">{t("Demand Grouping Diagnostics")}</h2>
           </div>
-          <Badge tone="success">{formatNumber(summary.cluster_count)} groups</Badge>
+          <Badge tone="success">{template(t("{count} groups"), { count: formatNumber(summary.cluster_count) })}</Badge>
         </div>
       )}
       <div className="space-y-4">
@@ -1222,7 +1234,7 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
         />
         {(result.stop_rows || []).length ? (
           <details className="rounded-md border border-border bg-muted/40">
-            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Group stop detail</summary>
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">{t("Group stop detail")}</summary>
             <div className="border-t border-border">
               <ResultTable
                 rows={result.stop_rows || []}
@@ -1246,6 +1258,7 @@ function RoutePreviewResult({
   title: string;
   framed?: boolean;
 }) {
+  const t = useT();
   const summary = result.summary || {};
   const content = (
     <>
@@ -1256,7 +1269,7 @@ function RoutePreviewResult({
               <Route className="h-4 w-4 text-primary" aria-hidden="true" />
               <h2 className="text-sm font-semibold">{title}</h2>
             </div>
-            <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(summary.route_count)} routes</Badge>
+            <Badge tone={result.refinement_note ? "warning" : "success"}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
           </div>
         </CardHeader>
       ) : (
@@ -1265,7 +1278,7 @@ function RoutePreviewResult({
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{title}</h2>
           </div>
-          <Badge tone={result.refinement_note ? "warning" : "success"}>{formatNumber(summary.route_count)} routes</Badge>
+          <Badge tone={result.refinement_note ? "warning" : "success"}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
         </div>
       )}
       <div className="space-y-4">
@@ -1273,8 +1286,8 @@ function RoutePreviewResult({
           <Metric label="Routes" value={formatNumber(summary.route_count)} />
           <Metric label="Distance" value={`${formatNumber(summary.total_distance_km)} km`} />
           <Metric label="Time" value={`${formatNumber(summary.total_duration_min)} min`} />
-          <Metric label="Direction" value={summary.service_direction === "from_school" ? "From School" : "To School"} />
-          <Metric label="Target" value={summary.max_route_duration_minutes ? `${formatNumber(summary.max_route_duration_minutes)} min` : "N/A"} />
+          <Metric label="Direction" value={summary.service_direction === "from_school" ? t("From School") : t("To School")} />
+          <Metric label="Target" value={summary.max_route_duration_minutes ? `${formatNumber(summary.max_route_duration_minutes)} ${t("min")}` : t("N/A")} />
         </div>
         {summary.candidate_vehicle_count || summary.solver ? (
           <div className="grid gap-3 md:grid-cols-2">
@@ -1290,7 +1303,7 @@ function RoutePreviewResult({
             icon={<Download className="h-4 w-4" />}
             onClick={() => downloadBase64Workbook(result.workbook_base64 || "", result.workbook_file_name || "fleet_planner_generated_plan.xlsx")}
           >
-            Download workbook
+            {t("Download workbook")}
           </Button>
         ) : null}
         <ResultTable
@@ -1310,7 +1323,7 @@ function RoutePreviewResult({
         />
         {(result.stop_rows || []).length ? (
           <details className="rounded-md border border-border bg-muted/40">
-            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">Route stop detail</summary>
+            <summary className="cursor-pointer px-3 py-3 text-sm font-semibold">{t("Route stop detail")}</summary>
             <div className="border-t border-border">
               <ResultTable
                 rows={result.stop_rows || []}
@@ -1345,6 +1358,7 @@ function FleetHistoryAutoSaveStatus({
   saveError?: Error | null;
   isSaving: boolean;
 }) {
+  const t = useT();
   if (!isSaving && !saveError && !saveResult?.job) {
     return null;
   }
@@ -1353,11 +1367,11 @@ function FleetHistoryAutoSaveStatus({
     <div className="space-y-3 rounded-md border border-border bg-muted/40 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="text-sm font-semibold">Fleet Planner History</h3>
-          <p className="mt-1 text-xs text-muted-foreground">Optimized plans are saved automatically after a successful run.</p>
+          <h3 className="text-sm font-semibold">{t("Fleet Planner History")}</h3>
+          <p className="mt-1 text-xs text-muted-foreground">{t("Optimized plans are saved automatically after a successful run.")}</p>
         </div>
-        {isSaving ? <Badge tone="info">Saving</Badge> : null}
-        {saveResult?.job ? <Badge tone="success">Saved</Badge> : null}
+        {isSaving ? <Badge tone="info">{t("Saving")}</Badge> : null}
+        {saveResult?.job ? <Badge tone="success">{t("Saved")}</Badge> : null}
       </div>
       {saveError ? <InlineError message={saveError.message} /> : null}
     </div>
@@ -1395,6 +1409,7 @@ function FleetPlannerHistoryPanel({
   onBulkDelete: (runIds: string[]) => void;
   canDeleteShared?: boolean;
 }) {
+  const t = useT();
   const [selecting, setSelecting] = useState(false);
   const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
   const selectedCount = selectedRunIds.size;
@@ -1430,7 +1445,7 @@ function FleetPlannerHistoryPanel({
           <button
             type="button"
             className="group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30 lg:flex-col lg:justify-start lg:px-2 lg:py-3"
-            aria-label="Open Fleet Planner history"
+            aria-label={t("Open Fleet Planner history")}
             onClick={() => onCollapsedChange(false)}
           >
             <span className="flex min-w-0 items-center gap-2 lg:flex-col">
@@ -1439,9 +1454,9 @@ function FleetPlannerHistoryPanel({
               </span>
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold text-foreground lg:[text-orientation:mixed] lg:[writing-mode:vertical-rl]">
-                  History
+                  {t("History")}
                 </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">Open saved runs</span>
+                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">{t("Open saved runs")}</span>
               </span>
             </span>
             <span className="flex shrink-0 items-center gap-2 lg:mt-3 lg:flex-col">
@@ -1450,7 +1465,7 @@ function FleetPlannerHistoryPanel({
             </span>
           </button>
           <div className="flex items-center lg:mt-auto">
-            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" title="Refresh history" onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={t("Refresh Fleet Planner history")} title={t("Refresh history")} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
           </div>
@@ -1465,16 +1480,16 @@ function FleetPlannerHistoryPanel({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <History className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">Fleet Planner History</h2>
+            <h2 className="text-sm font-semibold">{t("Fleet Planner History")}</h2>
           </div>
           <div className="flex items-center gap-1">
-            <button type="button" className={buttonClassName("ghost")} aria-label="Refresh Fleet Planner history" onClick={onRefresh}>
+            <button type="button" className={buttonClassName("ghost")} aria-label={t("Refresh Fleet Planner history")} onClick={onRefresh}>
               <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
             </button>
             <button
               type="button"
               className={buttonClassName("ghost")}
-              aria-label="Collapse Fleet Planner history"
+              aria-label={t("Collapse Fleet Planner history")}
               onClick={() => onCollapsedChange(true)}
             >
               <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
@@ -1486,7 +1501,7 @@ function FleetPlannerHistoryPanel({
         {error ? <InlineError message={error.message} /> : null}
         {!jobs.length && !isLoading ? (
           <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-            Saved Fleet Planner runs will appear here.
+            {t("Saved Fleet Planner runs will appear here.")}
           </div>
         ) : null}
         {jobs.length ? (
@@ -1499,7 +1514,7 @@ function FleetPlannerHistoryPanel({
                 setSelectedRunIds(new Set());
               }}
             >
-              {selecting ? "Cancel" : "Select"}
+              {t(selecting ? "Cancel" : "Select")}
             </button>
             {selecting ? (
               <button
@@ -1508,7 +1523,7 @@ function FleetPlannerHistoryPanel({
                 disabled={!selectedCount || bulkDeleting}
                 onClick={() => {
                   const runIds = [...selectedRunIds];
-                  if (runIds.length && window.confirm("Delete selected Fleet Planner history runs? This cannot be undone.")) {
+                  if (runIds.length && window.confirm(t("Delete selected Fleet Planner history runs? This cannot be undone."))) {
                     onBulkDelete(runIds);
                     setSelectedRunIds(new Set());
                     setSelecting(false);
@@ -1516,7 +1531,7 @@ function FleetPlannerHistoryPanel({
                 }}
               >
                 {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                Delete selected {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
+                {t("Delete selected")} {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
               </button>
             ) : null}
           </div>
@@ -1540,27 +1555,27 @@ function FleetPlannerHistoryPanel({
                     type="checkbox"
                     className="mt-2 h-4 w-4 shrink-0 accent-primary"
                     checked={selectedRunIds.has(job.run_id)}
-                    aria-label={`Select ${job.title || "Fleet Planner Run"}`}
+                    aria-label={`${t("Select")} ${job.title || t("Fleet Planner Run")}`}
                     onChange={() => toggleSelected(job.run_id)}
                   />
                 ) : null}
                 <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{job.title || "Fleet Planner Run"}</div>
+                      <div className="truncate text-sm font-semibold">{job.title || t("Fleet Planner Run")}</div>
                       <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
                         {formatDateTime(job.created_at)}
                       </div>
                       <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        Submitted by {job.owner_email || "Unknown"}
+                        {t("Submitted by")} {job.owner_email || t("Unknown")}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} routes</Badge>
+                      <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} {t("routes")}</Badge>
                     </div>
                   </div>
                   <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                    <span>{formatNumber(summary.students)} students</span>
+                    <span>{formatNumber(summary.students)} {t("students")}</span>
                     <span>{formatNumber(summary.total_distance_km)} km</span>
                   </div>
                 </button>
@@ -1573,10 +1588,10 @@ function FleetPlannerHistoryPanel({
                         ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
                         : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
                     )}
-                    aria-label={`Delete ${job.title || "Fleet Planner Run"}`}
+                    aria-label={`${t("Delete")} ${job.title || t("Fleet Planner Run")}`}
                     disabled={isDeleting}
                     onClick={() => {
-                      if (window.confirm("Delete this Fleet Planner history run? This cannot be undone.")) {
+                      if (window.confirm(t("Delete this Fleet Planner history run? This cannot be undone."))) {
                         onDelete(job.run_id);
                       }
                     }}
@@ -1602,6 +1617,7 @@ function ToolMapsPanel({
   workbookResult?: FleetPlannerRoutePreviewResponse;
   jobName: string;
 }) {
+  const t = useT();
   const [selectedKey, setSelectedKey] = useState("");
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
@@ -1621,7 +1637,7 @@ function ToolMapsPanel({
         disabled={!selected.mapData}
         onClick={() => setIsMapFullscreenOpen(true)}
       >
-        Open
+        {t("Open")}
       </Button>
       <Button
         type="button"
@@ -1629,9 +1645,9 @@ function ToolMapsPanel({
         className="bg-surface shadow-sm"
         icon={<Download className="h-4 w-4" />}
         disabled={!selected.mapData}
-        onClick={() => selected.mapData && downloadInteractiveMapHtml(selected.mapData, jobName, selected.name)}
+        onClick={() => selected.mapData && downloadInteractiveMapHtml(selected.mapData, jobName, selected.name, t)}
       >
-        Map
+        {t("Map")}
       </Button>
       <Button
         type="button"
@@ -1644,7 +1660,7 @@ function ToolMapsPanel({
           downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
         }
       >
-        Workbook
+        {t("Workbook")}
       </Button>
     </div>
   );
@@ -1656,7 +1672,7 @@ function ToolMapsPanel({
           <div className="flex items-center gap-2">
             <Map className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{selected.name}</h2>
-            {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} maps</Badge> : null}
+            {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} {t("maps")}</Badge> : null}
           </div>
         </div>
         {mapOutputs.length > 1 ? (
@@ -1697,7 +1713,7 @@ function ToolMapsPanel({
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/50 bg-white/70 px-4 py-3 backdrop-blur-xl">
               <div className="min-w-0">
                 <h2 className="truncate text-base font-semibold text-foreground">{selected.name}</h2>
-                <p className="text-xs text-muted-foreground">Interactive Fleet Planner map</p>
+                <p className="text-xs text-muted-foreground">{t("Interactive Fleet Planner map")}</p>
               </div>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 <Button
@@ -1705,9 +1721,9 @@ function ToolMapsPanel({
                   variant="secondary"
                   className="bg-surface shadow-sm"
                   icon={<Download className="h-4 w-4" />}
-                  onClick={() => downloadInteractiveMapHtml(selected.mapData as JobMapData, jobName, selected.name)}
+                  onClick={() => downloadInteractiveMapHtml(selected.mapData as JobMapData, jobName, selected.name, t)}
                 >
-                  Map
+                  {t("Map")}
                 </Button>
                 <Button
                   type="button"
@@ -1720,7 +1736,7 @@ function ToolMapsPanel({
                     downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
                   }
                 >
-                  Workbook
+                  {t("Workbook")}
                 </Button>
                 <Button
                   type="button"
@@ -1729,7 +1745,7 @@ function ToolMapsPanel({
                   icon={<X className="h-4 w-4" />}
                   onClick={() => setIsMapFullscreenOpen(false)}
                 >
-                  Close
+                  {t("Close")}
                 </Button>
               </div>
             </div>
@@ -1764,6 +1780,7 @@ function VehicleConfigModal({
   onReset: () => void;
   onClose: () => void;
 }) {
+  const t = useT();
   if (!open) {
     return null;
   }
@@ -1792,16 +1809,16 @@ function VehicleConfigModal({
 
   return (
     <div className="fixed inset-0 z-40">
-      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close vehicle configuration" onClick={onClose} />
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label={t("Close vehicle configuration")} onClick={onClose} />
       <aside className="absolute inset-y-0 right-0 flex w-full max-w-3xl flex-col border-l border-border bg-surface shadow-xl">
         <div className="flex items-start justify-between gap-3 border-b border-border px-4 py-4">
           <div>
-            <h2 className="text-base font-semibold text-foreground">Vehicle profile</h2>
+            <h2 className="text-base font-semibold text-foreground">{t("Vehicle profile")}</h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
-              Configure the vehicles available for this Fleet Planner run. Changes apply to preview, optimization, and saved history.
+              {t("Configure the vehicles available for this Fleet Planner run. Changes apply to preview, optimization, and saved history.")}
             </p>
           </div>
-          <button type="button" className={buttonClassName("ghost")} aria-label="Close vehicle configuration" onClick={onClose}>
+          <button type="button" className={buttonClassName("ghost")} aria-label={t("Close vehicle configuration")} onClick={onClose}>
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
@@ -1809,23 +1826,23 @@ function VehicleConfigModal({
           <div className="flex flex-wrap items-center gap-2 text-sm">
             <div className="grid grid-cols-2 gap-2">
               <ModeButton active={mode === "default"} onClick={() => onModeChange("default")}>
-                Default
+                {t("Default")}
               </ModeButton>
               <ModeButton active={mode === "manual"} onClick={() => onModeChange("manual")}>
-                Manual input
+                {t("Manual input")}
               </ModeButton>
             </div>
-            <Badge tone={edited ? "warning" : "neutral"}>{mode === "manual" ? "manual profile" : edited ? "custom defaults" : "market defaults"}</Badge>
-            <span className="text-muted-foreground">{formatNumber(visibleConfigs.filter((config) => config.enabled).length)} enabled types</span>
+            <Badge tone={edited ? "warning" : "neutral"}>{t(mode === "manual" ? "manual profile" : edited ? "custom defaults" : "market defaults")}</Badge>
+            <span className="text-muted-foreground">{formatNumber(visibleConfigs.filter((config) => config.enabled).length)} {t("enabled types")}</span>
           </div>
           <div className="flex flex-wrap gap-2">
             <button type="button" className={buttonClassName("secondary")} onClick={addConfig}>
               <Plus className="h-4 w-4" aria-hidden="true" />
-              Add vehicle
+              {t("Add vehicle")}
             </button>
             <button type="button" className={buttonClassName("secondary")} onClick={onReset}>
               <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              Reset profile
+              {t("Reset profile")}
             </button>
           </div>
         </div>
@@ -1835,7 +1852,7 @@ function VehicleConfigModal({
               <div key={config.id} className="rounded-md border border-border bg-muted/30 p-3">
                 <div className="grid gap-3 lg:grid-cols-[minmax(180px,1.4fr)_90px_130px_120px_110px_40px]">
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Vehicle Name</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t("Vehicle Name")}</span>
                     <input
                       className={fieldClassName}
                       value={config.display_name}
@@ -1843,7 +1860,7 @@ function VehicleConfigModal({
                     />
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Seats</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t("Seats")}</span>
                     <input
                       className={fieldClassName}
                       type="number"
@@ -1855,7 +1872,7 @@ function VehicleConfigModal({
                     />
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Category</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t("Category")}</span>
                     <select
                       className={fieldClassName}
                       value={config.category}
@@ -1863,13 +1880,13 @@ function VehicleConfigModal({
                     >
                       {VEHICLE_CATEGORIES.map((category) => (
                         <option key={category} value={category}>
-                          {vehicleCategoryLabel(category)}
+                          {t(vehicleCategoryLabel(category))}
                         </option>
                       ))}
                     </select>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Energy</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t("Energy")}</span>
                     <select
                       className={fieldClassName}
                       value={config.propulsion}
@@ -1877,13 +1894,13 @@ function VehicleConfigModal({
                     >
                       {VEHICLE_PROPULSIONS.map((propulsion) => (
                         <option key={propulsion} value={propulsion}>
-                          {propulsion === "electric" ? "Electric" : "Diesel"}
+                          {t(propulsion === "electric" ? "Electric" : "Diesel")}
                         </option>
                       ))}
                     </select>
                   </label>
                   <label className="space-y-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">Available</span>
+                    <span className="text-xs font-medium text-muted-foreground">{t("Available")}</span>
                     <input
                       className={fieldClassName}
                       type="number"
@@ -1901,7 +1918,7 @@ function VehicleConfigModal({
                         "flex h-9 w-9 items-center justify-center rounded-md border transition",
                         config.enabled ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface text-muted-foreground hover:bg-muted",
                       )}
-                      aria-label={config.enabled ? "Disable vehicle" : "Enable vehicle"}
+                      aria-label={t(config.enabled ? "Disable vehicle" : "Enable vehicle")}
                       onClick={() => updateConfig(config.id, { enabled: !config.enabled })}
                     >
                       <Bus className="h-4 w-4" aria-hidden="true" />
@@ -1909,7 +1926,7 @@ function VehicleConfigModal({
                     <button
                       type="button"
                       className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-muted-foreground transition hover:text-destructive"
-                      aria-label="Delete vehicle"
+                      aria-label={t("Delete vehicle")}
                       onClick={() => deleteConfig(config.id)}
                     >
                       <Trash2 className="h-4 w-4" aria-hidden="true" />
@@ -1917,7 +1934,7 @@ function VehicleConfigModal({
                   </div>
                 </div>
                 <label className="mt-3 block space-y-1.5">
-                  <span className="text-xs font-medium text-muted-foreground">Notes</span>
+                  <span className="text-xs font-medium text-muted-foreground">{t("Notes")}</span>
                   <input
                     className={fieldClassName}
                     value={config.notes || ""}
@@ -1932,7 +1949,7 @@ function VehicleConfigModal({
         </div>
         <div className="flex justify-end border-t border-border px-4 py-3">
           <button type="button" className={buttonClassName("primary")} onClick={onClose}>
-            Done
+            {t("Done")}
           </button>
         </div>
       </aside>
@@ -1941,55 +1958,56 @@ function VehicleConfigModal({
 }
 
 function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
   if (!open) {
     return null;
   }
   return (
     <div className="fixed inset-0 z-40">
-      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close how to use" onClick={onClose} />
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label={t("Close how to use")} onClick={onClose} />
       <aside className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
           <div>
-            <h2 className="text-base font-semibold text-foreground">How to use Fleet Planner</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Follow the setup flow from left to right; diagnostics are optional.</p>
+            <h2 className="text-base font-semibold text-foreground">{t("How to use Fleet Planner")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("Follow the setup flow from left to right; diagnostics are optional.")}</p>
           </div>
-          <button type="button" className={buttonClassName("ghost")} aria-label="Close how to use" onClick={onClose}>
+          <button type="button" className={buttonClassName("ghost")} aria-label={t("Close how to use")} onClick={onClose}>
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
         <div className="space-y-5 overflow-y-auto px-4 py-4 text-sm leading-6 text-muted-foreground">
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Operation flow</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("Operation flow")}</h3>
             <ol className="list-decimal space-y-2 pl-5">
-              <li>Demand source: upload a demand workbook, name the run, reserve monitor seats, choose service direction, and confirm the parsed city, school, address count, and students.</li>
-              <li>Run settings: confirm the auto-selected Fleet Setting and vehicle profile, then choose planning mode and route time target.</li>
-              <li>Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.</li>
-              <li>Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.</li>
-              <li>Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.</li>
+              <li>{t("Demand source: upload a demand workbook, name the run, reserve monitor seats, choose service direction, and confirm the parsed city, school, address count, and students.")}</li>
+              <li>{t("Run settings: confirm the auto-selected Fleet Setting and vehicle profile, then choose planning mode and route time target.")}</li>
+              <li>{t("Preview fleet: checks vehicle choices from the uploaded workbook without geocoding addresses.")}</li>
+              <li>{t("Validate & geocode: resolves workbook addresses into school and pickup points for routing and maps.")}</li>
+              <li>{t("Build optimized plan: runs the route solver, renders the optimized map, and saves the run to Fleet Planner History.")}</li>
             </ol>
           </section>
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Demand source</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("Demand source")}</h3>
             <ul className="list-disc space-y-2 pl-5">
-              <li>Upload the demand workbook first so Fleet Planner can parse city, school, address count, and total students.</li>
-              <li>Job Name controls the title saved in Fleet Planner History.</li>
-              <li>Bus Monitor Seats reserves adult seats before student capacity is calculated.</li>
-              <li>Service Direction controls whether routes are built toward school pickup or away from school drop-off.</li>
+              <li>{t("Upload the demand workbook first so Fleet Planner can parse city, school, address count, and total students.")}</li>
+              <li>{t("Job Name controls the title saved in Fleet Planner History.")}</li>
+              <li>{t("Bus Monitor Seats reserves adult seats before student capacity is calculated.")}</li>
+              <li>{t("Service Direction controls whether routes are built toward school pickup or away from school drop-off.")}</li>
             </ul>
           </section>
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Run settings</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("Run settings")}</h3>
             <ul className="list-disc space-y-2 pl-5">
-              <li>Fleet Setting is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.</li>
-              <li>Vehicle profile controls which vehicle types, seat counts, energy types, and available counts are used by this run.</li>
-              <li>Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.</li>
-              <li>Route Time Target caps each route's one-way completion time. Tighter targets may need more vehicles or become infeasible when individual demand points are too far from school.</li>
+              <li>{t("Fleet Setting is auto-selected from the workbook country, and controls vehicle catalog, capacity rules, and local routing assumptions.")}</li>
+              <li>{t("Vehicle profile controls which vehicle types, seat counts, energy types, and available counts are used by this run.")}</li>
+              <li>{t("Planning Mode changes the tradeoff between tighter vehicle fill and rider comfort.")}</li>
+              <li>{t("Route Time Target caps each route's one-way completion time. Tighter targets may need more vehicles or become infeasible when individual demand points are too far from school.")}</li>
             </ul>
           </section>
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Advanced diagnostics</h3>
-            <p>Preview groups is a diagnostic view for demand distribution around the school; it does not drive the optimized plan.</p>
-            <p>Grouping Granularity only changes that diagnostic grouping. The optimized solver still splits routes by capacity, travel time, distance, and service direction.</p>
+            <h3 className="text-sm font-semibold text-foreground">{t("Advanced diagnostics")}</h3>
+            <p>{t("Preview groups is a diagnostic view for demand distribution around the school; it does not drive the optimized plan.")}</p>
+            <p>{t("Grouping Granularity only changes that diagnostic grouping. The optimized solver still splits routes by capacity, travel time, distance, and service direction.")}</p>
           </section>
         </div>
       </aside>
@@ -1998,41 +2016,40 @@ function FleetPlannerHowToUse({ open, onClose }: { open: boolean; onClose: () =>
 }
 
 function FleetSettingGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const t = useT();
   if (!open) {
     return null;
   }
   return (
     <div className="fixed inset-0 z-40">
-      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label="Close Fleet Setting guide" onClick={onClose} />
+      <button type="button" className="absolute inset-0 bg-slate-950/20" aria-label={t("Close Fleet Setting guide")} onClick={onClose} />
       <aside className="absolute inset-y-0 right-0 flex w-full max-w-md flex-col border-l border-border bg-surface shadow-xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-4">
           <div>
-            <h2 className="text-base font-semibold text-foreground">Fleet Setting guide</h2>
-            <p className="mt-1 text-xs text-muted-foreground">Use defaults first; adjust only when the uploaded demand or available fleet requires it.</p>
+            <h2 className="text-base font-semibold text-foreground">{t("Fleet Setting guide")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("Use defaults first; adjust only when the uploaded demand or available fleet requires it.")}</p>
           </div>
-          <button type="button" className={buttonClassName("ghost")} aria-label="Close Fleet Setting guide" onClick={onClose}>
+          <button type="button" className={buttonClassName("ghost")} aria-label={t("Close Fleet Setting guide")} onClick={onClose}>
             <X className="h-4 w-4" aria-hidden="true" />
           </button>
         </div>
         <div className="space-y-5 overflow-y-auto px-4 py-4 text-sm leading-6 text-muted-foreground">
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">Default behavior</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("Default behavior")}</h3>
             <p>
-              After a workbook is uploaded, Fleet Setting is inferred from the workbook country. If nothing is changed, Fleet Planner uses that market's
-              default vehicle catalog. Demand source settings still control the saved job name, monitor-seat reservation, and service direction for the run.
+              {t("After a workbook is uploaded, Fleet Setting is inferred from the workbook country. If nothing is changed, Fleet Planner uses that market's default vehicle catalog. Demand source settings still control the saved job name, monitor-seat reservation, and service direction for the run.")}
             </p>
             <p>
-              Preview fleet chooses the best feasible vehicle for each rider group from the active catalog. The optimized plan may add routes or vehicles
-              when needed to satisfy capacity and Route Time Target.
+              {t("Preview fleet chooses the best feasible vehicle for each rider group from the active catalog. The optimized plan may add routes or vehicles when needed to satisfy capacity and Route Time Target.")}
             </p>
           </section>
           <section className="space-y-2">
-            <h3 className="text-sm font-semibold text-foreground">When to adjust</h3>
+            <h3 className="text-sm font-semibold text-foreground">{t("When to adjust")}</h3>
             <ul className="list-disc space-y-2 pl-5">
-              <li>Fleet Setting: change KR/CN only if the workbook country was inferred incorrectly.</li>
-              <li>Vehicle profile: use Manage when the operator needs custom seat counts, vehicle availability, diesel/electric mix, or disabled vehicle types.</li>
-              <li>Planning Mode: use Balanced for normal planning, Cost Saver for fuller vehicles, and Comfort Saver when lower loads are acceptable.</li>
-              <li>Route Time Target: tighten it for shorter routes; loosen it if the plan becomes infeasible or requires too many vehicles.</li>
+              <li>{t("Fleet Setting: change KR/CN only if the workbook country was inferred incorrectly.")}</li>
+              <li>{t("Vehicle profile: use Manage when the operator needs custom seat counts, vehicle availability, diesel/electric mix, or disabled vehicle types.")}</li>
+              <li>{t("Planning Mode: use Balanced for normal planning, Cost Saver for fuller vehicles, and Comfort Saver when lower loads are acceptable.")}</li>
+              <li>{t("Route Time Target: tighten it for shorter routes; loosen it if the plan becomes infeasible or requires too many vehicles.")}</li>
             </ul>
           </section>
         </div>
@@ -2042,10 +2059,11 @@ function FleetSettingGuide({ open, onClose }: { open: boolean; onClose: () => vo
 }
 
 function Field({ label, description, children }: { label: string; description?: string; children: ReactNode }) {
+  const t = useT();
   return (
     <label className="block space-y-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
-      {description ? <span className="block text-xs leading-5 text-muted-foreground">{description}</span> : null}
+      <span className="text-xs font-medium text-muted-foreground">{t(label)}</span>
+      {description ? <span className="block text-xs leading-5 text-muted-foreground">{t(description)}</span> : null}
       {children}
     </label>
   );
@@ -2140,6 +2158,7 @@ function WorkflowAction({
   variant?: "primary" | "secondary";
   onClick: () => void;
 }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-surface p-2">
       <div className="mb-2 flex items-start gap-2">
@@ -2147,8 +2166,8 @@ function WorkflowAction({
           {step}
         </span>
         <div className="min-w-0">
-          <div className="text-sm font-semibold">{title}</div>
-          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{description}</div>
+          <div className="text-sm font-semibold">{t(title)}</div>
+          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">{t(description)}</div>
         </div>
       </div>
       <Button
@@ -2159,7 +2178,7 @@ function WorkflowAction({
         icon={pending ? <Loader2 className="h-4 w-4 animate-spin" /> : icon}
         onClick={onClick}
       >
-        {title}
+        {t(title)}
       </Button>
     </div>
   );
@@ -2178,6 +2197,7 @@ function ResultTabButton({
   badge?: string;
   onClick: () => void;
 }) {
+  const t = useT();
   return (
     <button
       type="button"
@@ -2188,7 +2208,7 @@ function ResultTabButton({
       )}
       onClick={onClick}
     >
-      <span>{label}</span>
+      <span>{t(label)}</span>
       {badge ? (
         <span
           className={cn(
@@ -2204,24 +2224,27 @@ function ResultTabButton({
 }
 
 function EmptyResultState({ title, detail }: { title: string; detail: string }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-dashed border-border bg-muted/40 px-4 py-8 text-center">
-      <h3 className="text-sm font-semibold text-foreground">{title}</h3>
-      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{detail}</p>
+      <h3 className="text-sm font-semibold text-foreground">{t(title)}</h3>
+      <p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-muted-foreground">{t(detail)}</p>
     </div>
   );
 }
 
 function Metric({ label, value }: { label: string; value: ReactNode }) {
+  const t = useT();
   return (
     <div className="rounded-md border border-border bg-muted/50 p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-xs text-muted-foreground">{t(label)}</div>
       <div className="mt-1 text-lg font-semibold">{value}</div>
     </div>
   );
 }
 
 function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; columns: string[] }) {
+  const t = useT();
   if (!rows.length || !columns.length) {
     return null;
   }
@@ -2232,7 +2255,7 @@ function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; 
           <tr>
             {columns.map((column) => (
               <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
-                {column}
+                {t(column)}
               </th>
             ))}
           </tr>
@@ -2268,6 +2291,10 @@ function formatCell(value: unknown) {
     return formatNumber(value);
   }
   return String(value);
+}
+
+function template(text: string, values: Record<string, string | number>) {
+  return text.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match));
 }
 
 async function fileToBase64(file: File): Promise<string> {

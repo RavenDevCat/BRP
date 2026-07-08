@@ -190,7 +190,7 @@ function SummaryPanel({
   const ep15 = ep15Row?.enabled ? ep15Row : undefined;
   const recommended = pickRecommendedScenario(scenarios);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
-  const solveProcessRows = buildSolveProcessRows(result);
+  const solveProcessRows = buildSolveProcessRows(result, t);
 
   return (
     <div className="space-y-4">
@@ -396,7 +396,7 @@ function AuditPanel({
   const plannerConfig = asRecord(result.planner_config);
   const trafficBasis = stringValue(result.traffic_profile_context || plannerConfig.traffic_profile_name);
   const arrivalGateSummary = formatArrivalGateSummary(result);
-  const solveProcessRows = buildSolveProcessRows(result);
+  const solveProcessRows = buildSolveProcessRows(result, t);
 
   return (
     <div className="space-y-4">
@@ -1919,7 +1919,7 @@ function MapsPanel({
     if (!interactiveQuery.data) {
       return;
     }
-    downloadInteractiveMapHtml(interactiveQuery.data, jobName, selected.name);
+    downloadInteractiveMapHtml(interactiveQuery.data, jobName, selected.name, t);
   };
 
   const renderMapSurface = (fullscreen = false) => {
@@ -2886,9 +2886,9 @@ function getJobDisplayName(job: JobRecord) {
   );
 }
 
-export function downloadInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
+export function downloadInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string, t: (key: string, fallback?: string) => string = (key) => key) {
   const filename = `${sanitizeDownloadFilename(jobName)} - ${sanitizeDownloadFilename(mapName)}.html`;
-  const blob = new Blob([buildStandaloneInteractiveMapHtml(data, jobName, mapName)], { type: "text/html;charset=utf-8" });
+  const blob = new Blob([buildStandaloneInteractiveMapHtml(data, jobName, mapName, t)], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
@@ -2907,7 +2907,7 @@ function sanitizeDownloadFilename(value: string) {
   return (cleaned || "BRP Map").slice(0, 120).trim();
 }
 
-function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string) {
+function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, mapName: string, t: (key: string, fallback?: string) => string = (key) => key) {
   const payload = JSON.stringify(data).replace(/</g, "\\u003c");
   const title = `${jobName} - ${mapName}`;
   const summaryRecord = asRecord(data.summary);
@@ -2915,19 +2915,42 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
   const amStatus = String(amGate.status || "");
   const amWindowSummary =
     amStatus === "failed"
-      ? `Time window failed (${formatNumber(amGate.failed_route_count)} routes)`
+      ? template(t("Time window failed ({count} routes)"), { count: formatNumber(amGate.failed_route_count) })
       : amStatus === "unavailable"
-        ? `Time window unverified (${formatNumber(amGate.unavailable_route_count)} routes)`
+        ? template(t("Time window unverified ({count} routes)"), { count: formatNumber(amGate.unavailable_route_count) })
         : amStatus === "passed"
-          ? "Time window passed"
+          ? t("Time window passed")
           : "";
-  const mapSummary = `${formatNumber(data.summary.route_count)} routes · ${formatNumber(data.summary.stop_count)} stops · ${formatNumber(data.summary.passenger_count)} riders${amWindowSummary ? ` · ${amWindowSummary}` : ""}`;
+  const mapSummary = `${formatNumber(data.summary.route_count)} ${t("routes")} · ${formatNumber(data.summary.stop_count)} ${t("stops")} · ${formatNumber(data.summary.passenger_count)} ${t("riders")}${amWindowSummary ? ` · ${amWindowSummary}` : ""}`;
   const standaloneTileUrls = ["https://tile.openstreetmap.de/{z}/{x}/{y}.png"];
   const routeColors = [
     "#0f766e", "#2563eb", "#c2410c", "#7c3aed", "#15803d", "#be123c", "#0891b2", "#a16207",
     "#4338ca", "#db2777", "#047857", "#b45309", "#0369a1", "#9333ea", "#4d7c0f", "#dc2626",
     "#0e7490", "#6d28d9", "#ca8a04", "#1d4ed8", "#9f1239", "#166534",
   ];
+  const labelsPayload = JSON.stringify({
+    fitAll: t("Fit all"),
+    close: t("Close"),
+    search: t("Search route, bus, vehicle"),
+    all: t("All"),
+    long: t("Long"),
+    highLoad: t("High load"),
+    manyStops: t("Many stops"),
+    showing: t("Showing {shown} of {total} routes"),
+    bus: t("Bus"),
+    riders: t("riders"),
+    stops: t("stops"),
+    stopSequence: t("Stop sequence"),
+    schoolStart: t("School / Start"),
+    stop: t("Stop"),
+    unknownAddress: t("Unknown address"),
+    timeWindow: t("TIME WINDOW"),
+    unverified: t("UNVERIFIED"),
+    capacity: t("CAPACITY"),
+    highLoadBadge: t("HIGH LOAD"),
+    longBadge: t("LONG"),
+    min: t("min"),
+  }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html>
 <head>
@@ -2998,8 +3021,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
           <p>${htmlEscape(data.scenario_name)} · ${htmlEscape(mapSummary)}</p>
         </div>
         <div class="toolbar-actions">
-          <button class="button" type="button" onclick="fitAll()">Fit all</button>
-          <button class="button close" type="button" onclick="window.close()">Close</button>
+          <button class="button" type="button" onclick="fitAll()">${htmlEscape(t("Fit all"))}</button>
+          <button class="button close" type="button" onclick="window.close()">${htmlEscape(t("Close"))}</button>
         </div>
       </div>
       <div class="body">
@@ -3008,10 +3031,10 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
           <div class="sidebar-head">
             <div class="sidebar-title-row">
               <div><h2>${htmlEscape(data.scenario_name)}</h2><div class="summary">${htmlEscape(mapSummary)}</div></div>
-              <button class="button fit" type="button" onclick="fitAll()">Fit all</button>
+              <button class="button fit" type="button" onclick="fitAll()">${htmlEscape(t("Fit all"))}</button>
             </div>
-            <input id="search" class="search" placeholder="Search route, bus, vehicle" />
-            <div class="chips"><button class="chip active" data-filter="all">All</button><button class="chip" data-filter="long">Long</button><button class="chip" data-filter="high">High load</button><button class="chip" data-filter="many">Many stops</button></div>
+            <input id="search" class="search" placeholder="${htmlEscape(t("Search route, bus, vehicle"))}" />
+            <div class="chips"><button class="chip active" data-filter="all">${htmlEscape(t("All"))}</button><button class="chip" data-filter="long">${htmlEscape(t("Long"))}</button><button class="chip" data-filter="high">${htmlEscape(t("High load"))}</button><button class="chip" data-filter="many">${htmlEscape(t("Many stops"))}</button></div>
             <div id="showing" class="showing"></div>
           </div>
           <div id="routes" class="routes"></div>
@@ -3023,6 +3046,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
   <script>window.BRP_MAP_DATA = ${payload};</script>
   <script>
     const data = window.BRP_MAP_DATA;
+    const labels = ${labelsPayload};
     const colors = ${JSON.stringify(routeColors)};
     const bounds = normalizeBounds(data.bounds);
     let selectedRouteId = "";
@@ -3068,8 +3092,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       map.on("mouseleave", "selected-route-line", clearHover);
       map.on("mouseleave", "stops-circle", clearHover);
     }
-    function showRouteHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const route = routesById.get(String(feature.properties.route_id)); if (!route) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</strong><div>' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops</div><div>' + duration(route.duration_s) + ' · ' + distance(route.distance_m) + '</div>' + (route.bus_type_name ? '<div>' + esc(route.bus_type_name) + '</div>' : '') + '</div>'); }
-    function showStopHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const stop = data.stops.find(item => item.id === String(feature.properties.stop_id)); if (!stop) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>'); }
+    function showRouteHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const route = routesById.get(String(feature.properties.route_id)); if (!route) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</strong><div>' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + '</div><div>' + duration(route.duration_s) + ' · ' + distance(route.distance_m) + '</div>' + (route.bus_type_name ? '<div>' + esc(route.bus_type_name) + '</div>' : '') + '</div>'); }
+    function showStopHover(event) { const feature = event.features && event.features[0]; if (!feature) return; const stop = data.stops.find(item => item.id === String(feature.properties.stop_id)); if (!stop) return; showHover(event.lngLat, '<div class="popup"><strong>' + esc(stop.is_depot ? labels.schoolStart : labels.stop + ' ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' ' + labels.riders + '</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>'); }
     function showHover(lngLat, html) { if (!hoverPopup) hoverPopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12 }); hoverPopup.setLngLat(lngLat).setHTML(html).addTo(map); }
     function clearHover() { map.getCanvas().style.cursor = "grab"; if (hoverPopup) { hoverPopup.remove(); hoverPopup = null; } }
     function routeGeometry(route) { return route && Array.isArray(route.display_geometry) && route.display_geometry.length >= 2 ? route.display_geometry : (route && Array.isArray(route.geometry) ? route.geometry : []); }
@@ -3079,10 +3103,10 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function selectedRouteGeojson() { const route = routesById.get(selectedRouteId); return { type: "FeatureCollection", features: route && routeGeometry(route).length >= 2 ? [{ type: "Feature", properties: { route_id: route.id, color: color(route.route_index) }, geometry: { type: "LineString", coordinates: routeGeometry(route) } }] : [] }; }
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }
     function updateMapSources() { if (!map.getSource("routes")) return; map.getSource("route-connectors").setData(connectorGeojson(Boolean(selectedRouteId))); map.getSource("routes").setData(routeGeojson(Boolean(selectedRouteId))); map.getSource("selected-route-connectors").setData(selectedConnectorGeojson()); map.getSource("selected-route").setData(selectedRouteGeojson()); map.getSource("stops").setData(stopGeojson()); }
-    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = "Showing " + routes.length + " of " + data.routes.length + " routes"; document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
-    function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || ('Bus ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' riders · ' + fmt(route.stop_count) + ' stops · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">Stop sequence</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || 'Unknown address') + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' riders · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
+    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
+    function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
-    function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? 'School / Start' : 'Stop ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || 'Unknown address') + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' riders</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
+    function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? labels.schoolStart : labels.stop + ' ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' ' + labels.riders + '</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
     function fitAll() { if (!bounds) return; map.fitBounds([[bounds.min_lng, bounds.min_lat], [bounds.max_lng, bounds.max_lat]], { padding: 72, duration: 500 }); }
     function normalizeBounds(value) {
       if (!value) return null;
@@ -3095,13 +3119,13 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
       return [normalized.min_lng, normalized.min_lat, normalized.max_lng, normalized.max_lat].every(Number.isFinite) ? normalized : null;
     }
     function fitRoute(route) { const geometry = routeGeometry(route); if (!route || geometry.length < 2) return; const connectorPoints = routeConnectors.filter(connector => connector.route_id === route.id).flatMap(connector => connector.geometry || []); const points = geometry.concat(connectorPoints); const lngs = points.map(p => p[0]).filter(Number.isFinite); const lats = points.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
-    function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? 'TIME WINDOW' : gate.status === 'unavailable' ? 'UNVERIFIED' : route.load / (route.bus_capacity || 0) >= 1 ? 'CAPACITY' : route.load / (route.bus_capacity || 1) >= .85 ? 'HIGH LOAD' : route.duration_s >= 3600 ? 'LONG' : ''; if (!status) return ''; return '<span class="badge ' + (status === 'CAPACITY' || status === 'TIME WINDOW' ? 'capacity' : status === 'HIGH LOAD' || status === 'UNVERIFIED' ? 'high' : '') + '">' + status + '</span>'; }
+    function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? labels.timeWindow : gate.status === 'unavailable' ? labels.unverified : route.load / (route.bus_capacity || 0) >= 1 ? labels.capacity : route.load / (route.bus_capacity || 1) >= .85 ? labels.highLoadBadge : route.duration_s >= 3600 ? labels.longBadge : ''; if (!status) return ''; return '<span class="badge ' + (status === labels.capacity || status === labels.timeWindow ? 'capacity' : status === labels.highLoadBadge || status === labels.unverified ? 'high' : '') + '">' + esc(status) + '</span>'; }
     function stopTiming(stop) { return (stop.scheduled_time_label ? esc(stop.scheduled_time_label) + ' · ' : '') + duration(stop.cumulative_duration_s); }
     function color(index) { return colors[index % colors.length]; }
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }
     function percentile(values, ratio) { const sorted = values.filter(Number.isFinite).sort((a,b)=>a-b); return sorted.length ? sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio)))] : 0; }
     function fmt(value) { return new Intl.NumberFormat().format(Number(value || 0)); }
-    function duration(seconds) { const m = Math.round(Number(seconds || 0) / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + ' min'; }
+    function duration(seconds) { const m = Math.round(Number(seconds || 0) / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + ' ' + labels.min; }
     function distance(meters) { const km = Number(meters || 0) / 1000; return (Math.round(km * 10) / 10) + ' km'; }
     function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function escAttr(value) { return esc(value).split(String.fromCharCode(96)).join("&#96;"); }
@@ -3533,7 +3557,7 @@ function formatArrivalGateSummary(result: Record<string, unknown>): string {
     .join(" | ");
 }
 
-function buildSolveProcessRows(result: Record<string, unknown>) {
+function buildSolveProcessRows(result: Record<string, unknown>, t: (key: string, fallback?: string) => string = (key) => key) {
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization);
   const ep15Scenario = asRecord(result.ep15min_optimization);
   const scenarios: Array<[string, Record<string, unknown>]> = [
@@ -3541,10 +3565,10 @@ function buildSolveProcessRows(result: Record<string, unknown>) {
     ["Protected Route Plan", asRecord(result.exception_preserving_optimization)],
     [timeImpactScenarioName(result, ep15Scenario, "ep15min"), ep15Scenario],
   ];
-  return scenarios.map(([label, scenario]) => buildSolveProcessRow(label, scenario));
+  return scenarios.map(([label, scenario]) => buildSolveProcessRow(label, scenario, t));
 }
 
-function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) {
+function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, t: (key: string, fallback?: string) => string) {
   const gate = asRecord(scenario.traffic_gate);
   const status = stringValue(gate.status);
   const exceptionAttempts = asRecordArray(asRecord(scenario.exception_preserving).attempts);
@@ -3557,25 +3581,37 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
         const frozen = Number(attempt.frozen_route_count || 0);
         const accepted = Boolean(attempt.accepted);
         return accepted
-          ? `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), accepted ${formatNumber(routeCount)} total route(s).`
-          : `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), not accepted.`;
+          ? template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), accepted {total} total route(s)."), {
+              index: formatNumber(index + 1),
+              frozen: formatNumber(frozen),
+              remaining: formatNumber(remainingLimit),
+              total: formatNumber(routeCount),
+            })
+          : template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), not accepted."), {
+              index: formatNumber(index + 1),
+              frozen: formatNumber(frozen),
+              remaining: formatNumber(remainingLimit),
+            });
       });
       return {
         label,
-        status: acceptedAttempt ? "Passed" : "Failed",
+        status: acceptedAttempt ? t("Passed") : t("Failed"),
         passed: Boolean(acceptedAttempt),
         neutral: false,
-        summary: `${formatNumber(exceptionAttempts.length)} EP ladder attempt(s); ${acceptedAttempt ? "accepted a candidate" : "no accepted candidate"}.`,
+        summary: template(
+          t(acceptedAttempt ? "{count} EP ladder attempt(s); accepted a candidate." : "{count} EP ladder attempt(s); no accepted candidate."),
+          { count: formatNumber(exceptionAttempts.length) },
+        ),
         steps,
       };
     }
     return {
       label,
-      status: status === "not_applicable" ? "Not applicable" : "No record",
+      status: t(status === "not_applicable" ? "Not applicable" : "No record"),
       passed: true,
       neutral: true,
-      summary: status === "not_applicable" ? "This scenario did not require AM arrival-gate replanning." : "This job was created before solve-process tracking, or no optimization scenario was recorded.",
-      steps: ["No replan rounds were recorded."],
+      summary: t(status === "not_applicable" ? "This scenario did not require AM arrival-gate replanning." : "This job was created before solve-process tracking, or no optimization scenario was recorded."),
+      steps: [t("No replan rounds were recorded.")],
     };
   }
   const attempts = asRecordArray(gate.replan_attempts);
@@ -3584,8 +3620,8 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
   const ladderAttempts = asRecordArray(ladder.attempts);
   const savingTarget = asRecord(gate.vehicle_saving_target);
   const savingStatus = stringValue(savingTarget.status);
-  const checkName = trafficGateCheckName(gate);
-  const failureText = trafficGateFailureText(gate);
+  const checkName = t(trafficGateCheckName(gate));
+  const failureText = t(trafficGateFailureText(gate));
   const finalFailed = Number(gate.failed_route_count || 0);
   const finalDelay = Number(gate.max_estimated_arrival_delay_minutes || 0);
   const steps = attempts.map((attempt, index) => {
@@ -3595,8 +3631,16 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
     const toTarget = Number(attempt.to_route_duration_minutes || 0);
     const routeIds = asStringArray(attempt.failed_route_ids);
     const shownRoutes = routeIds.slice(0, 6).join(", ");
-    const routeText = shownRoutes ? `; affected routes: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
-    return `Round ${index + 1}: ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over; target ${formatNumber(Math.round(fromTarget))} -> ${formatNumber(Math.round(toTarget))} min${routeText}.`;
+    const routeText = shownRoutes ? `; ${t("affected routes")}: ${shownRoutes}${routeIds.length > 6 ? "..." : ""}` : "";
+    return template(t("Round {index}: {failed} {failure}, max {delay} min over; target {from} -> {to} min{routes}."), {
+      index: formatNumber(index + 1),
+      failed: formatNumber(failed),
+      failure: failureText,
+      delay: formatNumber(Math.round(delay)),
+      from: formatNumber(Math.round(fromTarget)),
+      to: formatNumber(Math.round(toTarget)),
+      routes: routeText,
+    });
   });
   vehicleAttempts.forEach((attempt, index) => {
     const targetBusCount = Number(attempt.target_bus_count || 0);
@@ -3607,8 +3651,18 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
     const passed = attemptStatus === "passed";
     steps.push(
       passed
-        ? `Vehicle search ${index + 1}: ${formatNumber(targetBusCount || busCount)} route(s) passed the final ${checkName}.`
-        : `Vehicle search ${index + 1}: ${formatNumber(targetBusCount)} route(s) failed; ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over.`
+        ? template(t("Vehicle search {index}: {routes} route(s) passed the final {check}."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(targetBusCount || busCount),
+            check: checkName,
+          })
+        : template(t("Vehicle search {index}: {routes} route(s) failed; {failed} {failure}, max {delay} min over."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(targetBusCount),
+            failed: formatNumber(failed),
+            failure: failureText,
+            delay: formatNumber(Math.round(delay)),
+          })
     );
   });
   ladderAttempts.forEach((attempt, index) => {
@@ -3620,8 +3674,18 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
     const delay = Number(attempt.max_overrun_minutes || 0);
     steps.push(
       attemptStatus === "passed"
-        ? `Vehicle ladder ${index + 1}: tested ${formatNumber(target || routeCount)} route(s), passed, saved ${formatNumber(saved)}.`
-        : `Vehicle ladder ${index + 1}: tested ${formatNumber(target)} route(s), failed; ${formatNumber(failed)} ${failureText}, max ${formatNumber(Math.round(delay))} min over.`
+        ? template(t("Vehicle ladder {index}: tested {routes} route(s), passed, saved {saved}."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(target || routeCount),
+            saved: formatNumber(saved),
+          })
+        : template(t("Vehicle ladder {index}: tested {routes} route(s), failed; {failed} {failure}, max {delay} min over."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(target),
+            failed: formatNumber(failed),
+            failure: failureText,
+            delay: formatNumber(Math.round(delay)),
+          })
     );
   });
   exceptionAttempts.forEach((attempt, index) => {
@@ -3631,31 +3695,65 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>) 
     const accepted = Boolean(attempt.accepted);
     steps.push(
       accepted
-        ? `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), accepted ${formatNumber(routeCount)} total route(s).`
-        : `EP ladder ${index + 1}: froze ${formatNumber(frozen)} current route(s), tested ${formatNumber(remainingLimit)} remainder route(s), not accepted.`
+        ? template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), accepted {total} total route(s)."), {
+            index: formatNumber(index + 1),
+            frozen: formatNumber(frozen),
+            remaining: formatNumber(remainingLimit),
+            total: formatNumber(routeCount),
+          })
+        : template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), not accepted."), {
+            index: formatNumber(index + 1),
+            frozen: formatNumber(frozen),
+            remaining: formatNumber(remainingLimit),
+          })
     );
   });
   steps.push(
     status === "passed" && savingStatus !== "failed"
-      ? `Final check passed: all checked routes passed the final ${checkName}.`
+      ? template(t("Final check passed: all checked routes passed the final {check}."), { check: checkName })
       : status === "passed" && savingStatus === "failed"
-        ? `Final check failed: saved ${formatNumber(Number(savingTarget.saved_route_count || 0))} route(s), below the required ${formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0))}.`
-      : `Final check failed: ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`
+        ? template(t("Final check failed: saved {saved} route(s), below the required {required}."), {
+            saved: formatNumber(Number(savingTarget.saved_route_count || 0)),
+            required: formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0)),
+          })
+      : template(t("Final check failed: {failed} {failure}, max {delay} min over."), {
+          failed: formatNumber(finalFailed),
+          failure: failureText,
+          delay: formatNumber(Math.round(finalDelay)),
+        })
   );
   const effectivePassed = status === "passed" && savingStatus !== "failed";
   return {
     label,
-    status: effectivePassed ? "Passed" : savingStatus === "failed" ? "Failed" : toTitle(status.replace(/_/g, " ")),
+    status: effectivePassed ? t("Passed") : savingStatus === "failed" ? t("Failed") : t(toTitle(status.replace(/_/g, " "))),
     passed: effectivePassed,
     neutral: false,
     summary:
       effectivePassed
-        ? `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(ladderAttempts.length)} ladder attempt(s); final ${checkName} passed.`
+        ? template(t("{rounds} solve round(s), {ladders} ladder attempt(s); final {check} passed."), {
+            rounds: formatNumber(Math.max(1, attempts.length + 1)),
+            ladders: formatNumber(ladderAttempts.length),
+            check: checkName,
+          })
         : savingStatus === "failed"
-          ? `${formatNumber(ladderAttempts.length + exceptionAttempts.length)} ladder attempt(s); saved ${formatNumber(Number(savingTarget.saved_route_count || 0))}, required ${formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0))}.`
-        : `${formatNumber(Math.max(1, attempts.length + 1))} solve round(s), ${formatNumber(vehicleAttempts.length + exceptionAttempts.length)} vehicle-search attempt(s); ${formatNumber(finalFailed)} ${failureText}, max ${formatNumber(Math.round(finalDelay))} min over.`,
+          ? template(t("{ladders} ladder attempt(s); saved {saved}, required {required}."), {
+              ladders: formatNumber(ladderAttempts.length + exceptionAttempts.length),
+              saved: formatNumber(Number(savingTarget.saved_route_count || 0)),
+              required: formatNumber(Number(savingTarget.minimum_vehicle_reduction || 0)),
+            })
+        : template(t("{rounds} solve round(s), {searches} vehicle-search attempt(s); {failed} {failure}, max {delay} min over."), {
+            rounds: formatNumber(Math.max(1, attempts.length + 1)),
+            searches: formatNumber(vehicleAttempts.length + exceptionAttempts.length),
+            failed: formatNumber(finalFailed),
+            failure: failureText,
+            delay: formatNumber(Math.round(finalDelay)),
+          }),
     steps,
   };
+}
+
+function template(text: string, values: Record<string, string | number>) {
+  return text.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match));
 }
 
 function formatSignedNumber(value: unknown): string {

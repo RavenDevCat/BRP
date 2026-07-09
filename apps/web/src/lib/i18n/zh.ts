@@ -57,6 +57,7 @@ const zh: Translations = {
     "Proposal results": "建议结果",
     "Resolved stops": "已解析站点",
     "Returned proposals": "返回建议",
+    "Road-refined candidates": "道路复核候选",
     "Geocode warnings": "地址解析警告",
     "Some addresses could not be resolved.": "部分地址无法解析。",
     "No candidates": "无候选",
@@ -67,6 +68,11 @@ const zh: Translations = {
     "Walk to stop": "步行到站",
     "Insert stop": "插入站点",
     "No issues": "无问题",
+    "Capacity limit": "容量上限",
+    "Road estimate unavailable": "道路估算不可用",
+    "Road estimate": "道路估算",
+    "Direct estimate": "直线估算",
+    Walking: "步行",
     "No insertion candidates were returned.": "没有返回插入候选方案。",
 
     // Job table

@@ -57,6 +57,7 @@ const ko: Translations = {
     "Proposal results": "추천 결과",
     "Resolved stops": "해결된 정류장",
     "Returned proposals": "반환된 추천",
+    "Road-refined candidates": "도로 검증 후보",
     "Some addresses could not be resolved.": "일부 주소를 해석할 수 없습니다.",
     "No candidates": "후보 없음",
     Row: "행",
@@ -66,6 +67,11 @@ const ko: Translations = {
     "Walk to stop": "정류장까지 도보",
     "Insert stop": "정류장 삽입",
     "No issues": "문제 없음",
+    "Capacity limit": "정원 제한",
+    "Road estimate unavailable": "도로 추정 불가",
+    "Road estimate": "도로 추정",
+    "Direct estimate": "직선 추정",
+    Walking: "도보",
     "No insertion candidates were returned.": "반환된 삽입 후보가 없습니다.",
 
     // Job table

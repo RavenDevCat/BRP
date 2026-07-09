@@ -29,6 +29,14 @@ function text(value: unknown): string {
   return String(value ?? "").trim();
 }
 
+function checkLabel(value: unknown, t: (key: string) => string): string {
+  const key = text(value);
+  if (key === "capacity") return t("Capacity limit");
+  if (key === "stop_limit") return t("Stop limit");
+  if (key === "osrm_refine_failed") return t("Road estimate unavailable");
+  return key;
+}
+
 export function RouteInsertAdvisorPage() {
   const t = useT();
   const [auditJobId, setAuditJobId] = useState("");
@@ -210,6 +218,7 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
         <div className="mb-4 grid gap-3 md:grid-cols-3">
           <Metric label={t("Resolved stops")} value={String(summary.new_stop_count ?? 0)} />
           <Metric label={t("Returned proposals")} value={String(summary.proposal_count ?? proposals.length)} />
+          <Metric label={t("Road-refined candidates")} value={String(summary.refined_candidate_count ?? 0)} />
           <Metric
             label={t("Geocode warnings")}
             value={String(summary.geocode_warning_count ?? warnings.length)}
@@ -261,9 +270,18 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
                         : `${String(proposal.insert_after_address || "-")} -> ${String(proposal.insert_before_address || "-")}`}
                     </td>
                     <td className="px-3 py-3">
-                      {isWalk
-                        ? meters(proposal.walking_distance_m)
-                        : `${minutes(proposal.delta_duration_s)} / ${meters(proposal.delta_distance_m)}`}
+                      <div>
+                        {isWalk
+                          ? meters(proposal.walking_distance_m)
+                          : `${minutes(proposal.delta_duration_s)} / ${meters(proposal.delta_distance_m)}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {isWalk
+                          ? t("Walking")
+                          : proposal.refined
+                            ? t("Road estimate")
+                            : t("Direct estimate")}
+                      </div>
                     </td>
                     <td className="px-3 py-3">
                       {String(proposal.capacity_after || "-")}
@@ -279,7 +297,7 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
                       </Badge>
                     </td>
                     <td className="px-3 py-3 text-muted-foreground">
-                      {checks.length ? checks.join(", ") : t("No issues")}
+                      {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
                     </td>
                   </tr>
                 );

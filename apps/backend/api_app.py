@@ -1041,6 +1041,72 @@ def _insert_stop_limit(route: dict[str, Any], constraints: dict[str, Any]) -> in
     return limit if limit > 0 else None
 
 
+def _insert_coord_payload(point: dict[str, Any], country: str, city: str) -> dict[str, Any]:
+    lat = _insert_float(point.get("lat"))
+    lng = _insert_float(point.get("lng"))
+    return {
+        "address": str(point.get("address") or "").strip(),
+        "country": str(point.get("country") or country).strip(),
+        "city": str(point.get("city") or city).strip(),
+        "lat": lat,
+        "lng": lng,
+        "plot_lat": lat,
+        "plot_lng": lng,
+    }
+
+
+def _refine_insert_proposals_with_osrm(
+    proposals: list[dict[str, Any]],
+    *,
+    country: str,
+    city: str,
+    limit: int,
+) -> None:
+    candidates = [
+        item
+        for item in proposals
+        if item.get("type") == "insert_stop" and item.get("insert_after_point") and item.get("insert_before_point")
+    ][: max(0, limit)]
+    if not candidates:
+        return
+    planner = backend_service.load_legacy_planner()
+    previous_multiplier = getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0)
+    previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
+    try:
+        planner.TRAFFIC_TIME_MULTIPLIER = 1.0
+        for item in candidates:
+            before = _insert_coord_payload(dict(item.get("insert_after_point") or {}), country, city)
+            new_stop = _insert_coord_payload(dict(item.get("new_stop") or {}), country, city)
+            after = _insert_coord_payload(dict(item.get("insert_before_point") or {}), country, city)
+            points = [before, new_stop, after]
+            try:
+                resolver = getattr(planner, "resolve_osrm_base_url", None)
+                if callable(resolver):
+                    planner.OSRM_BASE_URL = resolver(points)
+                time_matrix, distance_matrix = planner.build_osrm_full_matrix(points)
+                delta_s = max(0, int(time_matrix[0][1]) + int(time_matrix[1][2]) - int(time_matrix[0][2]))
+                delta_m = max(0, int(distance_matrix[0][1]) + int(distance_matrix[1][2]) - int(distance_matrix[0][2]))
+                item["delta_duration_s"] = delta_s
+                item["delta_distance_m"] = delta_m
+                item["estimated_route_duration_s"] = round(
+                    (_insert_float(item.get("base_route_duration_s")) or 0.0) + delta_s
+                )
+                item["impact_source"] = "osrm"
+                item["refined"] = True
+                item["score"] = delta_s + (0 if item.get("feasible") else 1_000_000)
+            except Exception as exc:
+                warnings = list(item.get("warnings") or [])
+                warnings.append("osrm_refine_failed")
+                item["warnings"] = warnings
+                item["impact_source"] = "direct_estimate"
+                item["refined"] = False
+                item["refine_error"] = str(exc)
+    finally:
+        planner.TRAFFIC_TIME_MULTIPLIER = previous_multiplier
+        if hasattr(planner, "OSRM_BASE_URL"):
+            planner.OSRM_BASE_URL = previous_osrm_base_url
+
+
 def _build_route_insert_proposals(
     job_record: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1057,6 +1123,7 @@ def _build_route_insert_proposals(
     default_city = str(constraints.get("city") or payload.get("city") or "Shanghai").strip()
     walking_threshold_m = max(0.0, _insert_float(constraints.get("walking_threshold_m")) or 500.0)
     proposal_limit = max(1, min(100, _insert_int(constraints.get("proposal_limit"), 50)))
+    refine_top_n = max(0, min(50, _insert_int(constraints.get("refine_top_n"), 25)))
 
     raw_stops = payload.get("new_stops") or payload.get("addresses") or []
     requested_stops = _insert_stop_inputs(raw_stops)
@@ -1149,10 +1216,13 @@ def _build_route_insert_proposals(
                         "route_index": route.get("route_index"),
                         "insert_after_order": before.get("order"),
                         "insert_after_address": before.get("address"),
+                        "insert_after_point": _insert_coord_payload(before, default_country, default_city),
                         "insert_before_order": after.get("order"),
                         "insert_before_address": after.get("address"),
+                        "insert_before_point": _insert_coord_payload(after, default_country, default_city),
                         "delta_distance_m": round(delta_m),
                         "delta_duration_s": round(delta_s),
+                        "base_route_duration_s": round(_insert_float(route.get("duration_s")) or 0.0),
                         "estimated_route_duration_s": round(
                             (_insert_float(route.get("duration_s")) or 0.0) + delta_s
                         ),
@@ -1162,22 +1232,34 @@ def _build_route_insert_proposals(
                         "stop_limit": stop_limit,
                         "feasible": feasible,
                         "warnings": warnings,
+                        "impact_source": "direct_estimate",
+                        "refined": False,
                         "score": delta_s + (0 if feasible else 1_000_000),
                     }
                 )
             proposals.extend(sorted(route_candidates, key=lambda item: item["score"])[:3])
 
     proposals.sort(key=lambda item: (not bool(item.get("feasible")), float(item.get("score") or 0)))
+    _refine_insert_proposals_with_osrm(
+        proposals,
+        country=default_country,
+        city=default_city,
+        limit=refine_top_n,
+    )
+    proposals.sort(key=lambda item: (not bool(item.get("feasible")), float(item.get("score") or 0)))
+    returned_proposals = proposals[:proposal_limit]
     return {
         "status": "ok",
         "proposal_status": "ready",
-        "proposals": proposals[:proposal_limit],
+        "proposals": returned_proposals,
         "summary": {
             "source_job_id": job_record.get("job_id"),
             "scenario_key": scenario_key,
             "new_stop_count": len(new_stops),
             "geocode_warning_count": len(geocode_warnings),
-            "proposal_count": min(len(proposals), proposal_limit),
+            "proposal_count": len(returned_proposals),
+            "refined_candidate_count": sum(1 for item in returned_proposals if item.get("refined")),
+            "refine_top_n": refine_top_n,
             "mutates_original_plan": False,
         },
         "geocode_warnings": geocode_warnings,

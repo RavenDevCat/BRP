@@ -761,6 +761,7 @@ export type RouteInsertAdvisorProposalResponse = {
     status: string;
     proposal_status: string;
     proposals: Array<Record<string, unknown>>;
+    recommendations?: Array<Record<string, unknown>>;
     summary: Record<string, unknown>;
     geocode_warnings?: Array<Record<string, unknown>>;
     map_data?: JobMapData;

@@ -45,15 +45,40 @@ function proposalNewStopAddress(proposal: Record<string, unknown>): string {
 }
 
 function proposalPosition(proposal: Record<string, unknown>, t: (key: string) => string): string {
+  const newAddress = proposalNewStopAddress(proposal) || t("New stop");
   return text(proposal.type) === "walk_to_stop"
     ? `${t("Walk to")} ${String(proposal.target_stop_address || "-")}`
-    : `${String(proposal.insert_after_address || "-")} -> ${String(proposal.insert_before_address || "-")}`;
+    : `${String(proposal.insert_after_address || "-")} -> ${newAddress} -> ${String(proposal.insert_before_address || "-")}`;
 }
 
-function proposalImpact(proposal: Record<string, unknown>): string {
-  return text(proposal.type) === "walk_to_stop"
-    ? meters(proposal.walking_distance_m)
-    : `${minutes(proposal.delta_duration_s)} / ${meters(proposal.delta_distance_m)}`;
+function recommendationList(result: RouteInsertAdvisorProposalResponse): Array<Record<string, unknown>> {
+  if (Array.isArray(result.recommendations) && result.recommendations.length) return result.recommendations;
+  const proposals = result.proposals ?? [];
+  return Array.from(
+    proposals
+      .reduce((bestByAddress, proposal) => {
+        const address = proposalNewStopAddress(proposal) || `${bestByAddress.size + 1}`;
+        if (!bestByAddress.has(address)) {
+          bestByAddress.set(address, {
+            new_stop: proposal.new_stop,
+            primary: proposal,
+            alternates: [],
+            option_count: 1,
+          });
+        }
+        return bestByAddress;
+      }, new Map<string, Record<string, unknown>>())
+      .values(),
+  );
+}
+
+function proposalChecks(proposal: Record<string, unknown>, t: (key: string) => string): string {
+  const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
+  return checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues");
+}
+
+function beforeAfter(base: unknown, next: unknown, formatter: (value: unknown) => string): string {
+  return `${formatter(base)} -> ${formatter(next)}`;
 }
 
 async function fileToBase64(file: File): Promise<string> {
@@ -259,15 +284,7 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
   const warnings = Array.isArray(result.geocode_warnings) ? result.geocode_warnings : [];
   const summary = result.summary ?? {};
   const mapData = result.map_data as JobMapData | undefined;
-  const bestProposals = Array.from(
-    proposals
-      .reduce((bestByAddress, proposal) => {
-        const address = proposalNewStopAddress(proposal) || `${t("New stop")} ${bestByAddress.size + 1}`;
-        if (!bestByAddress.has(address)) bestByAddress.set(address, proposal);
-        return bestByAddress;
-      }, new Map<string, Record<string, unknown>>())
-      .values(),
-  );
+  const recommendations = recommendationList(result);
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -279,7 +296,7 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
       <div className="overflow-auto p-4">
         <div className="mb-4 grid gap-3 md:grid-cols-3">
           <Metric label={t("Resolved stops")} value={String(summary.new_stop_count ?? 0)} />
-          <Metric label={t("Returned proposals")} value={String(summary.proposal_count ?? proposals.length)} />
+          <Metric label={t("Recommendations")} value={String(summary.recommendation_count ?? recommendations.length)} />
           <Metric label={t("Road-refined candidates")} value={String(summary.refined_candidate_count ?? 0)} />
           <Metric
             label={t("Geocode warnings")}
@@ -299,47 +316,50 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
             </ul>
           </div>
         ) : null}
-        {bestProposals.length ? (
+        {recommendations.length ? (
           <div className="mb-4 space-y-3">
             <div>
               <h3 className="text-base font-semibold">{t("Best insertion recommendation")}</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {t("Use this first option when you want the least-disruptive insertion for each new address.")}
+                {t("Each new stop shows the recommended route insertion first, followed by reasonable alternates when available.")}
               </p>
             </div>
-            <div className="grid gap-3 lg:grid-cols-2">
-              {bestProposals.map((proposal, index) => {
-                const feasible = Boolean(proposal.feasible);
-                const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
+            <div className="space-y-4">
+              {recommendations.map((recommendation, index) => {
+                const primary = recommendation.primary as Record<string, unknown> | null | undefined;
+                const alternates = Array.isArray(recommendation.alternates)
+                  ? (recommendation.alternates as Array<Record<string, unknown>>)
+                  : [];
+                const newStop =
+                  (recommendation.new_stop as Record<string, unknown> | undefined) ??
+                  (primary?.new_stop as Record<string, unknown> | undefined);
                 return (
-                  <article key={`${proposalNewStopAddress(proposal)}-${index}`} className="rounded-md border border-primary/30 bg-primary/5 p-4">
+                  <article key={`${text(newStop?.address)}-${index}`} className="rounded-md border border-border bg-muted/20 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <div className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{t("New stop")}</div>
-                        <div className="mt-1 font-semibold">{proposalNewStopAddress(proposal) || "-"}</div>
+                        <div className="mt-1 text-lg font-semibold">{text(newStop?.address) || `${t("New stop")} ${index + 1}`}</div>
                       </div>
-                      <Badge tone={feasible ? "success" : "warning"}>
-                        {feasible ? t("Feasible") : t("Needs review")}
+                      <Badge tone={primary?.feasible ? "success" : "warning"}>
+                        {primary ? (primary.feasible ? t("Feasible") : t("Needs review")) : t("No candidates")}
                       </Badge>
                     </div>
-                    <div className="mt-4 text-lg font-semibold">
-                      {t("Insert into")} {String(proposal.route_id || "-")}
-                    </div>
-                    <div className="mt-2 text-sm text-muted-foreground">{proposalPosition(proposal, t)}</div>
-                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
-                      <Metric label={t("Added impact")} value={proposalImpact(proposal)} />
-                      <Metric
-                        label={t("Capacity")}
-                        value={`${String(proposal.capacity_after || "-")}${proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""}`}
-                      />
-                      <Metric
-                        label={t("Stop count")}
-                        value={`${String(proposal.stop_count_after || "-")}${proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""}`}
-                      />
-                    </div>
-                    <p className="mt-3 text-sm text-muted-foreground">
-                      {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
-                    </p>
+                    {primary ? <RecommendationCard proposal={primary} title={t("Recommended plan")} /> : null}
+                    {alternates.length ? (
+                      <div className="mt-4">
+                        <h4 className="text-sm font-semibold">{t("Alternate options")}</h4>
+                        <div className="mt-2 grid gap-3 lg:grid-cols-2">
+                          {alternates.map((proposal, alternateIndex) => (
+                            <RecommendationCard
+                              key={`${String(proposal.route_id)}-${alternateIndex}`}
+                              proposal={proposal}
+                              title={`${t("Alternate option")} ${alternateIndex + 1}`}
+                              compact
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
                   </article>
                 );
               })}
@@ -359,6 +379,68 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
         ) : null}
       </div>
     </section>
+  );
+}
+
+function RecommendationCard({
+  proposal,
+  title,
+  compact = false,
+}: {
+  proposal: Record<string, unknown>;
+  title: string;
+  compact?: boolean;
+}) {
+  const t = useT();
+  const feasible = Boolean(proposal.feasible);
+  const isWalking = text(proposal.type) === "walk_to_stop";
+  return (
+    <div className={`mt-3 rounded-md border ${compact ? "border-border bg-surface" : "border-primary/30 bg-primary/5"} p-4`}>
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="font-semibold">{title}</h4>
+        <Badge tone={feasible ? "success" : "warning"}>{feasible ? t("Feasible") : t("Needs review")}</Badge>
+      </div>
+      <div className="mt-3 text-lg font-semibold">
+        {isWalking ? t("Walk to existing stop") : `${t("Insert into")} ${String(proposal.route_id || "-")}`}
+      </div>
+      <p className="mt-1 text-sm text-muted-foreground">{proposalPosition(proposal, t)}</p>
+      <div className="mt-4 grid gap-3 text-sm md:grid-cols-4">
+        <Metric
+          label={t("Route duration")}
+          value={
+            isWalking
+              ? t("No route change")
+              : beforeAfter(proposal.base_route_duration_s, proposal.estimated_route_duration_s, minutes)
+          }
+        />
+        <Metric
+          label={t("Route distance")}
+          value={
+            isWalking
+              ? meters(proposal.walking_distance_m)
+              : beforeAfter(proposal.base_route_distance_m, proposal.estimated_route_distance_m, meters)
+          }
+        />
+        <Metric
+          label={t("Capacity")}
+          value={`${String(proposal.capacity_before ?? "-")} -> ${String(proposal.capacity_after ?? "-")}${
+            proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""
+          }`}
+        />
+        <Metric
+          label={t("Stop count")}
+          value={`${String(proposal.base_stop_count ?? "-")} -> ${String(proposal.stop_count_after ?? "-")}${
+            proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""
+          }`}
+        />
+      </div>
+      {!isWalking ? (
+        <p className="mt-3 text-sm text-muted-foreground">
+          {t("Extra impact")}: {minutes(proposal.delta_duration_s)} / {meters(proposal.delta_distance_m)}
+        </p>
+      ) : null}
+      <p className="mt-2 text-sm text-muted-foreground">{proposalChecks(proposal, t)}</p>
+    </div>
   );
 }
 

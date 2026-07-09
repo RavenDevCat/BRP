@@ -55,9 +55,17 @@ const ko: Translations = {
     "Find proposals": "추천 찾기",
     "Proposal request failed.": "추천 요청 실패.",
     "Proposal results": "추천 결과",
+    "Resolved stops": "해결된 정류장",
+    "Returned proposals": "반환된 추천",
+    "Some addresses could not be resolved.": "일부 주소를 해석할 수 없습니다.",
     "No candidates": "후보 없음",
+    Row: "행",
+    "New stop": "신규 정류장",
+    "Stop count": "정류장 수",
+    Checks: "검토",
     "Walk to stop": "정류장까지 도보",
     "Insert stop": "정류장 삽입",
+    "No issues": "문제 없음",
     "No insertion candidates were returned.": "반환된 삽입 후보가 없습니다.",
 
     // Job table

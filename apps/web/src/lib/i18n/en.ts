@@ -58,9 +58,18 @@ const en: Translations = {
     "Find proposals": "Find proposals",
     "Proposal request failed.": "Proposal request failed.",
     "Proposal results": "Proposal results",
+    "Resolved stops": "Resolved stops",
+    "Returned proposals": "Returned proposals",
+    "Geocode warnings": "Geocode warnings",
+    "Some addresses could not be resolved.": "Some addresses could not be resolved.",
     "No candidates": "No candidates",
+    Row: "Row",
+    "New stop": "New stop",
+    "Stop count": "Stop count",
+    Checks: "Checks",
     "Walk to stop": "Walk to stop",
     "Insert stop": "Insert stop",
+    "No issues": "No issues",
     "No insertion candidates were returned.": "No insertion candidates were returned.",
 
     // Job table

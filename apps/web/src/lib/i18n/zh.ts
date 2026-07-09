@@ -55,9 +55,18 @@ const zh: Translations = {
     "Find proposals": "查找建议",
     "Proposal request failed.": "建议请求失败。",
     "Proposal results": "建议结果",
+    "Resolved stops": "已解析站点",
+    "Returned proposals": "返回建议",
+    "Geocode warnings": "地址解析警告",
+    "Some addresses could not be resolved.": "部分地址无法解析。",
     "No candidates": "无候选",
+    Row: "行",
+    "New stop": "新增站点",
+    "Stop count": "站点数",
+    Checks: "检查",
     "Walk to stop": "步行到站",
     "Insert stop": "插入站点",
+    "No issues": "无问题",
     "No insertion candidates were returned.": "没有返回插入候选方案。",
 
     // Job table

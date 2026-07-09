@@ -6,11 +6,13 @@ const zh: Translations = {
     "Planning console": "规划控制台",
     "Route Audit": "路线审计",
     "Side Tools": "侧边工具",
+    "Planning Tools": "规划工具",
     Dashboard: "仪表盘",
     "New Audit": "新建审计",
     "Audit History": "审计历史",
     "Fleet Planner": "车队规划",
     "Distance & Cost": "距离与成本",
+    "Route Insert Advisor": "插站建议",
     Home: "首页",
     History: "历史",
     Tools: "工具",
@@ -20,6 +22,20 @@ const zh: Translations = {
     "Sign out": "退出登录",
     Refresh: "刷新",
     "Resolving user": "正在识别用户",
+    "MVP interface": "MVP 接口",
+    "Supported sources": "支持来源",
+    "Candidate checks": "候选检查",
+    "Standard API": "标准 API",
+    "Find the least disruptive way to add new students into an existing route plan.":
+        "在不打乱原计划的前提下，寻找新增学生最小影响的插入方式。",
+    "The first version keeps the original plan unchanged and prepares proposal scoring.":
+        "第一版保持原计划不变，并先准备候选方案评分接口。",
+    "Audit jobs, Fleet Planner runs, and workbook uploads are reserved as input sources.":
+        "预留审计任务、Fleet Planner 运行记录和工作簿上传作为输入来源。",
+    "Capacity, stop limit, time window, rider impact, and walking-to-stop checks are part of the contract.":
+        "容量、站点上限、时间窗、现有乘客影响和步行到最近站点都会纳入接口契约。",
+    "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
+        "插入算法完成前，候选评分会保持禁用。",
 
     // Job table
     "No jobs yet": "暂无任务",

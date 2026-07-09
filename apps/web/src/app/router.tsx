@@ -3,6 +3,7 @@ import { DashboardPage, JobDetailPage, JobsPage, RootLayout } from "@/app/pages"
 import { AdminStatusPage } from "@/features/admin/admin-status-page";
 import { DistanceCheckerPage } from "@/features/distance/distance-checker-page";
 import { FleetPlannerPage } from "@/features/fleet/fleet-planner-page";
+import { RouteInsertAdvisorPage } from "@/features/insert/route-insert-advisor-page";
 import { NewJobPage } from "@/features/planner/new-job-page";
 
 const rootRoute = createRootRoute({
@@ -39,6 +40,12 @@ const fleetPlannerRoute = createRoute({
   component: FleetPlannerPage,
 });
 
+const routeInsertAdvisorRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/insert-advisor",
+  component: RouteInsertAdvisorPage,
+});
+
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
@@ -56,6 +63,7 @@ const routeTree = rootRoute.addChildren([
   newJobRoute,
   distanceCheckerRoute,
   fleetPlannerRoute,
+  routeInsertAdvisorRoute,
   adminRoute,
   jobsRoute,
   jobDetailRoute,

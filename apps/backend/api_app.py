@@ -894,6 +894,70 @@ def create_fleet_planner_history(
     )
 
 
+@_api_route(
+    "GET",
+    "/route-insert-advisor/capabilities",
+    dependencies=[Depends(require_authorized_request)],
+)
+def route_insert_advisor_capabilities() -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "status": "interface_ready",
+            "version": 1,
+            "proposal_endpoint": "/route-insert-advisor/proposals",
+            "mutates_original_plan": False,
+            "supported_sources": [
+                "audit_job_id",
+                "fleet_planner_run_id",
+                "workbook",
+            ],
+            "candidate_checks": [
+                "walking_threshold",
+                "capacity",
+                "stop_limit",
+                "time_window",
+                "existing_rider_impact",
+                "new_rider_time",
+                "address_review",
+            ],
+        },
+    )
+
+
+@_api_route(
+    "POST",
+    "/route-insert-advisor/proposals",
+    dependencies=[Depends(require_authorized_request)],
+)
+def route_insert_advisor_proposals(
+    payload: FlexiblePayload | None = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    payload_dict = _payload_dict(payload)
+    raw_stops = payload_dict.get("new_stops") or payload_dict.get("addresses") or []
+    if isinstance(raw_stops, str):
+        new_stop_count = len([line for line in raw_stops.splitlines() if line.strip()])
+    elif isinstance(raw_stops, list):
+        new_stop_count = len(raw_stops)
+    else:
+        new_stop_count = 0
+    return _json_response(
+        200,
+        {
+            "status": "interface_ready",
+            "proposal_status": "not_implemented",
+            "proposals": [],
+            "summary": {
+                "new_stop_count": new_stop_count,
+                "requested_by": context.email,
+                "mutates_original_plan": False,
+            },
+            "message": "Route Insert Advisor scoring is not enabled yet.",
+        },
+    )
+
+
 @_api_route("POST", "/compute", dependencies=[Depends(require_authorized_request)])
 def compute(payload: ComputeRequest | None = Body(default=None)) -> JSONResponse:
     payload_dict = _payload_dict(payload)

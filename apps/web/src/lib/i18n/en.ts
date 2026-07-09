@@ -9,11 +9,13 @@ const en: Translations = {
     "Planning console": "Planning console",
     "Route Audit": "Route Audit",
     "Side Tools": "Side Tools",
+    "Planning Tools": "Planning Tools",
     Dashboard: "Dashboard",
     "New Audit": "New Audit",
     "Audit History": "Audit History",
     "Fleet Planner": "Fleet Planner",
     "Distance & Cost": "Distance & Cost",
+    "Route Insert Advisor": "Route Insert Advisor",
     Home: "Home",
     History: "History",
     Tools: "Tools",
@@ -23,6 +25,20 @@ const en: Translations = {
     "Sign out": "Sign out",
     Refresh: "Refresh",
     "Resolving user": "Resolving user",
+    "MVP interface": "MVP interface",
+    "Supported sources": "Supported sources",
+    "Candidate checks": "Candidate checks",
+    "Standard API": "Standard API",
+    "Find the least disruptive way to add new students into an existing route plan.":
+        "Find the least disruptive way to add new students into an existing route plan.",
+    "The first version keeps the original plan unchanged and prepares proposal scoring.":
+        "The first version keeps the original plan unchanged and prepares proposal scoring.",
+    "Audit jobs, Fleet Planner runs, and workbook uploads are reserved as input sources.":
+        "Audit jobs, Fleet Planner runs, and workbook uploads are reserved as input sources.",
+    "Capacity, stop limit, time window, rider impact, and walking-to-stop checks are part of the contract.":
+        "Capacity, stop limit, time window, rider impact, and walking-to-stop checks are part of the contract.",
+    "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
+        "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.",
 
     // Job table
     "No jobs yet": "No jobs yet",

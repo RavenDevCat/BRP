@@ -736,6 +736,32 @@ export type FleetPlannerHistoryCreateResponse = {
     job: FleetPlannerHistorySummary;
 };
 
+export type RouteInsertAdvisorCapabilities = {
+    status: string;
+    version: number;
+    proposal_endpoint: string;
+    mutates_original_plan: boolean;
+    supported_sources: string[];
+    candidate_checks: string[];
+};
+
+export type RouteInsertAdvisorProposalRequest = {
+    source?: {
+        audit_job_id?: string;
+        fleet_planner_run_id?: string;
+    };
+    new_stops?: Array<Record<string, unknown>> | string;
+    constraints?: Record<string, unknown>;
+};
+
+export type RouteInsertAdvisorProposalResponse = {
+    status: string;
+    proposal_status: string;
+    proposals: Array<Record<string, unknown>>;
+    summary: Record<string, unknown>;
+    message?: string;
+};
+
 type JobsResponse = {
     jobs: JobSummary[];
 };
@@ -1192,6 +1218,25 @@ export function saveFleetPlannerHistory(payload: {
 }) {
     return apiFetch<FleetPlannerHistoryCreateResponse>(
         "/fleet-planner/history",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        },
+    );
+}
+
+export function getRouteInsertAdvisorCapabilities() {
+    return apiFetch<RouteInsertAdvisorCapabilities>(
+        "/route-insert-advisor/capabilities",
+    );
+}
+
+export function requestRouteInsertAdvisorProposals(
+    payload: RouteInsertAdvisorProposalRequest,
+) {
+    return apiFetch<RouteInsertAdvisorProposalResponse>(
+        "/route-insert-advisor/proposals",
         {
             method: "POST",
             headers: { "Content-Type": "application/json" },

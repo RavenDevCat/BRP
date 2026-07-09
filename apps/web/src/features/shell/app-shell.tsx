@@ -7,6 +7,7 @@ import {
     History,
     LayoutDashboard,
     LogOut,
+    MapPin,
     RefreshCw,
     Ruler,
     ShieldCheck,
@@ -34,6 +35,7 @@ const primaryNavItems = [
 const sideToolNavItems = [
     { to: "/fleet", labelKey: "Fleet Planner", icon: Bus },
     { to: "/distance", labelKey: "Distance & Cost", icon: Ruler },
+    { to: "/insert-advisor", labelKey: "Route Insert Advisor", icon: MapPin },
 ];
 
 const adminNavItems = [
@@ -71,6 +73,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         pathname.startsWith("/jobs") ||
         pathname.startsWith("/fleet") ||
         pathname.startsWith("/distance") ||
+        pathname.startsWith("/insert-advisor") ||
         pathname.startsWith("/admin");
     const googleUsage = googleUsageQuery.data;
     const googleUsagePct =
@@ -114,7 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         pathname={pathname}
                     />
                     <NavGroup
-                        title={t("Side Tools")}
+                        title={t("Planning Tools")}
                         items={sideToolNavItems}
                         pathname={pathname}
                     />

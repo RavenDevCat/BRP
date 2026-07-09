@@ -6,11 +6,13 @@ const ko: Translations = {
     "Planning console": "운영 콘솔",
     "Route Audit": "노선 감사",
     "Side Tools": "보조 도구",
+    "Planning Tools": "계획 도구",
     Dashboard: "대시보드",
     "New Audit": "새 감사",
     "Audit History": "감사 기록",
     "Fleet Planner": "차량 편성",
     "Distance & Cost": "거리 및 비용",
+    "Route Insert Advisor": "정류장 추가 조언",
     Home: "홈",
     History: "기록",
     Tools: "도구",
@@ -20,6 +22,20 @@ const ko: Translations = {
     "Sign out": "로그아웃",
     Refresh: "새로고침",
     "Resolving user": "사용자 확인 중",
+    "MVP interface": "MVP 인터페이스",
+    "Supported sources": "지원 입력",
+    "Candidate checks": "후보 검토",
+    "Standard API": "표준 API",
+    "Find the least disruptive way to add new students into an existing route plan.":
+        "기존 노선 계획을 최대한 덜 변경하면서 새 학생을 추가할 위치를 찾습니다.",
+    "The first version keeps the original plan unchanged and prepares proposal scoring.":
+        "첫 버전은 원본 계획을 변경하지 않고 추천 점수 계산 인터페이스를 준비합니다.",
+    "Audit jobs, Fleet Planner runs, and workbook uploads are reserved as input sources.":
+        "감사 작업, Fleet Planner 실행 기록, 워크북 업로드를 입력 소스로 예약합니다.",
+    "Capacity, stop limit, time window, rider impact, and walking-to-stop checks are part of the contract.":
+        "정원, 정류장 수 제한, 시간 창, 탑승자 영향, 가까운 정류장 도보 검토가 계약에 포함됩니다.",
+    "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
+        "삽입 알고리즘이 구현되기 전까지 추천 점수 계산은 의도적으로 비활성화되어 있습니다.",
 
     // Job table
     "No jobs yet": "작업 없음",

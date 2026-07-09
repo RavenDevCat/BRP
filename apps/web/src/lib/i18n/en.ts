@@ -70,6 +70,13 @@ const en: Translations = {
     "Geocode warnings": "Geocode warnings",
     "Some addresses could not be resolved.": "Some addresses could not be resolved.",
     "No candidates": "No candidates",
+    "Best insertion recommendation": "Best insertion recommendation",
+    "Use this first option when you want the least-disruptive insertion for each new address.":
+        "Use this first option when you want the least-disruptive insertion for each new address.",
+    "Insert into": "Insert into",
+    "Walk to": "Walk to",
+    "Added impact": "Added impact",
+    "Candidate details": "Candidate details",
     Row: "Row",
     "New stop": "New stop",
     "Stop count": "Stop count",

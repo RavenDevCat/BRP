@@ -65,6 +65,13 @@ const zh: Translations = {
     "Geocode warnings": "地址解析警告",
     "Some addresses could not be resolved.": "部分地址无法解析。",
     "No candidates": "无候选",
+    "Best insertion recommendation": "最佳插入建议",
+    "Use this first option when you want the least-disruptive insertion for each new address.":
+        "优先使用这条建议，它是每个新增地址当前影响最小的插入方案。",
+    "Insert into": "插入到",
+    "Walk to": "步行到",
+    "Added impact": "新增影响",
+    "Candidate details": "候选明细",
     Row: "行",
     "New stop": "新增站点",
     "Stop count": "站点数",

@@ -64,6 +64,13 @@ const ko: Translations = {
     "Road-refined candidates": "도로 검증 후보",
     "Some addresses could not be resolved.": "일부 주소를 해석할 수 없습니다.",
     "No candidates": "후보 없음",
+    "Best insertion recommendation": "최적 삽입 추천",
+    "Use this first option when you want the least-disruptive insertion for each new address.":
+        "각 신규 주소에 대해 기존 운행 영향이 가장 적은 첫 번째 추천을 우선 사용하세요.",
+    "Insert into": "삽입 노선",
+    "Walk to": "도보 이동",
+    "Added impact": "추가 영향",
+    "Candidate details": "후보 상세",
     Row: "행",
     "New stop": "신규 정류장",
     "Stop count": "정류장 수",

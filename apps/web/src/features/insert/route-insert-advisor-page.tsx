@@ -39,6 +39,23 @@ function checkLabel(value: unknown, t: (key: string) => string): string {
   return key;
 }
 
+function proposalNewStopAddress(proposal: Record<string, unknown>): string {
+  const newStop = proposal.new_stop as Record<string, unknown> | undefined;
+  return text(newStop?.address);
+}
+
+function proposalPosition(proposal: Record<string, unknown>, t: (key: string) => string): string {
+  return text(proposal.type) === "walk_to_stop"
+    ? `${t("Walk to")} ${String(proposal.target_stop_address || "-")}`
+    : `${String(proposal.insert_after_address || "-")} -> ${String(proposal.insert_before_address || "-")}`;
+}
+
+function proposalImpact(proposal: Record<string, unknown>): string {
+  return text(proposal.type) === "walk_to_stop"
+    ? meters(proposal.walking_distance_m)
+    : `${minutes(proposal.delta_duration_s)} / ${meters(proposal.delta_distance_m)}`;
+}
+
 async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
@@ -242,6 +259,15 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
   const warnings = Array.isArray(result.geocode_warnings) ? result.geocode_warnings : [];
   const summary = result.summary ?? {};
   const mapData = result.map_data as JobMapData | undefined;
+  const bestProposals = Array.from(
+    proposals
+      .reduce((bestByAddress, proposal) => {
+        const address = proposalNewStopAddress(proposal) || `${t("New stop")} ${bestByAddress.size + 1}`;
+        if (!bestByAddress.has(address)) bestByAddress.set(address, proposal);
+        return bestByAddress;
+      }, new Map<string, Record<string, unknown>>())
+      .values(),
+  );
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -273,6 +299,53 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
             </ul>
           </div>
         ) : null}
+        {bestProposals.length ? (
+          <div className="mb-4 space-y-3">
+            <div>
+              <h3 className="text-base font-semibold">{t("Best insertion recommendation")}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t("Use this first option when you want the least-disruptive insertion for each new address.")}
+              </p>
+            </div>
+            <div className="grid gap-3 lg:grid-cols-2">
+              {bestProposals.map((proposal, index) => {
+                const feasible = Boolean(proposal.feasible);
+                const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
+                return (
+                  <article key={`${proposalNewStopAddress(proposal)}-${index}`} className="rounded-md border border-primary/30 bg-primary/5 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{t("New stop")}</div>
+                        <div className="mt-1 font-semibold">{proposalNewStopAddress(proposal) || "-"}</div>
+                      </div>
+                      <Badge tone={feasible ? "success" : "warning"}>
+                        {feasible ? t("Feasible") : t("Needs review")}
+                      </Badge>
+                    </div>
+                    <div className="mt-4 text-lg font-semibold">
+                      {t("Insert into")} {String(proposal.route_id || "-")}
+                    </div>
+                    <div className="mt-2 text-sm text-muted-foreground">{proposalPosition(proposal, t)}</div>
+                    <div className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
+                      <Metric label={t("Added impact")} value={proposalImpact(proposal)} />
+                      <Metric
+                        label={t("Capacity")}
+                        value={`${String(proposal.capacity_after || "-")}${proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""}`}
+                      />
+                      <Metric
+                        label={t("Stop count")}
+                        value={`${String(proposal.stop_count_after || "-")}${proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""}`}
+                      />
+                    </div>
+                    <p className="mt-3 text-sm text-muted-foreground">
+                      {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
+                    </p>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
         {mapData ? (
           <div className="mb-4 overflow-hidden rounded-md border border-border">
             <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("Route maps")}</div>
@@ -282,72 +355,66 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
           </div>
         ) : null}
         {proposals.length ? (
-          <table className="min-w-full text-left text-sm">
-            <thead className="border-b border-border text-xs uppercase tracking-normal text-muted-foreground">
-              <tr>
-                <th className="px-3 py-2">{t("Type")}</th>
-                <th className="px-3 py-2">{t("New stop")}</th>
-                <th className="px-3 py-2">{t("Route")}</th>
-                <th className="px-3 py-2">{t("Position")}</th>
-                <th className="px-3 py-2">{t("Impact")}</th>
-                <th className="px-3 py-2">{t("Capacity")}</th>
-                <th className="px-3 py-2">{t("Stop count")}</th>
-                <th className="px-3 py-2">{t("Status")}</th>
-                <th className="px-3 py-2">{t("Checks")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {proposals.map((proposal, index) => {
-                const type = String(proposal.type || "");
-                const isWalk = type === "walk_to_stop";
-                const feasible = Boolean(proposal.feasible);
-                const newStop = proposal.new_stop as Record<string, unknown> | undefined;
-                const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
-                return (
-                  <tr key={`${type}-${proposal.route_id}-${index}`} className="border-b border-border last:border-0">
-                    <td className="px-3 py-3">{isWalk ? t("Walk to stop") : t("Insert stop")}</td>
-                    <td className="max-w-56 px-3 py-3 text-muted-foreground">{text(newStop?.address) || "-"}</td>
-                    <td className="px-3 py-3 font-medium">{String(proposal.route_id || "-")}</td>
-                    <td className="px-3 py-3 text-muted-foreground">
-                      {isWalk
-                        ? String(proposal.target_stop_address || "-")
-                        : `${String(proposal.insert_after_address || "-")} -> ${String(proposal.insert_before_address || "-")}`}
-                    </td>
-                    <td className="px-3 py-3">
-                      <div>
-                        {isWalk
-                          ? meters(proposal.walking_distance_m)
-                          : `${minutes(proposal.delta_duration_s)} / ${meters(proposal.delta_distance_m)}`}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {isWalk
-                          ? t("Walking")
-                          : proposal.refined
-                            ? t("Road estimate")
-                            : t("Direct estimate")}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3">
-                      {String(proposal.capacity_after || "-")}
-                      {proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""}
-                    </td>
-                    <td className="px-3 py-3">
-                      {String(proposal.stop_count_after || "-")}
-                      {proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""}
-                    </td>
-                    <td className="px-3 py-3">
-                      <Badge tone={feasible ? "success" : "warning"}>
-                        {feasible ? t("Feasible") : t("Needs review")}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-3 text-muted-foreground">
-                      {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+          <div className="overflow-auto rounded-md border border-border">
+            <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("Candidate details")}</div>
+            <table className="min-w-full text-left text-sm">
+              <thead className="border-b border-border text-xs uppercase tracking-normal text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2">{t("Type")}</th>
+                  <th className="px-3 py-2">{t("New stop")}</th>
+                  <th className="px-3 py-2">{t("Route")}</th>
+                  <th className="px-3 py-2">{t("Position")}</th>
+                  <th className="px-3 py-2">{t("Impact")}</th>
+                  <th className="px-3 py-2">{t("Capacity")}</th>
+                  <th className="px-3 py-2">{t("Stop count")}</th>
+                  <th className="px-3 py-2">{t("Status")}</th>
+                  <th className="px-3 py-2">{t("Checks")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {proposals.map((proposal, index) => {
+                  const type = String(proposal.type || "");
+                  const isWalk = type === "walk_to_stop";
+                  const feasible = Boolean(proposal.feasible);
+                  const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
+                  return (
+                    <tr key={`${type}-${proposal.route_id}-${index}`} className="border-b border-border last:border-0">
+                      <td className="px-3 py-3">{isWalk ? t("Walk to stop") : t("Insert stop")}</td>
+                      <td className="max-w-56 px-3 py-3 text-muted-foreground">{proposalNewStopAddress(proposal) || "-"}</td>
+                      <td className="px-3 py-3 font-medium">{String(proposal.route_id || "-")}</td>
+                      <td className="px-3 py-3 text-muted-foreground">{proposalPosition(proposal, t)}</td>
+                      <td className="px-3 py-3">
+                        <div>{proposalImpact(proposal)}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {isWalk
+                            ? t("Walking")
+                            : proposal.refined
+                              ? t("Road estimate")
+                              : t("Direct estimate")}
+                        </div>
+                      </td>
+                      <td className="px-3 py-3">
+                        {String(proposal.capacity_after || "-")}
+                        {proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""}
+                      </td>
+                      <td className="px-3 py-3">
+                        {String(proposal.stop_count_after || "-")}
+                        {proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""}
+                      </td>
+                      <td className="px-3 py-3">
+                        <Badge tone={feasible ? "success" : "warning"}>
+                          {feasible ? t("Feasible") : t("Needs review")}
+                        </Badge>
+                      </td>
+                      <td className="px-3 py-3 text-muted-foreground">
+                        {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground">{t("No insertion candidates were returned.")}</p>
         )}

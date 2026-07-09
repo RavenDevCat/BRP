@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ListChecks, MapPin, PlusCircle, ShieldCheck } from "lucide-react";
+import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
@@ -135,30 +135,34 @@ export function RouteInsertAdvisorPage() {
           }}
         >
           <div className="space-y-4">
-            <Field label={t("Current-plan workbook")}>
-              <input
-                className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
-                type="file"
-                accept=".xlsx,.xlsm"
-                onChange={async (event) => {
-                  const nextFile = event.target.files?.[0] ?? null;
-                  setFile(nextFile);
-                  setFileBase64("");
-                  setFileError("");
-                  proposalMutation.reset();
-                  if (!nextFile) return;
-                  try {
-                    setFileBase64(await fileToBase64(nextFile));
-                  } catch (error) {
-                    setFileError(error instanceof Error ? error.message : t("Workbook could not be read."));
-                  }
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                {file ? `${t("Workbook ready")}: ${file.name}` : t("Upload the current-plan workbook used for Route Audit.")}
-              </p>
+            <div className="space-y-2">
+              <span className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{t("Current-plan workbook")}</span>
+              <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">
+                <Upload className="mb-3 h-6 w-6 text-primary" aria-hidden="true" />
+                <span className="text-sm font-medium">{file?.name || t("Select workbook")}</span>
+                <span className="mt-1 text-xs text-muted-foreground">{t("Upload the current-plan workbook used for Route Audit.")}</span>
+                <input
+                  className="sr-only"
+                  type="file"
+                  accept=".xlsx,.xlsm"
+                  onChange={async (event) => {
+                    const nextFile = event.target.files?.[0] ?? null;
+                    event.currentTarget.value = "";
+                    setFile(nextFile);
+                    setFileBase64("");
+                    setFileError("");
+                    proposalMutation.reset();
+                    if (!nextFile) return;
+                    try {
+                      setFileBase64(await fileToBase64(nextFile));
+                    } catch (error) {
+                      setFileError(error instanceof Error ? error.message : t("Workbook could not be read."));
+                    }
+                  }}
+                />
+              </label>
               {fileError ? <p className="text-xs text-warning-foreground">{fileError}</p> : null}
-            </Field>
+            </div>
             <Field label={t("New student addresses")}>
               <textarea
                 className="min-h-32 w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"

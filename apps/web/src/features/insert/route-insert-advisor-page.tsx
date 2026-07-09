@@ -4,9 +4,11 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ListChecks, MapPin, PlusCircle, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
+import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import {
   getRouteInsertAdvisorCapabilities,
   requestRouteInsertAdvisorProposals,
+  type JobMapData,
   type RouteInsertAdvisorProposalResponse,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
@@ -235,6 +237,7 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
   const proposals = result.proposals ?? [];
   const warnings = Array.isArray(result.geocode_warnings) ? result.geocode_warnings : [];
   const summary = result.summary ?? {};
+  const mapData = result.map_data as JobMapData | undefined;
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -264,6 +267,14 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {mapData ? (
+          <div className="mb-4 overflow-hidden rounded-md border border-border">
+            <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("Route maps")}</div>
+            <div className="h-[520px]">
+              <InteractiveRouteMap data={mapData} focusKey={`insert-${mapData.job_id}-${mapData.scenario_key}`} />
+            </div>
           </div>
         ) : null}
         {proposals.length ? (

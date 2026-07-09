@@ -1266,6 +1266,7 @@ def _build_route_insert_proposals(
             "mutates_original_plan": False,
         },
         "geocode_warnings": geocode_warnings,
+        "map_data": map_data,
     }
 
 

@@ -70,7 +70,6 @@ const ko: Translations = {
     "Insert into": "삽입 노선",
     "Walk to": "도보 이동",
     "Added impact": "추가 영향",
-    "Candidate details": "후보 상세",
     Row: "행",
     "New stop": "신규 정류장",
     "Stop count": "정류장 수",

@@ -71,7 +71,6 @@ const zh: Translations = {
     "Insert into": "插入到",
     "Walk to": "步行到",
     "Added impact": "新增影响",
-    "Candidate details": "候选明细",
     Row: "行",
     "New stop": "新增站点",
     "Stop count": "站点数",

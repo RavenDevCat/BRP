@@ -354,70 +354,9 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
             </div>
           </div>
         ) : null}
-        {proposals.length ? (
-          <div className="overflow-auto rounded-md border border-border">
-            <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("Candidate details")}</div>
-            <table className="min-w-full text-left text-sm">
-              <thead className="border-b border-border text-xs uppercase tracking-normal text-muted-foreground">
-                <tr>
-                  <th className="px-3 py-2">{t("Type")}</th>
-                  <th className="px-3 py-2">{t("New stop")}</th>
-                  <th className="px-3 py-2">{t("Route")}</th>
-                  <th className="px-3 py-2">{t("Position")}</th>
-                  <th className="px-3 py-2">{t("Impact")}</th>
-                  <th className="px-3 py-2">{t("Capacity")}</th>
-                  <th className="px-3 py-2">{t("Stop count")}</th>
-                  <th className="px-3 py-2">{t("Status")}</th>
-                  <th className="px-3 py-2">{t("Checks")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {proposals.map((proposal, index) => {
-                  const type = String(proposal.type || "");
-                  const isWalk = type === "walk_to_stop";
-                  const feasible = Boolean(proposal.feasible);
-                  const checks = Array.isArray(proposal.warnings) ? proposal.warnings.map(text).filter(Boolean) : [];
-                  return (
-                    <tr key={`${type}-${proposal.route_id}-${index}`} className="border-b border-border last:border-0">
-                      <td className="px-3 py-3">{isWalk ? t("Walk to stop") : t("Insert stop")}</td>
-                      <td className="max-w-56 px-3 py-3 text-muted-foreground">{proposalNewStopAddress(proposal) || "-"}</td>
-                      <td className="px-3 py-3 font-medium">{String(proposal.route_id || "-")}</td>
-                      <td className="px-3 py-3 text-muted-foreground">{proposalPosition(proposal, t)}</td>
-                      <td className="px-3 py-3">
-                        <div>{proposalImpact(proposal)}</div>
-                        <div className="text-xs text-muted-foreground">
-                          {isWalk
-                            ? t("Walking")
-                            : proposal.refined
-                              ? t("Road estimate")
-                              : t("Direct estimate")}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        {String(proposal.capacity_after || "-")}
-                        {proposal.capacity_limit ? ` / ${String(proposal.capacity_limit)}` : ""}
-                      </td>
-                      <td className="px-3 py-3">
-                        {String(proposal.stop_count_after || "-")}
-                        {proposal.stop_limit ? ` / ${String(proposal.stop_limit)}` : ""}
-                      </td>
-                      <td className="px-3 py-3">
-                        <Badge tone={feasible ? "success" : "warning"}>
-                          {feasible ? t("Feasible") : t("Needs review")}
-                        </Badge>
-                      </td>
-                      <td className="px-3 py-3 text-muted-foreground">
-                        {checks.length ? checks.map((item) => checkLabel(item, t)).join(", ") : t("No issues")}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
+        {!proposals.length ? (
           <p className="text-sm text-muted-foreground">{t("No insertion candidates were returned.")}</p>
-        )}
+        ) : null}
       </div>
     </section>
   );

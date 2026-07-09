@@ -76,7 +76,6 @@ const en: Translations = {
     "Insert into": "Insert into",
     "Walk to": "Walk to",
     "Added impact": "Added impact",
-    "Candidate details": "Candidate details",
     Row: "Row",
     "New stop": "New stop",
     "Stop count": "Stop count",

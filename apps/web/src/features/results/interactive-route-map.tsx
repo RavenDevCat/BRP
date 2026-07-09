@@ -369,7 +369,7 @@ export function InteractiveRouteMap({
                     stop_id: stop.id,
                     route_id: stop.route_id,
                     route_index: stop.route_index,
-                    label: stop.is_depot ? "S" : String(stop.order),
+                    label: stop.display_label || (stop.is_depot ? "S" : String(stop.order)),
                     address: stop.address,
                     color: routeColor(stop.route_index),
                     is_depot: stop.is_depot,

@@ -1105,6 +1105,53 @@ def _refine_insert_proposals_with_osrm(
             planner.OSRM_BASE_URL = previous_osrm_base_url
 
 
+def _insert_map_data_with_new_stop_markers(
+    map_data: dict[str, Any],
+    proposals: list[dict[str, Any]],
+) -> dict[str, Any]:
+    marker_by_key: dict[str, dict[str, Any]] = {}
+    for proposal in proposals:
+        new_stop = dict(proposal.get("new_stop") or {})
+        lat = _insert_float(new_stop.get("lat"))
+        lng = _insert_float(new_stop.get("lng"))
+        if lat is None or lng is None:
+            continue
+        key = str(new_stop.get("address") or f"{lat:.6f},{lng:.6f}").strip()
+        if key in marker_by_key:
+            continue
+        marker_by_key[key] = {
+            "id": f"insert-new-{len(marker_by_key) + 1}",
+            "route_id": str(proposal.get("route_id") or ""),
+            "route_index": _insert_int(proposal.get("route_index"), 0),
+            "order": 10_000 + len(marker_by_key),
+            "display_label": f"N{len(marker_by_key) + 1}",
+            "address": str(new_stop.get("address") or "New stop"),
+            "requested_address": str(new_stop.get("address") or ""),
+            "passenger_count": _insert_int(new_stop.get("passenger_count"), 1),
+            "is_depot": False,
+            "lat": lat,
+            "lng": lng,
+            "cumulative_duration_s": 0,
+            "cumulative_distance_m": 0,
+        }
+
+    if not marker_by_key:
+        return map_data
+
+    preview = dict(map_data)
+    preview["stops"] = [dict(stop) for stop in list(map_data.get("stops") or [])] + list(marker_by_key.values())
+    bounds = dict(preview.get("bounds") or {})
+    for marker in marker_by_key.values():
+        lat = float(marker["lat"])
+        lng = float(marker["lng"])
+        bounds["min_lat"] = min(float(bounds.get("min_lat", lat)), lat)
+        bounds["max_lat"] = max(float(bounds.get("max_lat", lat)), lat)
+        bounds["min_lng"] = min(float(bounds.get("min_lng", lng)), lng)
+        bounds["max_lng"] = max(float(bounds.get("max_lng", lng)), lng)
+    preview["bounds"] = bounds
+    return preview
+
+
 def _build_route_insert_proposals(
     job_record: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1249,6 +1296,7 @@ def _build_route_insert_proposals(
     )
     proposals.sort(key=lambda item: (not bool(item.get("feasible")), float(item.get("score") or 0)))
     returned_proposals = proposals[:proposal_limit]
+    preview_map_data = _insert_map_data_with_new_stop_markers(map_data, returned_proposals)
     return {
         "status": "ok",
         "proposal_status": "ready",
@@ -1266,7 +1314,7 @@ def _build_route_insert_proposals(
             "mutates_original_plan": False,
         },
         "geocode_warnings": geocode_warnings,
-        "map_data": map_data,
+        "map_data": preview_map_data,
     }
 
 

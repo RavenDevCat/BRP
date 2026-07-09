@@ -233,6 +233,7 @@ export type JobMapStop = {
     route_id: string;
     route_index: number;
     order: number;
+    display_label?: string;
     node_index: number;
     address: string;
     requested_address?: string;

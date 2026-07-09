@@ -39,6 +39,29 @@ const en: Translations = {
         "Capacity, stop limit, time window, rider impact, and walking-to-stop checks are part of the contract.",
     "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
         "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.",
+    "Advisor status": "Advisor status",
+    "The original plan stays unchanged; the advisor only returns proposal candidates.":
+        "The original plan stays unchanged; the advisor only returns proposal candidates.",
+    "This MVP uses Route Audit jobs first; other sources remain reserved.":
+        "This MVP uses Route Audit jobs first; other sources remain reserved.",
+    "Capacity, stop limit, insertion impact, and walking-to-stop checks are included.":
+        "Capacity, stop limit, insertion impact, and walking-to-stop checks are included.",
+    "New student insertion": "New student insertion",
+    "Route Audit job ID": "Route Audit job ID",
+    "Paste an existing audit job seed": "Paste an existing audit job seed",
+    "New student addresses": "New student addresses",
+    "One address per line": "One address per line",
+    "Walking threshold": "Walking threshold",
+    "Stop limit": "Stop limit",
+    "Use route default": "Use route default",
+    "Scoring...": "Scoring...",
+    "Find proposals": "Find proposals",
+    "Proposal request failed.": "Proposal request failed.",
+    "Proposal results": "Proposal results",
+    "No candidates": "No candidates",
+    "Walk to stop": "Walk to stop",
+    "Insert stop": "Insert stop",
+    "No insertion candidates were returned.": "No insertion candidates were returned.",
 
     // Job table
     "No jobs yet": "No jobs yet",

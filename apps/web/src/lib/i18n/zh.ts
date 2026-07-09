@@ -36,6 +36,29 @@ const zh: Translations = {
         "容量、站点上限、时间窗、现有乘客影响和步行到最近站点都会纳入接口契约。",
     "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
         "插入算法完成前，候选评分会保持禁用。",
+    "Advisor status": "建议器状态",
+    "The original plan stays unchanged; the advisor only returns proposal candidates.":
+        "原计划不会被修改；建议器只返回候选方案。",
+    "This MVP uses Route Audit jobs first; other sources remain reserved.":
+        "当前 MVP 优先使用路线审计任务，其他来源先保留。",
+    "Capacity, stop limit, insertion impact, and walking-to-stop checks are included.":
+        "已包含容量、站点上限、插入影响和步行到站检查。",
+    "New student insertion": "新增学生插入",
+    "Route Audit job ID": "路线审计任务 ID",
+    "Paste an existing audit job seed": "粘贴已有审计任务 seed",
+    "New student addresses": "新增学生地址",
+    "One address per line": "每行一个地址",
+    "Walking threshold": "步行阈值",
+    "Stop limit": "站点上限",
+    "Use route default": "使用路线默认值",
+    "Scoring...": "评分中...",
+    "Find proposals": "查找建议",
+    "Proposal request failed.": "建议请求失败。",
+    "Proposal results": "建议结果",
+    "No candidates": "无候选",
+    "Walk to stop": "步行到站",
+    "Insert stop": "插入站点",
+    "No insertion candidates were returned.": "没有返回插入候选方案。",
 
     // Job table
     "No jobs yet": "暂无任务",

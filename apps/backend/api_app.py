@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+import math
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -925,6 +926,264 @@ def route_insert_advisor_capabilities() -> JSONResponse:
     )
 
 
+def _insert_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    return result if math.isfinite(result) else None
+
+
+def _insert_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _insert_haversine_m(a: dict[str, Any], b: dict[str, Any]) -> float:
+    lat1 = _insert_float(a.get("lat"))
+    lng1 = _insert_float(a.get("lng"))
+    lat2 = _insert_float(b.get("lat"))
+    lng2 = _insert_float(b.get("lng"))
+    if lat1 is None or lng1 is None or lat2 is None or lng2 is None:
+        return 0.0
+    radius_m = 6371000.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lam = math.radians(lng2 - lng1)
+    h = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lam / 2) ** 2
+    )
+    return 2 * radius_m * math.atan2(math.sqrt(h), math.sqrt(max(0.0, 1 - h)))
+
+
+def _insert_stop_inputs(raw_stops: Any) -> list[dict[str, Any]]:
+    if isinstance(raw_stops, str):
+        return [
+            {"address": line.strip(), "passenger_count": 1}
+            for line in raw_stops.splitlines()
+            if line.strip()
+        ]
+    if not isinstance(raw_stops, list):
+        return []
+    stops: list[dict[str, Any]] = []
+    for item in raw_stops:
+        if isinstance(item, str):
+            address = item.strip()
+            if address:
+                stops.append({"address": address, "passenger_count": 1})
+        elif isinstance(item, dict):
+            address = str(item.get("address") or item.get("name") or "").strip()
+            if address or (_insert_float(item.get("lat")) and _insert_float(item.get("lng"))):
+                stops.append(dict(item, address=address))
+    return stops
+
+
+def _insert_geocode_stops(
+    stops: list[dict[str, Any]], default_country: str, default_city: str
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    planner = None
+    resolved: list[dict[str, Any]] = []
+    warnings: list[dict[str, Any]] = []
+    for index, stop in enumerate(stops):
+        lat = _insert_float(stop.get("lat"))
+        lng = _insert_float(stop.get("lng"))
+        address = str(stop.get("address") or "").strip()
+        country = str(stop.get("country") or default_country or "China").strip()
+        city = str(stop.get("city") or default_city or "Shanghai").strip()
+        riders = max(
+            1,
+            _insert_int(
+                stop.get("passenger_count") or stop.get("riders") or stop.get("students"),
+                1,
+            ),
+        )
+        if lat is None or lng is None:
+            if not address:
+                warnings.append({"index": index, "reason": "missing_address"})
+                continue
+            try:
+                planner = planner or backend_service.load_legacy_planner()
+                point = planner.geocode_query(country, city, address)
+                lat = _insert_float(point.get("plot_lat") or point.get("lat"))
+                lng = _insert_float(point.get("plot_lng") or point.get("lng"))
+                address = str(point.get("formatted_address") or address).strip()
+            except Exception as exc:
+                warnings.append({"index": index, "address": address, "reason": str(exc)})
+                continue
+        if lat is None or lng is None:
+            warnings.append({"index": index, "address": address, "reason": "missing_coordinate"})
+            continue
+        resolved.append(
+            {
+                "index": index,
+                "address": address,
+                "country": country,
+                "city": city,
+                "lat": lat,
+                "lng": lng,
+                "passenger_count": riders,
+            }
+        )
+    return resolved, warnings
+
+
+def _insert_stop_limit(route: dict[str, Any], constraints: dict[str, Any]) -> int | None:
+    value = constraints.get("stop_limit")
+    if value in (None, "", 0, "0"):
+        value = route.get("max_stops")
+    limit = _insert_int(value, 0)
+    return limit if limit > 0 else None
+
+
+def _build_route_insert_proposals(
+    job_record: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    source = dict(payload.get("source") or {})
+    scenario_key = str(
+        payload.get("scenario_key") or source.get("scenario_key") or "current_plan"
+    ).strip()
+    map_data, map_error = backend_service._build_job_map_data(job_record, scenario_key)
+    if map_error or not map_data:
+        raise BackendHttpError(404, {"error": map_error or "Route map data not found."})
+
+    constraints = dict(payload.get("constraints") or {})
+    default_country = str(constraints.get("country") or payload.get("country") or "China").strip()
+    default_city = str(constraints.get("city") or payload.get("city") or "Shanghai").strip()
+    walking_threshold_m = max(0.0, _insert_float(constraints.get("walking_threshold_m")) or 500.0)
+    proposal_limit = max(1, min(100, _insert_int(constraints.get("proposal_limit"), 50)))
+
+    raw_stops = payload.get("new_stops") or payload.get("addresses") or []
+    requested_stops = _insert_stop_inputs(raw_stops)
+    new_stops, geocode_warnings = _insert_geocode_stops(
+        requested_stops, default_country, default_city
+    )
+
+    stops_by_id = {str(stop.get("id")): dict(stop) for stop in map_data.get("stops") or []}
+    stops_by_route: dict[str, list[dict[str, Any]]] = {}
+    for stop in stops_by_id.values():
+        stops_by_route.setdefault(str(stop.get("route_id") or ""), []).append(stop)
+    for route_stops in stops_by_route.values():
+        route_stops.sort(key=lambda item: _insert_int(item.get("order"), 0))
+
+    proposals: list[dict[str, Any]] = []
+    for new_stop in new_stops:
+        riders = _insert_int(new_stop.get("passenger_count"), 1)
+        for route in list(map_data.get("routes") or []):
+            route_id = str(route.get("id") or "").strip()
+            route_stops = stops_by_route.get(route_id, [])
+            service_stops = [stop for stop in route_stops if not stop.get("is_depot")]
+            capacity = _insert_int(route.get("bus_capacity"), 0)
+            load_after = _insert_int(route.get("load"), 0) + riders
+            capacity_ok = not capacity or load_after <= capacity
+            stop_limit = _insert_stop_limit(route, constraints)
+            stop_count_after = _insert_int(route.get("stop_count"), len(service_stops)) + 1
+            stop_ok = stop_limit is None or stop_count_after <= stop_limit
+
+            nearest = min(
+                service_stops,
+                key=lambda stop: _insert_haversine_m(new_stop, stop),
+                default=None,
+            )
+            if nearest:
+                walk_m = _insert_haversine_m(new_stop, nearest)
+                if walk_m <= walking_threshold_m:
+                    feasible = capacity_ok
+                    proposals.append(
+                        {
+                            "type": "walk_to_stop",
+                            "new_stop": new_stop,
+                            "route_id": route_id,
+                            "route_index": route.get("route_index"),
+                            "target_stop_order": nearest.get("order"),
+                            "target_stop_address": nearest.get("address"),
+                            "walking_distance_m": round(walk_m),
+                            "delta_distance_m": 0,
+                            "delta_duration_s": 0,
+                            "capacity_after": load_after,
+                            "capacity_limit": capacity or None,
+                            "stop_count_after": _insert_int(route.get("stop_count"), len(service_stops)),
+                            "stop_limit": stop_limit,
+                            "feasible": feasible,
+                            "warnings": [] if feasible else ["capacity"],
+                            "score": walk_m,
+                        }
+                    )
+
+            if len(route_stops) < 2:
+                continue
+            seconds_per_meter = (
+                (_insert_float(route.get("duration_s")) or 0.0)
+                / max(1.0, _insert_float(route.get("distance_m")) or 0.0)
+            )
+            if seconds_per_meter <= 0:
+                seconds_per_meter = 180.0 / 1000.0
+            route_candidates: list[dict[str, Any]] = []
+            for index in range(len(route_stops) - 1):
+                before = route_stops[index]
+                after = route_stops[index + 1]
+                # ponytail: direct-distance delta is only the first-pass ranker; use OSRM/AMap when final-priced inserts are needed.
+                delta_m = max(
+                    0.0,
+                    _insert_haversine_m(before, new_stop)
+                    + _insert_haversine_m(new_stop, after)
+                    - _insert_haversine_m(before, after),
+                )
+                delta_s = delta_m * seconds_per_meter
+                feasible = capacity_ok and stop_ok
+                warnings = []
+                if not capacity_ok:
+                    warnings.append("capacity")
+                if not stop_ok:
+                    warnings.append("stop_limit")
+                route_candidates.append(
+                    {
+                        "type": "insert_stop",
+                        "new_stop": new_stop,
+                        "route_id": route_id,
+                        "route_index": route.get("route_index"),
+                        "insert_after_order": before.get("order"),
+                        "insert_after_address": before.get("address"),
+                        "insert_before_order": after.get("order"),
+                        "insert_before_address": after.get("address"),
+                        "delta_distance_m": round(delta_m),
+                        "delta_duration_s": round(delta_s),
+                        "estimated_route_duration_s": round(
+                            (_insert_float(route.get("duration_s")) or 0.0) + delta_s
+                        ),
+                        "capacity_after": load_after,
+                        "capacity_limit": capacity or None,
+                        "stop_count_after": stop_count_after,
+                        "stop_limit": stop_limit,
+                        "feasible": feasible,
+                        "warnings": warnings,
+                        "score": delta_s + (0 if feasible else 1_000_000),
+                    }
+                )
+            proposals.extend(sorted(route_candidates, key=lambda item: item["score"])[:3])
+
+    proposals.sort(key=lambda item: (not bool(item.get("feasible")), float(item.get("score") or 0)))
+    return {
+        "status": "ok",
+        "proposal_status": "ready",
+        "proposals": proposals[:proposal_limit],
+        "summary": {
+            "source_job_id": job_record.get("job_id"),
+            "scenario_key": scenario_key,
+            "new_stop_count": len(new_stops),
+            "geocode_warning_count": len(geocode_warnings),
+            "proposal_count": min(len(proposals), proposal_limit),
+            "mutates_original_plan": False,
+        },
+        "geocode_warnings": geocode_warnings,
+    }
+
+
 @_api_route(
     "POST",
     "/route-insert-advisor/proposals",
@@ -935,27 +1194,14 @@ def route_insert_advisor_proposals(
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     payload_dict = _payload_dict(payload)
-    raw_stops = payload_dict.get("new_stops") or payload_dict.get("addresses") or []
-    if isinstance(raw_stops, str):
-        new_stop_count = len([line for line in raw_stops.splitlines() if line.strip()])
-    elif isinstance(raw_stops, list):
-        new_stop_count = len(raw_stops)
-    else:
-        new_stop_count = 0
-    return _json_response(
-        200,
-        {
-            "status": "interface_ready",
-            "proposal_status": "not_implemented",
-            "proposals": [],
-            "summary": {
-                "new_stop_count": new_stop_count,
-                "requested_by": context.email,
-                "mutates_original_plan": False,
-            },
-            "message": "Route Insert Advisor scoring is not enabled yet.",
-        },
-    )
+    source = dict(payload_dict.get("source") or {})
+    audit_job_id = str(source.get("audit_job_id") or payload_dict.get("audit_job_id") or "").strip()
+    if not audit_job_id:
+        raise BackendHttpError(400, {"error": "audit_job_id is required."})
+    job_record = _job_for_context(audit_job_id, context)
+    response = _build_route_insert_proposals(job_record, payload_dict)
+    response["summary"]["requested_by"] = context.email
+    return _json_response(200, response)
 
 
 @_api_route("POST", "/compute", dependencies=[Depends(require_authorized_request)])

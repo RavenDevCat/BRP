@@ -36,6 +36,29 @@ const ko: Translations = {
         "정원, 정류장 수 제한, 시간 창, 탑승자 영향, 가까운 정류장 도보 검토가 계약에 포함됩니다.",
     "Proposal scoring is intentionally disabled until the insertion algorithm is implemented.":
         "삽입 알고리즘이 구현되기 전까지 추천 점수 계산은 의도적으로 비활성화되어 있습니다.",
+    "Advisor status": "조언 상태",
+    "The original plan stays unchanged; the advisor only returns proposal candidates.":
+        "원본 계획은 변경하지 않고 후보 추천만 반환합니다.",
+    "This MVP uses Route Audit jobs first; other sources remain reserved.":
+        "이번 MVP는 우선 Route Audit 작업을 사용하며 다른 입력은 예약 상태로 둡니다.",
+    "Capacity, stop limit, insertion impact, and walking-to-stop checks are included.":
+        "정원, 정류장 수 제한, 삽입 영향, 가까운 정류장 도보 검토가 포함됩니다.",
+    "New student insertion": "신규 학생 삽입",
+    "Route Audit job ID": "Route Audit 작업 ID",
+    "Paste an existing audit job seed": "기존 감사 작업 seed 입력",
+    "New student addresses": "신규 학생 주소",
+    "One address per line": "한 줄에 주소 하나",
+    "Walking threshold": "도보 기준",
+    "Stop limit": "정류장 제한",
+    "Use route default": "노선 기본값 사용",
+    "Scoring...": "점수 계산 중...",
+    "Find proposals": "추천 찾기",
+    "Proposal request failed.": "추천 요청 실패.",
+    "Proposal results": "추천 결과",
+    "No candidates": "후보 없음",
+    "Walk to stop": "정류장까지 도보",
+    "Insert stop": "정류장 삽입",
+    "No insertion candidates were returned.": "반환된 삽입 후보가 없습니다.",
 
     // Job table
     "No jobs yet": "작업 없음",

@@ -37,9 +37,21 @@ function checkLabel(value: unknown, t: (key: string) => string): string {
   return key;
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+  return btoa(binary);
+}
+
 export function RouteInsertAdvisorPage() {
   const t = useT();
-  const [auditJobId, setAuditJobId] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [fileBase64, setFileBase64] = useState("");
+  const [fileError, setFileError] = useState("");
   const [addresses, setAddresses] = useState("");
   const [country, setCountry] = useState("China");
   const [city, setCity] = useState("Shanghai");
@@ -54,10 +66,10 @@ export function RouteInsertAdvisorPage() {
     mutationFn: requestRouteInsertAdvisorProposals,
   });
   const capabilities = capabilitiesQuery.data;
-  const sourceCount = capabilities?.supported_sources.length ?? 3;
+  const sourceCount = capabilities?.supported_sources.length ?? 1;
   const checkCount = capabilities?.candidate_checks.length ?? 7;
   const result = proposalMutation.data as RouteInsertAdvisorProposalResponse | undefined;
-  const canRun = auditJobId.trim() && addresses.trim() && !proposalMutation.isPending;
+  const canRun = Boolean(fileBase64 && addresses.trim() && !proposalMutation.isPending);
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -89,7 +101,7 @@ export function RouteInsertAdvisorPage() {
           icon={<MapPin className="h-4 w-4" aria-hidden="true" />}
           title={t("Supported sources")}
           value={`${sourceCount}`}
-          detail={t("This MVP uses Route Audit jobs first; other sources remain reserved.")}
+          detail={t("Upload the same current-plan workbook used by Route Audit.")}
         />
         <InfoCard
           icon={<ShieldCheck className="h-4 w-4" aria-hidden="true" />}
@@ -108,7 +120,8 @@ export function RouteInsertAdvisorPage() {
           onSubmit={(event) => {
             event.preventDefault();
             proposalMutation.mutate({
-              source: { audit_job_id: auditJobId.trim() },
+              file_name: file?.name || "workbook.xlsx",
+              file_base64: fileBase64,
               new_stops: addresses,
               constraints: {
                 country,
@@ -120,13 +133,29 @@ export function RouteInsertAdvisorPage() {
           }}
         >
           <div className="space-y-4">
-            <Field label={t("Route Audit job ID")}>
+            <Field label={t("Current-plan workbook")}>
               <input
                 className="w-full rounded-md border border-border bg-surface px-3 py-2 text-sm"
-                value={auditJobId}
-                onChange={(event) => setAuditJobId(event.target.value)}
-                placeholder={t("Paste an existing audit job seed")}
+                type="file"
+                accept=".xlsx,.xlsm"
+                onChange={async (event) => {
+                  const nextFile = event.target.files?.[0] ?? null;
+                  setFile(nextFile);
+                  setFileBase64("");
+                  setFileError("");
+                  proposalMutation.reset();
+                  if (!nextFile) return;
+                  try {
+                    setFileBase64(await fileToBase64(nextFile));
+                  } catch (error) {
+                    setFileError(error instanceof Error ? error.message : t("Workbook could not be read."));
+                  }
+                }}
               />
+              <p className="text-xs text-muted-foreground">
+                {file ? `${t("Workbook ready")}: ${file.name}` : t("Upload the current-plan workbook used for Route Audit.")}
+              </p>
+              {fileError ? <p className="text-xs text-warning-foreground">{fileError}</p> : null}
             </Field>
             <Field label={t("New student addresses")}>
               <textarea

@@ -909,8 +909,6 @@ def route_insert_advisor_capabilities() -> JSONResponse:
             "proposal_endpoint": "/route-insert-advisor/proposals",
             "mutates_original_plan": False,
             "supported_sources": [
-                "audit_job_id",
-                "fleet_planner_run_id",
                 "workbook",
             ],
             "candidate_checks": [
@@ -1114,7 +1112,10 @@ def _build_route_insert_proposals(
     scenario_key = str(
         payload.get("scenario_key") or source.get("scenario_key") or "current_plan"
     ).strip()
-    map_data, map_error = backend_service._build_job_map_data(job_record, scenario_key)
+    map_data = dict(payload.get("_map_data") or {})
+    map_error = None
+    if not map_data:
+        map_data, map_error = backend_service._build_job_map_data(job_record, scenario_key)
     if map_error or not map_data:
         raise BackendHttpError(404, {"error": map_error or "Route map data not found."})
 
@@ -1254,6 +1255,8 @@ def _build_route_insert_proposals(
         "proposals": returned_proposals,
         "summary": {
             "source_job_id": job_record.get("job_id"),
+            "source_label": payload.get("_source_label") or "",
+            "source_kind": payload.get("_source_kind") or "audit_job",
             "scenario_key": scenario_key,
             "new_stop_count": len(new_stops),
             "geocode_warning_count": len(geocode_warnings),
@@ -1276,10 +1279,30 @@ def route_insert_advisor_proposals(
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     payload_dict = _payload_dict(payload)
+    if str(payload_dict.get("file_base64") or "").strip():
+        preview = backend_service._workbook_preview_response(payload_dict)
+        map_data = dict(preview.get("current_plan_map") or {})
+        if not map_data:
+            raise BackendHttpError(
+                400,
+                {"error": preview.get("current_plan_map_error") or "Workbook map preview is not available."},
+            )
+        workbook_payload = dict(payload_dict)
+        workbook_payload["_map_data"] = map_data
+        workbook_payload["_source_label"] = preview.get("source_label") or payload_dict.get("file_name") or ""
+        workbook_payload["_source_kind"] = "workbook"
+        response = _build_route_insert_proposals(
+            {"job_id": "workbook-preview"},
+            workbook_payload,
+        )
+        response["summary"]["requested_by"] = context.email
+        response["summary"]["workbook_summary"] = dict(preview.get("summary") or {})
+        return _json_response(200, response)
+
     source = dict(payload_dict.get("source") or {})
     audit_job_id = str(source.get("audit_job_id") or payload_dict.get("audit_job_id") or "").strip()
     if not audit_job_id:
-        raise BackendHttpError(400, {"error": "audit_job_id is required."})
+        raise BackendHttpError(400, {"error": "Upload a workbook before requesting insert proposals."})
     job_record = _job_for_context(audit_job_id, context)
     response = _build_route_insert_proposals(job_record, payload_dict)
     response["summary"]["requested_by"] = context.email

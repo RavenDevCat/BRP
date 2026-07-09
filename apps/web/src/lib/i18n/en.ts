@@ -49,6 +49,12 @@ const en: Translations = {
     "New student insertion": "New student insertion",
     "Route Audit job ID": "Route Audit job ID",
     "Paste an existing audit job seed": "Paste an existing audit job seed",
+    "Current-plan workbook": "Current-plan workbook",
+    "Workbook ready": "Workbook ready",
+    "Upload the current-plan workbook used for Route Audit.":
+        "Upload the current-plan workbook used for Route Audit.",
+    "Upload the same current-plan workbook used by Route Audit.":
+        "Upload the same current-plan workbook used by Route Audit.",
     "New student addresses": "New student addresses",
     "One address per line": "One address per line",
     "Walking threshold": "Walking threshold",

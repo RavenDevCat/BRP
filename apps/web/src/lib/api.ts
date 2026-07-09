@@ -746,6 +746,8 @@ export type RouteInsertAdvisorCapabilities = {
 };
 
 export type RouteInsertAdvisorProposalRequest = {
+    file_name?: string;
+    file_base64?: string;
     source?: {
         audit_job_id?: string;
         fleet_planner_run_id?: string;

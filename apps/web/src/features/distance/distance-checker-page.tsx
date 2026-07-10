@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Calculator, FileSpreadsheet, Fuel, History, Loader2, MapPinned, RefreshCw, Ruler, Trash2, Upload } from "lucide-react";
+import { Calculator, FileSpreadsheet, Fuel, Loader2, MapPinned, Ruler, Upload } from "lucide-react";
+import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   deleteDistanceCheckerHistory,
@@ -78,32 +78,11 @@ export function DistanceCheckerPage() {
   const [loadedHistoryRecord, setLoadedHistoryRecord] = useState<DistanceCheckerHistoryRecord | null>(null);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [deletingRunId, setDeletingRunId] = useState("");
-  const historyPanelRef = useRef<HTMLDivElement | null>(null);
 
   const historyQuery = useQuery({
     queryKey: ["distance-checker-history", activeTool],
     queryFn: () => listDistanceCheckerHistory(activeTool),
   });
-
-  useEffect(() => {
-    if (historyCollapsed) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (window.innerWidth < 1024) {
-        return;
-      }
-      const target = event.target;
-      if (target instanceof Node && historyPanelRef.current?.contains(target)) {
-        return;
-      }
-      setHistoryCollapsed(true);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [historyCollapsed]);
 
   const previewMutation = useMutation({
     mutationFn: async (sheetName?: string) => {
@@ -475,29 +454,28 @@ export function DistanceCheckerPage() {
           historyCollapsed ? "lg:grid-cols-[88px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
         )}
       >
-        <div ref={historyPanelRef} className="min-w-0 lg:sticky lg:top-20 lg:self-start">
-          <DistanceCheckerHistoryPanel
-            className="min-w-0"
-            title={activeHistoryTitle}
-            emptyMessage={activeHistoryEmpty}
-            toolMode={activeTool}
-            jobs={historyQuery.data || []}
-            activeRunId={activeLoadedRunId || activeSavedRunId}
-            deletingRunId={deletingRunId}
-            bulkDeleting={bulkDeleteHistoryMutation.isPending}
-            isLoading={historyQuery.isLoading || openHistoryMutation.isPending || deleteHistoryMutation.isPending || bulkDeleteHistoryMutation.isPending}
-            error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null) || (bulkDeleteHistoryMutation.error as Error | null)}
-            collapsed={historyCollapsed}
-            onCollapsedChange={setHistoryCollapsed}
-            onRefresh={() => void historyQuery.refetch()}
-            onOpen={(runId) => {
-              setHistoryCollapsed(true);
-              openHistoryMutation.mutate({ toolMode: activeTool, runId });
-            }}
-            onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
-            onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate({ toolMode: activeTool, runIds })}
-          />
-        </div>
+        <HistorySidebar
+          items={historyQuery.data || []}
+          itemId={(job) => job.run_id}
+          activeId={activeLoadedRunId || activeSavedRunId}
+          title={activeHistoryTitle}
+          emptyMessage={activeHistoryEmpty}
+          collapsed={historyCollapsed}
+          onCollapsedChange={setHistoryCollapsed}
+          isLoading={historyQuery.isLoading}
+          isFetching={historyQuery.isFetching}
+          error={(historyQuery.error as Error | null) || (openHistoryMutation.error as Error | null) || (deleteHistoryMutation.error as Error | null) || (bulkDeleteHistoryMutation.error as Error | null)}
+          deletingId={deletingRunId}
+          bulkDeleting={bulkDeleteHistoryMutation.isPending}
+          onRefresh={() => void historyQuery.refetch()}
+          onOpen={(runId) => openHistoryMutation.mutate({ toolMode: activeTool, runId })}
+          onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
+          onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate({ toolMode: activeTool, runIds })}
+          renderItem={(job, active) => (
+            <DistanceHistoryItem job={job} active={active} toolMode={activeTool} />
+          )}
+          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
+        />
 
         <div className="min-w-0 space-y-4">
           <Card>
@@ -800,241 +778,56 @@ export function DistanceCheckerPage() {
   );
 }
 
-function DistanceCheckerHistoryPanel({
-  className,
-  title,
-  emptyMessage,
+function DistanceHistoryItem({
+  job,
+  active,
   toolMode,
-  jobs,
-  activeRunId,
-  deletingRunId,
-  bulkDeleting,
-  isLoading,
-  error,
-  collapsed,
-  onCollapsedChange,
-  onRefresh,
-  onOpen,
-  onDelete,
-  onBulkDelete,
 }: {
-  className?: string;
-  title: string;
-  emptyMessage: string;
+  job: DistanceCheckerHistorySummary;
+  active: boolean;
   toolMode: DistanceCheckerToolMode;
-  jobs: DistanceCheckerHistorySummary[];
-  activeRunId?: string;
-  deletingRunId?: string;
-  bulkDeleting?: boolean;
-  isLoading: boolean;
-  error?: Error | null;
-  collapsed: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-  onRefresh: () => void;
-  onOpen: (runId: string) => void;
-  onDelete: (runId: string) => void;
-  onBulkDelete: (runIds: string[]) => void;
 }) {
   const t = useT();
-  const [selecting, setSelecting] = useState(false);
-  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
-  const selectedCount = selectedRunIds.size;
-
-  useEffect(() => {
-    const runIds = new Set(jobs.map((job) => job.run_id));
-    setSelectedRunIds((previous) => {
-      const next = new Set([...previous].filter((runId) => runIds.has(runId)));
-      return next.size === previous.size ? previous : next;
-    });
-  }, [jobs]);
-
-  function toggleSelected(runId: string) {
-    setSelectedRunIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(runId)) {
-        next.delete(runId);
-      } else {
-        next.add(runId);
-      }
-      return next;
-    });
-  }
-
-  if (collapsed) {
-    return (
-      <Card className={cn("overflow-hidden", className)}>
-        <div className="flex min-h-[72px] items-stretch gap-2 p-2 lg:min-h-[320px] lg:flex-col">
-          <button
-            type="button"
-            className="group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30 lg:flex-col lg:justify-start lg:px-2 lg:py-3"
-            aria-label={`${t("Open")} ${t(title)}`}
-            onClick={() => onCollapsedChange(false)}
-          >
-            <span className="flex min-w-0 items-center gap-2 lg:flex-col">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface shadow-sm ring-1 ring-border transition group-hover:ring-primary/40">
-                <History className="h-4 w-4 text-primary" aria-hidden="true" />
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-foreground lg:[text-orientation:mixed] lg:[writing-mode:vertical-rl]">
-                  {t("History")}
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">{t("Open saved runs")}</span>
-              </span>
-            </span>
-            <span className="flex shrink-0 items-center gap-2 lg:mt-3 lg:flex-col">
-              <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
-              <ArrowRight className="h-4 w-4 text-primary transition group-hover:translate-x-0.5 lg:rotate-90 lg:group-hover:translate-x-0 lg:group-hover:translate-y-0.5" aria-hidden="true" />
-            </span>
-          </button>
-          <div className="flex items-center lg:mt-auto">
-            <button type="button" className={buttonClassName("ghost")} aria-label={`${t("Refresh")} ${t(title)}`} title={t("Refresh history")} onClick={onRefresh}>
-              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
+  const summary = job.summary || {};
+  const isReference = toolMode === "reference";
+  const badgeLabel = isReference
+    ? distanceModeLabel(summary.distance_mode)
+    : String(summary.currency_label || summary.currency_code || "Cost");
+  const secondaryClass = active
+    ? "text-primary-foreground/80"
+    : "text-muted-foreground";
   return (
-    <Card className={className}>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{t(title)}</h2>
+    <div className="min-w-0 px-1 py-1">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">
+            {job.title || t("Distance & Cost Run")}
           </div>
-          <div className="flex items-center gap-1">
-            <button type="button" className={buttonClassName("ghost")} aria-label={`${t("Refresh")} ${t(title)}`} onClick={onRefresh}>
-              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={buttonClassName("ghost")}
-              aria-label={`${t("Collapse")} ${t(title)}`}
-              onClick={() => onCollapsedChange(true)}
-            >
-              <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
-            </button>
+          <div className={cn("mt-1 text-xs", secondaryClass)}>
+            {formatDateTime(job.created_at)}
+          </div>
+          <div className={cn("mt-1 truncate text-xs", secondaryClass)}>
+            {t("Submitted by")} {job.owner_email || t("Unknown")}
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {error ? <InlineError message={error.message} /> : null}
-        {!jobs.length && !isLoading ? (
-          <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-            {emptyMessage}
-          </div>
-        ) : null}
-        {jobs.length ? (
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              className={buttonClassName("ghost")}
-              onClick={() => {
-                setSelecting(!selecting);
-                setSelectedRunIds(new Set());
-              }}
-            >
-              {t(selecting ? "Cancel" : "Select")}
-            </button>
-            {selecting ? (
-              <button
-                type="button"
-                className={buttonClassName("secondary")}
-                disabled={!selectedCount || bulkDeleting}
-                onClick={() => {
-                  const runIds = [...selectedRunIds];
-                  if (runIds.length && window.confirm(t("Delete selected Distance & Cost history runs? This cannot be undone."))) {
-                    onBulkDelete(runIds);
-                    setSelectedRunIds(new Set());
-                    setSelecting(false);
-                  }
-                }}
-              >
-                {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                {t("Delete selected")} {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
-          {jobs.map((job) => {
-            const summary = job.summary || {};
-            const isReference = toolMode === "reference";
-            const isActive = activeRunId === job.run_id;
-            const isDeleting = deletingRunId === job.run_id;
-            const badgeLabel = isReference ? distanceModeLabel(summary.distance_mode) : String(summary.currency_label || summary.currency_code || "Cost");
-            return (
-              <div
-                key={job.run_id}
-                className={cn(
-                  "flex items-stretch gap-1 rounded-md border p-2 transition",
-                  isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
-                )}
-              >
-                {selecting ? (
-                  <input
-                    type="checkbox"
-                    className="mt-2 h-4 w-4 shrink-0 accent-primary"
-                    checked={selectedRunIds.has(job.run_id)}
-                    aria-label={`${t("Select")} ${job.title || t("Distance & Cost Run")}`}
-                    onChange={() => toggleSelected(job.run_id)}
-                  />
-                ) : null}
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{job.title || t("Distance & Cost Run")}</div>
-                      <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        {formatDateTime(job.created_at)}
-                      </div>
-                      <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        {t("Submitted by")} {job.owner_email || t("Unknown")}
-                      </div>
-                    </div>
-                    <Badge tone={isActive ? "neutral" : isReference ? "info" : "success"}>{badgeLabel}</Badge>
-                  </div>
-                  <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                    {isReference ? (
-                      <>
-                        <span>{formatNumber(summary.resolved_count)} {t("resolved")}</span>
-                        <span>{formatNumber(summary.failed_count)} {t("failed")}</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>{formatNumber(summary.route_count)} {t("routes")}</span>
-                        <span>{formatNumber(summary.total_one_way_distance_km)} km</span>
-                      </>
-                    )}
-                  </div>
-                </button>
-                {!selecting ? (
-                  <button
-                  type="button"
-                  className={cn(
-                    "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-                    isActive
-                      ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
-                      : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-                  )}
-                  aria-label={`${t("Delete")} ${job.title || t("Distance & Cost Run")}`}
-                  disabled={isDeleting}
-                  onClick={() => {
-                    if (window.confirm(t("Delete this Distance & Cost history run? This cannot be undone."))) {
-                      onDelete(job.run_id);
-                    }
-                  }}
-                >
-                  {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+        <Badge tone={active ? "neutral" : isReference ? "info" : "success"}>
+          {badgeLabel}
+        </Badge>
+      </div>
+      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", secondaryClass)}>
+        {isReference ? (
+          <>
+            <span>{formatNumber(summary.resolved_count)} {t("resolved")}</span>
+            <span>{formatNumber(summary.failed_count)} {t("failed")}</span>
+          </>
+        ) : (
+          <>
+            <span>{formatNumber(summary.route_count)} {t("routes")}</span>
+            <span>{formatNumber(summary.total_one_way_distance_km)} km</span>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 

@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, History, Loader2, Map, MapPinned, Maximize2, Plus, RefreshCw, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, Loader2, Map, MapPinned, Maximize2, Plus, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
+import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Button } from "@/components/ui/button";
@@ -86,7 +87,6 @@ export function FleetPlannerPage() {
   const [fleetSettingHelpOpen, setFleetSettingHelpOpen] = useState(false);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [activeResultView, setActiveResultView] = useState<FleetResultView>("review");
-  const historyPanelRef = useRef<HTMLDivElement | null>(null);
 
   const currentUserQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser, staleTime: 60_000 });
 
@@ -101,26 +101,6 @@ export function FleetPlannerPage() {
     queryFn: () => getFleetPlannerVehicleCatalog({ market, monitor_seats: monitorSeats }),
     staleTime: 60_000,
   });
-
-  useEffect(() => {
-    if (historyCollapsed) {
-      return;
-    }
-
-    function handlePointerDown(event: PointerEvent) {
-      if (window.innerWidth < 1024) {
-        return;
-      }
-      const target = event.target;
-      if (target instanceof Node && historyPanelRef.current?.contains(target)) {
-        return;
-      }
-      setHistoryCollapsed(true);
-    }
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [historyCollapsed]);
 
   const defaultVehicleConfigs = useMemo(
     () => normalizeVehicleConfigDrafts(vehicleCatalogQuery.data?.catalog || [], market),
@@ -539,27 +519,27 @@ export function FleetPlannerPage() {
           historyCollapsed ? "lg:grid-cols-[88px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]",
         )}
       >
-        <div ref={historyPanelRef} className="min-w-0 lg:sticky lg:top-20 lg:self-start">
-          <FleetPlannerHistoryPanel
-            className="min-w-0"
-            jobs={historyQuery.data || []}
-            activeRunId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
-            isLoading={historyQuery.isLoading || loadHistoryMutation.isPending || deleteHistoryMutation.isPending || bulkDeleteHistoryMutation.isPending}
-            error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error || bulkDeleteHistoryMutation.error) as Error | null}
-            collapsed={historyCollapsed}
-            onCollapsedChange={setHistoryCollapsed}
-            onRefresh={() => void historyQuery.refetch()}
-            onOpen={(runId) => {
-              setHistoryCollapsed(true);
-              loadHistoryMutation.mutate(runId);
-            }}
-            onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
-            onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate(runIds)}
-            deletingRunId={deleteHistoryMutation.variables}
-            bulkDeleting={bulkDeleteHistoryMutation.isPending}
-            canDeleteShared={Boolean(currentUserQuery.data?.is_admin)}
-          />
-        </div>
+        <HistorySidebar
+          items={historyQuery.data || []}
+          itemId={(job) => job.run_id}
+          activeId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
+          title="Fleet Planner History"
+          emptyMessage="Saved Fleet Planner runs will appear here."
+          collapsed={historyCollapsed}
+          onCollapsedChange={setHistoryCollapsed}
+          isLoading={historyQuery.isLoading}
+          isFetching={historyQuery.isFetching}
+          error={(historyQuery.error || loadHistoryMutation.error || deleteHistoryMutation.error || bulkDeleteHistoryMutation.error) as Error | null}
+          deletingId={deleteHistoryMutation.variables}
+          bulkDeleting={bulkDeleteHistoryMutation.isPending}
+          onRefresh={() => void historyQuery.refetch()}
+          onOpen={(runId) => loadHistoryMutation.mutate(runId)}
+          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+          onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate(runIds)}
+          canDelete={(job) => !job.shared_with_all || Boolean(currentUserQuery.data?.is_admin)}
+          renderItem={(job, active) => <FleetHistoryItem job={job} active={active} />}
+          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
+        />
 
         <div className="min-w-0 space-y-4">
           <Card>
@@ -1378,233 +1358,41 @@ function FleetHistoryAutoSaveStatus({
   );
 }
 
-function FleetPlannerHistoryPanel({
-  className,
-  jobs,
-  activeRunId,
-  deletingRunId,
-  isLoading,
-  error,
-  collapsed,
-  onCollapsedChange,
-  onRefresh,
-  onOpen,
-  onDelete,
-  onBulkDelete,
-  canDeleteShared = false,
-  bulkDeleting,
+function FleetHistoryItem({
+  job,
+  active,
 }: {
-  className?: string;
-  jobs: FleetPlannerHistorySummary[];
-  activeRunId?: string;
-  deletingRunId?: string;
-  bulkDeleting?: boolean;
-  isLoading: boolean;
-  error?: Error | null;
-  collapsed: boolean;
-  onCollapsedChange: (collapsed: boolean) => void;
-  onRefresh: () => void;
-  onOpen: (runId: string) => void;
-  onDelete: (runId: string) => void;
-  onBulkDelete: (runIds: string[]) => void;
-  canDeleteShared?: boolean;
+  job: FleetPlannerHistorySummary;
+  active: boolean;
 }) {
   const t = useT();
-  const [selecting, setSelecting] = useState(false);
-  const [selectedRunIds, setSelectedRunIds] = useState<Set<string>>(() => new Set());
-  const selectedCount = selectedRunIds.size;
-
-  useEffect(() => {
-    const runIds = new Set(jobs.map((job) => job.run_id));
-    setSelectedRunIds((previous) => {
-      const next = new Set([...previous].filter((runId) => runIds.has(runId)));
-      return next.size === previous.size ? previous : next;
-    });
-  }, [jobs]);
-
-  function canDeleteJob(job: FleetPlannerHistorySummary) {
-    return !job.shared_with_all || canDeleteShared;
-  }
-
-  function toggleSelected(runId: string) {
-    setSelectedRunIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(runId)) {
-        next.delete(runId);
-      } else {
-        next.add(runId);
-      }
-      return next;
-    });
-  }
-
-  if (collapsed) {
-    return (
-      <Card className={cn("overflow-hidden", className)}>
-        <div className="flex min-h-[72px] items-stretch gap-2 p-2 lg:min-h-[320px] lg:flex-col">
-          <button
-            type="button"
-            className="group flex min-w-0 flex-1 items-center justify-between gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30 lg:flex-col lg:justify-start lg:px-2 lg:py-3"
-            aria-label={t("Open Fleet Planner history")}
-            onClick={() => onCollapsedChange(false)}
-          >
-            <span className="flex min-w-0 items-center gap-2 lg:flex-col">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface shadow-sm ring-1 ring-border transition group-hover:ring-primary/40">
-                <History className="h-4 w-4 text-primary" aria-hidden="true" />
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-foreground lg:[text-orientation:mixed] lg:[writing-mode:vertical-rl]">
-                  {t("History")}
-                </span>
-                <span className="mt-0.5 block text-xs text-muted-foreground lg:hidden">{t("Open saved runs")}</span>
-              </span>
-            </span>
-            <span className="flex shrink-0 items-center gap-2 lg:mt-3 lg:flex-col">
-              <Badge tone={jobs.length ? "info" : "neutral"}>{formatNumber(jobs.length)}</Badge>
-              <ArrowRight className="h-4 w-4 text-primary transition group-hover:translate-x-0.5 lg:rotate-90 lg:group-hover:translate-x-0 lg:group-hover:translate-y-0.5" aria-hidden="true" />
-            </span>
-          </button>
-          <div className="flex items-center lg:mt-auto">
-            <button type="button" className={buttonClassName("ghost")} aria-label={t("Refresh Fleet Planner history")} title={t("Refresh history")} onClick={onRefresh}>
-              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
+  const summary = job.summary || {};
+  const secondaryClass = active
+    ? "text-primary-foreground/80"
+    : "text-muted-foreground";
   return (
-    <Card className={className}>
-      <CardHeader>
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <History className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{t("Fleet Planner History")}</h2>
+    <div className="min-w-0 px-1 py-1">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">
+            {job.title || t("Fleet Planner Run")}
           </div>
-          <div className="flex items-center gap-1">
-            <button type="button" className={buttonClassName("ghost")} aria-label={t("Refresh Fleet Planner history")} onClick={onRefresh}>
-              <RefreshCw className={cn("h-4 w-4", isLoading && "animate-spin")} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className={buttonClassName("ghost")}
-              aria-label={t("Collapse Fleet Planner history")}
-              onClick={() => onCollapsedChange(true)}
-            >
-              <ArrowRight className="h-4 w-4 rotate-180" aria-hidden="true" />
-            </button>
+          <div className={cn("mt-1 text-xs", secondaryClass)}>
+            {formatDateTime(job.created_at)}
+          </div>
+          <div className={cn("mt-1 truncate text-xs", secondaryClass)}>
+            {t("Submitted by")} {job.owner_email || t("Unknown")}
           </div>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        {error ? <InlineError message={error.message} /> : null}
-        {!jobs.length && !isLoading ? (
-          <div className="rounded-md border border-dashed border-border bg-muted/40 px-3 py-4 text-sm text-muted-foreground">
-            {t("Saved Fleet Planner runs will appear here.")}
-          </div>
-        ) : null}
-        {jobs.length ? (
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              className={buttonClassName("ghost")}
-              onClick={() => {
-                setSelecting(!selecting);
-                setSelectedRunIds(new Set());
-              }}
-            >
-              {t(selecting ? "Cancel" : "Select")}
-            </button>
-            {selecting ? (
-              <button
-                type="button"
-                className={buttonClassName("secondary")}
-                disabled={!selectedCount || bulkDeleting}
-                onClick={() => {
-                  const runIds = [...selectedRunIds];
-                  if (runIds.length && window.confirm(t("Delete selected Fleet Planner history runs? This cannot be undone."))) {
-                    onBulkDelete(runIds);
-                    setSelectedRunIds(new Set());
-                    setSelecting(false);
-                  }
-                }}
-              >
-                {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                {t("Delete selected")} {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
-          {jobs.map((job) => {
-            const summary = job.summary || {};
-            const isActive = activeRunId === job.run_id;
-            const isDeleting = deletingRunId === job.run_id;
-            const canDeleteRun = canDeleteJob(job);
-            return (
-              <div
-                key={job.run_id}
-                className={cn(
-                  "flex items-stretch gap-1 rounded-md border p-2 transition",
-                  isActive ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted",
-                )}
-              >
-                {selecting && canDeleteRun ? (
-                  <input
-                    type="checkbox"
-                    className="mt-2 h-4 w-4 shrink-0 accent-primary"
-                    checked={selectedRunIds.has(job.run_id)}
-                    aria-label={`${t("Select")} ${job.title || t("Fleet Planner Run")}`}
-                    onChange={() => toggleSelected(job.run_id)}
-                  />
-                ) : null}
-                <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(job.run_id)}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold">{job.title || t("Fleet Planner Run")}</div>
-                      <div className={cn("mt-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        {formatDateTime(job.created_at)}
-                      </div>
-                      <div className={cn("mt-1 truncate text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                        {t("Submitted by")} {job.owner_email || t("Unknown")}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      <Badge tone={isActive ? "neutral" : "success"}>{formatNumber(summary.routes)} {t("routes")}</Badge>
-                    </div>
-                  </div>
-                  <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", isActive ? "text-primary-foreground/80" : "text-muted-foreground")}>
-                    <span>{formatNumber(summary.students)} {t("students")}</span>
-                    <span>{formatNumber(summary.total_distance_km)} km</span>
-                  </div>
-                </button>
-                {canDeleteRun && !selecting ? (
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-                      isActive
-                        ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
-                        : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-                    )}
-                    aria-label={`${t("Delete")} ${job.title || t("Fleet Planner Run")}`}
-                    disabled={isDeleting}
-                    onClick={() => {
-                      if (window.confirm(t("Delete this Fleet Planner history run? This cannot be undone."))) {
-                        onDelete(job.run_id);
-                      }
-                    }}
-                  >
-                    {isDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                  </button>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      </CardContent>
-    </Card>
+        <Badge tone={active ? "neutral" : "success"}>
+          {formatNumber(summary.routes)} {t("routes")}
+        </Badge>
+      </div>
+      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", secondaryClass)}>
+        <span>{formatNumber(summary.students)} {t("students")}</span>
+        <span>{formatNumber(summary.total_distance_km)} km</span>
+      </div>
+    </div>
   );
 }
 

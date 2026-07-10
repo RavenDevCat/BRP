@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
+import { ListChecks, MapPin, PlusCircle, RotateCcw, ShieldCheck, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
@@ -9,6 +9,7 @@ import {
   getRouteInsertAdvisorCapabilities,
   requestRouteInsertAdvisorProposals,
   type JobMapData,
+  type RouteInsertAdvisorProposalRequest,
   type RouteInsertAdvisorProposalResponse,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
@@ -27,6 +28,11 @@ function meters(value: unknown): string {
   return raw >= 1000 ? `${(raw / 1000).toFixed(1)} km` : `${Math.round(raw)} m`;
 }
 
+function signed(value: unknown, formatter: (item: unknown) => string): string {
+  const raw = asNumber(value);
+  return `${raw > 0 ? "+" : ""}${formatter(raw)}`;
+}
+
 function text(value: unknown): string {
   return String(value ?? "").trim();
 }
@@ -35,6 +41,9 @@ function checkLabel(value: unknown, t: (key: string) => string): string {
   const key = text(value);
   if (key === "capacity") return t("Capacity limit");
   if (key === "stop_limit") return t("Stop limit");
+  if (key === "combined_capacity") return t("Combined capacity limit");
+  if (key === "combined_stop_limit") return t("Combined stop limit");
+  if (key === "combined_constraints") return t("No combined feasible option");
   if (key === "osrm_refine_failed") return t("Road estimate unavailable");
   return key;
 }
@@ -81,6 +90,31 @@ function beforeAfter(base: unknown, next: unknown, formatter: (value: unknown) =
   return `${formatter(base)} -> ${formatter(next)}`;
 }
 
+function proposalKey(proposal: Record<string, unknown> | null | undefined): string {
+  if (!proposal) return "";
+  const newStop = proposal.new_stop as Record<string, unknown> | undefined;
+  return [
+    newStop?.index,
+    proposal.type,
+    proposal.route_id,
+    proposal.target_stop_order,
+    proposal.insert_after_order,
+    proposal.insert_before_order,
+  ].join(":");
+}
+
+function proposalSelection(proposal: Record<string, unknown>): Record<string, unknown> {
+  const newStop = proposal.new_stop as Record<string, unknown> | undefined;
+  return {
+    new_stop_index: newStop?.index,
+    type: proposal.type,
+    route_id: proposal.route_id,
+    target_stop_order: proposal.target_stop_order,
+    insert_after_order: proposal.insert_after_order,
+    insert_before_order: proposal.insert_before_order,
+  };
+}
+
 async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
@@ -101,6 +135,7 @@ export function RouteInsertAdvisorPage() {
   const [city, setCity] = useState("Shanghai");
   const [walkingThreshold, setWalkingThreshold] = useState("500");
   const [stopLimit, setStopLimit] = useState("");
+  const [selections, setSelections] = useState<Record<string, Record<string, unknown>>>({});
   const capabilitiesQuery = useQuery({
     queryKey: ["route-insert-advisor-capabilities"],
     queryFn: getRouteInsertAdvisorCapabilities,
@@ -114,6 +149,24 @@ export function RouteInsertAdvisorPage() {
   const checkCount = capabilities?.candidate_checks.length ?? 7;
   const result = proposalMutation.data as RouteInsertAdvisorProposalResponse | undefined;
   const canRun = Boolean(fileBase64 && addresses.trim() && !proposalMutation.isPending);
+  const requestPayload = (
+    nextSelections: Record<string, Record<string, unknown>>,
+  ): RouteInsertAdvisorProposalRequest => ({
+    file_name: file?.name || "workbook.xlsx",
+    file_base64: fileBase64,
+    new_stops: addresses,
+    constraints: {
+      country,
+      city,
+      walking_threshold_m: Number(walkingThreshold) || 0,
+      stop_limit: stopLimit ? Number(stopLimit) : null,
+    },
+    selections: Object.values(nextSelections),
+  });
+  const runWithSelections = (nextSelections: Record<string, Record<string, unknown>>) => {
+    setSelections(nextSelections);
+    proposalMutation.mutate(requestPayload(nextSelections));
+  };
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -163,17 +216,7 @@ export function RouteInsertAdvisorPage() {
           className="grid gap-4 p-4 lg:grid-cols-[1fr_320px]"
           onSubmit={(event) => {
             event.preventDefault();
-            proposalMutation.mutate({
-              file_name: file?.name || "workbook.xlsx",
-              file_base64: fileBase64,
-              new_stops: addresses,
-              constraints: {
-                country,
-                city,
-                walking_threshold_m: Number(walkingThreshold) || 0,
-                stop_limit: stopLimit ? Number(stopLimit) : null,
-              },
-            });
+            runWithSelections({});
           }}
         >
           <div className="space-y-4">
@@ -193,6 +236,7 @@ export function RouteInsertAdvisorPage() {
                     setFile(nextFile);
                     setFileBase64("");
                     setFileError("");
+                    setSelections({});
                     proposalMutation.reset();
                     if (!nextFile) return;
                     try {
@@ -264,7 +308,19 @@ export function RouteInsertAdvisorPage() {
         </section>
       ) : null}
 
-      {result ? <ProposalResults result={result} /> : null}
+      {result ? (
+        <ProposalResults
+          result={result}
+          isUpdating={proposalMutation.isPending}
+          hasSelections={Object.keys(selections).length > 0}
+          onReset={() => runWithSelections({})}
+          onSelect={(proposal) => {
+            const newStop = proposal.new_stop as Record<string, unknown> | undefined;
+            const key = String(newStop?.index ?? proposalKey(proposal));
+            runWithSelections({ ...selections, [key]: proposalSelection(proposal) });
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -278,26 +334,60 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function ProposalResults({ result }: { result: RouteInsertAdvisorProposalResponse }) {
+function ProposalResults({
+  result,
+  isUpdating,
+  hasSelections,
+  onReset,
+  onSelect,
+}: {
+  result: RouteInsertAdvisorProposalResponse;
+  isUpdating: boolean;
+  hasSelections: boolean;
+  onReset: () => void;
+  onSelect: (proposal: Record<string, unknown>) => void;
+}) {
   const t = useT();
   const proposals = result.proposals ?? [];
   const warnings = Array.isArray(result.geocode_warnings) ? result.geocode_warnings : [];
   const summary = result.summary ?? {};
-  const mapData = result.map_data as JobMapData | undefined;
+  const selectedPlan = (result.selected_plan ?? {}) as Record<string, unknown>;
+  const affectedRoutes = Array.isArray(selectedPlan.affected_routes)
+    ? (selectedPlan.affected_routes as Array<Record<string, unknown>>)
+    : [];
+  const mapData = (result.selected_map_data ?? result.map_data) as JobMapData | undefined;
+  const localizedMapData = mapData
+    ? { ...mapData, scenario_name: t("Selected insert plan") }
+    : undefined;
   const recommendations = recommendationList(result);
+  const planFeasible = Boolean(selectedPlan.feasible);
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">{t("Proposal results")}</h2>
-        <Badge tone={proposals.length ? "success" : "warning"}>
-          {proposals.length ? `${proposals.length}` : t("No candidates")}
-        </Badge>
+        <div>
+          <h2 className="text-sm font-semibold">{t("Selected insert plan")}</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t("All new students are combined into one plan and one active map.")}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          {hasSelections ? (
+            <button className={buttonClassName("secondary")} disabled={isUpdating} onClick={onReset} type="button">
+              <RotateCcw className="h-4 w-4" aria-hidden="true" />
+              {t("Reset recommendations")}
+            </button>
+          ) : null}
+          <Badge tone={planFeasible ? "success" : "warning"}>
+            {planFeasible ? t("Ready to review") : t("Needs review")}
+          </Badge>
+        </div>
       </div>
       <div className="overflow-auto p-4">
-        <div className="mb-4 grid gap-3 md:grid-cols-3">
-          <Metric label={t("Resolved stops")} value={String(summary.new_stop_count ?? 0)} />
-          <Metric label={t("Recommendations")} value={String(summary.recommendation_count ?? recommendations.length)} />
-          <Metric label={t("Road-refined candidates")} value={String(summary.refined_candidate_count ?? 0)} />
+        <div className="mb-4 grid gap-3 md:grid-cols-4">
+          <Metric label={t("New students")} value={String(summary.new_stop_count ?? 0)} />
+          <Metric label={t("Affected routes")} value={String(selectedPlan.affected_route_count ?? affectedRoutes.length)} />
+          <Metric label={t("Added time")} value={signed(selectedPlan.total_added_duration_s, minutes)} />
+          <Metric label={t("Added distance")} value={signed(selectedPlan.total_added_distance_m, meters)} />
           <Metric
             label={t("Geocode warnings")}
             value={String(summary.geocode_warning_count ?? warnings.length)}
@@ -319,20 +409,26 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
         {recommendations.length ? (
           <div className="mb-4 space-y-3">
             <div>
-              <h3 className="text-base font-semibold">{t("Best insertion recommendation")}</h3>
+              <h3 className="text-base font-semibold">{t("Student actions")}</h3>
               <p className="mt-1 text-sm text-muted-foreground">
-                {t("Each new stop shows the recommended route insertion first, followed by reasonable alternates when available.")}
+                {t("Choose an alternate only when operations prefers another reasonable route; the map refreshes as one combined plan.")}
               </p>
             </div>
             <div className="space-y-4">
               {recommendations.map((recommendation, index) => {
                 const primary = recommendation.primary as Record<string, unknown> | null | undefined;
+                const selected =
+                  (recommendation.selected as Record<string, unknown> | null | undefined) ?? primary;
                 const alternates = Array.isArray(recommendation.alternates)
                   ? (recommendation.alternates as Array<Record<string, unknown>>)
                   : [];
                 const newStop =
                   (recommendation.new_stop as Record<string, unknown> | undefined) ??
-                  (primary?.new_stop as Record<string, unknown> | undefined);
+                  (selected?.new_stop as Record<string, unknown> | undefined);
+                const options = [primary, ...alternates].filter(
+                  (proposal): proposal is Record<string, unknown> =>
+                    Boolean(proposal) && proposalKey(proposal) !== proposalKey(selected),
+                );
                 return (
                   <article key={`${text(newStop?.address)}-${index}`} className="rounded-md border border-border bg-muted/20 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -340,21 +436,23 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
                         <div className="text-xs font-semibold uppercase tracking-normal text-muted-foreground">{t("New stop")}</div>
                         <div className="mt-1 text-lg font-semibold">{text(newStop?.address) || `${t("New stop")} ${index + 1}`}</div>
                       </div>
-                      <Badge tone={primary?.feasible ? "success" : "warning"}>
-                        {primary ? (primary.feasible ? t("Feasible") : t("Needs review")) : t("No candidates")}
+                      <Badge tone={selected?.feasible ? "success" : "warning"}>
+                        {selected ? (selected.feasible ? t("Feasible") : t("Needs review")) : t("No candidates")}
                       </Badge>
                     </div>
-                    {primary ? <RecommendationCard proposal={primary} title={t("Recommended plan")} /> : null}
-                    {alternates.length ? (
+                    {selected ? <RecommendationCard proposal={selected} title={t("Selected action")} /> : null}
+                    {options.length ? (
                       <div className="mt-4">
-                        <h4 className="text-sm font-semibold">{t("Alternate options")}</h4>
+                        <h4 className="text-sm font-semibold">{t("Reasonable alternatives")}</h4>
                         <div className="mt-2 grid gap-3 lg:grid-cols-2">
-                          {alternates.map((proposal, alternateIndex) => (
+                          {options.map((proposal, alternateIndex) => (
                             <RecommendationCard
                               key={`${String(proposal.route_id)}-${alternateIndex}`}
                               proposal={proposal}
-                              title={`${t("Alternate option")} ${alternateIndex + 1}`}
+                              title={proposalKey(proposal) === proposalKey(primary) ? t("Default recommendation") : `${t("Alternate option")} ${alternateIndex + 1}`}
                               compact
+                              disabled={isUpdating}
+                              onSelect={() => onSelect(proposal)}
                             />
                           ))}
                         </div>
@@ -366,11 +464,52 @@ function ProposalResults({ result }: { result: RouteInsertAdvisorProposalRespons
             </div>
           </div>
         ) : null}
-        {mapData ? (
-          <div className="mb-4 overflow-hidden rounded-md border border-border">
-            <div className="border-b border-border px-4 py-3 text-sm font-semibold">{t("Route maps")}</div>
-            <div className="h-[520px]">
-              <InteractiveRouteMap data={mapData} focusKey={`insert-${mapData.job_id}-${mapData.scenario_key}`} />
+        {localizedMapData ? (
+          <div className="relative mb-4 overflow-hidden rounded-md border border-border">
+            <div className="border-b border-border px-4 py-3">
+              <div className="text-sm font-semibold">{t("Selected plan map")}</div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {t("Colored lines are the selected routes; grey dashed lines show the original affected routes.")}
+              </div>
+            </div>
+            <div className="h-[560px]">
+              <InteractiveRouteMap data={localizedMapData} focusKey={`insert-${localizedMapData.job_id}-${localizedMapData.scenario_key}-${proposals.map(proposalKey).join("|")}`} />
+            </div>
+            {isUpdating ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-surface/70 text-sm font-medium backdrop-blur-sm">
+                {t("Verifying selected plan...")}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {affectedRoutes.length ? (
+          <div className="mb-4">
+            <h3 className="text-base font-semibold">{t("Affected route comparison")}</h3>
+            <div className="mt-3 grid gap-3 lg:grid-cols-2">
+              {affectedRoutes.map((route) => (
+                <article key={text(route.route_id)} className="rounded-md border border-border p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <h4 className="font-semibold">{text(route.route_id)}</h4>
+                    <Badge tone={route.feasible ? "success" : "warning"}>
+                      {route.feasible ? t("Within constraints") : t("Needs review")}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+                    <Metric label={t("Route duration")} value={beforeAfter(route.base_duration_s, route.selected_duration_s, minutes)} />
+                    <Metric label={t("Route distance")} value={beforeAfter(route.base_distance_m, route.selected_distance_m, meters)} />
+                    <Metric label={t("Capacity")} value={`${String(route.capacity_before ?? "-")} -> ${String(route.capacity_after ?? "-")}${route.capacity_limit ? ` / ${String(route.capacity_limit)}` : ""}`} />
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge tone={route.time_window_ok ? "success" : "warning"}>
+                      {route.time_window_ok ? t("Time window passed") : t("Outside time window")}
+                    </Badge>
+                    <Badge tone={route.provider_verified ? "success" : "warning"}>
+                      {route.provider_verified ? t("AMap verified") : t("Road estimate only")}
+                    </Badge>
+                    <Badge tone="info">{signed(route.delta_duration_s, minutes)}</Badge>
+                  </div>
+                </article>
+              ))}
             </div>
           </div>
         ) : null}
@@ -386,10 +525,14 @@ function RecommendationCard({
   proposal,
   title,
   compact = false,
+  disabled = false,
+  onSelect,
 }: {
   proposal: Record<string, unknown>;
   title: string;
   compact?: boolean;
+  disabled?: boolean;
+  onSelect?: () => void;
 }) {
   const t = useT();
   const feasible = Boolean(proposal.feasible);
@@ -440,6 +583,11 @@ function RecommendationCard({
         </p>
       ) : null}
       <p className="mt-2 text-sm text-muted-foreground">{proposalChecks(proposal, t)}</p>
+      {onSelect ? (
+        <button className={`${buttonClassName("secondary")} mt-3`} disabled={disabled} onClick={onSelect} type="button">
+          {t("Use this option")}
+        </button>
+      ) : null}
     </div>
   );
 }

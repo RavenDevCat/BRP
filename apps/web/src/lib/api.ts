@@ -755,6 +755,7 @@ export type RouteInsertAdvisorProposalRequest = {
     };
     new_stops?: Array<Record<string, unknown>> | string;
     constraints?: Record<string, unknown>;
+    selections?: Array<Record<string, unknown>>;
 };
 
 export type RouteInsertAdvisorProposalResponse = {
@@ -762,6 +763,8 @@ export type RouteInsertAdvisorProposalResponse = {
     proposal_status: string;
     proposals: Array<Record<string, unknown>>;
     recommendations?: Array<Record<string, unknown>>;
+    selected_plan?: Record<string, unknown>;
+    selected_map_data?: JobMapData;
     summary: Record<string, unknown>;
     geocode_warnings?: Array<Record<string, unknown>>;
     map_data?: JobMapData;

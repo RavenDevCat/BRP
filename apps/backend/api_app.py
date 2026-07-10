@@ -5,6 +5,7 @@ import math
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from itertools import permutations
 from typing import Any, Callable
 from urllib.parse import quote
 
@@ -1180,24 +1181,160 @@ def _insert_proposal_sort_key(proposal: dict[str, Any]) -> tuple[int, float]:
     return (1 if feasible else 2, float(_insert_float(proposal.get("score")) or 0.0))
 
 
+def _insert_selection_matches(
+    proposal: dict[str, Any], selection: dict[str, Any]
+) -> bool:
+    return all(
+        str(proposal.get(key) if proposal.get(key) is not None else "")
+        == str(selection.get(key) if selection.get(key) is not None else "")
+        for key in (
+            "type",
+            "route_id",
+            "target_stop_order",
+            "insert_after_order",
+            "insert_before_order",
+        )
+    )
+
+
+def _insert_options_by_stop(
+    proposals: list[dict[str, Any]], new_stops: list[dict[str, Any]]
+) -> dict[str, list[dict[str, Any]]]:
+    grouped: dict[str, list[dict[str, Any]]] = {
+        _insert_new_stop_key(stop): [] for stop in new_stops
+    }
+    seen: dict[str, set[tuple[Any, ...]]] = {key: set() for key in grouped}
+    for proposal in sorted(proposals, key=_insert_proposal_sort_key):
+        key = _insert_new_stop_key(dict(proposal.get("new_stop") or {}))
+        identity = _insert_proposal_identity(proposal)
+        if key not in grouped or identity in seen[key]:
+            continue
+        grouped[key].append(proposal)
+        seen[key].add(identity)
+    return grouped
+
+
+def _insert_select_joint_plan(
+    proposals: list[dict[str, Any]],
+    new_stops: list[dict[str, Any]],
+    selections: Any = None,
+) -> list[dict[str, Any]]:
+    options_by_stop = _insert_options_by_stop(proposals, new_stops)
+    requested_by_stop = {
+        _insert_new_stop_key(dict(item.get("new_stop") or {"index": item.get("new_stop_index")})): item
+        for item in list(selections or [])
+        if isinstance(item, dict)
+    }
+    route_state: dict[str, dict[str, int]] = {}
+    selected_by_stop: dict[str, dict[str, Any]] = {}
+    ordered_stops = sorted(
+        new_stops,
+        key=lambda stop: (
+            0 if _insert_new_stop_key(stop) in requested_by_stop else 1,
+            len([item for item in options_by_stop.get(_insert_new_stop_key(stop), []) if item.get("feasible")]),
+            _insert_int(stop.get("index"), 0),
+        ),
+    )
+
+    for stop in ordered_stops:
+        stop_key = _insert_new_stop_key(stop)
+        options = options_by_stop.get(stop_key, [])
+        requested = requested_by_stop.get(stop_key)
+        if requested:
+            matches = [item for item in options if _insert_selection_matches(item, requested)]
+            options = matches or options
+
+        chosen: dict[str, Any] | None = None
+        for raw_option in options:
+            option = deepcopy(raw_option)
+            route_id = str(option.get("route_id") or "")
+            state = route_state.setdefault(route_id, {"riders": 0, "stops": 0})
+            riders = max(1, _insert_int(dict(option.get("new_stop") or {}).get("passenger_count"), 1))
+            adds_stop = 1 if option.get("type") == "insert_stop" else 0
+            capacity_before = _insert_int(option.get("capacity_before"), 0)
+            capacity_after = capacity_before + state["riders"] + riders
+            capacity_limit = _insert_int(option.get("capacity_limit"), 0)
+            base_stop_count = _insert_int(option.get("base_stop_count"), 0)
+            stop_count_after = base_stop_count + state["stops"] + adds_stop
+            stop_limit = _insert_int(option.get("stop_limit"), 0)
+            capacity_ok = not capacity_limit or capacity_after <= capacity_limit
+            stop_ok = not stop_limit or stop_count_after <= stop_limit
+            warnings = list(option.get("warnings") or [])
+            if not capacity_ok and "combined_capacity" not in warnings:
+                warnings.append("combined_capacity")
+            if not stop_ok and "combined_stop_limit" not in warnings:
+                warnings.append("combined_stop_limit")
+            option.update(
+                {
+                    "capacity_after": capacity_after,
+                    "stop_count_after": stop_count_after,
+                    "warnings": warnings,
+                    "feasible": bool(option.get("feasible")) and capacity_ok and stop_ok,
+                }
+            )
+            if requested or option["feasible"]:
+                chosen = option
+                break
+
+        if chosen is None and options:
+            chosen = deepcopy(options[0])
+            chosen["feasible"] = False
+            chosen["warnings"] = list(chosen.get("warnings") or []) + ["combined_constraints"]
+        if chosen is None:
+            continue
+        route_id = str(chosen.get("route_id") or "")
+        state = route_state.setdefault(route_id, {"riders": 0, "stops": 0})
+        state["riders"] += max(
+            1, _insert_int(dict(chosen.get("new_stop") or {}).get("passenger_count"), 1)
+        )
+        state["stops"] += 1 if chosen.get("type") == "insert_stop" else 0
+        selected_by_stop[stop_key] = chosen
+
+    return [
+        selected_by_stop[key]
+        for key in (_insert_new_stop_key(stop) for stop in new_stops)
+        if key in selected_by_stop
+    ]
+
+
+def _insert_reasonable_alternate(
+    primary: dict[str, Any], option: dict[str, Any]
+) -> bool:
+    if not option.get("feasible"):
+        return False
+    if option.get("type") != primary.get("type"):
+        return True
+    if option.get("type") == "walk_to_stop":
+        primary_m = _insert_float(primary.get("walking_distance_m")) or 0.0
+        option_m = _insert_float(option.get("walking_distance_m")) or 0.0
+        return option_m <= primary_m + 250.0
+    primary_s = _insert_float(primary.get("delta_duration_s")) or 0.0
+    option_s = _insert_float(option.get("delta_duration_s")) or 0.0
+    return option_s <= primary_s + 300.0
+
+
 def _insert_build_recommendations(
     proposals: list[dict[str, Any]],
     new_stops: list[dict[str, Any]],
+    selected_proposals: list[dict[str, Any]],
     *,
-    alternate_limit: int = 3,
+    alternate_limit: int = 2,
 ) -> list[dict[str, Any]]:
-    by_stop: dict[str, list[dict[str, Any]]] = {}
-    for proposal in proposals:
-        by_stop.setdefault(_insert_new_stop_key(dict(proposal.get("new_stop") or {})), []).append(proposal)
+    by_stop = _insert_options_by_stop(proposals, new_stops)
+    selected_by_stop = {
+        _insert_new_stop_key(dict(item.get("new_stop") or {})): item
+        for item in selected_proposals
+    }
 
     recommendations: list[dict[str, Any]] = []
     for stop in new_stops:
         options = sorted(by_stop.get(_insert_new_stop_key(stop), []), key=_insert_proposal_sort_key)
         primary = options[0] if options else None
+        selected = selected_by_stop.get(_insert_new_stop_key(stop)) or primary
         alternates: list[dict[str, Any]] = []
-        seen = {_insert_proposal_identity(primary)} if primary else set()
-        for option in options[1:]:
-            if primary and primary.get("feasible") and not option.get("feasible"):
+        seen = {_insert_proposal_identity(selected)} if selected else set()
+        for option in options:
+            if selected and not _insert_reasonable_alternate(selected, option):
                 continue
             identity = _insert_proposal_identity(option)
             if identity in seen:
@@ -1210,6 +1347,7 @@ def _insert_build_recommendations(
             {
                 "new_stop": stop,
                 "primary": primary,
+                "selected": selected,
                 "alternates": alternates,
                 "option_count": len(options),
             }
@@ -1285,6 +1423,459 @@ def _insert_filtered_map_data(
     }
     preview["bounds"] = _insert_bounds_for_map(preview)
     return _insert_map_data_with_new_stop_markers(preview, proposals)
+
+
+def _insert_order_segment_actions(
+    before: dict[str, Any],
+    actions: list[dict[str, Any]],
+    after: dict[str, Any],
+) -> list[dict[str, Any]]:
+    if len(actions) < 2:
+        return actions
+
+    def path_distance(items: tuple[dict[str, Any], ...]) -> float:
+        points = [before, *(dict(item.get("new_stop") or {}) for item in items), after]
+        return sum(_insert_haversine_m(points[index], points[index + 1]) for index in range(len(points) - 1))
+
+    if len(actions) <= 6:
+        return list(min(permutations(actions), key=path_distance))
+
+    # ponytail: large same-segment batches use nearest-neighbour order; switch to
+    # a bounded search only if real insert batches regularly exceed six stops.
+    remaining = list(actions)
+    ordered: list[dict[str, Any]] = []
+    current = before
+    while remaining:
+        next_action = min(
+            remaining,
+            key=lambda item: _insert_haversine_m(current, dict(item.get("new_stop") or {})),
+        )
+        ordered.append(next_action)
+        remaining.remove(next_action)
+        current = dict(next_action.get("new_stop") or {})
+    return ordered
+
+
+def _insert_route_sequence(
+    route_stops: list[dict[str, Any]], actions: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    if len(route_stops) < 2:
+        return [deepcopy(stop) for stop in route_stops]
+    actions_by_segment: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    for action in actions:
+        if action.get("type") != "insert_stop":
+            continue
+        key = (
+            _insert_int(action.get("insert_after_order"), -1),
+            _insert_int(action.get("insert_before_order"), -1),
+        )
+        actions_by_segment.setdefault(key, []).append(action)
+
+    sequence: list[dict[str, Any]] = [deepcopy(route_stops[0])]
+    for index in range(len(route_stops) - 1):
+        before = route_stops[index]
+        after = route_stops[index + 1]
+        segment_actions = _insert_order_segment_actions(
+            before,
+            actions_by_segment.get(
+                (
+                    _insert_int(before.get("order"), -1),
+                    _insert_int(after.get("order"), -1),
+                ),
+                [],
+            ),
+            after,
+        )
+        for action in segment_actions:
+            new_stop = dict(action.get("new_stop") or {})
+            stop_index = _insert_int(new_stop.get("index"), len(sequence))
+            sequence.append(
+                {
+                    "id": f"insert-new-{stop_index + 1}",
+                    "address": str(new_stop.get("address") or "New stop"),
+                    "requested_address": str(new_stop.get("address") or ""),
+                    "passenger_count": max(1, _insert_int(new_stop.get("passenger_count"), 1)),
+                    "is_depot": False,
+                    "lat": _insert_float(new_stop.get("lat")),
+                    "lng": _insert_float(new_stop.get("lng")),
+                    "display_label": f"N{stop_index + 1}",
+                    "node_index": -1,
+                    "_is_inserted": True,
+                }
+            )
+        sequence.append(deepcopy(after))
+    return sequence
+
+
+def _insert_route_measurement(
+    route_points: list[dict[str, Any]], country: str
+) -> dict[str, Any]:
+    planner = backend_service.load_legacy_planner()
+    previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
+    osrm_geometry: list[list[float]] = []
+    osrm_duration_s = 0.0
+    osrm_distance_m = 0.0
+    leg_durations_s: list[float] = []
+    leg_distances_m: list[float] = []
+    warnings: list[str] = []
+    try:
+        resolver = getattr(planner, "resolve_osrm_base_url", None)
+        if callable(resolver):
+            planner.OSRM_BASE_URL = resolver(route_points)
+        coordinates: list[str] = []
+        for point in route_points:
+            lat, lng = planner.point_osrm_lat_lng(point, prefer_plot=True)
+            coordinates.append(f"{lng:.7f},{lat:.7f}")
+        payload = planner.osrm_request_json(
+            "route",
+            ";".join(coordinates),
+            {"overview": "full", "geometries": "geojson", "steps": "false"},
+        )
+        route = dict((payload.get("routes") or [{}])[0] or {})
+        osrm_duration_s = float(route.get("duration", 0.0) or 0.0)
+        osrm_distance_m = float(route.get("distance", 0.0) or 0.0)
+        osrm_geometry = [
+            [float(pair[0]), float(pair[1])]
+            for pair in list(dict(route.get("geometry") or {}).get("coordinates") or [])
+            if isinstance(pair, (list, tuple)) and len(pair) >= 2
+        ]
+        legs = [dict(item or {}) for item in list(route.get("legs") or [])]
+        leg_durations_s = [float(item.get("duration", 0.0) or 0.0) for item in legs]
+        leg_distances_m = [float(item.get("distance", 0.0) or 0.0) for item in legs]
+    except Exception as exc:
+        warnings.append(f"osrm_route_failed:{exc.__class__.__name__}")
+        osrm_geometry = [
+            [float(point.get("lng") or 0.0), float(point.get("lat") or 0.0)]
+            for point in route_points
+        ]
+        leg_distances_m = [
+            _insert_haversine_m(route_points[index], route_points[index + 1])
+            for index in range(max(0, len(route_points) - 1))
+        ]
+        leg_durations_s = [distance / 8.33 for distance in leg_distances_m]
+        osrm_distance_m = sum(leg_distances_m)
+        osrm_duration_s = sum(leg_durations_s)
+    finally:
+        if hasattr(planner, "OSRM_BASE_URL"):
+            planner.OSRM_BASE_URL = previous_osrm_base_url
+
+    display_geometry: list[list[float]] | None = None
+    display_source = "osrm"
+    display_message = ""
+    display_duration_s: float | None = None
+    display_distance_m: float | None = None
+    country_key = str(country or "").strip().upper()
+    if country_key in {"CHINA", "CN", "中国", "中华人民共和国"}:
+        (
+            display_geometry,
+            display_source,
+            display_message,
+            display_duration_s,
+            display_distance_m,
+        ) = backend_service._amap_display_geometry_for_route(
+            route_points, list(range(len(route_points)))
+        )
+        if not str(display_source).startswith("amap") or display_duration_s is None:
+            warnings.append("amap_final_validation_unavailable")
+
+    duration_s = display_duration_s if display_duration_s is not None else osrm_duration_s
+    distance_m = display_distance_m if display_distance_m is not None else osrm_distance_m
+    duration_scale = duration_s / osrm_duration_s if osrm_duration_s > 0 else 1.0
+    distance_scale = distance_m / osrm_distance_m if osrm_distance_m > 0 else 1.0
+    return {
+        "geometry": osrm_geometry,
+        "display_geometry": display_geometry,
+        "display_geometry_source": display_source,
+        "display_geometry_message": display_message,
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "leg_durations_s": [value * duration_scale for value in leg_durations_s],
+        "leg_distances_m": [value * distance_scale for value in leg_distances_m],
+        "provider_verified": str(display_source).startswith("amap") and display_duration_s is not None,
+        "warnings": warnings,
+    }
+
+
+def _insert_clock_minutes(value: Any) -> int | None:
+    parts = str(value or "").strip().split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hours, minutes = int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+    if not (0 <= hours <= 23 and 0 <= minutes <= 59):
+        return None
+    return hours * 60 + minutes
+
+
+def _insert_time_window_seconds(config: dict[str, Any]) -> float | None:
+    start = _insert_clock_minutes(config.get("time_window_start"))
+    end = _insert_clock_minutes(config.get("time_window_end"))
+    if start is None or end is None:
+        return None
+    if end <= start:
+        end += 24 * 60
+    return float((end - start) * 60)
+
+
+def _insert_build_selected_plan(
+    map_data: dict[str, Any],
+    selected: list[dict[str, Any]],
+    *,
+    country: str,
+    constraints: dict[str, Any],
+    suggested_config: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    route_ids = {str(item.get("route_id") or "") for item in selected if item.get("route_id")}
+    if not route_ids:
+        return {"status": "unavailable", "feasible": False, "actions": selected}, None
+
+    route_by_id = {str(route.get("id") or ""): dict(route) for route in map_data.get("routes") or []}
+    stops_by_route: dict[str, list[dict[str, Any]]] = {}
+    for stop in map_data.get("stops") or []:
+        route_id = str(dict(stop).get("route_id") or "")
+        if route_id in route_ids:
+            stops_by_route.setdefault(route_id, []).append(dict(stop))
+    for route_stops in stops_by_route.values():
+        route_stops.sort(key=lambda item: _insert_int(item.get("order"), 0))
+
+    merged_config = dict(suggested_config)
+    merged_config.update({key: value for key, value in constraints.items() if value not in (None, "")})
+    window_s = _insert_time_window_seconds(merged_config)
+    dwell_s = max(0.0, (_insert_float(merged_config.get("stop_service_minutes")) or 1.0) * 60.0)
+    map_routes: list[dict[str, Any]] = []
+    map_stops: list[dict[str, Any]] = []
+    private_links: list[dict[str, Any]] = []
+    route_results: list[dict[str, Any]] = []
+
+    for route_id in sorted(route_ids):
+        route = route_by_id.get(route_id)
+        route_stops = stops_by_route.get(route_id, [])
+        if not route or len(route_stops) < 2:
+            continue
+        route_actions = [item for item in selected if str(item.get("route_id") or "") == route_id]
+        insert_actions = [item for item in route_actions if item.get("type") == "insert_stop"]
+        sequence = _insert_route_sequence(route_stops, insert_actions)
+        route_points = [
+            _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
+            for stop in sequence
+        ]
+        if insert_actions:
+            base_points = [
+                _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
+                for stop in route_stops
+            ]
+            base_measurement = _insert_route_measurement(base_points, country)
+            selected_measurement = _insert_route_measurement(route_points, country)
+        else:
+            original_geometry = list(route.get("display_geometry") or route.get("geometry") or [])
+            base_measurement = {
+                "geometry": list(route.get("geometry") or []),
+                "display_geometry": list(route.get("display_geometry") or []) or None,
+                "display_geometry_source": str(route.get("display_geometry_source") or "existing"),
+                "display_geometry_message": str(route.get("display_geometry_message") or ""),
+                "duration_s": float(route.get("duration_s", 0.0) or 0.0),
+                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "leg_durations_s": [],
+                "leg_distances_m": [],
+                "provider_verified": bool(original_geometry),
+                "warnings": [],
+            }
+            selected_measurement = dict(base_measurement)
+
+        base_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
+        if base_service_s <= 0:
+            base_service_s = max(0, _insert_int(route.get("stop_count"), 0)) * dwell_s
+        selected_service_s = base_service_s + len(insert_actions) * dwell_s
+        base_total_s = float(base_measurement.get("duration_s", 0.0) or 0.0) + base_service_s
+        selected_total_s = float(selected_measurement.get("duration_s", 0.0) or 0.0) + selected_service_s
+        time_window_ok = window_s is None or selected_total_s <= window_s
+        action_ok = all(bool(item.get("feasible")) for item in route_actions)
+        provider_required = bool(insert_actions) and str(country or "").strip().upper() in {
+            "CHINA",
+            "CN",
+            "中国",
+            "中华人民共和国",
+        }
+        provider_ok = not provider_required or bool(selected_measurement.get("provider_verified"))
+        route_feasible = action_ok and time_window_ok and provider_ok
+        load_after = _insert_int(route.get("load"), 0) + sum(
+            max(1, _insert_int(dict(item.get("new_stop") or {}).get("passenger_count"), 1))
+            for item in route_actions
+        )
+        route_results.append(
+            {
+                "route_id": route_id,
+                "feasible": route_feasible,
+                "base_duration_s": round(base_total_s),
+                "selected_duration_s": round(selected_total_s),
+                "delta_duration_s": round(selected_total_s - base_total_s),
+                "base_distance_m": round(float(base_measurement.get("distance_m", 0.0) or 0.0)),
+                "selected_distance_m": round(float(selected_measurement.get("distance_m", 0.0) or 0.0)),
+                "delta_distance_m": round(
+                    float(selected_measurement.get("distance_m", 0.0) or 0.0)
+                    - float(base_measurement.get("distance_m", 0.0) or 0.0)
+                ),
+                "capacity_before": _insert_int(route.get("load"), 0),
+                "capacity_after": load_after,
+                "capacity_limit": _insert_int(route.get("bus_capacity"), 0) or None,
+                "base_stop_count": _insert_int(route.get("stop_count"), 0),
+                "selected_stop_count": _insert_int(route.get("stop_count"), 0) + len(insert_actions),
+                "affected_riders": _insert_int(route.get("load"), 0),
+                "time_window_ok": time_window_ok,
+                "provider_required": provider_required,
+                "provider_verified": bool(selected_measurement.get("provider_verified")),
+                "provider_source": selected_measurement.get("display_geometry_source") or "osrm",
+                "warnings": list(selected_measurement.get("warnings") or []),
+            }
+        )
+
+        leg_durations = list(selected_measurement.get("leg_durations_s") or [])
+        leg_distances = list(selected_measurement.get("leg_distances_m") or [])
+        cumulative_duration_s = 0.0
+        cumulative_distance_m = 0.0
+        stop_ids: list[str] = []
+        for order, stop in enumerate(sequence):
+            if order > 0:
+                if order - 1 < len(leg_durations):
+                    cumulative_duration_s += float(leg_durations[order - 1] or 0.0)
+                if order - 1 < len(leg_distances):
+                    cumulative_distance_m += float(leg_distances[order - 1] or 0.0)
+            stop_id = str(stop.get("id") or f"{route_id}:insert:{order}")
+            stop_ids.append(stop_id)
+            map_stops.append(
+                {
+                    "id": stop_id,
+                    "route_id": route_id,
+                    "route_index": _insert_int(route.get("route_index"), 0),
+                    "order": order,
+                    "display_label": stop.get("display_label"),
+                    "node_index": _insert_int(stop.get("node_index"), -1),
+                    "address": str(stop.get("address") or ""),
+                    "requested_address": str(stop.get("requested_address") or ""),
+                    "passenger_count": _insert_int(stop.get("passenger_count"), 0),
+                    "is_depot": bool(stop.get("is_depot")),
+                    "lat": _insert_float(stop.get("lat")) or 0.0,
+                    "lng": _insert_float(stop.get("lng")) or 0.0,
+                    "cumulative_duration_s": cumulative_duration_s,
+                    "cumulative_distance_m": cumulative_distance_m,
+                }
+            )
+
+        map_route = dict(route)
+        map_route.update(
+            {
+                "load": load_after,
+                "stop_count": _insert_int(route.get("stop_count"), 0) + len(insert_actions),
+                "distance_m": float(selected_measurement.get("distance_m", 0.0) or 0.0),
+                "duration_s": float(selected_measurement.get("duration_s", 0.0) or 0.0),
+                "raw_duration_s": float(selected_measurement.get("duration_s", 0.0) or 0.0),
+                "geometry": list(selected_measurement.get("geometry") or []),
+                "display_geometry": selected_measurement.get("display_geometry"),
+                "display_geometry_source": selected_measurement.get("display_geometry_source") or "osrm",
+                "display_geometry_message": selected_measurement.get("display_geometry_message") or "",
+                "stop_ids": stop_ids,
+            }
+        )
+        map_routes.append(map_route)
+
+        if insert_actions:
+            old_geometry = list(base_measurement.get("display_geometry") or base_measurement.get("geometry") or [])
+            if len(old_geometry) >= 2:
+                private_links.append(
+                    {
+                        "id": f"original-route-{route_id}",
+                        "access_type": "original_route",
+                        "address": "Original route",
+                        "pickup_address": route_id,
+                        "pickup_route_id": route_id,
+                        "drive_time_s": float(base_measurement.get("duration_s", 0.0) or 0.0),
+                        "drive_distance_m": float(base_measurement.get("distance_m", 0.0) or 0.0),
+                        "geometry": old_geometry,
+                    }
+                )
+
+        for action in [item for item in route_actions if item.get("type") == "walk_to_stop"]:
+            new_stop = dict(action.get("new_stop") or {})
+            target_order = _insert_int(action.get("target_stop_order"), -1)
+            target = next(
+                (stop for stop in route_stops if _insert_int(stop.get("order"), -2) == target_order),
+                None,
+            )
+            if not target:
+                continue
+            stop_index = _insert_int(new_stop.get("index"), len(map_stops))
+            map_stops.append(
+                {
+                    "id": f"walk-new-{stop_index + 1}",
+                    "route_id": f"walk:{route_id}:{stop_index + 1}",
+                    "route_index": _insert_int(route.get("route_index"), 0),
+                    "order": 0,
+                    "display_label": f"N{stop_index + 1}",
+                    "node_index": -1,
+                    "address": str(new_stop.get("address") or ""),
+                    "requested_address": str(new_stop.get("address") or ""),
+                    "passenger_count": max(1, _insert_int(new_stop.get("passenger_count"), 1)),
+                    "is_depot": False,
+                    "lat": _insert_float(new_stop.get("lat")) or 0.0,
+                    "lng": _insert_float(new_stop.get("lng")) or 0.0,
+                    "cumulative_duration_s": 0,
+                    "cumulative_distance_m": 0,
+                }
+            )
+            private_links.append(
+                {
+                    "id": f"walk-link-{stop_index + 1}",
+                    "access_type": "walk_to_stop",
+                    "address": str(new_stop.get("address") or ""),
+                    "pickup_address": str(target.get("address") or ""),
+                    "pickup_route_id": route_id,
+                    "drive_time_s": 0,
+                    "drive_distance_m": _insert_float(action.get("walking_distance_m")) or 0.0,
+                    "geometry": [
+                        [_insert_float(new_stop.get("lng")) or 0.0, _insert_float(new_stop.get("lat")) or 0.0],
+                        [_insert_float(target.get("lng")) or 0.0, _insert_float(target.get("lat")) or 0.0],
+                    ],
+                }
+            )
+
+    selected_map = dict(map_data)
+    selected_map.update(
+        {
+            "scenario_key": "route_insert_selected",
+            "scenario_name": "Selected Insert Plan",
+            "routes": map_routes,
+            "stops": map_stops,
+            "route_connectors": [],
+            "private_links": private_links,
+            "summary": {
+                "route_count": len(map_routes),
+                "stop_count": sum(_insert_int(route.get("stop_count"), 0) for route in map_routes),
+                "passenger_count": sum(_insert_int(route.get("load"), 0) for route in map_routes),
+                "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in map_routes),
+                "duration_s": max([float(route.get("duration_s", 0.0) or 0.0) for route in map_routes] or [0.0]),
+            },
+        }
+    )
+    selected_map["bounds"] = _insert_bounds_for_map(selected_map)
+    feasible = len(selected) > 0 and all(bool(item.get("feasible")) for item in selected)
+    feasible = feasible and all(bool(item.get("feasible")) for item in route_results)
+    plan = {
+        "status": "ready" if feasible else "needs_review",
+        "feasible": feasible,
+        "actions": selected,
+        "affected_routes": route_results,
+        "affected_route_count": len(route_results),
+        "inserted_stop_count": sum(1 for item in selected if item.get("type") == "insert_stop"),
+        "walking_stop_count": sum(1 for item in selected if item.get("type") == "walk_to_stop"),
+        "total_added_duration_s": round(sum(float(item.get("delta_duration_s", 0.0) or 0.0) for item in route_results)),
+        "total_added_distance_m": round(sum(float(item.get("delta_distance_m", 0.0) or 0.0) for item in route_results)),
+        "provider_verified_route_count": sum(1 for item in route_results if item.get("provider_verified")),
+        "time_window_start": merged_config.get("time_window_start"),
+        "time_window_end": merged_config.get("time_window_end"),
+    }
+    return plan, selected_map
 
 
 def _build_route_insert_proposals(
@@ -1444,19 +2035,47 @@ def _build_route_insert_proposals(
         limit=refine_top_n,
     )
     proposals.sort(key=_insert_proposal_sort_key)
-    recommendations = _insert_build_recommendations(proposals, new_stops)
-    returned_proposals = [
-        item
-        for recommendation in recommendations
-        for item in [recommendation.get("primary"), *(recommendation.get("alternates") or [])]
-        if isinstance(item, dict)
-    ]
-    preview_map_data = _insert_filtered_map_data(map_data, returned_proposals)
+    selected_proposals = _insert_select_joint_plan(
+        proposals, new_stops, payload.get("selections")
+    )
+    recommendations = _insert_build_recommendations(
+        proposals, new_stops, selected_proposals
+    )
+    returned_proposals: list[dict[str, Any]] = []
+    seen_returned: set[tuple[str, tuple[Any, ...]]] = set()
+    for recommendation in recommendations:
+        for item in [
+            recommendation.get("selected"),
+            recommendation.get("primary"),
+            *(recommendation.get("alternates") or []),
+        ]:
+            if not isinstance(item, dict):
+                continue
+            item_key = (
+                _insert_new_stop_key(dict(item.get("new_stop") or {})),
+                _insert_proposal_identity(item),
+            )
+            if item_key in seen_returned:
+                continue
+            returned_proposals.append(item)
+            seen_returned.add(item_key)
+    selected_plan, selected_map_data = _insert_build_selected_plan(
+        map_data,
+        selected_proposals,
+        country=default_country,
+        constraints=constraints,
+        suggested_config=dict(payload.get("_suggested_config") or {}),
+    )
+    preview_map_data = selected_map_data or _insert_filtered_map_data(
+        map_data, selected_proposals
+    )
     return {
         "status": "ok",
         "proposal_status": "ready",
         "proposals": returned_proposals,
         "recommendations": recommendations,
+        "selected_plan": selected_plan,
+        "selected_map_data": selected_map_data,
         "summary": {
             "source_job_id": job_record.get("job_id"),
             "source_label": payload.get("_source_label") or "",
@@ -1470,6 +2089,8 @@ def _build_route_insert_proposals(
             "proposal_limit": proposal_limit,
             "refined_candidate_count": sum(1 for item in returned_proposals if item.get("refined")),
             "refine_top_n": refine_top_n,
+            "selected_action_count": len(selected_proposals),
+            "selected_plan_status": selected_plan.get("status"),
             "mutates_original_plan": False,
         },
         "geocode_warnings": geocode_warnings,
@@ -1497,6 +2118,7 @@ def route_insert_advisor_proposals(
             )
         workbook_payload = dict(payload_dict)
         workbook_payload["_map_data"] = map_data
+        workbook_payload["_suggested_config"] = dict(preview.get("suggested_config") or {})
         workbook_payload["_source_label"] = preview.get("source_label") or payload_dict.get("file_name") or ""
         workbook_payload["_source_kind"] = "workbook"
         response = _build_route_insert_proposals(

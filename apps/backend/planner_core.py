@@ -1886,11 +1886,21 @@ def _amap_route_stats(
     distance_m = 0.0
     start = 0
     while start < len(request_points) - 1:
-        if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
-            return None
         end = min(len(request_points), start + max_points)
-        stats = _amap_route_segment_stats(planner, request_points[start:end])
-        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        stats = None
+        for attempt in range(2):
+            if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
+                return None
+            state["api_calls"] = int(state.get("api_calls", 0)) + 1
+            try:
+                stats = _amap_route_segment_stats(planner, request_points[start:end])
+                break
+            except Exception:
+                if attempt:
+                    raise
+                time.sleep(0.25)
+        if stats is None:
+            return None
         duration_s += float(stats.get("duration_s", 0.0) or 0.0)
         distance_m += float(stats.get("distance_m", 0.0) or 0.0)
         start = end - 1
@@ -2211,15 +2221,24 @@ def attach_final_route_traffic_gate(
         scenario["traffic_gate"] = gate
         return gate
 
-    persistent_cache = traffic_policy.provider != "amap"
+    persistent_cache = (
+        traffic_policy.provider != "amap"
+        and not bool(getattr(config, "_fresh_final_route_traffic_required", False))
+    )
     if persistent_cache:
         cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
     else:
-        # AMap represents current traffic, so reuse it only inside this planner run.
-        cache = getattr(config, "_amap_final_route_cache", None)
+        # Fresh scheduled validation and AMap current traffic are reusable only
+        # inside this planner run.
+        cache_attribute = (
+            "_amap_final_route_cache"
+            if traffic_policy.provider == "amap"
+            else "_scheduled_final_route_traffic_cache"
+        )
+        cache = getattr(config, cache_attribute, None)
         if cache is None:
             cache = {}
-            setattr(config, "_amap_final_route_cache", cache)
+            setattr(config, cache_attribute, cache)
     state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
     target_minutes = latest_arrival_minutes
     departure_minutes = from_school_departure_minutes
@@ -4485,6 +4504,81 @@ def attach_current_plan_traffic_gate(
         input_records,
         "Current Plan",
     )
+
+
+def calibrate_scheduled_current_plan_traffic(
+    current_plan_scenario: dict[str, Any] | None,
+    gate: dict[str, Any] | None,
+    config: PlannerConfig,
+    previous_multiplier: float,
+) -> dict[str, Any]:
+    gate = dict(gate or {})
+    policy = dict(gate.get("traffic_policy") or {})
+    provider = str(gate.get("provider") or policy.get("provider") or "none").strip().lower()
+    evidence: dict[str, Any] = {
+        "enabled": True,
+        "provider": provider,
+        "gate_status": str(gate.get("status") or "unavailable").strip().lower(),
+        "api_calls": int(gate.get("api_calls", 0) or 0),
+        "cache_hits": int(gate.get("cache_hits", 0) or 0),
+    }
+    if provider not in {"amap", "kakao_navi"}:
+        return {**evidence, "status": "not_applicable", "reason": "unsupported_final_route_traffic_provider"}
+    if evidence["gate_status"] not in {"passed", "failed"}:
+        return {**evidence, "status": "unavailable", "reason": "current_plan_traffic_gate_unavailable"}
+    if evidence["api_calls"] <= 0:
+        return {**evidence, "status": "unavailable", "reason": "no_fresh_api_calls"}
+
+    routes = list(dict(current_plan_scenario or {}).get("routes") or [])
+    old_multiplier = max(0.1, float(previous_multiplier or 0.0))
+    verified_drive_s = 0.0
+    raw_drive_s = 0.0
+    max_verified_total_s = 0.0
+    measured_route_count = 0
+    for route in routes:
+        route_gate = dict(route.get("final_route_traffic_gate") or {})
+        verified_drive = _traffic_float(route_gate.get("verified_drive_duration_s"))
+        verified_total = _traffic_float(route_gate.get("verified_total_duration_s"))
+        adjusted_total = _traffic_float(route.get("time_s"))
+        stop_service = _traffic_float(route.get("stop_service_time_s")) or 0.0
+        if verified_drive is None or verified_total is None or adjusted_total is None:
+            continue
+        raw_drive = max(0.0, adjusted_total - stop_service) / old_multiplier
+        if raw_drive <= 0 or verified_drive <= 0 or verified_total <= 0:
+            continue
+        verified_drive_s += verified_drive
+        raw_drive_s += raw_drive
+        max_verified_total_s = max(max_verified_total_s, verified_total)
+        measured_route_count += 1
+
+    if not routes or measured_route_count != len(routes) or raw_drive_s <= 0 or max_verified_total_s <= 0:
+        return {
+            **evidence,
+            "status": "unavailable",
+            "reason": "incomplete_current_plan_traffic_measurement",
+            "route_count": len(routes),
+            "measured_route_count": measured_route_count,
+        }
+
+    raw_multiplier = verified_drive_s / raw_drive_s
+    multiplier = min(3.0, max(0.5, raw_multiplier))
+    previous_budget = int(config.max_route_duration_minutes)
+    refreshed_budget = max(5, min(240, int(math.ceil(max_verified_total_s / 60.0))))
+    config.max_route_duration_minutes = refreshed_budget
+    return {
+        **evidence,
+        "status": "ready",
+        "succeeded": True,
+        "route_count": len(routes),
+        "measured_route_count": measured_route_count,
+        "previous_traffic_time_multiplier": old_multiplier,
+        "raw_traffic_time_multiplier": raw_multiplier,
+        "traffic_time_multiplier": multiplier,
+        "traffic_time_multiplier_clamped": not math.isclose(raw_multiplier, multiplier),
+        "previous_max_route_duration_minutes": previous_budget,
+        "max_route_duration_minutes": refreshed_budget,
+        "max_verified_total_duration_minutes": max_verified_total_s / 60.0,
+    }
 
 
 def compare_current_plan_to_like_for_like_baseline(
@@ -7329,6 +7423,7 @@ def _solve_vehicle_ladder_scenario(
                     time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                     route_traffic_attribution_context=route_traffic_attribution_context,
                     route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                    enable_vehicle_search=False,
                 )
             except Exception as exc:
                 attempts.append(
@@ -7355,6 +7450,8 @@ def _solve_vehicle_ladder_scenario(
 
             if all_constraints_passed:
                 best_target_result = candidate
+                if phase_name == "fallback_more_vehicles":
+                    break
                 continue
             if hard_passed and best_hard_pass_result is None:
                 best_hard_pass_result = candidate
@@ -7380,6 +7477,7 @@ def _solve_vehicle_ladder_scenario(
                 time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                 route_traffic_attribution_context=route_traffic_attribution_context,
                 route_traffic_fallback_multiplier=route_traffic_fallback_multiplier,
+                enable_vehicle_search=False,
             )
             result = _apply_vehicle_saving_target(result, current_route_count, minimum_vehicle_reduction)
             attempt = _vehicle_ladder_attempt(result, current_route_count)
@@ -7993,8 +8091,11 @@ def run_backend_planner_with_prepared_data(
     prepared_payload: dict[str, Any],
     config: PlannerConfig | None = None,
     progress_callback: Any | None = None,
+    require_fresh_final_traffic: bool = False,
 ) -> dict[str, Any]:
     config = create_request_scoped_config(config or PlannerConfig())
+    if require_fresh_final_traffic:
+        setattr(config, "_fresh_final_route_traffic_required", True)
     input_records = _normalize_input_records(prepared_payload.get("input_records") or [])
     if not input_records:
         raise ValueError("Prepared payload does not contain any input records.")
@@ -8027,6 +8128,10 @@ def run_backend_planner_with_prepared_data(
         "enabled": False,
         "mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
         "reason": "legacy_mode",
+    }
+    scheduled_run_traffic_refresh: dict[str, Any] = {
+        "enabled": bool(require_fresh_final_traffic),
+        "status": "pending" if require_fresh_final_traffic else "not_requested",
     }
     route_traffic_attribution_context: dict[str, Any] = {}
     with redirect_stdout(log_stream), redirect_stderr(log_stream):
@@ -8107,6 +8212,82 @@ def run_backend_planner_with_prepared_data(
             if current_plan_route_count_for_reduction > 0 and minimum_vehicle_reduction > 0
             else None
         )
+        assessment_time = None
+        assessment_distance = None
+        current_plan_assessment = None
+        current_plan_scenario = None
+        if require_fresh_final_traffic:
+            if not current_plan:
+                raise RuntimeError("Scheduled run requires a current plan for fresh traffic validation.")
+            assessment_time, assessment_distance = _build_assessment_metric_matrices(planner, original_points)
+            current_plan_assessment = assess_current_plan(
+                planner,
+                current_plan,
+                original_points,
+                config,
+                solve_time=assessment_time,
+                solve_distance=assessment_distance,
+                traffic_calibration=traffic_calibration,
+            )
+            current_plan_scenario = build_current_plan_map_scenario(
+                planner,
+                current_plan_assessment,
+                original_points,
+            )
+            current_plan_gate = attach_current_plan_traffic_gate(
+                planner,
+                current_plan_scenario,
+                original_points,
+                config,
+                input_records,
+            )
+            scheduled_run_traffic_refresh = calibrate_scheduled_current_plan_traffic(
+                current_plan_scenario,
+                current_plan_gate,
+                config,
+                traffic_time_multiplier,
+            )
+            refresh_status = str(scheduled_run_traffic_refresh.get("status") or "").strip().lower()
+            if refresh_status == "ready":
+                traffic_time_multiplier = float(scheduled_run_traffic_refresh["traffic_time_multiplier"])
+                traffic_profile_name = f"{str(scheduled_run_traffic_refresh.get('provider') or '').upper()} Current (Scheduled)"
+                traffic_profile_context = (
+                    "Fresh current-plan final-route traffic validation for this scheduled run"
+                )
+                planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
+                planner.TRAFFIC_TIME_MULTIPLIER = traffic_time_multiplier
+                planner.TRAFFIC_PROFILE_CONTEXT = traffic_profile_context
+                planner.MAX_ROUTE_DURATION_SECONDS = effective_route_duration_limit_minutes(config) * 60
+                planner.ANNOTATION_ROUTE_DURATION_SECONDS = config.max_route_duration_minutes * 60
+                planner.log(
+                    f"[BACKEND] Scheduled traffic refresh selected {traffic_time_multiplier:.2f}x "
+                    f"and a {config.max_route_duration_minutes}-minute current-plan route budget."
+                )
+                assessment_time, assessment_distance = _build_assessment_metric_matrices(planner, original_points)
+                current_plan_assessment = assess_current_plan(
+                    planner,
+                    current_plan,
+                    original_points,
+                    config,
+                    solve_time=assessment_time,
+                    solve_distance=assessment_distance,
+                    traffic_calibration=traffic_calibration,
+                )
+                current_plan_scenario = build_current_plan_map_scenario(
+                    planner,
+                    current_plan_assessment,
+                    original_points,
+                )
+                attach_current_plan_traffic_gate(
+                    planner,
+                    current_plan_scenario,
+                    original_points,
+                    config,
+                    input_records,
+                )
+            elif refresh_status != "not_applicable":
+                reason = str(scheduled_run_traffic_refresh.get("reason") or "traffic_refresh_unavailable")
+                raise RuntimeError(f"Scheduled fresh traffic validation failed: {reason}")
         planner.log("[BACKEND] Free optimization baseline solve paused; X-minute constrained is the primary baseline.")
         free_optimization_baseline = _attach_free_baseline_metadata(
             _build_skipped_scenario_result(
@@ -8149,31 +8330,30 @@ def run_backend_planner_with_prepared_data(
             nearby_result = _build_skipped_scenario_result(
                 "Nearby alternative baseline was disabled for this run."
             )
-        assessment_time = None
-        assessment_distance = None
-        if current_plan:
-            assessment_time, assessment_distance = _build_assessment_metric_matrices(planner, original_points)
-        current_plan_assessment = assess_current_plan(
-            planner,
-            current_plan,
-            original_points,
-            config,
-            solve_time=assessment_time,
-            solve_distance=assessment_distance,
-            traffic_calibration=traffic_calibration,
-        )
-        current_plan_scenario = build_current_plan_map_scenario(
-            planner,
-            current_plan_assessment,
-            original_points,
-        )
-        attach_current_plan_traffic_gate(
-            planner,
-            current_plan_scenario,
-            original_points,
-            config,
-            input_records,
-        )
+        if current_plan_scenario is None:
+            if current_plan:
+                assessment_time, assessment_distance = _build_assessment_metric_matrices(planner, original_points)
+            current_plan_assessment = assess_current_plan(
+                planner,
+                current_plan,
+                original_points,
+                config,
+                solve_time=assessment_time,
+                solve_distance=assessment_distance,
+                traffic_calibration=traffic_calibration,
+            )
+            current_plan_scenario = build_current_plan_map_scenario(
+                planner,
+                current_plan_assessment,
+                original_points,
+            )
+            attach_current_plan_traffic_gate(
+                planner,
+                current_plan_scenario,
+                original_points,
+                config,
+                input_records,
+            )
         time_impact_limit_minutes = max(
             0.0,
             float(
@@ -8400,6 +8580,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_coefficient_mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
         "traffic_attribution": traffic_attribution,
         "traffic_calibration": traffic_calibration,
+        "scheduled_run_traffic_refresh": scheduled_run_traffic_refresh,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
         "planner_config": asdict(config),
@@ -8427,6 +8608,7 @@ def run_backend_planner_with_prepared_data(
         "traffic_coefficient_mode": normalize_traffic_coefficient_mode(config.traffic_coefficient_mode),
         "traffic_attribution": traffic_attribution,
         "traffic_calibration": traffic_calibration,
+        "scheduled_run_traffic_refresh": scheduled_run_traffic_refresh,
         "live_traffic_sample": live_traffic_sample,
         "service_direction": normalize_service_direction(config.service_direction),
         "planner_config": asdict(config),

@@ -3963,6 +3963,9 @@ def _fetch_amap_display_geometry(
 def _amap_display_geometry_for_route(
     points: list[Any],
     nodes: list[Any],
+    *,
+    cache: dict[str, Any] | None = None,
+    cache_updates: dict[str, Any] | None = None,
 ) -> tuple[list[list[float]] | None, str, str, float | None, float | None]:
     route_points: list[dict[str, Any]] = []
     for node in nodes:
@@ -3982,23 +3985,25 @@ def _amap_display_geometry_for_route(
 
     cache_key = _amap_display_cache_key(request_points)
     stale_cached_geometry: list[list[float]] | None = None
-    with _AMAP_DISPLAY_CACHE_LOCK:
-        cache = _load_amap_display_cache_unlocked()
-        cached = dict(cache.get(cache_key) or {})
-        cached_geometry = cached.get("geometry")
-        if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
-            cached_duration_s = _float_or_none(cached.get("duration_s"))
-            cached_distance_m = _float_or_none(cached.get("distance_m"))
-            if cached_duration_s is None:
-                stale_cached_geometry = cached_geometry
-            else:
-                return (
-                    cached_geometry,
-                    "amap_cn_cache",
-                    "",
-                    cached_duration_s,
-                    cached_distance_m,
-                )
+    owns_cache = cache is None
+    if cache is None:
+        with _AMAP_DISPLAY_CACHE_LOCK:
+            cache = _load_amap_display_cache_unlocked()
+    cached = dict(cache.get(cache_key) or {})
+    cached_geometry = cached.get("geometry")
+    if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
+        cached_duration_s = _float_or_none(cached.get("duration_s"))
+        cached_distance_m = _float_or_none(cached.get("distance_m"))
+        if cached_duration_s is None:
+            stale_cached_geometry = cached_geometry
+        else:
+            return (
+                cached_geometry,
+                "amap_cn_cache",
+                "",
+                cached_duration_s,
+                cached_distance_m,
+            )
 
     def stale_cache_result(
         message: str,
@@ -4021,16 +4026,21 @@ def _amap_display_geometry_for_route(
             return fallback
         return None, "osrm", "AMap display route returned no geometry", None, None
 
-    with _AMAP_DISPLAY_CACHE_LOCK:
-        cache = _load_amap_display_cache_unlocked()
-        cache[cache_key] = {
-            "created_at": utc_now_iso(),
-            "point_count": len(request_points),
-            "geometry": geometry,
-            "duration_s": response.get("duration_s"),
-            "distance_m": response.get("distance_m"),
-        }
-        _save_amap_display_cache_unlocked(cache)
+    cache_entry = {
+        "created_at": utc_now_iso(),
+        "point_count": len(request_points),
+        "geometry": geometry,
+        "duration_s": response.get("duration_s"),
+        "distance_m": response.get("distance_m"),
+    }
+    cache[cache_key] = cache_entry
+    if owns_cache:
+        with _AMAP_DISPLAY_CACHE_LOCK:
+            latest_cache = _load_amap_display_cache_unlocked()
+            latest_cache[cache_key] = cache_entry
+            _save_amap_display_cache_unlocked(latest_cache)
+    elif cache_updates is not None:
+        cache_updates[cache_key] = cache_entry
     return (
         geometry,
         "amap_cn",
@@ -4727,6 +4737,11 @@ def _build_job_map_payload(
     use_amap_display_geometry = _should_use_amap_display_geometry(
         job_record, result, structured, points
     )
+    amap_display_cache: dict[str, Any] | None = None
+    amap_display_cache_updates: dict[str, Any] = {}
+    if use_amap_display_geometry:
+        with _AMAP_DISPLAY_CACHE_LOCK:
+            amap_display_cache = _load_amap_display_cache_unlocked()
 
     for route_index, route in enumerate(routes):
         route_id = str(
@@ -4746,7 +4761,12 @@ def _build_job_map_payload(
                 display_geometry_message,
                 display_duration_s,
                 display_distance_m,
-            ) = _amap_display_geometry_for_route(points, nodes)
+            ) = _amap_display_geometry_for_route(
+                points,
+                nodes,
+                cache=amap_display_cache,
+                cache_updates=amap_display_cache_updates,
+            )
 
         visible_geometry = display_geometry if display_geometry else geometry
         for lng, lat in visible_geometry:
@@ -4773,8 +4793,8 @@ def _build_job_map_payload(
         )
         if route_duration_s is None:
             route_duration_s = (
-                _float_or_none(route.get("traffic_adjusted_drive_time_s"))
-                or display_duration_s
+                display_duration_s
+                or _float_or_none(route.get("traffic_adjusted_drive_time_s"))
                 or _float_or_none(route.get("time_s"))
                 or 0.0
             )
@@ -4851,6 +4871,12 @@ def _build_job_map_payload(
                 "stop_ids": route_stop_ids,
             }
         )
+
+    if amap_display_cache_updates:
+        with _AMAP_DISPLAY_CACHE_LOCK:
+            latest_cache = _load_amap_display_cache_unlocked()
+            latest_cache.update(amap_display_cache_updates)
+            _save_amap_display_cache_unlocked(latest_cache)
 
     point_by_address = {
         str(point.get("address") or point.get("display_address") or "").strip(): dict(

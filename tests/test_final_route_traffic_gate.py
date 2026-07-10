@@ -755,6 +755,84 @@ def test_current_plan_scenario_reuses_final_route_gate(monkeypatch):
     assert scenario["routes"][0]["final_route_traffic_gate"]["scenario"] == "Current Plan"
 
 
+def test_scheduled_current_plan_refresh_updates_budget_and_multiplier_without_changing_route():
+    config = planner_core.PlannerConfig(max_route_duration_minutes=60)
+    route = {
+        "nodes": [0, 1, 2],
+        "time_s": 1720,
+        "stop_service_time_s": 120,
+        "final_route_traffic_gate": {
+            "verified_drive_duration_s": 2000,
+            "verified_total_duration_s": 2120,
+        },
+    }
+    scenario = {"routes": [route]}
+    gate = {
+        "provider": "amap",
+        "status": "failed",
+        "api_calls": 1,
+        "cache_hits": 0,
+        "traffic_policy": {"provider": "amap"},
+    }
+
+    evidence = planner_core.calibrate_scheduled_current_plan_traffic(
+        scenario,
+        gate,
+        config,
+        previous_multiplier=1.6,
+    )
+
+    assert evidence["status"] == "ready"
+    assert evidence["raw_traffic_time_multiplier"] == 2.0
+    assert evidence["traffic_time_multiplier"] == 2.0
+    assert evidence["traffic_time_multiplier_clamped"] is False
+    assert evidence["max_route_duration_minutes"] == 36
+    assert config.max_route_duration_minutes == 36
+    assert route["nodes"] == [0, 1, 2]
+
+
+def test_scheduled_current_plan_refresh_requires_fresh_api_call():
+    evidence = planner_core.calibrate_scheduled_current_plan_traffic(
+        {"routes": [{}]},
+        {
+            "provider": "amap",
+            "status": "passed",
+            "api_calls": 0,
+            "traffic_policy": {"provider": "amap"},
+        },
+        planner_core.PlannerConfig(),
+        previous_multiplier=1.6,
+    )
+
+    assert evidence["status"] == "unavailable"
+    assert evidence["reason"] == "no_fresh_api_calls"
+
+
+def test_amap_final_route_retries_once_and_counts_attempts(monkeypatch):
+    calls = {"count": 0}
+
+    def flaky_segment(_planner, _points):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("temporary failure")
+        return {"duration_s": 1200, "distance_m": 1234}
+
+    monkeypatch.setattr(planner_core, "_amap_route_segment_stats", flaky_segment)
+    monkeypatch.setattr(planner_core.time, "sleep", lambda _seconds: None)
+    state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
+
+    stats = planner_core._amap_route_stats(
+        object(),
+        [(31.1, 121.1), (31.2, 121.2)],
+        {},
+        state,
+    )
+
+    assert stats["duration_s"] == 1200
+    assert calls["count"] == 2
+    assert state["api_calls"] == 2
+
+
 def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)

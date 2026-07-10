@@ -88,7 +88,7 @@ class InteractiveMapDataTests(unittest.TestCase):
         os.environ["AMAP_API_KEY"] = "unit-test-key"
         self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = True
         self.service._amap_display_geometry_for_route = (
-            lambda _points, _nodes: (
+            lambda _points, _nodes, **_kwargs: (
                 [[121.4001, 31.2001], [121.4101, 31.2101]],
                 "amap_cn",
                 "",

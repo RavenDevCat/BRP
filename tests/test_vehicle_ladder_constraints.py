@@ -65,6 +65,7 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         try:
             def fake_compute(*args, **kwargs):
                 self.assertNotIn("forced_vehicle_count", kwargs)
+                self.assertFalse(kwargs["enable_vehicle_search"])
                 target = int(kwargs["reduced_vehicle_limit"])
                 calls.append(target)
                 passed = target >= 19
@@ -94,6 +95,42 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         self.assertEqual(result["bus_count"], 19)
         self.assertEqual(result["vehicle_saving_target"]["status"], "passed")
         self.assertEqual(len(result["vehicle_ladder_search"]["attempts"]), 3)
+
+    def test_vehicle_ladder_stops_after_first_passing_fallback(self) -> None:
+        calls: list[int] = []
+        original_compute = planner_core._compute_scenario_without_render
+        try:
+            def fake_compute(*args, **kwargs):
+                self.assertFalse(kwargs["enable_vehicle_search"])
+                target = int(kwargs["reduced_vehicle_limit"])
+                calls.append(target)
+                if target == 20:
+                    return {
+                        "bus_count": 20,
+                        "routes": [{} for _ in range(20)],
+                        "traffic_gate": {"status": "failed"},
+                        "feasibility_report": {"status": "failed", "failure_reasons": ["arrival_window"]},
+                    }
+                return {
+                    "bus_count": 19,
+                    "routes": [{} for _ in range(19)],
+                    "traffic_gate": {"status": "passed"},
+                    "feasibility_report": {"status": "passed", "failure_reasons": []},
+                }
+
+            planner_core._compute_scenario_without_render = fake_compute
+            result = planner_core._solve_vehicle_ladder_scenario(
+                object(),
+                [{"is_depot": True}, {"is_depot": False}],
+                "test",
+                current_route_count=22,
+                minimum_vehicle_reduction=2,
+            )
+        finally:
+            planner_core._compute_scenario_without_render = original_compute
+
+        self.assertEqual(calls, [20, 21])
+        self.assertEqual(result["bus_count"], 19)
 
 
 if __name__ == "__main__":

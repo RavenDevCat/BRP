@@ -73,6 +73,63 @@ def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
     return PlannerConfig(**filtered_payload)
 
 
+def _is_scheduled_job(job_record: dict[str, Any]) -> bool:
+    metadata = dict(job_record.get("metadata") or {})
+    return bool(metadata.get("scheduled_job") or job_record.get("scheduled_start_at"))
+
+
+def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> str | None:
+    result = dict(result or {})
+    structured = dict(result.get("structured_results") or {})
+    refresh = dict(
+        structured.get("scheduled_run_traffic_refresh")
+        or result.get("scheduled_run_traffic_refresh")
+        or {}
+    )
+    refresh_provider = str(refresh.get("provider") or "none").strip().lower()
+    supported_providers = {"amap", "kakao_navi"}
+    current_plan_routes = list(dict(structured.get("current_plan") or {}).get("routes") or [])
+    if not current_plan_routes:
+        return "scheduled result is missing current-plan routes"
+    if refresh_provider in supported_providers:
+        if str(refresh.get("status") or "").strip().lower() != "ready":
+            return "scheduled fresh traffic refresh was unavailable"
+        if int(refresh.get("api_calls", 0) or 0) <= 0:
+            return "scheduled fresh traffic refresh made no provider API calls"
+
+    required_gate_count = 0
+    for scenario_key in (
+        "current_plan",
+        "original",
+        "subway",
+        "nearby",
+        "time_constrained",
+        "exception_preserving",
+        "ep15min",
+    ):
+        scenario = dict(structured.get(scenario_key) or {})
+        routes = list(scenario.get("routes") or [])
+        if not routes:
+            continue
+        gate = dict(scenario.get("traffic_gate") or {})
+        policy = dict(gate.get("traffic_policy") or {})
+        provider = str(gate.get("provider") or policy.get("provider") or "none").strip().lower()
+        if provider not in supported_providers:
+            if refresh_provider in supported_providers:
+                return f"scheduled final traffic gate unavailable for {scenario_key}"
+            continue
+        required_gate_count += 1
+        status = str(gate.get("status") or "").strip().lower()
+        if status not in {"passed", "failed"} or int(gate.get("unavailable_route_count", 0) or 0) > 0:
+            return f"scheduled final traffic gate unavailable for {scenario_key}"
+        if int(gate.get("checked_route_count", 0) or 0) < len(routes):
+            return f"scheduled final traffic gate did not check every route for {scenario_key}"
+
+    if required_gate_count and refresh_provider not in supported_providers:
+        return "scheduled result lacks fresh provider traffic evidence"
+    return None
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         raise SystemExit("Usage: backend_job_runner.py <job_id>")
@@ -91,10 +148,21 @@ def main() -> int:
     job_record["job_slot_path"] = os.environ.get("BRP_JOB_CONCURRENCY_SLOT", "").strip() or job_record.get("job_slot_path")
     _save_job(job_record)
 
+    result: dict[str, Any] | None = None
     try:
         config = _build_planner_config(job_record.get("config") or {})
         prepared_payload = dict(job_record.get("prepared_payload") or {})
-        result = run_backend_planner_with_prepared_data(prepared_payload, config=config)
+        if _is_scheduled_job(job_record):
+            result = run_backend_planner_with_prepared_data(
+                prepared_payload,
+                config=config,
+                require_fresh_final_traffic=True,
+            )
+            validation_error = _scheduled_final_traffic_validation_error(result)
+            if validation_error:
+                raise RuntimeError(validation_error)
+        else:
+            result = run_backend_planner_with_prepared_data(prepared_payload, config=config)
         job_record = _load_job(job_id)
         if str(job_record.get("status", "")).strip().lower() == "canceled":
             return 0
@@ -113,7 +181,7 @@ def main() -> int:
             return 0
         job_record["status"] = "failed"
         job_record["finished_at"] = utc_now_iso()
-        job_record["result"] = None
+        job_record["result"] = result
         job_record["error"] = str(exc)
         job_record["traceback"] = traceback.format_exc()
         job_record["worker_pid"] = None

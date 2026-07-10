@@ -25,7 +25,7 @@ CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache")
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
 SUBWAY_CACHE_PATH = CACHE_DIR / "subway_search_cache.json"
 
-AMAP_KEY = os.environ.get("AMAP_API_KEY", "67552867e1fe0125b04b7437cf0c392d").strip()
+AMAP_KEY = os.environ.get("AMAP_API_KEY", "").strip()
 GOOGLE_KEY = (
     os.environ.get("GOOGLE_GEOCODE_API_KEY")
     or os.environ.get("GOOGLE_API_KEY")

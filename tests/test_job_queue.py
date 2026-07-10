@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import threading
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,11 +68,13 @@ def test_job_queue_claims_before_starting_worker(
 ) -> None:
     store = FakeJobStore()
     popen_calls: list[list[str]] = []
+    finish_worker = threading.Event()
 
     class FakeProcess:
         pid = 4321
 
         def wait(self) -> int:
+            finish_worker.wait()
             return 0
 
     def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
@@ -100,6 +103,8 @@ def test_job_queue_claims_before_starting_worker(
     assert manager.spawn_job_worker("job1") is None
     assert store.claims == 2
     assert len(popen_calls) == 1
+    store.update_job("job1", status="succeeded")
+    finish_worker.set()
 
 
 def test_job_queue_releases_due_scheduled_jobs_before_scheduling(
@@ -108,11 +113,13 @@ def test_job_queue_releases_due_scheduled_jobs_before_scheduling(
     store = FakeJobStore()
     store.records = {"job1": {"job_id": "job1", "status": "scheduled", "due": True}}
     popen_calls: list[list[str]] = []
+    finish_worker = threading.Event()
 
     class FakeProcess:
         pid = 9876
 
         def wait(self) -> int:
+            finish_worker.wait()
             return 0
 
     def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
@@ -136,3 +143,77 @@ def test_job_queue_releases_due_scheduled_jobs_before_scheduling(
     assert store.records["job1"]["status"] == "running"
     assert store.records["job1"]["worker_pid"] == 9876
     assert len(popen_calls) == 1
+    store.update_job("job1", status="succeeded")
+    finish_worker.set()
+
+
+def test_worker_reaper_marks_orphaned_running_job_failed_and_reschedules(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    slot_path = manager.gate.acquire("job1")
+    assert slot_path is not None
+    store.records["job1"].update(
+        status="running", worker_pid=2468, job_slot_path=str(slot_path)
+    )
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+
+    class CrashedProcess:
+        def wait(self) -> int:
+            return 7
+
+    manager._reap_job_worker("job1", CrashedProcess(), slot_path)
+
+    record = store.records["job1"]
+    assert record["status"] == "failed"
+    assert record["worker_exit_code"] == 7
+    assert "code 7" in record["error"]
+    assert record["worker_pid"] is None
+    assert record["job_slot_path"] is None
+    assert not slot_path.exists()
+    assert scheduled == [True]
+
+
+def test_worker_reaper_does_not_overwrite_runner_terminal_status(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    store.records["job1"].update(
+        status="succeeded",
+        result={"route_count": 22},
+        error=None,
+        worker_pid=None,
+        job_slot_path=None,
+    )
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    slot_path = manager.gate.acquire("job1")
+    assert slot_path is not None
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+
+    class FinishedProcess:
+        def wait(self) -> int:
+            return 0
+
+    before = dict(store.records["job1"])
+    manager._reap_job_worker("job1", FinishedProcess(), slot_path)
+
+    assert store.records["job1"] == before
+    assert not slot_path.exists()
+    assert scheduled == [True]

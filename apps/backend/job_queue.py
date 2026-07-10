@@ -240,6 +240,7 @@ class JobQueueManager:
             slot_attach_stale_seconds=slot_attach_stale_seconds,
         )
         self._scheduler_lock = threading.Lock()
+        self._worker_state_lock = threading.Lock()
         self._scheduler_started = False
 
     def process_is_alive(self, pid: int | None) -> bool:
@@ -252,55 +253,81 @@ class JobQueueManager:
         slot_path = self.gate.acquire(normalized_job_id)
         if self.gate.enabled and slot_path is None:
             return None
-        claimed = self.job_store.claim_queued_job(
-            normalized_job_id,
-            job_slot_path=str(slot_path) if slot_path else None,
-        )
-        if not claimed:
-            self.gate.release(slot_path)
-            return None
-
-        env = os.environ.copy()
-        if slot_path:
-            env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
-            env["BRP_JOB_CONCURRENCY_ROOT"] = str(self.gate.slot_dir)
-        try:
-            process = subprocess.Popen(
-                [
-                    self.python_executable,
-                    str(self.runner_path),
-                    str(normalized_job_id),
-                ],
-                cwd=str(self.base_dir),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=env,
-                creationflags=worker_creation_flags(),
-            )
-        except Exception as exc:
-            self.gate.release(slot_path)
-            self.job_store.update_job(
+        with self._worker_state_lock:
+            claimed = self.job_store.claim_queued_job(
                 normalized_job_id,
-                status="failed",
-                finished_at=utc_now_iso(),
-                error=f"Failed to start job worker: {exc}",
-                traceback=traceback.format_exc(),
-                worker_pid=None,
-                job_slot_path=None,
-                result=None,
+                job_slot_path=str(slot_path) if slot_path else None,
             )
-            raise
+            if not claimed:
+                self.gate.release(slot_path)
+                return None
 
-        threading.Thread(
-            target=process.wait, name=f"brp-job-worker-reaper-{process.pid}", daemon=True
-        ).start()
-        self.gate.attach_worker(slot_path, int(process.pid))
-        updated = self.job_store.update_job(
-            normalized_job_id,
-            worker_pid=int(process.pid),
-            job_slot_path=str(slot_path) if slot_path else None,
-        )
+            env = os.environ.copy()
+            if slot_path:
+                env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
+                env["BRP_JOB_CONCURRENCY_ROOT"] = str(self.gate.slot_dir)
+            try:
+                process = subprocess.Popen(
+                    [
+                        self.python_executable,
+                        str(self.runner_path),
+                        str(normalized_job_id),
+                    ],
+                    cwd=str(self.base_dir),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                    creationflags=worker_creation_flags(),
+                )
+            except Exception as exc:
+                self.gate.release(slot_path)
+                self.job_store.update_job(
+                    normalized_job_id,
+                    status="failed",
+                    finished_at=utc_now_iso(),
+                    error=f"Failed to start job worker: {exc}",
+                    traceback=traceback.format_exc(),
+                    worker_pid=None,
+                    job_slot_path=None,
+                    result=None,
+                )
+                raise
+
+            self.gate.attach_worker(slot_path, int(process.pid))
+            updated = self.job_store.update_job(
+                normalized_job_id,
+                worker_pid=int(process.pid),
+                job_slot_path=str(slot_path) if slot_path else None,
+            )
+            threading.Thread(
+                target=self._reap_job_worker,
+                args=(normalized_job_id, process, slot_path),
+                name=f"brp-job-worker-reaper-{process.pid}",
+                daemon=True,
+            ).start()
         return updated or self.job_store.get_job(normalized_job_id) or claimed
+
+    def _reap_job_worker(
+        self, job_id: str, process: subprocess.Popen[Any], slot_path: Path | None
+    ) -> None:
+        exit_code = int(process.wait())
+        with self._worker_state_lock:
+            job_record = self.job_store.get_job(job_id)
+            if str((job_record or {}).get("status", "")).strip().lower() == "running":
+                self.job_store.update_job(
+                    job_id,
+                    status="failed",
+                    finished_at=utc_now_iso(),
+                    error=(
+                        f"Job worker exited with code {exit_code} before recording a terminal status."
+                    ),
+                    worker_exit_code=exit_code,
+                    worker_pid=None,
+                    job_slot_path=None,
+                )
+            self.gate.release((job_record or {}).get("job_slot_path") or slot_path)
+            self.gate.cleanup_stale_slots()
+        self.schedule_queued_jobs()
 
     def schedule_queued_jobs(self) -> None:
         if not self._scheduler_lock.acquire(blocking=False):
@@ -332,25 +359,26 @@ class JobQueueManager:
         ).start()
 
     def cancel_job(self, job_id: str) -> dict[str, Any] | None:
-        job_record = self.job_store.get_job(job_id)
-        if not job_record:
-            return None
-        status = str(job_record.get("status", "")).strip().lower()
-        pid = safe_int(job_record.get("worker_pid"))
-        if status in {"succeeded", "failed", "canceled"}:
-            return job_record
-        terminate_worker_process(pid)
-        self.gate.release(job_record.get("job_slot_path"))
-        self.gate.cleanup_stale_slots()
-        updated = self.job_store.update_job(
-            job_id,
-            status="canceled",
-            finished_at=utc_now_iso(),
-            error="Job was canceled by the user.",
-            traceback=None,
-            worker_pid=None,
-            job_slot_path=None,
-            result=None,
-        )
+        with self._worker_state_lock:
+            job_record = self.job_store.get_job(job_id)
+            if not job_record:
+                return None
+            status = str(job_record.get("status", "")).strip().lower()
+            pid = safe_int(job_record.get("worker_pid"))
+            if status in {"succeeded", "failed", "canceled"}:
+                return job_record
+            terminate_worker_process(pid)
+            self.gate.release(job_record.get("job_slot_path"))
+            self.gate.cleanup_stale_slots()
+            updated = self.job_store.update_job(
+                job_id,
+                status="canceled",
+                finished_at=utc_now_iso(),
+                error="Job was canceled by the user.",
+                traceback=None,
+                worker_pid=None,
+                job_slot_path=None,
+                result=None,
+            )
         self.schedule_queued_jobs()
         return updated

@@ -97,6 +97,10 @@ const ko: Translations = {
     "Selected insert plan": "선택된 정류장 추가 계획",
     "All new students are combined into one plan and one active map.":
         "모든 신규 학생을 하나의 계획과 하나의 활성 지도에 함께 표시합니다.",
+    "Cached scenarios": "캐시된 시나리오",
+    "Alternative plan": "대안 계획",
+    "Choose a cached whole-plan scenario. Switching does not rerun geocoding, routing, or AMap.":
+        "캐시된 전체 계획을 선택합니다. 전환해도 주소 해석, 경로 계산 또는 AMap 검증을 다시 실행하지 않습니다.",
     "Reset recommendations": "권장안으로 초기화",
     "Ready to review": "검토 가능",
     "New students": "신규 학생",

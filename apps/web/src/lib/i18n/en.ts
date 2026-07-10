@@ -103,6 +103,10 @@ const en: Translations = {
     "Selected insert plan": "Selected insert plan",
     "All new students are combined into one plan and one active map.":
         "All new students are combined into one plan and one active map.",
+    "Cached scenarios": "Cached scenarios",
+    "Alternative plan": "Alternative plan",
+    "Choose a cached whole-plan scenario. Switching does not rerun geocoding, routing, or AMap.":
+        "Choose a cached whole-plan scenario. Switching does not rerun geocoding, routing, or AMap.",
     "Reset recommendations": "Reset recommendations",
     "Ready to review": "Ready to review",
     "New students": "New students",

@@ -98,6 +98,10 @@ const zh: Translations = {
     "Selected insert plan": "选定插站方案",
     "All new students are combined into one plan and one active map.":
         "所有新增学生会被组合成一个方案，并统一显示在一张活动地图中。",
+    "Cached scenarios": "已缓存方案",
+    "Alternative plan": "备选方案",
+    "Choose a cached whole-plan scenario. Switching does not rerun geocoding, routing, or AMap.":
+        "选择一套已缓存的完整方案。切换时不会重新运行地址解析、路线计算或高德验证。",
     "Reset recommendations": "恢复推荐方案",
     "Ready to review": "可以复核",
     "New students": "新增学生",

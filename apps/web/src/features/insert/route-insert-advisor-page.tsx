@@ -1,7 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ListChecks, MapPin, PlusCircle, RotateCcw, ShieldCheck, Upload } from "lucide-react";
+import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
@@ -90,31 +90,6 @@ function beforeAfter(base: unknown, next: unknown, formatter: (value: unknown) =
   return `${formatter(base)} -> ${formatter(next)}`;
 }
 
-function proposalKey(proposal: Record<string, unknown> | null | undefined): string {
-  if (!proposal) return "";
-  const newStop = proposal.new_stop as Record<string, unknown> | undefined;
-  return [
-    newStop?.index,
-    proposal.type,
-    proposal.route_id,
-    proposal.target_stop_order,
-    proposal.insert_after_order,
-    proposal.insert_before_order,
-  ].join(":");
-}
-
-function proposalSelection(proposal: Record<string, unknown>): Record<string, unknown> {
-  const newStop = proposal.new_stop as Record<string, unknown> | undefined;
-  return {
-    new_stop_index: newStop?.index,
-    type: proposal.type,
-    route_id: proposal.route_id,
-    target_stop_order: proposal.target_stop_order,
-    insert_after_order: proposal.insert_after_order,
-    insert_before_order: proposal.insert_before_order,
-  };
-}
-
 async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   let binary = "";
@@ -135,7 +110,7 @@ export function RouteInsertAdvisorPage() {
   const [city, setCity] = useState("Shanghai");
   const [walkingThreshold, setWalkingThreshold] = useState("500");
   const [stopLimit, setStopLimit] = useState("");
-  const [selections, setSelections] = useState<Record<string, Record<string, unknown>>>({});
+  const [activeScenarioId, setActiveScenarioId] = useState("recommended");
   const capabilitiesQuery = useQuery({
     queryKey: ["route-insert-advisor-capabilities"],
     queryFn: getRouteInsertAdvisorCapabilities,
@@ -143,15 +118,16 @@ export function RouteInsertAdvisorPage() {
   });
   const proposalMutation = useMutation({
     mutationFn: requestRouteInsertAdvisorProposals,
+    onSuccess: (data) => {
+      setActiveScenarioId(data.scenarios?.[0]?.id || "recommended");
+    },
   });
   const capabilities = capabilitiesQuery.data;
   const sourceCount = capabilities?.supported_sources.length ?? 1;
   const checkCount = capabilities?.candidate_checks.length ?? 7;
   const result = proposalMutation.data as RouteInsertAdvisorProposalResponse | undefined;
   const canRun = Boolean(fileBase64 && addresses.trim() && !proposalMutation.isPending);
-  const requestPayload = (
-    nextSelections: Record<string, Record<string, unknown>>,
-  ): RouteInsertAdvisorProposalRequest => ({
+  const requestPayload = (): RouteInsertAdvisorProposalRequest => ({
     file_name: file?.name || "workbook.xlsx",
     file_base64: fileBase64,
     new_stops: addresses,
@@ -161,12 +137,7 @@ export function RouteInsertAdvisorPage() {
       walking_threshold_m: Number(walkingThreshold) || 0,
       stop_limit: stopLimit ? Number(stopLimit) : null,
     },
-    selections: Object.values(nextSelections),
   });
-  const runWithSelections = (nextSelections: Record<string, Record<string, unknown>>) => {
-    setSelections(nextSelections);
-    proposalMutation.mutate(requestPayload(nextSelections));
-  };
 
   return (
     <div className="space-y-6 pb-16 lg:pb-0">
@@ -216,7 +187,7 @@ export function RouteInsertAdvisorPage() {
           className="grid gap-4 p-4 lg:grid-cols-[1fr_320px]"
           onSubmit={(event) => {
             event.preventDefault();
-            runWithSelections({});
+            proposalMutation.mutate(requestPayload());
           }}
         >
           <div className="space-y-4">
@@ -236,7 +207,7 @@ export function RouteInsertAdvisorPage() {
                     setFile(nextFile);
                     setFileBase64("");
                     setFileError("");
-                    setSelections({});
+                    setActiveScenarioId("recommended");
                     proposalMutation.reset();
                     if (!nextFile) return;
                     try {
@@ -311,14 +282,8 @@ export function RouteInsertAdvisorPage() {
       {result ? (
         <ProposalResults
           result={result}
-          isUpdating={proposalMutation.isPending}
-          hasSelections={Object.keys(selections).length > 0}
-          onReset={() => runWithSelections({})}
-          onSelect={(proposal) => {
-            const newStop = proposal.new_stop as Record<string, unknown> | undefined;
-            const key = String(newStop?.index ?? proposalKey(proposal));
-            runWithSelections({ ...selections, [key]: proposalSelection(proposal) });
-          }}
+          activeScenarioId={activeScenarioId}
+          onSelectScenario={setActiveScenarioId}
         />
       ) : null}
     </div>
@@ -336,30 +301,41 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
 
 function ProposalResults({
   result,
-  isUpdating,
-  hasSelections,
-  onReset,
-  onSelect,
+  activeScenarioId,
+  onSelectScenario,
 }: {
   result: RouteInsertAdvisorProposalResponse;
-  isUpdating: boolean;
-  hasSelections: boolean;
-  onReset: () => void;
-  onSelect: (proposal: Record<string, unknown>) => void;
+  activeScenarioId: string;
+  onSelectScenario: (scenarioId: string) => void;
 }) {
   const t = useT();
   const proposals = result.proposals ?? [];
   const warnings = Array.isArray(result.geocode_warnings) ? result.geocode_warnings : [];
   const summary = result.summary ?? {};
-  const selectedPlan = (result.selected_plan ?? {}) as Record<string, unknown>;
+  const scenarios = result.scenarios?.length
+    ? result.scenarios
+    : [
+        {
+          id: "recommended",
+          is_recommended: true,
+          recommendations: result.recommendations,
+          selected_plan: result.selected_plan,
+          selected_map_data: result.selected_map_data ?? result.map_data,
+        },
+      ];
+  const activeScenario =
+    scenarios.find((scenario) => scenario.id === activeScenarioId) ?? scenarios[0];
+  const selectedPlan = (activeScenario.selected_plan ?? {}) as Record<string, unknown>;
   const affectedRoutes = Array.isArray(selectedPlan.affected_routes)
     ? (selectedPlan.affected_routes as Array<Record<string, unknown>>)
     : [];
-  const mapData = (result.selected_map_data ?? result.map_data) as JobMapData | undefined;
+  const mapData = activeScenario.selected_map_data as JobMapData | undefined;
   const localizedMapData = mapData
     ? { ...mapData, scenario_name: t("Selected insert plan") }
     : undefined;
-  const recommendations = recommendationList(result);
+  const recommendations = activeScenario.recommendations?.length
+    ? activeScenario.recommendations
+    : recommendationList(result);
   const planFeasible = Boolean(selectedPlan.feasible);
   return (
     <section className="rounded-md border border-border bg-surface shadow-sm">
@@ -370,19 +346,57 @@ function ProposalResults({
             {t("All new students are combined into one plan and one active map.")}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {hasSelections ? (
-            <button className={buttonClassName("secondary")} disabled={isUpdating} onClick={onReset} type="button">
-              <RotateCcw className="h-4 w-4" aria-hidden="true" />
-              {t("Reset recommendations")}
-            </button>
-          ) : null}
-          <Badge tone={planFeasible ? "success" : "warning"}>
-            {planFeasible ? t("Ready to review") : t("Needs review")}
-          </Badge>
-        </div>
+        <Badge tone={planFeasible ? "success" : "warning"}>
+          {planFeasible ? t("Ready to review") : t("Needs review")}
+        </Badge>
       </div>
       <div className="overflow-auto p-4">
+        <div className="mb-4">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <h3 className="text-base font-semibold">{t("Cached scenarios")}</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {t("Choose a cached whole-plan scenario. Switching does not rerun geocoding, routing, or AMap.")}
+              </p>
+            </div>
+            <Badge tone="info">{scenarios.length}</Badge>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+            {scenarios.map((scenario, index) => {
+              const plan = (scenario.selected_plan ?? {}) as Record<string, unknown>;
+              const active = scenario.id === activeScenario.id;
+              return (
+                <button
+                  key={scenario.id}
+                  type="button"
+                  aria-pressed={active}
+                  className={[
+                    "min-w-0 rounded-md border p-3 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/30",
+                    active
+                      ? "border-primary bg-primary/10"
+                      : "border-border bg-surface hover:border-primary/50 hover:bg-muted/50",
+                  ].join(" ")}
+                  onClick={() => onSelectScenario(scenario.id)}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="truncate text-sm font-semibold">
+                      {index === 0 ? t("Recommended plan") : `${t("Alternative plan")} ${index}`}
+                    </span>
+                    <Badge tone={plan.feasible ? "success" : "warning"}>
+                      {plan.feasible ? t("Feasible") : t("Needs review")}
+                    </Badge>
+                  </div>
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                    <span>{signed(plan.total_added_duration_s, minutes)}</span>
+                    <span>{signed(plan.total_added_distance_m, meters)}</span>
+                    <span>{String(plan.affected_route_count ?? 0)} {t("routes")}</span>
+                    <span>{String(plan.inserted_stop_count ?? 0)} {t("stops")}</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="mb-4 grid gap-3 md:grid-cols-4">
           <Metric label={t("New students")} value={String(summary.new_stop_count ?? 0)} />
           <Metric label={t("Affected routes")} value={String(selectedPlan.affected_route_count ?? affectedRoutes.length)} />
@@ -416,19 +430,11 @@ function ProposalResults({
             </div>
             <div className="space-y-4">
               {recommendations.map((recommendation, index) => {
-                const primary = recommendation.primary as Record<string, unknown> | null | undefined;
                 const selected =
-                  (recommendation.selected as Record<string, unknown> | null | undefined) ?? primary;
-                const alternates = Array.isArray(recommendation.alternates)
-                  ? (recommendation.alternates as Array<Record<string, unknown>>)
-                  : [];
+                  recommendation.selected as Record<string, unknown> | null | undefined;
                 const newStop =
                   (recommendation.new_stop as Record<string, unknown> | undefined) ??
                   (selected?.new_stop as Record<string, unknown> | undefined);
-                const options = [primary, ...alternates].filter(
-                  (proposal): proposal is Record<string, unknown> =>
-                    Boolean(proposal) && proposalKey(proposal) !== proposalKey(selected),
-                );
                 return (
                   <article key={`${text(newStop?.address)}-${index}`} className="rounded-md border border-border bg-muted/20 p-4">
                     <div className="flex items-start justify-between gap-3">
@@ -441,23 +447,6 @@ function ProposalResults({
                       </Badge>
                     </div>
                     {selected ? <RecommendationCard proposal={selected} title={t("Selected action")} /> : null}
-                    {options.length ? (
-                      <div className="mt-4">
-                        <h4 className="text-sm font-semibold">{t("Reasonable alternatives")}</h4>
-                        <div className="mt-2 grid gap-3 lg:grid-cols-2">
-                          {options.map((proposal, alternateIndex) => (
-                            <RecommendationCard
-                              key={`${String(proposal.route_id)}-${alternateIndex}`}
-                              proposal={proposal}
-                              title={proposalKey(proposal) === proposalKey(primary) ? t("Default recommendation") : `${t("Alternate option")} ${alternateIndex + 1}`}
-                              compact
-                              disabled={isUpdating}
-                              onSelect={() => onSelect(proposal)}
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    ) : null}
                   </article>
                 );
               })}
@@ -473,13 +462,8 @@ function ProposalResults({
               </div>
             </div>
             <div className="h-[560px]">
-              <InteractiveRouteMap data={localizedMapData} focusKey={`insert-${localizedMapData.job_id}-${localizedMapData.scenario_key}-${proposals.map(proposalKey).join("|")}`} />
+              <InteractiveRouteMap data={localizedMapData} focusKey={`insert-${localizedMapData.job_id}-${activeScenario.id}`} />
             </div>
-            {isUpdating ? (
-              <div className="absolute inset-0 flex items-center justify-center bg-surface/70 text-sm font-medium backdrop-blur-sm">
-                {t("Verifying selected plan...")}
-              </div>
-            ) : null}
           </div>
         ) : null}
         {affectedRoutes.length ? (
@@ -524,21 +508,15 @@ function ProposalResults({
 function RecommendationCard({
   proposal,
   title,
-  compact = false,
-  disabled = false,
-  onSelect,
 }: {
   proposal: Record<string, unknown>;
   title: string;
-  compact?: boolean;
-  disabled?: boolean;
-  onSelect?: () => void;
 }) {
   const t = useT();
   const feasible = Boolean(proposal.feasible);
   const isWalking = text(proposal.type) === "walk_to_stop";
   return (
-    <div className={`mt-3 rounded-md border ${compact ? "border-border bg-surface" : "border-primary/30 bg-primary/5"} p-4`}>
+    <div className="mt-3 rounded-md border border-primary/30 bg-primary/5 p-4">
       <div className="flex items-center justify-between gap-3">
         <h4 className="font-semibold">{title}</h4>
         <Badge tone={feasible ? "success" : "warning"}>{feasible ? t("Feasible") : t("Needs review")}</Badge>
@@ -583,11 +561,6 @@ function RecommendationCard({
         </p>
       ) : null}
       <p className="mt-2 text-sm text-muted-foreground">{proposalChecks(proposal, t)}</p>
-      {onSelect ? (
-        <button className={`${buttonClassName("secondary")} mt-3`} disabled={disabled} onClick={onSelect} type="button">
-          {t("Use this option")}
-        </button>
-      ) : null}
     </div>
   );
 }

@@ -1355,6 +1355,66 @@ def _insert_build_recommendations(
     return recommendations
 
 
+def _insert_selected_signature(
+    selected: list[dict[str, Any]],
+) -> tuple[tuple[str, tuple[Any, ...]], ...]:
+    return tuple(
+        sorted(
+            (
+                _insert_new_stop_key(dict(item.get("new_stop") or {})),
+                _insert_proposal_identity(item),
+            )
+            for item in selected
+        )
+    )
+
+
+def _insert_scenario_selections(
+    proposals: list[dict[str, Any]],
+    new_stops: list[dict[str, Any]],
+    primary: list[dict[str, Any]],
+    *,
+    limit: int = 4,
+) -> list[list[dict[str, Any]]]:
+    if not primary:
+        return []
+    limit = max(1, limit)
+    primary_by_stop = {
+        _insert_new_stop_key(dict(item.get("new_stop") or {})): item
+        for item in primary
+    }
+    seen = {_insert_selected_signature(primary)}
+    alternates: list[list[dict[str, Any]]] = []
+    for recommendation in _insert_build_recommendations(
+        proposals, new_stops, primary
+    ):
+        stop_key = _insert_new_stop_key(
+            dict(recommendation.get("new_stop") or {})
+        )
+        for option in list(recommendation.get("alternates") or []):
+            requested = [
+                option if key == stop_key else selected
+                for key, selected in primary_by_stop.items()
+            ]
+            candidate = _insert_select_joint_plan(
+                proposals, new_stops, requested
+            )
+            signature = _insert_selected_signature(candidate)
+            if not candidate or signature in seen:
+                continue
+            seen.add(signature)
+            alternates.append(candidate)
+
+    alternates.sort(
+        key=lambda items: (
+            not all(bool(item.get("feasible")) for item in items),
+            sum(float(_insert_float(item.get("score")) or 0.0) for item in items),
+            str(_insert_selected_signature(items)),
+        )
+    )
+    return [primary, *alternates[: limit - 1]]
+
+
 def _insert_coord_from_pair(pair: Any) -> tuple[float, float] | None:
     if not isinstance(pair, (list, tuple)) or len(pair) < 2:
         return None
@@ -1508,8 +1568,22 @@ def _insert_route_sequence(
 
 
 def _insert_route_measurement(
-    route_points: list[dict[str, Any]], country: str
+    route_points: list[dict[str, Any]],
+    country: str,
+    cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    signature = (
+        str(country or "").strip().upper(),
+        tuple(
+            (
+                round(float(_insert_float(point.get("lat")) or 0.0), 6),
+                round(float(_insert_float(point.get("lng")) or 0.0), 6),
+            )
+            for point in route_points
+        ),
+    )
+    if cache is not None and signature in cache:
+        return deepcopy(cache[signature])
     planner = backend_service.load_legacy_planner()
     previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
     osrm_geometry: list[list[float]] = []
@@ -1582,7 +1656,7 @@ def _insert_route_measurement(
     distance_m = display_distance_m if display_distance_m is not None else osrm_distance_m
     duration_scale = duration_s / osrm_duration_s if osrm_duration_s > 0 else 1.0
     distance_scale = distance_m / osrm_distance_m if osrm_distance_m > 0 else 1.0
-    return {
+    result = {
         "geometry": osrm_geometry,
         "display_geometry": display_geometry,
         "display_geometry_source": display_source,
@@ -1594,6 +1668,9 @@ def _insert_route_measurement(
         "provider_verified": str(display_source).startswith("amap") and display_duration_s is not None,
         "warnings": warnings,
     }
+    if cache is not None:
+        cache[signature] = deepcopy(result)
+    return result
 
 
 def _insert_clock_minutes(value: Any) -> int | None:
@@ -1626,6 +1703,7 @@ def _insert_build_selected_plan(
     country: str,
     constraints: dict[str, Any],
     suggested_config: dict[str, Any],
+    measurement_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     route_ids = {str(item.get("route_id") or "") for item in selected if item.get("route_id")}
     if not route_ids:
@@ -1666,8 +1744,12 @@ def _insert_build_selected_plan(
                 _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
                 for stop in route_stops
             ]
-            base_measurement = _insert_route_measurement(base_points, country)
-            selected_measurement = _insert_route_measurement(route_points, country)
+            base_measurement = _insert_route_measurement(
+                base_points, country, measurement_cache
+            )
+            selected_measurement = _insert_route_measurement(
+                route_points, country, measurement_cache
+            )
         else:
             original_geometry = list(route.get("display_geometry") or route.get("geometry") or [])
             base_measurement = {
@@ -2038,9 +2120,41 @@ def _build_route_insert_proposals(
     selected_proposals = _insert_select_joint_plan(
         proposals, new_stops, payload.get("selections")
     )
-    recommendations = _insert_build_recommendations(
+    scenario_selections = _insert_scenario_selections(
         proposals, new_stops, selected_proposals
     )
+    measurement_cache: dict[tuple[Any, ...], dict[str, Any]] = {}
+    scenarios: list[dict[str, Any]] = []
+    for index, scenario_selected in enumerate(scenario_selections):
+        scenario_plan, scenario_map = _insert_build_selected_plan(
+            map_data,
+            scenario_selected,
+            country=default_country,
+            constraints=constraints,
+            suggested_config=dict(payload.get("_suggested_config") or {}),
+            measurement_cache=measurement_cache,
+        )
+        scenarios.append(
+            {
+                "id": "recommended" if index == 0 else f"alternative_{index}",
+                "is_recommended": index == 0,
+                "recommendations": _insert_build_recommendations(
+                    proposals, new_stops, scenario_selected
+                ),
+                "selected_plan": scenario_plan,
+                "selected_map_data": scenario_map,
+            }
+        )
+    active_scenario = scenarios[0] if scenarios else {
+        "recommendations": [],
+        "selected_plan": {
+            "status": "unavailable",
+            "feasible": False,
+            "actions": [],
+        },
+        "selected_map_data": None,
+    }
+    recommendations = list(active_scenario.get("recommendations") or [])
     returned_proposals: list[dict[str, Any]] = []
     seen_returned: set[tuple[str, tuple[Any, ...]]] = set()
     for recommendation in recommendations:
@@ -2059,13 +2173,8 @@ def _build_route_insert_proposals(
                 continue
             returned_proposals.append(item)
             seen_returned.add(item_key)
-    selected_plan, selected_map_data = _insert_build_selected_plan(
-        map_data,
-        selected_proposals,
-        country=default_country,
-        constraints=constraints,
-        suggested_config=dict(payload.get("_suggested_config") or {}),
-    )
+    selected_plan = dict(active_scenario.get("selected_plan") or {})
+    selected_map_data = active_scenario.get("selected_map_data")
     preview_map_data = selected_map_data or _insert_filtered_map_data(
         map_data, selected_proposals
     )
@@ -2076,6 +2185,7 @@ def _build_route_insert_proposals(
         "recommendations": recommendations,
         "selected_plan": selected_plan,
         "selected_map_data": selected_map_data,
+        "scenarios": scenarios,
         "summary": {
             "source_job_id": job_record.get("job_id"),
             "source_label": payload.get("_source_label") or "",
@@ -2091,6 +2201,7 @@ def _build_route_insert_proposals(
             "refine_top_n": refine_top_n,
             "selected_action_count": len(selected_proposals),
             "selected_plan_status": selected_plan.get("status"),
+            "scenario_count": len(scenarios),
             "mutates_original_plan": False,
         },
         "geocode_warnings": geocode_warnings,

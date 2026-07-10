@@ -73,6 +73,30 @@ class RouteInsertAdvisorTests(unittest.TestCase):
         self.assertEqual(recommendations[0]["selected"]["route_id"], "R2")
         self.assertEqual(recommendations[0]["primary"]["route_id"], "R1")
 
+    def test_scenario_bundle_is_bounded_and_keeps_whole_plan_choices(self) -> None:
+        stops = [
+            {"index": 0, "address": "New 1", "passenger_count": 1},
+            {"index": 1, "address": "New 2", "passenger_count": 1},
+        ]
+        proposals = [
+            proposal(stop_index, route_id, base_load=2, capacity=10)
+            for stop_index in range(2)
+            for route_id in ("R1", "R2", "R3")
+        ]
+        primary = api_app._insert_select_joint_plan(proposals, stops)
+
+        scenarios = api_app._insert_scenario_selections(
+            proposals, stops, primary, limit=4
+        )
+
+        self.assertGreater(len(scenarios), 1)
+        self.assertLessEqual(len(scenarios), 4)
+        self.assertTrue(all(len(items) == len(stops) for items in scenarios))
+        self.assertEqual(
+            len({api_app._insert_selected_signature(items) for items in scenarios}),
+            len(scenarios),
+        )
+
     def test_selected_map_combines_new_stops_and_keeps_original_comparison(self) -> None:
         map_data = {
             "job_id": "workbook-preview",
@@ -132,7 +156,9 @@ class RouteInsertAdvisorTests(unittest.TestCase):
         actions[0]["capacity_after"] = 6
         actions[1]["capacity_after"] = 7
 
-        def measurement(points: list[dict], _country: str) -> dict:
+        def measurement(
+            points: list[dict], _country: str, _cache: dict | None = None
+        ) -> dict:
             inserted = len(points) - 2
             duration = 600 + inserted * 90
             distance = 5000 + inserted * 1000

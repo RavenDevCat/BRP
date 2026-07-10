@@ -765,6 +765,13 @@ export type RouteInsertAdvisorProposalResponse = {
     recommendations?: Array<Record<string, unknown>>;
     selected_plan?: Record<string, unknown>;
     selected_map_data?: JobMapData;
+    scenarios?: Array<{
+        id: string;
+        is_recommended?: boolean;
+        recommendations?: Array<Record<string, unknown>>;
+        selected_plan?: Record<string, unknown>;
+        selected_map_data?: JobMapData;
+    }>;
     summary: Record<string, unknown>;
     geocode_warnings?: Array<Record<string, unknown>>;
     map_data?: JobMapData;

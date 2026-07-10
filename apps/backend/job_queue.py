@@ -159,7 +159,9 @@ class JobConcurrencyGate:
         except FileNotFoundError:
             return
 
-    def release(self, slot_path: str | Path | None) -> None:
+    def release(
+        self, slot_path: str | Path | None, *, job_id: str | None = None
+    ) -> None:
         if not slot_path:
             return
         try:
@@ -167,6 +169,12 @@ class JobConcurrencyGate:
             resolved_root = self.slot_dir.resolve()
             resolved_slot.relative_to(resolved_root)
             if resolved_slot.name.startswith("slot-"):
+                if job_id is not None:
+                    slot_job_id = str(
+                        self._read_metadata(resolved_slot).get("job_id", "")
+                    ).strip()
+                    if slot_job_id != str(job_id).strip():
+                        return
                 shutil.rmtree(resolved_slot, ignore_errors=True)
         except Exception:
             return
@@ -325,7 +333,10 @@ class JobQueueManager:
                     worker_pid=None,
                     job_slot_path=None,
                 )
-            self.gate.release((job_record or {}).get("job_slot_path") or slot_path)
+            self.gate.release(
+                (job_record or {}).get("job_slot_path") or slot_path,
+                job_id=job_id,
+            )
             self.gate.cleanup_stale_slots()
         self.schedule_queued_jobs()
 
@@ -368,7 +379,7 @@ class JobQueueManager:
             if status in {"succeeded", "failed", "canceled"}:
                 return job_record
             terminate_worker_process(pid)
-            self.gate.release(job_record.get("job_slot_path"))
+            self.gate.release(job_record.get("job_slot_path"), job_id=job_id)
             self.gate.cleanup_stale_slots()
             updated = self.job_store.update_job(
                 job_id,

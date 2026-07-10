@@ -217,3 +217,78 @@ def test_worker_reaper_does_not_overwrite_runner_terminal_status(
     assert store.records["job1"] == before
     assert not slot_path.exists()
     assert scheduled == [True]
+
+
+def test_worker_reaper_does_not_release_slot_reused_by_next_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    store.records["job1"].update(
+        status="succeeded", worker_pid=None, job_slot_path=None
+    )
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    old_slot_path = manager.gate.acquire("job1")
+    assert old_slot_path is not None
+    manager.gate.release(old_slot_path)
+    reused_slot_path = manager.gate.acquire("job2")
+    assert reused_slot_path == old_slot_path
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+
+    class FinishedProcess:
+        def wait(self) -> int:
+            return 0
+
+    manager._reap_job_worker("job1", FinishedProcess(), old_slot_path)
+
+    assert reused_slot_path.exists()
+    assert manager.gate._read_metadata(reused_slot_path)["job_id"] == "job2"
+    assert scheduled == [True]
+
+
+def test_cancel_wins_race_with_worker_reaper(tmp_path: Path, monkeypatch) -> None:
+    store = FakeJobStore()
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    slot_path = manager.gate.acquire("job1")
+    assert slot_path is not None
+    store.records["job1"].update(
+        status="running", worker_pid=2468, job_slot_path=str(slot_path)
+    )
+    worker_exited = threading.Event()
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+    monkeypatch.setattr(job_queue, "terminate_worker_process", lambda pid: worker_exited.set())
+
+    class CanceledProcess:
+        def wait(self) -> int:
+            worker_exited.wait()
+            return -15
+
+    reaper = threading.Thread(
+        target=manager._reap_job_worker,
+        args=("job1", CanceledProcess(), slot_path),
+    )
+    reaper.start()
+    canceled = manager.cancel_job("job1")
+    reaper.join(timeout=1)
+
+    assert not reaper.is_alive()
+    assert canceled is not None
+    assert store.records["job1"]["status"] == "canceled"
+    assert "worker_exit_code" not in store.records["job1"]
+    assert not slot_path.exists()
+    assert scheduled == [True, True]

@@ -1,22 +1,18 @@
-import { lazy, Suspense, type ReactNode, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, type ReactNode, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-    ArrowRight,
     Ban,
     CheckCircle2,
-    ChevronDown,
-    ChevronUp,
     Clock3,
-    History,
     ListChecks,
     Loader2,
     Play,
-    RefreshCw,
     Trash2,
     XCircle,
 } from "lucide-react";
 import { AppShell } from "@/features/shell/app-shell";
+import { HistorySidebar } from "@/components/history-sidebar";
 import { JobMetrics } from "@/features/jobs/job-metrics";
 import { JobTable } from "@/features/jobs/job-table";
 import {
@@ -149,10 +145,8 @@ export function JobDetailPage() {
 
 function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     const t = useT();
-    const [mobileHistoryOpen, setMobileHistoryOpen] = useState(!selectedJobId);
     const [desktopHistoryCollapsed, setDesktopHistoryCollapsed] =
         useState(true);
-    const desktopHistoryRef = useRef<HTMLDivElement | null>(null);
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const jobsQuery = useQuery({
@@ -163,7 +157,6 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     });
     const jobs = jobsQuery.data || [];
     const resolvedJobId = selectedJobId || "";
-    const selectedJob = jobs.find((job) => job.job_id === resolvedJobId);
 
     const historyDeleteMutation = useMutation({
         mutationFn: (jobId: string) => deleteJob(jobId),
@@ -228,37 +221,6 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
         (historyDeleteMutation.error as Error | null) ||
         (bulkHistoryDeleteMutation.error as Error | null);
 
-    useEffect(() => {
-        if (selectedJobId) {
-            setMobileHistoryOpen(false);
-            setDesktopHistoryCollapsed(true);
-        }
-    }, [selectedJobId]);
-
-    useEffect(() => {
-        if (desktopHistoryCollapsed) {
-            return;
-        }
-
-        function handlePointerDown(event: PointerEvent) {
-            if (window.innerWidth < 1280) {
-                return;
-            }
-            const target = event.target;
-            if (
-                target instanceof Node &&
-                desktopHistoryRef.current?.contains(target)
-            ) {
-                return;
-            }
-            setDesktopHistoryCollapsed(true);
-        }
-
-        document.addEventListener("pointerdown", handlePointerDown);
-        return () =>
-            document.removeEventListener("pointerdown", handlePointerDown);
-    }, [desktopHistoryCollapsed]);
-
     return (
         <div className="space-y-4 pb-16 lg:pb-0">
             <section className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
@@ -300,51 +262,37 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                 className={[
                     "grid gap-4",
                     desktopHistoryCollapsed
-                        ? "xl:grid-cols-[88px_minmax(0,1fr)]"
-                        : "xl:grid-cols-[340px_minmax(0,1fr)]",
+                        ? "lg:grid-cols-[88px_minmax(0,1fr)]"
+                        : "lg:grid-cols-[320px_minmax(0,1fr)]",
                 ].join(" ")}
             >
-                <JobHistoryMobilePanel
-                    jobs={jobs}
-                    selectedJob={selectedJob}
-                    selectedJobId={resolvedJobId}
-                    isOpen={mobileHistoryOpen}
+                <HistorySidebar
+                    items={jobs}
+                    itemId={(job) => job.job_id}
+                    activeId={resolvedJobId}
+                    title="Audit History"
+                    emptyMessage="Submitted audit runs will appear here after workbook validation and queue submission."
+                    collapsed={desktopHistoryCollapsed}
+                    onCollapsedChange={setDesktopHistoryCollapsed}
                     isLoading={jobsQuery.isLoading}
                     isFetching={jobsQuery.isFetching}
-                    error={jobsQuery.error as Error | null}
-                    onOpenChange={setMobileHistoryOpen}
-                    onRefresh={() => void jobsQuery.refetch()}
-                    onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
-                    onBulkDelete={(jobIds) =>
-                        bulkHistoryDeleteMutation.mutate(jobIds)
-                    }
-                    deletingJobId={deletingJobId}
+                    error={(jobsQuery.error as Error | null) || deleteError}
+                    deletingId={deletingJobId || undefined}
                     bulkDeleting={bulkHistoryDeleteMutation.isPending}
-                    deleteError={deleteError}
+                    onRefresh={() => void jobsQuery.refetch()}
+                    onOpen={(jobId) => {
+                        void navigate({
+                            to: "/jobs/$jobId",
+                            params: { jobId },
+                        });
+                    }}
+                    onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
+                    onBulkDelete={(jobIds) => bulkHistoryDeleteMutation.mutate(jobIds)}
+                    renderItem={(job, active) => (
+                        <AuditHistoryItem job={job} active={active} />
+                    )}
+                    className="min-w-0 lg:sticky lg:top-20 lg:self-start"
                 />
-
-                <div
-                    ref={desktopHistoryRef}
-                    className="hidden xl:block xl:sticky xl:top-20 xl:self-start"
-                >
-                    <JobHistoryDesktopPanel
-                        jobs={jobs}
-                        selectedJobId={resolvedJobId}
-                        collapsed={desktopHistoryCollapsed}
-                        isLoading={jobsQuery.isLoading}
-                        isFetching={jobsQuery.isFetching}
-                        error={jobsQuery.error as Error | null}
-                        onCollapsedChange={setDesktopHistoryCollapsed}
-                        onRefresh={() => void jobsQuery.refetch()}
-                        onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
-                        onBulkDelete={(jobIds) =>
-                            bulkHistoryDeleteMutation.mutate(jobIds)
-                        }
-                        deletingJobId={deletingJobId}
-                        bulkDeleting={bulkHistoryDeleteMutation.isPending}
-                        deleteError={deleteError}
-                    />
-                </div>
 
                 {resolvedJobId ? (
                     <JobDetailPanel jobId={resolvedJobId} />
@@ -369,526 +317,46 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     );
 }
 
-function JobHistoryMobilePanel({
-    jobs,
-    selectedJob,
-    selectedJobId,
-    isOpen,
-    isLoading,
-    isFetching,
-    error,
-    onOpenChange,
-    onRefresh,
-    onDelete,
-    onBulkDelete,
-    deletingJobId,
-    bulkDeleting,
-    deleteError,
+function AuditHistoryItem({
+    job,
+    active,
 }: {
-    jobs: Awaited<ReturnType<typeof listJobs>>;
-    selectedJob?: Awaited<ReturnType<typeof listJobs>>[number];
-    selectedJobId: string;
-    isOpen: boolean;
-    isLoading: boolean;
-    isFetching: boolean;
-    error?: Error | null;
-    onOpenChange: (open: boolean) => void;
-    onRefresh: () => void;
-    onDelete: (jobId: string) => void;
-    onBulkDelete: (jobIds: string[]) => void;
-    deletingJobId?: string | null;
-    bulkDeleting?: boolean;
-    deleteError?: Error | null;
+    job: Awaited<ReturnType<typeof listJobs>>[number];
+    active: boolean;
 }) {
     const t = useT();
+    const summary = job.prepared_payload_summary || {};
+    const scheduledStartAt = getScheduledStartAt(job);
+    const secondaryClass = active
+        ? "text-primary-foreground/80"
+        : "text-muted-foreground";
     return (
-        <Card className="min-w-0 xl:hidden">
-            <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                            <h2 className="text-sm font-semibold">
-                                {t("History")}
-                            </h2>
-                            <Badge tone="info">
-                                {formatNumber(jobs.length)}
-                            </Badge>
+        <div className="min-w-0 px-1 py-1">
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="truncate text-sm font-semibold">
+                        {getJobName(job)}
+                    </div>
+                    <div className={`mt-1 text-xs ${secondaryClass}`}>
+                        {formatDateTime(job.created_at)}
+                    </div>
+                    {scheduledStartAt ? (
+                        <div className={`mt-1 text-xs ${secondaryClass}`}>
+                            {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
                         </div>
-                        {selectedJob ? (
-                            <div className="mt-1 truncate text-xs text-muted-foreground">
-                                {getJobName(selectedJob)}
-                            </div>
-                        ) : null}
-                    </div>
-                    <div className="flex items-center gap-1">
-                        <button
-                            type="button"
-                            className={buttonClassName("ghost")}
-                            aria-label={t("Refresh Route Audit history")}
-                            onClick={onRefresh}
-                        >
-                            <RefreshCw
-                                className={
-                                    isFetching
-                                        ? "h-4 w-4 animate-spin"
-                                        : "h-4 w-4"
-                                }
-                                aria-hidden="true"
-                            />
-                        </button>
-                        <Button
-                            type="button"
-                            variant="ghost"
-                            icon={
-                                isOpen ? (
-                                    <ChevronUp
-                                        className="h-4 w-4"
-                                        aria-hidden="true"
-                                    />
-                                ) : (
-                                    <ChevronDown
-                                        className="h-4 w-4"
-                                        aria-hidden="true"
-                                    />
-                                )
-                            }
-                            onClick={() => onOpenChange(!isOpen)}
-                        >
-                            {isOpen ? t("Hide") : t("Show")}
-                        </Button>
-                    </div>
+                    ) : null}
                 </div>
-            </CardHeader>
-            <CardContent className={isOpen ? "block" : "hidden"}>
-                <JobHistoryContent
-                    jobs={jobs}
-                    selectedJobId={selectedJobId}
-                    isLoading={isLoading}
-                    error={error}
-                    onDelete={onDelete}
-                    onBulkDelete={onBulkDelete}
-                    deletingJobId={deletingJobId}
-                    bulkDeleting={bulkDeleting}
-                    deleteError={deleteError}
-                />
-            </CardContent>
-        </Card>
-    );
-}
-
-function JobHistoryDesktopPanel({
-    className,
-    jobs,
-    selectedJobId,
-    collapsed,
-    isLoading,
-    isFetching,
-    error,
-    onCollapsedChange,
-    onRefresh,
-    onDelete,
-    onBulkDelete,
-    deletingJobId,
-    bulkDeleting,
-    deleteError,
-}: {
-    className?: string;
-    jobs: Awaited<ReturnType<typeof listJobs>>;
-    selectedJobId: string;
-    collapsed: boolean;
-    isLoading: boolean;
-    isFetching: boolean;
-    error?: Error | null;
-    onCollapsedChange: (collapsed: boolean) => void;
-    onRefresh: () => void;
-    onDelete: (jobId: string) => void;
-    onBulkDelete: (jobIds: string[]) => void;
-    deletingJobId?: string | null;
-    bulkDeleting?: boolean;
-    deleteError?: Error | null;
-}) {
-    const t = useT();
-    if (collapsed) {
-        return (
-            <Card className={["overflow-hidden", className || ""].join(" ")}>
-                <div className="flex min-h-[320px] items-stretch gap-2 p-2 lg:flex-col">
-                    <button
-                        type="button"
-                        className="group flex min-w-0 flex-1 flex-col items-center justify-start gap-3 rounded-md border border-primary/30 bg-primary/5 px-2 py-3 text-left transition hover:border-primary/60 hover:bg-primary/10 focus:outline-none focus:ring-2 focus:ring-primary/30"
-                        aria-label={t("Open history")}
-                        onClick={() => onCollapsedChange(false)}
-                    >
-                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-surface shadow-sm ring-1 ring-border transition group-hover:ring-primary/40">
-                            <History
-                                className="h-4 w-4 text-primary"
-                                aria-hidden="true"
-                            />
-                        </span>
-                        <span className="block truncate text-sm font-semibold text-foreground [text-orientation:mixed] [writing-mode:vertical-rl]">
-                            {t("History")}
-                        </span>
-                        <span className="mt-auto flex shrink-0 flex-col items-center gap-2">
-                            <Badge tone={jobs.length ? "info" : "neutral"}>
-                                {formatNumber(jobs.length)}
-                            </Badge>
-                            <ArrowRight
-                                className="h-4 w-4 rotate-90 text-primary transition group-hover:translate-y-0.5"
-                                aria-hidden="true"
-                            />
-                        </span>
-                    </button>
-                    <button
-                        type="button"
-                        className={buttonClassName("ghost")}
-                        aria-label={t("Refresh history")}
-                        title={t("Refresh history")}
-                        onClick={onRefresh}
-                    >
-                        <RefreshCw
-                            className={
-                                isFetching ? "h-4 w-4 animate-spin" : "h-4 w-4"
-                            }
-                            aria-hidden="true"
-                        />
-                    </button>
-                </div>
-            </Card>
-        );
-    }
-
-    return (
-        <Card className={["min-w-0", className || ""].join(" ")}>
-            <CardHeader>
-                <div className="flex items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                        <History
-                            className="h-4 w-4 flex-none text-primary"
-                            aria-hidden="true"
-                        />
-                        <h2 className="truncate text-sm font-semibold">
-                            {t("Audit History")}
-                        </h2>
-                        <Badge tone="info">{formatNumber(jobs.length)}</Badge>
-                    </div>
-                    <div className="flex items-center gap-1">
-                        <button
-                            type="button"
-                            className={buttonClassName("ghost")}
-                            aria-label={t("Refresh history")}
-                            onClick={onRefresh}
-                        >
-                            <RefreshCw
-                                className={
-                                    isFetching
-                                        ? "h-4 w-4 animate-spin"
-                                        : "h-4 w-4"
-                                }
-                                aria-hidden="true"
-                            />
-                        </button>
-                        <button
-                            type="button"
-                            className={buttonClassName("ghost")}
-                            aria-label={t("Collapse history")}
-                            onClick={() => onCollapsedChange(true)}
-                        >
-                            <ArrowRight
-                                className="h-4 w-4 rotate-180"
-                                aria-hidden="true"
-                            />
-                        </button>
-                    </div>
-                </div>
-            </CardHeader>
-            <CardContent>
-                <JobHistoryContent
-                    jobs={jobs}
-                    selectedJobId={selectedJobId}
-                    isLoading={isLoading}
-                    error={error}
-                    onDelete={onDelete}
-                    onBulkDelete={onBulkDelete}
-                    deletingJobId={deletingJobId}
-                    bulkDeleting={bulkDeleting}
-                    deleteError={deleteError}
-                />
-            </CardContent>
-        </Card>
-    );
-}
-
-function JobHistoryContent({
-    jobs,
-    selectedJobId,
-    isLoading,
-    error,
-    onDelete,
-    onBulkDelete,
-    deletingJobId,
-    bulkDeleting,
-    deleteError,
-}: {
-    jobs: Awaited<ReturnType<typeof listJobs>>;
-    selectedJobId: string;
-    isLoading: boolean;
-    error?: Error | null;
-    onDelete: (jobId: string) => void;
-    onBulkDelete: (jobIds: string[]) => void;
-    deletingJobId?: string | null;
-    bulkDeleting?: boolean;
-    deleteError?: Error | null;
-}) {
-    const t = useT();
-    if (error) {
-        return <InlineError message={error.message} />;
-    }
-    if (isLoading) {
-        return (
-            <div className="flex h-24 items-center justify-center text-sm text-muted-foreground">
-                <Loader2
-                    className="mr-2 h-4 w-4 animate-spin text-primary"
-                    aria-hidden="true"
-                />
-                {t("Loading jobs")}
+                <Badge tone={active ? "neutral" : getJobStatusTone(job.status)}>
+                    {t(job.status)}
+                </Badge>
             </div>
-        );
-    }
-    if (!jobs.length) {
-        return (
-            <EmptyState
-                title={t("No audits yet")}
-                detail={t(
-                    "Submitted audit runs will appear here after workbook validation and queue submission.",
-                )}
-            />
-        );
-    }
-    return (
-        <>
-            {deleteError ? (
-                <div className="mb-3">
-                    <InlineError message={deleteError.message} />
-                </div>
-            ) : null}
-            <JobHistorySubList
-                jobs={jobs}
-                selectedJobId={selectedJobId}
-                onDelete={onDelete}
-                onBulkDelete={onBulkDelete}
-                deletingJobId={deletingJobId}
-                bulkDeleting={bulkDeleting}
-            />
-        </>
-    );
-}
-
-function JobHistorySubList({
-    jobs,
-    selectedJobId,
-    onDelete,
-    onBulkDelete,
-    deletingJobId,
-    bulkDeleting,
-}: {
-    jobs: Awaited<ReturnType<typeof listJobs>>;
-    selectedJobId: string;
-    onDelete: (jobId: string) => void;
-    onBulkDelete: (jobIds: string[]) => void;
-    deletingJobId?: string | null;
-    bulkDeleting?: boolean;
-}) {
-    const t = useT();
-    const [selecting, setSelecting] = useState(false);
-    const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-    const selectedCount = selectedIds.size;
-
-    useEffect(() => {
-        const jobIds = new Set(jobs.map((job) => job.job_id));
-        setSelectedIds((previous) => {
-            const next = new Set([...previous].filter((jobId) => jobIds.has(jobId)));
-            return next.size === previous.size ? previous : next;
-        });
-    }, [jobs]);
-
-    function toggleSelected(jobId: string) {
-        setSelectedIds((previous) => {
-            const next = new Set(previous);
-            if (next.has(jobId)) {
-                next.delete(jobId);
-            } else {
-                next.add(jobId);
-            }
-            return next;
-        });
-    }
-
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-                <button
-                    type="button"
-                    className={buttonClassName("ghost")}
-                    onClick={() => {
-                        setSelecting(!selecting);
-                        setSelectedIds(new Set());
-                    }}
-                >
-                    {selecting ? t("Cancel") : t("Select")}
-                </button>
-                {selecting ? (
-                    <button
-                        type="button"
-                        className={buttonClassName("secondary")}
-                        disabled={!selectedCount || bulkDeleting}
-                        onClick={() => {
-                            const jobIds = [...selectedIds];
-                            if (
-                                jobIds.length &&
-                                window.confirm(
-                                    t(
-                                        "Delete selected history items? This cannot be undone.",
-                                    ),
-                                )
-                            ) {
-                                onBulkDelete(jobIds);
-                                setSelectedIds(new Set());
-                                setSelecting(false);
-                            }
-                        }}
-                    >
-                        {bulkDeleting ? (
-                            <Loader2
-                                className="h-4 w-4 animate-spin"
-                                aria-hidden="true"
-                            />
-                        ) : (
-                            <Trash2 className="h-4 w-4" aria-hidden="true" />
-                        )}
-                        {t("Delete selected")}{" "}
-                        {selectedCount ? `(${formatNumber(selectedCount)})` : ""}
-                    </button>
-                ) : null}
-            </div>
-            <div className="max-h-72 space-y-2 overflow-auto pr-1 xl:max-h-[calc(100vh-260px)]">
-                {jobs.map((job) => {
-                const active = job.job_id === selectedJobId;
-                const isDeleting = deletingJobId === job.job_id;
-                const summary = job.prepared_payload_summary || {};
-                const scheduledStartAt = getScheduledStartAt(job);
-                return (
-                    <div
-                        key={job.job_id}
-                        className={[
-                            "flex items-stretch gap-1 rounded-md border p-2 text-sm transition",
-                            active
-                                ? "border-primary bg-primary text-primary-foreground"
-                                : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
-                            ].join(" ")}
-                        >
-                        {selecting ? (
-                            <input
-                                type="checkbox"
-                                className="mt-2 h-4 w-4 shrink-0 accent-primary"
-                                checked={selectedIds.has(job.job_id)}
-                                aria-label={`${t("Select")} ${getJobName(job)}`}
-                                onChange={() => toggleSelected(job.job_id)}
-                            />
-                        ) : null}
-                        <Link
-                            to="/jobs/$jobId"
-                            params={{ jobId: job.job_id }}
-                            className="min-w-0 flex-1 px-1 py-1"
-                        >
-                            <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                    <div className="truncate font-semibold">
-                                        {getJobName(job)}
-                                    </div>
-                                    <div
-                                        className={
-                                            active
-                                                ? "mt-1 text-xs text-primary-foreground/75"
-                                                : "mt-1 text-xs text-muted-foreground"
-                                        }
-                                    >
-                                        {formatDateTime(job.created_at)}
-                                    </div>
-                                    {scheduledStartAt ? (
-                                        <div
-                                            className={
-                                                active
-                                                    ? "mt-1 text-xs text-primary-foreground/75"
-                                                    : "mt-1 text-xs text-muted-foreground"
-                                            }
-                                        >
-                                            {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
-                                        </div>
-                                    ) : null}
-                                </div>
-                                <Badge
-                                    tone={
-                                        active
-                                            ? "neutral"
-                                            : getJobStatusTone(job.status)
-                                    }
-                                    >
-                                    {t(job.status)}
-                                </Badge>
-                            </div>
-                            <div
-                                className={
-                                    active
-                                        ? "mt-2 grid grid-cols-2 gap-2 text-xs text-primary-foreground/80"
-                                        : "mt-2 grid grid-cols-2 gap-2 text-xs text-muted-foreground"
-                                }
-                            >
-                                <span>
-                                    {formatNumber(jobInputStopCount(summary))}{" "}
-                                    {t("stops")}
-                                </span>
-                                <span>
-                                    {formatNumber(summary.current_plan_route_count)}{" "}
-                                    {t("routes")}
-                                </span>
-                            </div>
-                        </Link>
-                        {!selecting ? (
-                            <button
-                            type="button"
-                            className={[
-                                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-                                active
-                                    ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10 hover:text-primary-foreground"
-                                    : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-                            ].join(" ")}
-                            aria-label={`${t("Delete job")}: ${getJobName(job)}`}
-                            title={t("Delete job")}
-                            disabled={isDeleting}
-                            onClick={() => {
-                                if (
-                                    window.confirm(
-                                        t(
-                                            "Delete this job from local history? This cannot be undone.",
-                                        ),
-                                    )
-                                ) {
-                                    onDelete(job.job_id);
-                                }
-                            }}
-                        >
-                            {isDeleting ? (
-                                <Loader2
-                                    className="h-4 w-4 animate-spin"
-                                    aria-hidden="true"
-                                />
-                            ) : (
-                                <Trash2 className="h-4 w-4" aria-hidden="true" />
-                            )}
-                            </button>
-                        ) : null}
-                    </div>
-                );
-                })}
+            <div className={`mt-2 grid grid-cols-2 gap-2 text-xs ${secondaryClass}`}>
+                <span>
+                    {formatNumber(jobInputStopCount(summary))} {t("stops")}
+                </span>
+                <span>
+                    {formatNumber(summary.current_plan_route_count)} {t("routes")}
+                </span>
             </div>
         </div>
     );

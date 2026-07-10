@@ -387,6 +387,15 @@ class SqliteRuntimeStore:
 
     @staticmethod
     def _job_summary_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        metadata = json_loads(row["metadata_json"], {})
+        if isinstance(metadata, dict):
+            metadata = {
+                key: value
+                for key, value in metadata.items()
+                if key not in {"client_prep", "planner_config"}
+            }
+        else:
+            metadata = {}
         return {
             "job_id": row["job_id"],
             "owner_email": row["owner_email"],
@@ -395,7 +404,7 @@ class SqliteRuntimeStore:
             "created_at": row["created_at"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
-            "metadata": json_loads(row["metadata_json"], {}),
+            "metadata": metadata,
             "prepared_payload_summary": json_loads(row["prepared_payload_summary_json"], {}),
             "error": row["error"],
         }

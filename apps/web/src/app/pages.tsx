@@ -1,5 +1,4 @@
-import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, Outlet, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,7 +19,6 @@ import {
 import { AppShell } from "@/features/shell/app-shell";
 import { JobMetrics } from "@/features/jobs/job-metrics";
 import { JobTable } from "@/features/jobs/job-table";
-import { JobResultView } from "@/features/results/job-result-view";
 import {
     cancelJob,
     deleteJob,
@@ -38,6 +36,10 @@ import { formatDateTime, formatNumber, formatRuntime } from "@/lib/format";
 import { getJobName, getJobStatusTone } from "@/features/jobs/status";
 import { jobInputStopCount } from "@/features/jobs/summary-metrics";
 import { LanguageProvider, useT } from "@/lib/i18n/context";
+
+const JobResultView = lazy(() =>
+    import("@/features/results/job-result-view").then((module) => ({ default: module.JobResultView })),
+);
 
 export function RootLayout() {
     const featuresQuery = useQuery({
@@ -156,7 +158,8 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     const jobsQuery = useQuery({
         queryKey: ["jobs"],
         queryFn: listJobs,
-        refetchInterval: 15_000,
+        refetchInterval: (query) => jobsRefreshInterval(query.state.data),
+        refetchIntervalInBackground: false,
     });
     const jobs = jobsQuery.data || [];
     const resolvedJobId = selectedJobId || "";
@@ -902,6 +905,37 @@ function getScheduledStartAt(job: {
     return typeof metadataValue === "string" && metadataValue.trim() ? metadataValue : null;
 }
 
+function scheduledRefreshInterval(job: Parameters<typeof getScheduledStartAt>[0]) {
+    const scheduledStartAt = getScheduledStartAt(job);
+    const scheduledTime = scheduledStartAt ? Date.parse(scheduledStartAt) : Number.NaN;
+    return Number.isFinite(scheduledTime) && scheduledTime - Date.now() <= 60_000
+        ? 5_000
+        : 60_000;
+}
+
+function jobsRefreshInterval(jobs?: Awaited<ReturnType<typeof listJobs>>) {
+    if (!jobs?.length) {
+        return false;
+    }
+    if (jobs.some((job) => job.status === "queued" || job.status === "running")) {
+        return 15_000;
+    }
+    const scheduledJobs = jobs.filter((job) => job.status === "scheduled");
+    return scheduledJobs.length
+        ? Math.min(...scheduledJobs.map(scheduledRefreshInterval))
+        : false;
+}
+
+function jobRefreshInterval(job?: Awaited<ReturnType<typeof getJob>>) {
+    if (!job) {
+        return false;
+    }
+    if (job.status === "queued" || job.status === "running") {
+        return 5_000;
+    }
+    return job.status === "scheduled" ? scheduledRefreshInterval(job) : false;
+}
+
 function JobDetailPanel({ jobId }: { jobId: string }) {
     const t = useT();
     const navigate = useNavigate();
@@ -909,10 +943,8 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
     const jobQuery = useQuery({
         queryKey: ["jobs", jobId],
         queryFn: () => getJob(jobId),
-        refetchInterval: (query) => {
-            const status = query.state.data?.status;
-            return status === "scheduled" || status === "queued" || status === "running" ? 5_000 : false;
-        },
+        refetchInterval: (query) => jobRefreshInterval(query.state.data),
+        refetchIntervalInBackground: false,
     });
     const cancelMutation = useMutation({
         mutationFn: () => cancelJob(jobId),
@@ -979,7 +1011,9 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
             <JobMetrics job={job} />
 
             <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
-                <JobResultView job={job} />
+                <Suspense fallback={<LoadingState label={t("Loading job")} />}>
+                    <JobResultView job={job} />
+                </Suspense>
 
                 <aside className="space-y-4">
                     <Card>

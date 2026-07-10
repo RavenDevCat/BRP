@@ -55,12 +55,21 @@ def side_tool_record(run_id: str, owner: str, *, shared: bool = False) -> dict[s
 
 def test_sqlite_job_store_filters_and_deletes(tmp_path: Path) -> None:
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
-    store.upsert_job(job_record("job1", "alice@example.com"))
+    alice_job = job_record("job1", "alice@example.com")
+    alice_job["metadata"].update(
+        {
+            "client_prep": {"rows": [{"address": "A"}]},
+            "planner_config": {"service_direction": "To School"},
+        }
+    )
+    store.upsert_job(alice_job)
     store.upsert_job(job_record("job2", "bob@example.com", shared=True))
 
     alice_jobs = store.list_jobs(user_email="alice@example.com")
     assert {item["job_id"] for item in alice_jobs} == {"job1", "job2"}
-    assert store.get_job("job1")["metadata"] == {"job_name": "job job1"}
+    alice_summary = next(item for item in alice_jobs if item["job_id"] == "job1")
+    assert alice_summary["metadata"] == {"job_name": "job job1"}
+    assert store.get_job("job1")["metadata"] == alice_job["metadata"]
     assert store.count_jobs() == 2
 
     assert store.delete_job("job1") is True

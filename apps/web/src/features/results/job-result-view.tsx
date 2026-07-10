@@ -1101,9 +1101,10 @@ function TimeImpactPanel({
     scenarioOptions.find((item) => item.key === "time_constrained") ||
     scenarioOptions[0];
   const impactQuery = useQuery({
-    queryKey: ["job-map-data", jobId, "time-impact", selected?.key],
+    queryKey: ["job-map-data", jobId, selected?.key],
     queryFn: () => getJobMapData(jobId, selected?.key || ""),
     enabled: Boolean(selected),
+    staleTime: Infinity,
   });
 
   if (!scenarioOptions.length || !selected) {
@@ -1897,6 +1898,7 @@ function MapsPanel({
     queryKey: ["job-map-data", jobId, selected?.key],
     queryFn: () => getJobMapData(jobId, selected.key),
     enabled: Boolean(selected),
+    staleTime: Infinity,
   });
   const displayScenarioSummaries = useMemo(
     () =>

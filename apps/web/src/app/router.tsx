@@ -1,10 +1,32 @@
+import { lazy, Suspense, type ReactNode } from "react";
 import { createRootRoute, createRoute, createRouter } from "@tanstack/react-router";
 import { DashboardPage, JobDetailPage, JobsPage, RootLayout } from "@/app/pages";
-import { AdminStatusPage } from "@/features/admin/admin-status-page";
-import { DistanceCheckerPage } from "@/features/distance/distance-checker-page";
-import { FleetPlannerPage } from "@/features/fleet/fleet-planner-page";
-import { RouteInsertAdvisorPage } from "@/features/insert/route-insert-advisor-page";
-import { NewJobPage } from "@/features/planner/new-job-page";
+
+const AdminStatusPage = lazy(() =>
+  import("@/features/admin/admin-status-page").then((module) => ({ default: module.AdminStatusPage })),
+);
+const DistanceCheckerPage = lazy(() =>
+  import("@/features/distance/distance-checker-page").then((module) => ({ default: module.DistanceCheckerPage })),
+);
+const FleetPlannerPage = lazy(() =>
+  import("@/features/fleet/fleet-planner-page").then((module) => ({ default: module.FleetPlannerPage })),
+);
+const RouteInsertAdvisorPage = lazy(() =>
+  import("@/features/insert/route-insert-advisor-page").then((module) => ({ default: module.RouteInsertAdvisorPage })),
+);
+const NewJobPage = lazy(() =>
+  import("@/features/planner/new-job-page").then((module) => ({ default: module.NewJobPage })),
+);
+
+function lazyRoutePage(render: () => ReactNode) {
+  return function LazyRoutePage() {
+    return (
+      <Suspense fallback={<div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>}>
+        {render()}
+      </Suspense>
+    );
+  };
+}
 
 const rootRoute = createRootRoute({
   component: RootLayout,
@@ -25,31 +47,31 @@ const jobsRoute = createRoute({
 const newJobRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/new",
-  component: NewJobPage,
+  component: lazyRoutePage(() => <NewJobPage />),
 });
 
 const distanceCheckerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/distance",
-  component: DistanceCheckerPage,
+  component: lazyRoutePage(() => <DistanceCheckerPage />),
 });
 
 const fleetPlannerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/fleet",
-  component: FleetPlannerPage,
+  component: lazyRoutePage(() => <FleetPlannerPage />),
 });
 
 const routeInsertAdvisorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/insert-advisor",
-  component: RouteInsertAdvisorPage,
+  component: lazyRoutePage(() => <RouteInsertAdvisorPage />),
 });
 
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/admin",
-  component: AdminStatusPage,
+  component: lazyRoutePage(() => <AdminStatusPage />),
 });
 
 const jobDetailRoute = createRoute({

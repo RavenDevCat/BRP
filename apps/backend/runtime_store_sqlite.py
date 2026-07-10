@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import sqlite3
+import threading
 from typing import Any, Iterable
 
 SCHEMA_VERSION = 1
@@ -92,6 +93,8 @@ class SqliteRuntimeStore:
 
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path)
+        self._initialized = False
+        self._initialize_lock = threading.Lock()
 
     def connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -103,8 +106,13 @@ class SqliteRuntimeStore:
         return conn
 
     def initialize(self) -> None:
-        with self.connect() as conn:
-            conn.executescript(
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            with self.connect() as conn:
+                conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
@@ -145,17 +153,19 @@ class SqliteRuntimeStore:
                 CREATE INDEX IF NOT EXISTS idx_side_tool_runs_owner
                     ON side_tool_runs(owner_email);
                 """
-            )
-            conn.execute(
-                """
-                INSERT INTO schema_migrations(name, version, updated_at)
-                VALUES('runtime_store', ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    version = excluded.version,
-                    updated_at = excluded.updated_at
-                """,
-                (SCHEMA_VERSION, utc_now_iso()),
-            )
+                )
+                conn.execute(
+                    """
+                    INSERT INTO schema_migrations(name, version, updated_at)
+                    VALUES('runtime_store', ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        version = excluded.version,
+                        updated_at = excluded.updated_at
+                    WHERE schema_migrations.version <> excluded.version
+                    """,
+                    (SCHEMA_VERSION, utc_now_iso()),
+                )
+            self._initialized = True
 
     def upsert_job(self, record: dict[str, Any]) -> None:
         summary = job_summary(record)

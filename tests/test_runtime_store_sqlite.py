@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sqlite3
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -13,6 +14,8 @@ from runtime_store_sqlite import (  # noqa: E402
     migrate_json_runtime_to_sqlite,
     verify_json_sqlite_parity,
 )
+from osrm_manager_store import OsrmManagerStore  # noqa: E402
+from quota_store_sqlite import SqliteQuotaStore  # noqa: E402
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -76,6 +79,49 @@ def test_sqlite_job_store_filters_and_deletes(tmp_path: Path) -> None:
     assert store.delete_job("missing") is False
     assert store.get_job("job1") is None
     assert [item["job_id"] for item in store.list_jobs(include_all=True)] == ["job2"]
+
+
+def test_repeated_store_reads_do_not_write_schema_migrations(tmp_path: Path) -> None:
+    cases = [
+        (
+            SqliteRuntimeStore(tmp_path / "runtime.sqlite"),
+            "runtime_store",
+            lambda store: store.count_jobs(),
+        ),
+        (
+            SqliteQuotaStore(tmp_path / "quota.sqlite"),
+            "quota_store",
+            lambda store: store.get_usage("provider", "counter", "month", "2026-07"),
+        ),
+        (
+            OsrmManagerStore(tmp_path / "osrm.sqlite"),
+            "osrm_manager_store",
+            lambda store: store.is_lock_held("missing"),
+        ),
+    ]
+
+    for store, migration_name, read in cases:
+        read(store)
+        with sqlite3.connect(store.db_path) as observer:
+            before_timestamp = observer.execute(
+                "SELECT updated_at FROM schema_migrations WHERE name = ?",
+                (migration_name,),
+            ).fetchone()[0]
+            before_data_version = observer.execute("PRAGMA data_version").fetchone()[0]
+
+            read(store)
+            assert observer.execute("PRAGMA data_version").fetchone()[0] == before_data_version
+            assert observer.execute(
+                "SELECT updated_at FROM schema_migrations WHERE name = ?",
+                (migration_name,),
+            ).fetchone()[0] == before_timestamp
+
+            read(type(store)(store.db_path))
+            assert observer.execute("PRAGMA data_version").fetchone()[0] == before_data_version
+            assert observer.execute(
+                "SELECT updated_at FROM schema_migrations WHERE name = ?",
+                (migration_name,),
+            ).fetchone()[0] == before_timestamp
 
 
 def test_sqlite_job_claim_transitions_queued_job_once(tmp_path: Path) -> None:

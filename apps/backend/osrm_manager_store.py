@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import threading
 import time
 from typing import Any, Iterator
 from uuid import uuid4
@@ -32,6 +33,8 @@ def _load_json_object(path: Path) -> dict[str, Any]:
 class OsrmManagerStore:
     def __init__(self, db_path: Path | str) -> None:
         self.db_path = Path(db_path).expanduser()
+        self._initialized = False
+        self._initialize_lock = threading.Lock()
 
     def connect(self) -> sqlite3.Connection:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,8 +45,13 @@ class OsrmManagerStore:
         return conn
 
     def initialize(self) -> None:
-        with self.connect() as conn:
-            conn.executescript(
+        if self._initialized:
+            return
+        with self._initialize_lock:
+            if self._initialized:
+                return
+            with self.connect() as conn:
+                conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS schema_migrations (
                     name TEXT PRIMARY KEY,
@@ -73,17 +81,19 @@ class OsrmManagerStore:
                     PRIMARY KEY(region, owner)
                 );
                 """
-            )
-            conn.execute(
-                """
-                INSERT INTO schema_migrations(name, version, updated_at)
-                VALUES('osrm_manager_store', ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
-                    version = excluded.version,
-                    updated_at = excluded.updated_at
-                """,
-                (SCHEMA_VERSION, utc_now_iso()),
-            )
+                )
+                conn.execute(
+                    """
+                    INSERT INTO schema_migrations(name, version, updated_at)
+                    VALUES('osrm_manager_store', ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        version = excluded.version,
+                        updated_at = excluded.updated_at
+                    WHERE schema_migrations.version <> excluded.version
+                    """,
+                    (SCHEMA_VERSION, utc_now_iso()),
+                )
+            self._initialized = True
 
     @contextmanager
     def write_tx(self) -> Iterator[sqlite3.Connection]:

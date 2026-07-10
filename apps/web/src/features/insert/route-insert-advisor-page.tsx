@@ -1,17 +1,23 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
+import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import {
   getRouteInsertAdvisorCapabilities,
+  deleteRouteInsertAdvisorHistory,
+  getRouteInsertAdvisorHistory,
+  listRouteInsertAdvisorHistory,
   requestRouteInsertAdvisorProposals,
   type JobMapData,
   type RouteInsertAdvisorProposalRequest,
   type RouteInsertAdvisorProposalResponse,
+  type RouteInsertAdvisorHistorySummary,
 } from "@/lib/api";
+import { formatDateTime } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 
 function asNumber(value: unknown): number {
@@ -102,6 +108,7 @@ async function fileToBase64(file: File): Promise<string> {
 
 export function RouteInsertAdvisorPage() {
   const t = useT();
+  const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
@@ -111,6 +118,9 @@ export function RouteInsertAdvisorPage() {
   const [walkingThreshold, setWalkingThreshold] = useState("500");
   const [stopLimit, setStopLimit] = useState("");
   const [activeScenarioId, setActiveScenarioId] = useState("recommended");
+  const [historyCollapsed, setHistoryCollapsed] = useState(true);
+  const [activeHistoryId, setActiveHistoryId] = useState("");
+  const [historyResult, setHistoryResult] = useState<RouteInsertAdvisorProposalResponse>();
   const capabilitiesQuery = useQuery({
     queryKey: ["route-insert-advisor-capabilities"],
     queryFn: getRouteInsertAdvisorCapabilities,
@@ -120,12 +130,52 @@ export function RouteInsertAdvisorPage() {
     mutationFn: requestRouteInsertAdvisorProposals,
     onSuccess: (data) => {
       setActiveScenarioId(data.scenarios?.[0]?.id || "recommended");
+      setActiveHistoryId(data.history_job?.run_id || "");
+      setHistoryResult(data);
+      void queryClient.invalidateQueries({ queryKey: ["route-insert-history"] });
+    },
+  });
+  const historyQuery = useQuery({
+    queryKey: ["route-insert-history"],
+    queryFn: listRouteInsertAdvisorHistory,
+  });
+  const openHistoryMutation = useMutation({
+    mutationFn: getRouteInsertAdvisorHistory,
+    onSuccess: (record) => {
+      const restored = record.route_insert_result;
+      if (!restored) return;
+      setHistoryResult(restored);
+      setActiveHistoryId(record.run_id);
+      setActiveScenarioId(restored.scenarios?.[0]?.id || "recommended");
+    },
+  });
+  const deleteHistoryMutation = useMutation({
+    mutationFn: deleteRouteInsertAdvisorHistory,
+    onSuccess: async (_response, runId) => {
+      if (activeHistoryId === runId) {
+        setActiveHistoryId("");
+        setHistoryResult(undefined);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["route-insert-history"] });
+    },
+  });
+  const bulkDeleteHistoryMutation = useMutation({
+    mutationFn: async (runIds: string[]) => {
+      for (const runId of runIds) await deleteRouteInsertAdvisorHistory(runId);
+      return runIds;
+    },
+    onSuccess: async (runIds) => {
+      if (runIds.includes(activeHistoryId)) {
+        setActiveHistoryId("");
+        setHistoryResult(undefined);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["route-insert-history"] });
     },
   });
   const capabilities = capabilitiesQuery.data;
   const sourceCount = capabilities?.supported_sources.length ?? 1;
   const checkCount = capabilities?.candidate_checks.length ?? 7;
-  const result = proposalMutation.data as RouteInsertAdvisorProposalResponse | undefined;
+  const result = historyResult;
   const canRun = Boolean(fileBase64 && addresses.trim() && !proposalMutation.isPending);
   const requestPayload = (): RouteInsertAdvisorProposalRequest => ({
     file_name: file?.name || "workbook.xlsx",
@@ -157,6 +207,47 @@ export function RouteInsertAdvisorPage() {
         </Link>
       </section>
 
+      <div
+        className={[
+          "grid gap-4",
+          historyCollapsed
+            ? "lg:grid-cols-[88px_minmax(0,1fr)]"
+            : "lg:grid-cols-[320px_minmax(0,1fr)]",
+        ].join(" ")}
+      >
+        <HistorySidebar
+          items={historyQuery.data || []}
+          itemId={(job) => job.run_id}
+          activeId={activeHistoryId}
+          title="Route Insert History"
+          emptyMessage="Saved Route Insert runs will appear here."
+          collapsed={historyCollapsed}
+          onCollapsedChange={setHistoryCollapsed}
+          isLoading={historyQuery.isLoading}
+          isFetching={historyQuery.isFetching}
+          error={
+            (historyQuery.error ||
+              openHistoryMutation.error ||
+              deleteHistoryMutation.error ||
+              bulkDeleteHistoryMutation.error) as Error | null
+          }
+          deletingId={
+            deleteHistoryMutation.isPending
+              ? deleteHistoryMutation.variables
+              : undefined
+          }
+          bulkDeleting={bulkDeleteHistoryMutation.isPending}
+          onRefresh={() => void historyQuery.refetch()}
+          onOpen={(runId) => openHistoryMutation.mutate(runId)}
+          onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
+          onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate(runIds)}
+          renderItem={(job, active) => (
+            <RouteInsertHistoryItem job={job} active={active} />
+          )}
+          className="min-w-0 lg:sticky lg:top-20 lg:self-start"
+        />
+
+        <div className="min-w-0 space-y-6">
       <div className="grid gap-4 lg:grid-cols-3">
         <InfoCard
           icon={<PlusCircle className="h-4 w-4" aria-hidden="true" />}
@@ -187,6 +278,8 @@ export function RouteInsertAdvisorPage() {
           className="grid gap-4 p-4 lg:grid-cols-[1fr_320px]"
           onSubmit={(event) => {
             event.preventDefault();
+            setActiveHistoryId("");
+            setHistoryResult(undefined);
             proposalMutation.mutate(requestPayload());
           }}
         >
@@ -208,6 +301,8 @@ export function RouteInsertAdvisorPage() {
                     setFileBase64("");
                     setFileError("");
                     setActiveScenarioId("recommended");
+                    setActiveHistoryId("");
+                    setHistoryResult(undefined);
                     proposalMutation.reset();
                     if (!nextFile) return;
                     try {
@@ -279,6 +374,12 @@ export function RouteInsertAdvisorPage() {
         </section>
       ) : null}
 
+      {result?.history_error ? (
+        <section className="rounded-md border border-warning bg-warning/10 p-4 text-sm text-warning-foreground">
+          {t("History autosave failed")}: {result.history_error}
+        </section>
+      ) : null}
+
       {result ? (
         <ProposalResults
           result={result}
@@ -286,6 +387,48 @@ export function RouteInsertAdvisorPage() {
           onSelectScenario={setActiveScenarioId}
         />
       ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RouteInsertHistoryItem({
+  job,
+  active,
+}: {
+  job: RouteInsertAdvisorHistorySummary;
+  active: boolean;
+}) {
+  const t = useT();
+  const summary = job.summary || {};
+  const secondaryClass = active
+    ? "text-primary-foreground/80"
+    : "text-muted-foreground";
+  return (
+    <div className="min-w-0 px-1 py-1">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="truncate text-sm font-semibold">
+            {job.title || t("Route Insert Run")}
+          </div>
+          <div className={`mt-1 text-xs ${secondaryClass}`}>
+            {formatDateTime(job.created_at)}
+          </div>
+          <div className={`mt-1 truncate text-xs ${secondaryClass}`}>
+            {t("Submitted by")} {job.owner_email || t("Unknown")}
+          </div>
+        </div>
+        <Badge tone={active ? "neutral" : summary.feasible ? "success" : "warning"}>
+          {summary.feasible ? t("Feasible") : t("Needs review")}
+        </Badge>
+      </div>
+      <div className={`mt-2 grid grid-cols-2 gap-1 text-xs ${secondaryClass}`}>
+        <span>{String(summary.new_stop_count ?? 0)} {t("new stops")}</span>
+        <span>{String(summary.affected_route_count ?? 0)} {t("routes")}</span>
+        <span>{signed(summary.total_added_duration_s, minutes)}</span>
+        <span>{String(summary.scenario_count ?? 0)} {t("scenarios")}</span>
+      </div>
     </div>
   );
 }

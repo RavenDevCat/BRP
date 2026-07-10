@@ -775,8 +775,25 @@ export type RouteInsertAdvisorProposalResponse = {
     summary: Record<string, unknown>;
     geocode_warnings?: Array<Record<string, unknown>>;
     map_data?: JobMapData;
+    history_job?: RouteInsertAdvisorHistorySummary;
+    history_error?: string;
     message?: string;
 };
+
+export type RouteInsertAdvisorHistorySummary = {
+    run_id: string;
+    tool_key: string;
+    owner_email?: string;
+    title?: string;
+    created_at?: string;
+    summary?: Record<string, unknown>;
+};
+
+export type RouteInsertAdvisorHistoryRecord =
+    RouteInsertAdvisorHistorySummary & {
+        scenario?: Record<string, unknown>;
+        route_insert_result?: RouteInsertAdvisorProposalResponse;
+    };
 
 type JobsResponse = {
     jobs: JobSummary[];
@@ -1258,5 +1275,25 @@ export function requestRouteInsertAdvisorProposals(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload),
         },
+    );
+}
+
+export async function listRouteInsertAdvisorHistory() {
+    const payload = await apiFetch<{
+        jobs: RouteInsertAdvisorHistorySummary[];
+    }>("/route-insert-advisor/history");
+    return payload.jobs || [];
+}
+
+export function getRouteInsertAdvisorHistory(runId: string) {
+    return apiFetch<RouteInsertAdvisorHistoryRecord>(
+        `/route-insert-advisor/history/${encodeURIComponent(runId)}`,
+    );
+}
+
+export function deleteRouteInsertAdvisorHistory(runId: string) {
+    return apiFetch<{ deleted: boolean; run_id: string }>(
+        `/route-insert-advisor/history/${encodeURIComponent(runId)}`,
+        { method: "DELETE" },
     );
 }

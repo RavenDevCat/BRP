@@ -236,6 +236,32 @@ def _fleet_history_for_context(
     return record
 
 
+def _route_insert_history_for_context(
+    run_id: str, context: UserContext
+) -> dict[str, Any]:
+    normalized_run_id = str(run_id or "").strip()
+    record = backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE.get(
+        normalized_run_id
+    )
+    if not record:
+        raise BackendHttpError(
+            404,
+            {
+                "error": f"Route Insert Advisor history run not found: {normalized_run_id}"
+            },
+        )
+    if not context.is_admin and backend_service._normalize_email(
+        record.get("owner_email")
+    ) != backend_service._normalize_email(context.email):
+        raise BackendHttpError(
+            403,
+            {
+                "error": f"Route Insert Advisor history run is not available for user: {context.email}"
+            },
+        )
+    return record
+
+
 def _api_route(method: str, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         route_kwargs = {"response_model": None, **kwargs}
@@ -553,6 +579,49 @@ def delete_fleet_planner_history(
         )
     normalized_run_id = str(run_id or "").strip()
     backend_service.FLEET_PLANNER_HISTORY_STORE.delete(normalized_run_id)
+    return _json_response(200, {"deleted": True, "run_id": normalized_run_id})
+
+
+@_api_route(
+    "GET",
+    "/route-insert-advisor/history",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_route_insert_history(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE.list(
+                user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/route-insert-advisor/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_route_insert_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    return _json_response(200, _route_insert_history_for_context(run_id, context))
+
+
+@_api_route(
+    "DELETE",
+    "/route-insert-advisor/history/{run_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_route_insert_history(
+    run_id: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    _route_insert_history_for_context(run_id, context)
+    normalized_run_id = str(run_id or "").strip()
+    backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE.delete(normalized_run_id)
     return _json_response(200, {"deleted": True, "run_id": normalized_run_id})
 
 
@@ -2238,15 +2307,41 @@ def route_insert_advisor_proposals(
         )
         response["summary"]["requested_by"] = context.email
         response["summary"]["workbook_summary"] = dict(preview.get("summary") or {})
-        return _json_response(200, response)
+    else:
+        source = dict(payload_dict.get("source") or {})
+        audit_job_id = str(
+            source.get("audit_job_id")
+            or payload_dict.get("audit_job_id")
+            or ""
+        ).strip()
+        if not audit_job_id:
+            raise BackendHttpError(
+                400,
+                {"error": "Upload a workbook before requesting insert proposals."},
+            )
+        job_record = _job_for_context(audit_job_id, context)
+        response = _build_route_insert_proposals(job_record, payload_dict)
+        response["summary"]["requested_by"] = context.email
 
-    source = dict(payload_dict.get("source") or {})
-    audit_job_id = str(source.get("audit_job_id") or payload_dict.get("audit_job_id") or "").strip()
-    if not audit_job_id:
-        raise BackendHttpError(400, {"error": "Upload a workbook before requesting insert proposals."})
-    job_record = _job_for_context(audit_job_id, context)
-    response = _build_route_insert_proposals(job_record, payload_dict)
-    response["summary"]["requested_by"] = context.email
+    try:
+        history = backend_service._handle_route_insert_history_create(
+            {
+                "title": payload_dict.get("history_title"),
+                "scenario": {
+                    "file_name": payload_dict.get("file_name")
+                    or dict(response.get("summary") or {}).get("source_label"),
+                    "new_stops": payload_dict.get("new_stops")
+                    or payload_dict.get("addresses"),
+                    "constraints": dict(payload_dict.get("constraints") or {}),
+                    "source": dict(payload_dict.get("source") or {}),
+                },
+                "route_insert_result": response,
+            },
+            context.email,
+        )
+        response["history_job"] = history.get("job")
+    except Exception as exc:
+        response["history_error"] = str(exc)
     return _json_response(200, response)
 
 

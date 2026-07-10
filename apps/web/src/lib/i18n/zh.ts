@@ -96,6 +96,13 @@ const zh: Translations = {
     Walking: "步行",
     "No insertion candidates were returned.": "没有返回插入候选方案。",
     "Selected insert plan": "选定插站方案",
+    "Route Insert History": "插站建议历史",
+    "Route Insert Run": "插站建议任务",
+    "Saved Route Insert runs will appear here.": "已保存的插站建议结果会显示在这里。",
+    "new stops": "个新增站点",
+    "Loading history": "正在加载历史",
+    "Delete history item": "删除历史记录",
+    "Delete this history item? This cannot be undone.": "删除这条历史记录？此操作无法撤销。",
     "All new students are combined into one plan and one active map.":
         "所有新增学生会被组合成一个方案，并统一显示在一张活动地图中。",
     "Cached scenarios": "已缓存方案",

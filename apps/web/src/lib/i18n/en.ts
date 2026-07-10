@@ -101,6 +101,13 @@ const en: Translations = {
     Walking: "Walking",
     "No insertion candidates were returned.": "No insertion candidates were returned.",
     "Selected insert plan": "Selected insert plan",
+    "Route Insert History": "Route Insert History",
+    "Route Insert Run": "Route Insert Run",
+    "Saved Route Insert runs will appear here.": "Saved Route Insert runs will appear here.",
+    "new stops": "new stops",
+    "Loading history": "Loading history",
+    "Delete history item": "Delete history item",
+    "Delete this history item? This cannot be undone.": "Delete this history item? This cannot be undone.",
     "All new students are combined into one plan and one active map.":
         "All new students are combined into one plan and one active map.",
     "Cached scenarios": "Cached scenarios",

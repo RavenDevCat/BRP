@@ -1499,6 +1499,65 @@ def _handle_distance_checker_history_create(
     }
 
 
+def _handle_route_insert_history_create(
+    payload: dict[str, Any], user_email: str
+) -> dict[str, Any]:
+    result = dict(payload.get("route_insert_result") or {})
+    scenarios = list(result.get("scenarios") or [])
+    if not scenarios:
+        raise ValueError("Run Route Insert Advisor before saving history.")
+
+    scenario = dict(payload.get("scenario") or {})
+    source_summary = dict(result.get("summary") or {})
+    recommended_plan = dict(dict(scenarios[0] or {}).get("selected_plan") or {})
+    source_label = str(
+        scenario.get("file_name") or source_summary.get("source_label") or ""
+    ).strip()
+    new_stop_count = int(source_summary.get("new_stop_count") or 0)
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        title = f"{source_label or 'Route Insert'} - {new_stop_count} new stop(s)"
+
+    stored_result = {
+        key: deepcopy(result.get(key))
+        for key in (
+            "status",
+            "proposal_status",
+            "proposals",
+            "scenarios",
+            "summary",
+            "geocode_warnings",
+            "message",
+        )
+        if result.get(key) is not None
+    }
+    return {
+        "job": ROUTE_INSERT_ADVISOR_HISTORY_STORE.create(
+            {
+                "title": title,
+                "scenario": scenario,
+                "route_insert_result": stored_result,
+                "summary": {
+                    "source_label": source_label,
+                    "new_stop_count": new_stop_count,
+                    "scenario_count": len(scenarios),
+                    "affected_route_count": recommended_plan.get(
+                        "affected_route_count"
+                    ),
+                    "total_added_duration_s": recommended_plan.get(
+                        "total_added_duration_s"
+                    ),
+                    "total_added_distance_m": recommended_plan.get(
+                        "total_added_distance_m"
+                    ),
+                    "feasible": bool(recommended_plan.get("feasible")),
+                },
+            },
+            owner_email=user_email,
+        )
+    }
+
+
 def _infer_service_direction_from_label(source_label: str) -> str:
     label = str(source_label or "").lower().replace("_", " ").replace("-", " ")
     if "to school" in label or "morning" in label:
@@ -3191,6 +3250,7 @@ class SideToolHistoryStore:
             "preview": deepcopy(payload.get("preview") or {}),
             "reference_result": deepcopy(payload.get("reference_result") or {}),
             "route_cost_result": deepcopy(payload.get("route_cost_result") or {}),
+            "route_insert_result": deepcopy(payload.get("route_insert_result") or {}),
             "summary": deepcopy(payload.get("summary") or {}),
         }
         summary = self._summary_for_record(record)
@@ -3227,6 +3287,9 @@ REFERENCE_DISTANCE_HISTORY_STORE = SideToolHistoryStore(
 )
 ROUTE_COST_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "route_cost")
 FLEET_PLANNER_HISTORY_STORE = SideToolHistoryStore(SIDE_TOOLS_DIR, "fleet_planner")
+ROUTE_INSERT_ADVISOR_HISTORY_STORE = SideToolHistoryStore(
+    SIDE_TOOLS_DIR, "route_insert_advisor"
+)
 JOB_QUEUE = JobQueueManager(
     job_store=JOB_STORE,
     runner_path=JOB_RUNNER_PATH,

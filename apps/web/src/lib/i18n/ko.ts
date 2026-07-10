@@ -95,6 +95,13 @@ const ko: Translations = {
     Walking: "도보",
     "No insertion candidates were returned.": "반환된 삽입 후보가 없습니다.",
     "Selected insert plan": "선택된 정류장 추가 계획",
+    "Route Insert History": "정류장 삽입 기록",
+    "Route Insert Run": "정류장 삽입 실행",
+    "Saved Route Insert runs will appear here.": "저장된 정류장 삽입 결과가 여기에 표시됩니다.",
+    "new stops": "개 신규 정류장",
+    "Loading history": "기록 불러오는 중",
+    "Delete history item": "기록 삭제",
+    "Delete this history item? This cannot be undone.": "이 기록을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
     "All new students are combined into one plan and one active map.":
         "모든 신규 학생을 하나의 계획과 하나의 활성 지도에 함께 표시합니다.",
     "Cached scenarios": "캐시된 시나리오",

@@ -97,6 +97,48 @@ class RouteInsertAdvisorTests(unittest.TestCase):
             len(scenarios),
         )
 
+    def test_history_saves_scenario_bundle_without_workbook_bytes(self) -> None:
+        result = {
+            "status": "ok",
+            "proposal_status": "ready",
+            "scenarios": [
+                {
+                    "id": "recommended",
+                    "selected_plan": {
+                        "feasible": True,
+                        "affected_route_count": 1,
+                        "total_added_duration_s": 120,
+                        "total_added_distance_m": 800,
+                    },
+                }
+            ],
+            "summary": {"source_label": "plan.xlsx", "new_stop_count": 1},
+        }
+        with mock.patch.object(
+            api_app.backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE,
+            "create",
+            return_value={"run_id": "history-1"},
+        ) as create:
+            saved = api_app.backend_service._handle_route_insert_history_create(
+                {
+                    "scenario": {
+                        "file_name": "plan.xlsx",
+                        "new_stops": "New address",
+                    },
+                    "route_insert_result": result,
+                    "file_base64": "must-not-be-saved",
+                },
+                "owner@example.com",
+            )
+
+        self.assertEqual(saved["job"]["run_id"], "history-1")
+        stored_payload = create.call_args.args[0]
+        self.assertNotIn("file_base64", stored_payload)
+        self.assertEqual(
+            stored_payload["route_insert_result"]["scenarios"][0]["id"],
+            "recommended",
+        )
+
     def test_selected_map_combines_new_stops_and_keeps_original_comparison(self) -> None:
         map_data = {
             "job_id": "workbook-preview",

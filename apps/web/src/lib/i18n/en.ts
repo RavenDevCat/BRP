@@ -105,6 +105,7 @@ const en: Translations = {
     "Route Insert Run": "Route Insert Run",
     "Saved Route Insert runs will appear here.": "Saved Route Insert runs will appear here.",
     "new stops": "new stops",
+    scenarios: "scenarios",
     "Loading history": "Loading history",
     "Delete history item": "Delete history item",
     "Delete this history item? This cannot be undone.": "Delete this history item? This cannot be undone.",

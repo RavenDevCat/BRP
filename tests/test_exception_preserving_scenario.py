@@ -25,6 +25,34 @@ class FakePlanner:
         }
 
 
+def test_exception_subset_time_constraints_keep_original_node_ids():
+    points = [
+        {"node_id": 0, "is_depot": True},
+        {"node_id": 1},
+        {"node_id": 2},
+        {"node_id": 3},
+    ]
+    assessment_time = [
+        [0, 100, 0, 0],
+        [0, 0, 100, 0],
+        [0, 0, 0, 100],
+        [0, 0, 0, 0],
+    ]
+    builder, _metadata = planner_core._build_time_acceptance_constraint_builder(
+        {
+            "route_count": 1,
+            "route_summaries": [{"matched_node_ids": [0, 1, 2, 3]}],
+        },
+        points,
+        assessment_time,
+        "From School",
+        0,
+    )
+    subset_points, _mapping = planner_core._build_exception_subset_points(points, {1})
+
+    assert builder(subset_points) == {1: 200, 2: 300}
+
+
 def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monkeypatch):
     points = [
         {"node_id": 0, "address": "school", "is_depot": True},
@@ -124,51 +152,49 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
     assert result["routes"][1]["nodes"] == [2, 3, 0]
 
 
-def test_exception_preserving_skips_when_current_plan_has_no_failed_routes():
+def test_exception_preserving_runs_independently_without_current_failures(monkeypatch):
+    points = [
+        {"node_id": 0, "is_depot": True},
+        {"node_id": 1, "address": "stop"},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 1,
+        "routes": [
+            {
+                "route_id": "KR1",
+                "nodes": [1, 0],
+                "final_route_traffic_gate": {"status": "passed"},
+            }
+        ],
+        "traffic_gate": {"status": "passed", "failed_route_count": 0, "failed_route_ids": []},
+    }
+
+    def fake_compute(_planner, subset_points, *_args, **_kwargs):
+        return {"points": subset_points, "routes": [{"route_id": "Bus 1", "nodes": [1, 0]}]}
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {"status": "passed", "failed_route_count": 0, "failed_route_ids": []}
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = {"status": "passed"}
+        return scenario["traffic_gate"]
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
     result = planner_core.build_exception_preserving_scenario(
         FakePlanner(),
-        [{"node_id": 0, "is_depot": True}],
-        {"enabled": True, "routes": []},
-        planner_core.PlannerConfig(),
-        [],
-        [],
-        None,
-        standard_scenarios=[{"traffic_gate": {"status": "passed"}}],
-    )
-
-    assert result["enabled"] is False
-    assert "no failed time-window routes" in result["skipped_reason"]
-
-
-def test_exception_preserving_keeps_standard_pass_skip_for_kr():
-    result = planner_core.build_exception_preserving_scenario(
-        FakePlanner(),
-        [{"node_id": 0, "is_depot": True}],
-        {
-            "enabled": True,
-            "bus_count": 1,
-            "routes": [
-                {
-                    "route_id": "KR1",
-                    "nodes": [1, 0],
-                    "final_route_traffic_gate": {"status": "failed"},
-                }
-            ],
-            "traffic_gate": {
-                "status": "failed",
-                "failed_route_count": 1,
-                "failed_route_ids": ["KR1"],
-            },
-        },
+        points,
+        current,
         planner_core.PlannerConfig(),
         [{"country": "South Korea", "city": "Seoul"}],
-        [],
+        [{"name": "bus", "capacity": 30, "max_count": 1}],
         None,
         standard_scenarios=[{"traffic_gate": {"status": "passed"}}],
     )
 
-    assert result["enabled"] is False
-    assert "standard scenario" in result["skipped_reason"]
+    assert result.get("enabled") is not False
+    assert result["traffic_gate"]["status"] == "passed"
+    assert result["exception_preserving"]["frozen_route_count"] == 0
 
 
 def test_ep15min_passes_time_constraints_into_exception_remainder(monkeypatch):

@@ -13,6 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SCRIPT_PATH = ROOT / "ops" / "scripts" / "report_traffic_rollout_verification.py"
 SCRIPT_DIR = SCRIPT_PATH.parent
 sys.path.insert(0, str(SCRIPT_DIR))
+sys.path.insert(0, str(ROOT / "apps" / "backend"))
+
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 spec = importlib.util.spec_from_file_location("report_traffic_rollout_verification", SCRIPT_PATH)
 assert spec is not None
@@ -22,10 +25,20 @@ spec.loader.exec_module(report_traffic_rollout_verification)
 
 
 def _args(tmpdir: str, **overrides: object) -> argparse.Namespace:
+    root = Path(tmpdir)
+    sqlite_path = root / "runtime.sqlite"
+    store = SqliteRuntimeStore(sqlite_path)
+    store.initialize()
+    for path in (root / "jobs").glob("*.json"):
+        if path.name == "index.json":
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            store.upsert_job(payload)
     values: dict[str, object] = {
-        "sample_dir": Path(tmpdir) / "samples",
-        "job_dir": Path(tmpdir) / "jobs",
-        "sqlite_path": None,
+        "sample_dir": root / "samples",
+        "job_dir": root / "jobs",
+        "sqlite_path": sqlite_path,
         "min_measured_at": "2026-06-18T00:00:00+08:00",
         "profile": [],
         "service_direction": [],

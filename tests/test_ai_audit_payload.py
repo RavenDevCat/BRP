@@ -127,7 +127,7 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
     review = payload["decision_review"]
     assert payload["job"]["time_impact_limit_minutes"] == 20
     assert payload["scenario_outcomes"][1]["name"] == "20-Minute Balanced Plan"
-    assert payload["recommended_scenario"]["key"] == "time_constrained"
+    assert payload["recommended_scenario"] is None
     assert review["time_impact"]["decision"] == "review_needed"
     assert review["time_impact"]["acceptance_rider_pct"] == 76
     assert review["input_address_review"]["warning_count"] == 2
@@ -136,6 +136,37 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
     assert review["aggregated_stop_batches"]["has_split_stop_batches"] is True
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "This full address must not leak" not in serialized
+
+
+def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> None:
+    scenarios = [
+        {
+            "key": "time_constrained",
+            "enabled": True,
+            "route_count": 18,
+            "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
+            "time_constraint": {"strict_satisfied": True},
+            "time_impact": {"available": False},
+        },
+        {
+            "key": "exception_preserving",
+            "enabled": True,
+            "route_count": 16,
+            "traffic_gate": {"status": "failed", "vehicle_saving_target": {"status": "passed"}},
+            "time_constraint": {"strict_satisfied": True},
+            "time_impact": {"available": False},
+        },
+        {
+            "key": "ep15min",
+            "enabled": True,
+            "route_count": 17,
+            "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
+            "time_constraint": {"strict_satisfied": True},
+            "time_impact": {"available": False},
+        },
+    ]
+
+    assert ai_audit._recommended_scenario(scenarios)["key"] == "ep15min"
 
 
 def test_ai_audit_prompt_headings_cover_new_sections() -> None:

@@ -2789,31 +2789,37 @@ def _ai_audit_record_with_decision_context(job_record: dict[str, Any]) -> dict[s
     result = dict(enriched.get("result") or {})
     if not result:
         return enriched
-
-    time_constrained = dict(result.get("time_constrained_optimization") or {})
-    existing_summary = (
-        dict(time_constrained.get("time_impact") or {})
-        or dict(dict(time_constrained.get("summary") or {}).get("time_impact") or {})
-    )
-    if existing_summary:
-        return enriched
-
-    payload, _error = _build_job_map_payload(
-        enriched,
-        "time_constrained",
-        "time_constrained",
-        attach_impact=True,
-    )
-    time_impact = dict(dict(payload or {}).get("summary") or {}).get("time_impact")
-    if not isinstance(time_impact, dict) or not time_impact:
-        return enriched
-
-    time_constrained["time_impact"] = time_impact
-    result["time_constrained_optimization"] = time_constrained
     structured = dict(result.get("structured_results") or {})
-    structured_time_constrained = dict(structured.get("time_constrained") or {})
-    structured_time_constrained["time_impact"] = time_impact
-    structured["time_constrained"] = structured_time_constrained
+    scenarios = (
+        ("time_constrained", "time_constrained_optimization"),
+        ("exception_preserving", "exception_preserving_optimization"),
+        ("ep15min", "ep15min_optimization"),
+    )
+    for scenario_key, result_key in scenarios:
+        scenario = dict(result.get(result_key) or structured.get(scenario_key) or {})
+        if not scenario or scenario.get("enabled") is False:
+            continue
+        existing_summary = (
+            dict(scenario.get("time_impact") or {})
+            or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
+        )
+        if existing_summary:
+            continue
+        enriched["result"] = result
+        payload, _error = _build_job_map_payload(
+            enriched,
+            scenario_key,
+            scenario_key,
+            attach_impact=True,
+        )
+        time_impact = dict(dict(payload or {}).get("summary") or {}).get("time_impact")
+        if not isinstance(time_impact, dict) or not time_impact:
+            continue
+        scenario["time_impact"] = time_impact
+        result[result_key] = scenario
+        structured_scenario = dict(structured.get(scenario_key) or {})
+        structured_scenario["time_impact"] = time_impact
+        structured[scenario_key] = structured_scenario
     result["structured_results"] = structured
     enriched["result"] = result
     return enriched

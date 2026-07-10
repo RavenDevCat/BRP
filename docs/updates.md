@@ -5,6 +5,21 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-07-10
+
+### Hard-Constrained Scenario Selection
+
+- Route candidates now use unscaled OSRM travel times and direct AMap or Kakao
+  final-route validation; retired traffic coefficients no longer alter solver
+  inputs.
+- The balanced and protected scenarios run independently and apply the user's
+  stop time-impact limit as a hard constraint across every optimized stop.
+- A scenario is recommended only when its provider time window, requested
+  vehicle saving, and hard time-impact checks all pass. When several qualify,
+  the result with the fewest vehicles is recommended.
+- Existing completed jobs keep their stored results. Rerun an audit to use the
+  new solve and recommendation flow.
+
 ## 2026-06-21
 
 ### Backend Runtime Standardization

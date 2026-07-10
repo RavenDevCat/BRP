@@ -2529,6 +2529,7 @@ type ScenarioRow = {
   enabled: boolean;
   skippedReason: string;
   trafficGate: Record<string, unknown>;
+  timeConstraint: Record<string, unknown>;
   exceptionAccepted: boolean;
   routeCount: unknown;
   stopCount: unknown;
@@ -2740,6 +2741,7 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     enabled: Object.keys(assessment).length > 0,
     skippedReason: "",
     trafficGate: {},
+    timeConstraint: {},
     exceptionAccepted: false,
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
@@ -2758,6 +2760,7 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     enabled: Object.keys(scenario).length > 0 && scenario.enabled !== false,
     skippedReason: stringValue(scenario.skipped_reason),
     trafficGate: asRecord(scenario.traffic_gate),
+    timeConstraint: asRecord(scenario.time_constraint),
     exceptionAccepted: Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
@@ -2789,9 +2792,6 @@ function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate" | 
   const savingTarget = asRecord(scenario.trafficGate.vehicle_saving_target);
   const savingStatus = stringValue(savingTarget.status);
   const checkName = trafficGateCheckName(scenario.trafficGate);
-  if (status === "failed" && scenario.exceptionAccepted) {
-    return "Exception contained";
-  }
   if (status === "passed" && savingStatus === "failed") {
     return "Vehicle saving target failed";
   }
@@ -2823,9 +2823,6 @@ function scenarioTrafficTone(
 ): "neutral" | "success" | "warning" | "info" {
   const status = stringValue(scenario.trafficGate.status);
   const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
-  if (status === "failed" && scenario.exceptionAccepted) {
-    return "info";
-  }
   if (status === "passed" && savingStatus === "failed") {
     return "warning";
   }
@@ -2840,19 +2837,30 @@ function scenarioTrafficTone(
 
 function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
   const status = stringValue(scenario.trafficGate.status);
-  return status === "passed" || (status === "failed" && scenario.exceptionAccepted);
+  const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
+  const constraint = scenario.timeConstraint;
+  const strictSatisfied = constraint.strict_satisfied;
+  const bounded = Number(constraint.bounded_solver_stop_count || 0);
+  const expected = Number(constraint.expected_solver_stop_count || scenario.stopCount || 0);
+  const timeImpactPassed =
+    typeof strictSatisfied === "boolean"
+      ? strictSatisfied
+      : constraint.enabled === true
+        && stringValue(constraint.mode) === "hard"
+        && expected > 0
+        && bounded >= expected;
+  return status === "passed" && savingStatus !== "failed" && timeImpactPassed;
 }
 
 function pickRecommendedScenario(scenarios: ScenarioRow[]): ScenarioRow | undefined {
   const optimized = ["time_constrained", "ep15min", "exception_preserving"];
-  return (
-    optimized
-      .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
-      .find((scenario): scenario is ScenarioRow => Boolean(scenario && scenarioIsAdoptionReady(scenario))) ||
-    optimized
-      .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
-      .find((scenario): scenario is ScenarioRow => Boolean(scenario))
-  );
+  return scenarios
+    .filter((scenario) => optimized.includes(scenario.key) && scenario.enabled && scenarioIsAdoptionReady(scenario))
+    .sort((left, right) => {
+      const routeDifference = Number(left.routeCount || Number.MAX_SAFE_INTEGER)
+        - Number(right.routeCount || Number.MAX_SAFE_INTEGER);
+      return routeDifference || optimized.indexOf(left.key) - optimized.indexOf(right.key);
+    })[0];
 }
 
 function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {

@@ -124,6 +124,8 @@ def _compact_traffic_gate(scenario: dict[str, Any]) -> dict[str, Any]:
         or gate.get("max_estimated_arrival_delay_minutes"),
         "earliest_departure": "06:00",
         "latest_arrival": gate.get("target_arrival_label") or "08:00",
+        "vehicle_saving_target": gate.get("vehicle_saving_target")
+        or scenario.get("vehicle_saving_target"),
     }
 
 
@@ -258,6 +260,11 @@ def _scenario_summary(
     planner_config: dict[str, Any],
 ) -> dict[str, Any]:
     enabled = bool(scenario) and scenario.get("enabled") is not False
+    time_constraint = dict(scenario.get("time_constraint") or {})
+    time_impact = _compact_time_impact(
+        dict(scenario.get("time_impact") or {})
+        or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
+    )
     return {
         "key": key,
         "name": _scenario_display_name(key, result, scenario, planner_config),
@@ -271,27 +278,63 @@ def _scenario_summary(
         "bus_mix": scenario.get("bus_mix"),
         "traffic_gate": _compact_traffic_gate(scenario),
         "exception_accepted": bool(dict(scenario.get("exception_preserving") or {}).get("accepted") or scenario.get("exception_feasible")),
-        "time_impact": _compact_time_impact(
-            dict(scenario.get("time_impact") or {})
-            or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
-        ),
+        "time_constraint": {
+            key: time_constraint.get(key)
+            for key in (
+                "enabled",
+                "mode",
+                "strict_satisfied",
+                "bounded_solver_stop_count",
+                "expected_solver_stop_count",
+                "threshold_minutes",
+            )
+            if key in time_constraint
+        },
+        "time_impact": time_impact,
     }
+
+
+def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
+    time_impact = dict(scenario.get("time_impact") or {})
+    if time_impact.get("available"):
+        return str(time_impact.get("decision") or "") == "acceptable"
+    constraint = dict(scenario.get("time_constraint") or {})
+    strict_satisfied = constraint.get("strict_satisfied")
+    if isinstance(strict_satisfied, bool):
+        return strict_satisfied
+    bounded = int(constraint.get("bounded_solver_stop_count", 0) or 0)
+    expected = int(constraint.get("expected_solver_stop_count", 0) or scenario.get("stop_count") or 0)
+    return (
+        constraint.get("enabled") is True
+        and str(constraint.get("mode") or "") == "hard"
+        and expected > 0
+        and bounded >= expected
+    )
 
 
 def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
     order = ["time_constrained", "ep15min", "exception_preserving"]
-    by_key = {str(item.get("key")): item for item in scenarios if item.get("enabled")}
-    for key in order:
-        item = by_key.get(key)
-        if not item:
+    order_index = {key: index for index, key in enumerate(order)}
+    ready: list[dict[str, Any]] = []
+    for item in scenarios:
+        key = str(item.get("key") or "")
+        if key not in order_index or not item.get("enabled"):
             continue
         gate = dict(item.get("traffic_gate") or {})
-        if gate.get("status") == "passed" or (gate.get("status") == "failed" and item.get("exception_accepted")):
-            return item
-    for key in order:
-        if key in by_key:
-            return by_key[key]
-    return None
+        saving = dict(gate.get("vehicle_saving_target") or {})
+        if gate.get("status") != "passed" or saving.get("status") == "failed":
+            continue
+        if not _scenario_time_impact_passed(item):
+            continue
+        ready.append(item)
+    return min(
+        ready,
+        key=lambda item: (
+            int(item.get("route_count", 10**9) or 10**9),
+            order_index[str(item.get("key") or "")],
+        ),
+        default=None,
+    )
 
 
 def _input_address_review_summary(review: dict[str, Any]) -> dict[str, Any]:

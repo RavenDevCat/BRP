@@ -9,7 +9,30 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend")
 planner_core = importlib.import_module("planner_core")
 
 
-def test_am_arrival_gate_replans_once(monkeypatch):
+def test_arrival_feedback_can_tighten_below_thirty_minutes(monkeypatch):
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", 5)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_MAX_STEP_MINUTES", 15)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES", 10)
+    gate = {
+        "status": "failed",
+        "gate_type": "arrival_window",
+        "failed_route_count": 1,
+        "max_estimated_arrival_delay_minutes": 4.43,
+    }
+
+    minimum, max_step = planner_core._route_duration_replan_bounds(gate)
+    result = planner_core._next_final_route_replan_limit_seconds(
+        30 * 60,
+        gate,
+        minimum_limit_seconds=minimum,
+        max_step_minutes=max_step,
+    )
+
+    assert result == 25 * 60
+
+
+def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
@@ -21,7 +44,7 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     def fake_amap_route_stats(planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
         return {
-            "duration_s": 9000 if planner.last_bus_count < 2 else 1200,
+            "duration_s": 9000 if planner.MAX_ROUTE_DURATION_SECONDS >= 3600 else 1200,
             "distance_m": 1234,
             "source": "fake_amap",
         }
@@ -88,17 +111,17 @@ def test_am_arrival_gate_replans_once(monkeypatch):
     result = planner_core._compute_scenario_without_render(planner, points, "smoke")
 
     assert planner.solve_count == 2
-    assert result["bus_count"] == 2
+    assert result["bus_count"] == 1
     assert result["traffic_gate"]["status"] == "passed"
     assert result["feasibility_report"]["status"] == "passed"
-    assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 2
+    assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 0
     assert len(result["traffic_replan_attempts"]) == 1
-    assert result["traffic_replan_attempts"][0]["action"] == "increase_active_vehicles"
+    assert result["traffic_replan_attempts"][0]["action"] == "tighten_route_target"
     assert result["traffic_replan_attempts"][0]["feasibility_status"] == "failed"
     assert result["traffic_replan_attempts"][0]["failure_reasons"] == ["arrival_window"]
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
-    assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 2
-    assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 60
+    assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 0
+    assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 45
     assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
     assert result["traffic_replan_attempts"][0]["unavailable_route_count"] == 0
     assert result["traffic_replan_attempts"][0]["api_calls"] == 1
@@ -199,7 +222,7 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
     assert result["traffic_vehicle_search_attempts"][0]["status"] == "passed"
 
 
-def test_vehicle_floor_error_falls_back_to_route_target_search(monkeypatch):
+def test_am_arrival_gate_stops_after_tighter_target_is_infeasible(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
@@ -207,10 +230,10 @@ def test_vehicle_floor_error_falls_back_to_route_target_search(monkeypatch):
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS", 0)
     monkeypatch.setattr(planner_core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 0)
 
-    def fake_amap_route_stats(planner, _points, _cache, state):
+    def fake_amap_route_stats(_planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
         return {
-            "duration_s": 1200 if planner.MAX_ROUTE_DURATION_SECONDS < 3600 else 9000,
+            "duration_s": 9000,
             "distance_m": 1234,
             "source": "fake_amap",
         }
@@ -248,8 +271,8 @@ def test_vehicle_floor_error_falls_back_to_route_target_search(monkeypatch):
 
         def solve_routes(self, _points, _solve_time, _solve_distance):
             self.solve_count += 1
-            if int(self.MIN_SOLVER_VEHICLE_COUNT or 0) >= 2:
-                raise RuntimeError("forced vehicle-floor infeasible")
+            if self.MAX_ROUTE_DURATION_SECONDS < 3600:
+                raise RuntimeError("tighter route target infeasible")
             return [
                 {
                     "route_id": f"Bus {index + 1}",
@@ -277,11 +300,107 @@ def test_vehicle_floor_error_falls_back_to_route_target_search(monkeypatch):
     result = planner_core._compute_scenario_without_render(planner, points, "am-fallback-smoke")
 
     assert result["bus_count"] == 1
+    assert planner.solve_count == 2
+    assert result["traffic_gate"]["status"] == "failed"
+    assert result["traffic_replan_attempts"][0]["action"] == "tighten_route_target"
+    assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 45
+    assert result["traffic_replan_attempts"][0]["error"] == "tighter route target infeasible"
+
+
+def test_am_arrival_gate_recovers_after_combined_replan_is_infeasible(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS", 4)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS", 5)
+    monkeypatch.setattr(planner_core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 0)
+
+    def fake_amap_route_stats(planner, _points, _cache, state):
+        state["api_calls"] = int(state.get("api_calls", 0)) + 1
+        return {
+            "duration_s": 1200 if planner.MIN_SOLVER_VEHICLE_COUNT >= 3 else 9000,
+            "distance_m": 1234,
+            "source": "fake_amap",
+        }
+
+    monkeypatch.setattr(planner_core, "_amap_route_stats", fake_amap_route_stats)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+        BUS_TYPE_CONFIGS = [{"name": "bus", "capacity": 99, "max_count": 3}]
+        NODE_TIME_UPPER_BOUNDS = {}
+        MIN_SOLVER_VEHICLE_COUNT = 0
+        MAX_ROUTE_DURATION_SECONDS = 3600
+        OSRM_BASE_URL = ""
+        TRAFFIC_TIME_MULTIPLIER = 1.0
+        INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
+
+        def __init__(self):
+            self.solve_count = 0
+            self._BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(
+                service_direction="To School",
+                to_school_arrival_time="08:00",
+            )
+
+        def log(self, _message):
+            return None
+
+        def build_vehicle_fleet(self):
+            return []
+
+        def resolve_osrm_base_url(self, _points):
+            return "fake-osrm"
+
+        def build_osrm_full_matrix(self, points):
+            return [[0 for _ in points] for _ in points], [[0 for _ in points] for _ in points]
+
+        def solve_routes(self, _points, _solve_time, _solve_distance):
+            self.solve_count += 1
+            if self.solve_count == 3:
+                raise RuntimeError("combined replan infeasible")
+            vehicle_count = max(1, int(self.MIN_SOLVER_VEHICLE_COUNT or 0))
+            return [
+                {
+                    "route_id": f"Bus {index + 1}",
+                    "nodes": [0, index + 2] if vehicle_count >= 3 else [0, 1],
+                    "time_s": float(self.MAX_ROUTE_DURATION_SECONDS),
+                    "stop_service_time_s": 0,
+                }
+                for index in range(vehicle_count)
+            ]
+
+        def enrich_routes_with_actual_driving(self, _points, _routes):
+            return None
+
+        def annotate_and_price_routes(self, _points, _routes):
+            return None
+
+        def build_scenario_result(self, _points, routes, _html):
+            return {"routes": routes, "bus_count": len(routes)}
+
+    planner = FakePlanner()
+    points = [
+        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.4, "lng": 121.4, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.5, "lng": 121.5, "adcode": "310000"},
+    ]
+    result = planner_core._compute_scenario_without_render(
+        planner,
+        points,
+        "combined-replan-smoke",
+        enable_vehicle_search=False,
+    )
+
+    assert planner.solve_count == 4
     assert result["traffic_gate"]["status"] == "passed"
-    assert result["traffic_gate"]["solver_target_duration_minutes"] < 60
-    assert result["traffic_replan_attempts"][0]["action"] == "increase_active_vehicles"
-    assert result["traffic_replan_attempts"][0]["error"] == "forced vehicle-floor infeasible"
-    assert result["traffic_replan_attempts"][1]["action"] == "tighten_route_target_after_vehicle_error"
+    assert [attempt["action"] for attempt in result["traffic_replan_attempts"]] == [
+        "tighten_route_target",
+        "tighten_route_target_and_increase_active_vehicles",
+        "increase_active_vehicles_after_solver_error",
+    ]
+    assert result["traffic_replan_attempts"][1]["error"] == "combined replan infeasible"
 
 
 def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkeypatch):
@@ -363,6 +482,8 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
     assert planner.min_counts_seen == [0]
     assert result["time_constraint"]["min_solver_vehicle_count"] == 0
     assert result["time_constraint"]["reduced_vehicle_limit"] == 20
+    assert result["time_constraint"]["expected_solver_stop_count"] == 1
+    assert result["time_constraint"]["strict_satisfied"] is True
     assert metadata["min_solver_vehicle_count"] == 0
 
 
@@ -755,7 +876,7 @@ def test_current_plan_scenario_reuses_final_route_gate(monkeypatch):
     assert scenario["routes"][0]["final_route_traffic_gate"]["scenario"] == "Current Plan"
 
 
-def test_scheduled_current_plan_refresh_updates_budget_and_multiplier_without_changing_route():
+def test_scheduled_current_plan_refresh_keeps_solver_inputs_unchanged():
     config = planner_core.PlannerConfig(max_route_duration_minutes=60)
     route = {
         "nodes": [0, 1, 2],
@@ -783,11 +904,10 @@ def test_scheduled_current_plan_refresh_updates_budget_and_multiplier_without_ch
     )
 
     assert evidence["status"] == "ready"
-    assert evidence["raw_traffic_time_multiplier"] == 2.0
-    assert evidence["traffic_time_multiplier"] == 2.0
-    assert evidence["traffic_time_multiplier_clamped"] is False
-    assert evidence["max_route_duration_minutes"] == 36
-    assert config.max_route_duration_minutes == 36
+    assert evidence["solver_adjustment"] == "none"
+    assert evidence["max_verified_total_duration_minutes"] == 2120 / 60
+    assert "traffic_time_multiplier" not in evidence
+    assert config.max_route_duration_minutes == 60
     assert route["nodes"] == [0, 1, 2]
 
 

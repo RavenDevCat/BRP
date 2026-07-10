@@ -753,3 +753,62 @@ def test_current_plan_scenario_reuses_final_route_gate(monkeypatch):
     assert gate["status"] == "passed"
     assert scenario["traffic_feasible"] is True
     assert scenario["routes"][0]["final_route_traffic_gate"]["scenario"] == "Current Plan"
+
+
+def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+
+    def unexpected_shared_cache(*_args, **_kwargs):
+        raise AssertionError("AMap final validation must not use shared cache")
+
+    monkeypatch.setattr(planner_core, "load_json_object", unexpected_shared_cache)
+    monkeypatch.setattr(planner_core, "save_json_object", unexpected_shared_cache)
+
+    calls = {"count": 0}
+
+    def fake_amap_segment_stats(_planner, _points):
+        calls["count"] += 1
+        return {"duration_s": 20 * 60, "distance_m": 1234}
+
+    monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_amap_segment_stats)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+        MAX_ROUTE_DURATION_SECONDS = 60 * 60
+
+    points = [
+        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+    ]
+
+    def scenario():
+        return {
+            "routes": [
+                {"route_id": "Bus 1", "nodes": [0, 1], "time_s": 20 * 60, "stop_service_time_s": 0},
+            ]
+        }
+
+    config = planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00")
+    first_gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(), scenario(), points, config, [{"address": "Shanghai"}], "first"
+    )
+    repeated_gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(), scenario(), points, config, [{"address": "Shanghai"}], "repeated"
+    )
+    next_run_gate = planner_core.attach_final_route_traffic_gate(
+        FakePlanner(),
+        scenario(),
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Shanghai"}],
+        "next-run",
+    )
+
+    assert first_gate["api_calls"] == 1
+    assert first_gate["cache_hits"] == 0
+    assert repeated_gate["api_calls"] == 0
+    assert repeated_gate["cache_hits"] == 1
+    assert next_run_gate["api_calls"] == 1
+    assert next_run_gate["cache_hits"] == 0
+    assert calls["count"] == 2

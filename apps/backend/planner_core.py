@@ -2211,7 +2211,15 @@ def attach_final_route_traffic_gate(
         scenario["traffic_gate"] = gate
         return gate
 
-    cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
+    persistent_cache = traffic_policy.provider != "amap"
+    if persistent_cache:
+        cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
+    else:
+        # AMap represents current traffic, so reuse it only inside this planner run.
+        cache = getattr(config, "_amap_final_route_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(config, "_amap_final_route_cache", cache)
     state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
     target_minutes = latest_arrival_minutes
     departure_minutes = from_school_departure_minutes
@@ -2364,7 +2372,7 @@ def attach_final_route_traffic_gate(
             reverse_check_routes.append(reverse_check)
         route["final_route_traffic_gate"] = verification
 
-    if state.get("cache_changed"):
+    if persistent_cache and state.get("cache_changed"):
         save_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH, cache, sort_keys=True)
     gate["api_calls"] = int(state.get("api_calls", 0))
     gate["cache_hits"] = int(state.get("cache_hits", 0))

@@ -21,9 +21,8 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
             "config": {"service_direction": "To School", "max_route_duration_minutes": 75, "time_impact_limit_minutes": 20},
             "result": {
                 "service_direction": "To School",
-                "traffic_profile_name": "AM Peak (Attributed)",
-                "traffic_time_multiplier": 1.42,
-                "traffic_profile_context": "Live Seoul sample",
+                "traffic_profile_name": "AM Peak",
+                "traffic_profile_context": "Direct provider validation",
                 "current_plan_assessment": {
                     "route_count": 2,
                     "route_summaries": [
@@ -40,6 +39,11 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
                 },
                 "time_constrained_optimization": {
                     "route_count": 2,
+                    "traffic_gate": {
+                        "status": "failed",
+                        "checked_route_count": 2,
+                        "failed_route_count": 1,
+                    },
                     "time_impact": {
                         "available": True,
                         "acceptance_threshold_minutes": 15,
@@ -90,49 +94,18 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
                         }
                     ],
                 },
-                "traffic_attribution": {
-                    "enabled": True,
-                    "succeeded": True,
-                    "mode": "attributed",
-                    "confidence": "medium",
-                    "route_level_applied": True,
-                    "observed_route_sample_count": 20,
-                    "geo_route_sample_count": 18,
-                    "scenario_route_estimates": {
-                        "time_constrained": {
-                            "route_estimates": [
-                                {
-                                    "route_id": "R1",
-                                    "method": "geo_route_similarity",
-                                    "quality_reason": "geo_threshold_passed",
-                                    "factor": 1.45,
-                                    "matched_sample_count": 4,
-                                    "avg_similarity": 0.88,
-                                },
-                                {
-                                    "route_id": "R2",
-                                    "method": "fallback",
-                                    "quality_reason": "no_similar_route_sample",
-                                    "factor": 1.42,
-                                    "matched_sample_count": 0,
-                                },
-                            ]
-                        }
-                    },
-                },
             },
         }
     )
 
     review = payload["decision_review"]
     assert payload["job"]["time_impact_limit_minutes"] == 20
-    assert payload["scenario_outcomes"][1]["name"] == "20-Minute Balanced Plan"
+    assert payload["scenario_outcomes"][1]["name"] == "Strict Plan"
     assert payload["recommended_scenario"] is None
     assert review["time_impact"]["decision"] == "review_needed"
     assert review["time_impact"]["acceptance_rider_pct"] == 76
     assert review["input_address_review"]["warning_count"] == 2
-    assert review["traffic_confidence"]["fallback_route_count"] == 1
-    assert review["traffic_confidence"]["method_counts"] == {"geo_route_similarity": 1, "fallback": 1}
+    assert review["provider_validation"]["strict_plan"]["status"] == "failed"
     assert review["aggregated_stop_batches"]["has_split_stop_batches"] is True
     serialized = json.dumps(payload, ensure_ascii=False)
     assert "This full address must not leak" not in serialized
@@ -153,20 +126,29 @@ def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> No
             "enabled": True,
             "route_count": 16,
             "traffic_gate": {"status": "failed", "vehicle_saving_target": {"status": "passed"}},
-            "time_constraint": {"strict_satisfied": True},
-            "time_impact": {"available": False},
-        },
-        {
-            "key": "ep15min",
-            "enabled": True,
-            "route_count": 17,
-            "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
+            "exception_accepted": True,
             "time_constraint": {"strict_satisfied": True},
             "time_impact": {"available": False},
         },
     ]
 
-    assert ai_audit._recommended_scenario(scenarios)["key"] == "ep15min"
+    assert ai_audit._recommended_scenario(scenarios)["key"] == "exception_preserving"
+
+
+def test_recommended_scenario_uses_provider_time_when_route_counts_tie() -> None:
+    shared = {
+        "enabled": True,
+        "route_count": 16,
+        "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
+        "time_constraint": {"strict_satisfied": True},
+        "time_impact": {"available": False},
+    }
+    scenarios = [
+        {**shared, "key": "time_constrained", "provider_total_duration_s": 7200},
+        {**shared, "key": "exception_preserving", "provider_total_duration_s": 6900},
+    ]
+
+    assert ai_audit._recommended_scenario(scenarios)["key"] == "exception_preserving"
 
 
 def test_ai_audit_prompt_headings_cover_new_sections() -> None:

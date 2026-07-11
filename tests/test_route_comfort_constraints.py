@@ -72,7 +72,6 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self._setattr("RESERVED_EXPRESS_BUSES", 0)
         self._setattr("EXPRESS_THRESHOLD_KM", 9999.0)
         self._setattr("MAX_ROUTE_DURATION_SECONDS", 3600)
-        self._setattr("ROUTE_DURATION_GRACE_SECONDS", 0)
 
     def test_solver_caps_routes_at_ten_service_stops(self) -> None:
         points = [_point(0)] + [_point(index) for index in range(1, 23)]

@@ -30,7 +30,6 @@ while continuing product work.
 | GET | `/google-geocode-usage` | Google geocode usage status |
 | GET | `/deployment-features` | deployment feature flags |
 | GET | `/osrm-manager/status` | admin-only OSRM manager readout |
-| GET | `/traffic-rollout/status` | admin-only traffic rollout readout |
 | GET | `/workbooks/template` | planning workbook download |
 | GET | `/fleet-planner/demand-template` | fleet demand workbook download |
 | GET | `/fleet-planner/vehicle-catalog` | fleet vehicle catalog |
@@ -40,7 +39,6 @@ while continuing product work.
 | GET | `/jobs/{job_id}/map-data/{scenario_key}` | interactive map data |
 | GET | `/jobs/{job_id}/artifacts/{artifact_key}` | legacy HTML map artifact |
 | GET | `/jobs/{job_id}/exports/{export_key}` | workbook export |
-| GET | `/jobs/{job_id}/traffic-attribution` | traffic attribution report |
 | GET | `/map-tiles/{z}/{x}/{y}.png` | cached/proxied OSM tile |
 | GET | `/fleet-planner/history` | fleet planner history list |
 | GET | `/fleet-planner/history/{run_id}` | fleet planner history detail |
@@ -94,27 +92,13 @@ Rollback is code-based, not env-switch based: deploy a previously tested commit
 or revert the FastAPI-only cleanup commit, then restart the same service/task.
 Do not attempt to restore legacy mode by setting `BRP_BACKEND_FRAMEWORK`.
 
-## Ops Status Scope
-
-`GET /traffic-rollout/status` is read-only and scopes rollout status to the
-current environment:
-
-- CN staging shows all tracked markets: CN, KR, and BK.
-- CN production shows CN and BK, excluding KR.
-- KR production shows KR only.
-- `BRP_TRAFFIC_STATUS_MARKETS` can override the market scope for diagnostics.
-- The rollout gate, API-budget preflight, and market overview are all derived
-  from the same scoped market definitions. The status endpoint must not call
-  traffic providers or start OSRM.
-
 ## Required Smoke Checks
 
 Before and after production deployment, verify at least:
 
 - `GET /api/health`
 - `GET /api/jobs`
-- `GET /api/traffic-rollout/status` as an admin, confirming the environment
-  scope above
+- `GET /api/osrm-manager/status` as an admin
 - create/cancel/delete of a queued job
 - frontend version marker matches the deployed git head
 - KR `BRP Backend` Scheduled Task can be `Ready` after launch, but there must be

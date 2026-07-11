@@ -112,7 +112,6 @@ RESERVED_EXPRESS_BUSES = 4
 EXPRESS_SKIP_INNER_KM = 8.0
 MAX_ROUTE_DURATION_SECONDS = 90 * 60
 ANNOTATION_ROUTE_DURATION_SECONDS = 90 * 60
-ROUTE_DURATION_GRACE_SECONDS = 10 * 60
 STOP_SERVICE_SECONDS = 60
 MAX_STOPS_PER_ROUTE = int(os.environ.get("BRP_MAX_STOPS_PER_ROUTE", "10") or 10)
 COMFORT_LOAD_FACTOR = float(os.environ.get("BRP_COMFORT_LOAD_FACTOR", "0.85") or 0.85)
@@ -120,17 +119,15 @@ DEMAND_SPLIT_TARGET_LOAD_RATIO = float(os.environ.get("BRP_DEMAND_SPLIT_TARGET_L
 DEMAND_SPLIT_MIN_BATCH_SIZE = int(os.environ.get("BRP_DEMAND_SPLIT_MIN_BATCH_SIZE", "8") or 8)
 DEMAND_SPLIT_MAX_EXTRA_BATCHES = int(os.environ.get("BRP_DEMAND_SPLIT_MAX_EXTRA_BATCHES", "2") or 2)
 MIN_ACTIVE_ROUTE_PASSENGERS = 2
+SOLVER_TIME_LIMIT_SECONDS = max(
+    1,
+    int(os.environ.get("BRP_SOLVER_TIME_LIMIT_SECONDS", "10") or 10),
+)
 SUBWAY_SEARCH_RADIUS_M = 1500
 MAX_SUBWAY_WALK_DISTANCE_M = 800
 NEARBY_CLUSTER_RADIUS_M = 500
 TRAFFIC_PROFILE_NAME = "Off-Peak"
-TRAFFIC_TIME_MULTIPLIER = 1.0
-TRAFFIC_PROFILE_CONTEXT = "Global default"
-RAW_SOLVER_TIME_MATRIX: list[list[int]] | None = None
-SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED = os.environ.get(
-    "BRP_SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED",
-    "true",
-).strip().lower() not in {"0", "false", "no", "off"}
+TRAFFIC_PROFILE_CONTEXT = "Direct final-route provider validation"
 SERVICE_DIRECTION = "From School"
 MATRIX_NEAREST_NEIGHBORS = 10
 MATRIX_MAX_CANDIDATE_DISTANCE_KM = 15.0
@@ -146,6 +143,7 @@ NEARBY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_nearby_aggreg
 
 CURRENT_CURRENCY_CODE = "USD"
 LAST_RUN_RESULTS: dict[str, Any] = {}
+NODE_TIME_LOWER_BOUNDS: dict[int, int] = {}
 NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
 NODE_TIME_SOFT_UPPER_BOUNDS: dict[int, int] = {}
 MIN_SOLVER_VEHICLE_COUNT = 0
@@ -158,7 +156,6 @@ VEHICLE_FIXED_COST = {"Large Bus": 0, "Mid Bus": 1200, "Small Bus": 2600}
 # before we start discouraging underfilled buses.
 MIN_LOAD_TARGET = {"Large Bus": 21, "Mid Bus": 18, "Small Bus": 10}
 MIN_LOAD_PENALTY = {"Large Bus": 140, "Mid Bus": 100, "Small Bus": 40}
-ROUTE_DURATION_SOFT_PENALTY_PER_SECOND = 80
 NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND = int(
     os.environ.get("BRP_NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND", "240") or 240
 )
@@ -185,15 +182,6 @@ def use_google_geocode_relay(country: str) -> bool:
 
 def ensure_cache_dir() -> None:
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def apply_traffic_time_multiplier(duration_s: int | float) -> int:
-    adjusted = int(round(float(duration_s) * max(0.1, float(TRAFFIC_TIME_MULTIPLIER))))
-    return max(1, adjusted)
-
-
-def traffic_buffer_factor() -> float:
-    return max(0.1, float(TRAFFIC_TIME_MULTIPLIER))
 
 
 def stop_rider_label(point: dict[str, Any]) -> str:
@@ -1214,10 +1202,8 @@ def build_nearby_aggregated_points(points: list[dict[str, Any]]) -> list[dict[st
 
 
 def seed_edge_metrics(points: list[dict[str, Any]]) -> tuple[list[list[int]], list[list[int]]]:
-    global RAW_SOLVER_TIME_MATRIX
     n = len(points)
     time_matrix = [[0] * n for _ in range(n)]
-    raw_time_matrix = [[0] * n for _ in range(n)]
     distance_matrix = [[0] * n for _ in range(n)]
     for i in range(n):
         for j in range(n):
@@ -1225,15 +1211,11 @@ def seed_edge_metrics(points: list[dict[str, Any]]) -> tuple[list[list[int]], li
                 continue
             distance_km = haversine_distance_km(points[i]["lat"], points[i]["lng"], points[j]["lat"], points[j]["lng"])
             distance_m = max(100, int(distance_km * 1000))
-            raw_time_s = max(120, int(distance_km * SEED_SECONDS_PER_KM))
-            time_s = apply_traffic_time_multiplier(raw_time_s)
+            time_s = max(120, int(distance_km * SEED_SECONDS_PER_KM))
             if j != 0:
-                raw_time_s += STOP_SERVICE_SECONDS
                 time_s += STOP_SERVICE_SECONDS
-            raw_time_matrix[i][j] = raw_time_s
             time_matrix[i][j] = time_s
             distance_matrix[i][j] = distance_m
-    RAW_SOLVER_TIME_MATRIX = raw_time_matrix
     return time_matrix, distance_matrix
 
 
@@ -1473,14 +1455,6 @@ def subset_matrix(matrix: list[list[int]], nodes: list[int]) -> list[list[int]]:
 
 
 def solver_route_budget_time_matrix(time_matrix: list[list[int]]) -> list[list[int]]:
-    if SOLVER_ROUTE_BUDGET_USES_TRAFFIC_ADJUSTED:
-        return time_matrix
-    if (
-        RAW_SOLVER_TIME_MATRIX
-        and len(RAW_SOLVER_TIME_MATRIX) == len(time_matrix)
-        and all(len(row) == len(time_matrix) for row in RAW_SOLVER_TIME_MATRIX)
-    ):
-        return RAW_SOLVER_TIME_MATRIX
     return time_matrix
 
 
@@ -1529,19 +1503,23 @@ def validate_trivial_time_bounds(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
     bounds: dict[int, int] | None,
+    lower_bounds: dict[int, int] | None = None,
 ) -> None:
-    if not bounds or len(points) <= 1:
+    if (not bounds and not lower_bounds) or len(points) <= 1:
         return
     working_time_matrix = transpose_matrix(time_matrix) if is_to_school_direction() else time_matrix
-    for node, upper_bound in bounds.items():
+    for node in set(bounds or {}) | set(lower_bounds or {}):
         if node <= 0 or node >= len(points):
             continue
         elapsed_s = int(working_time_matrix[0][node])
-        if elapsed_s > int(upper_bound):
+        lower_bound = int((lower_bounds or {}).get(node, 0) or 0)
+        upper_bound = int((bounds or {}).get(node, 10**9) or 10**9)
+        if elapsed_s < lower_bound or elapsed_s > upper_bound:
             raise RuntimeError(
                 "No feasible route satisfies the configured time-impact acceptance limit. "
                 f"Stop `{points[node].get('address', f'node {node}')}` requires "
-                f"{elapsed_s / 60.0:.1f} minutes against a limit of {int(upper_bound) / 60.0:.1f} minutes."
+                f"{elapsed_s / 60.0:.1f} minutes against an allowed range of "
+                f"{lower_bound / 60.0:.1f}-{upper_bound / 60.0:.1f} minutes."
             )
 
 
@@ -1552,6 +1530,7 @@ def solve_routes_for_fleet(
     fleet: list[dict[str, Any]],
     node_time_upper_bounds: dict[int, int] | None = None,
     node_time_soft_upper_bounds: dict[int, int] | None = None,
+    node_time_lower_bounds: dict[int, int] | None = None,
 ) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -1586,12 +1565,7 @@ def solve_routes_for_fleet(
 
     transit_index = routing.RegisterTransitCallback(transit_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(transit_index)
-    target_route_duration_seconds = max(60, int(MAX_ROUTE_DURATION_SECONDS))
-    soft_route_duration_seconds = target_route_duration_seconds + ROUTE_DURATION_GRACE_SECONDS
-    hard_route_duration_seconds = max(
-        soft_route_duration_seconds + 10 * 60,
-        int(round(soft_route_duration_seconds * 1.20)),
-    )
+    hard_route_duration_seconds = max(60, int(MAX_ROUTE_DURATION_SECONDS))
     routing.AddDimension(
         transit_index,
         0,
@@ -1600,6 +1574,17 @@ def solve_routes_for_fleet(
         "Time",
     )
     time_dimension = routing.GetDimensionOrDie("Time")
+    for node, lower_bound in dict(node_time_lower_bounds or {}).items():
+        try:
+            node_int = int(node)
+            lower_bound_int = int(lower_bound)
+        except (TypeError, ValueError):
+            continue
+        if node_int <= 0 or node_int >= len(points):
+            continue
+        time_dimension.CumulVar(manager.NodeToIndex(node_int)).SetMin(
+            max(0, min(hard_route_duration_seconds, lower_bound_int))
+        )
     for node, upper_bound in dict(node_time_upper_bounds or {}).items():
         try:
             node_int = int(node)
@@ -1659,12 +1644,6 @@ def solve_routes_for_fleet(
         penalty = MIN_LOAD_PENALTY.get(vehicle["name"], 0)
         if target > 0 and penalty > 0:
             load_dimension.SetCumulVarSoftLowerBound(routing.End(vehicle_id), target, penalty)
-        time_dimension.SetCumulVarSoftUpperBound(
-            routing.End(vehicle_id),
-            soft_route_duration_seconds,
-            ROUTE_DURATION_SOFT_PENALTY_PER_SECOND,
-        )
-
     requested_min_active_vehicles = max(0, int(MIN_SOLVER_VEHICLE_COUNT or 0))
     if requested_min_active_vehicles > 0:
         max_active_by_stops = max(0, len(points) - 1)
@@ -1687,7 +1666,7 @@ def solve_routes_for_fleet(
     search = pywrapcp.DefaultRoutingSearchParameters()
     search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
     search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search.time_limit.seconds = 30
+    search.time_limit.seconds = SOLVER_TIME_LIMIT_SECONDS
     solution = routing.SolveWithParameters(search)
     if solution is None:
         raise RuntimeError(
@@ -1759,7 +1738,12 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
 
     # Small cases do not need the full VRP search; avoiding it keeps the backend responsive.
     if len(points) == 2:
-        validate_trivial_time_bounds(points, route_budget_time_matrix, NODE_TIME_UPPER_BOUNDS)
+        validate_trivial_time_bounds(
+            points,
+            route_budget_time_matrix,
+            NODE_TIME_UPPER_BOUNDS,
+            NODE_TIME_LOWER_BOUNDS,
+        )
         return build_trivial_routes(points, route_budget_time_matrix, distance_matrix, full_fleet)
 
     depot_distances = compute_depot_distances(points)
@@ -1774,9 +1758,16 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
 
     express_fleet: list[dict[str, Any]] = []
     regular_fleet = trim_fleet_for_demand(points, full_fleet)
+    global_time_lower_bounds = dict(NODE_TIME_LOWER_BOUNDS or {})
     global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
     global_time_soft_upper_bounds = dict(NODE_TIME_SOFT_UPPER_BOUNDS or {})
-    if remote_nodes and RESERVED_EXPRESS_BUSES > 0 and not global_time_upper_bounds and not global_time_soft_upper_bounds:
+    if (
+        remote_nodes
+        and RESERVED_EXPRESS_BUSES > 0
+        and not global_time_lower_bounds
+        and not global_time_upper_bounds
+        and not global_time_soft_upper_bounds
+    ):
         sorted_for_express = sort_express_preference(full_fleet)
         candidate_express_fleet = sorted_for_express[: min(RESERVED_EXPRESS_BUSES, len(sorted_for_express))]
         express_ids = {id(item) for item in candidate_express_fleet}
@@ -1814,6 +1805,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
                 express_fleet,
                 subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
                 subset_node_time_upper_bounds(global_time_soft_upper_bounds, subset_nodes),
+                subset_node_time_upper_bounds(global_time_lower_bounds, subset_nodes),
             )
             combined_routes.extend(remap_subset_routes(express_routes, subset_nodes))
             served_remote_nodes = {
@@ -1842,6 +1834,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
             regular_fleet or full_fleet,
             subset_node_time_upper_bounds(global_time_upper_bounds, subset_nodes),
             subset_node_time_upper_bounds(global_time_soft_upper_bounds, subset_nodes),
+            subset_node_time_upper_bounds(global_time_lower_bounds, subset_nodes),
         )
         combined_routes.extend(remap_subset_routes(regular_routes, subset_nodes))
 
@@ -1878,16 +1871,14 @@ def osrm_distance_matrix_batch(origin_points: list[dict[str, Any]], destination_
         parsed.append(
             (
                 int(round(float(distance_m))) if distance_m is not None else HUGE_DISTANCE_METERS,
-                apply_traffic_time_multiplier(float(duration_s)) if duration_s is not None else HUGE_TIME_SECONDS,
+                int(round(float(duration_s))) if duration_s is not None else HUGE_TIME_SECONDS,
             )
         )
     return parsed
 
 
 def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]], list[list[int]]]:
-    global RAW_SOLVER_TIME_MATRIX
     if not points:
-        RAW_SOLVER_TIME_MATRIX = []
         return [], []
 
     coordinates = []
@@ -1908,7 +1899,6 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
         raise RuntimeError("OSRM full table returned an unexpected matrix shape.")
 
     time_matrix = [[0] * len(points) for _ in range(len(points))]
-    raw_time_matrix = [[0] * len(points) for _ in range(len(points))]
     distance_matrix = [[0] * len(points) for _ in range(len(points))]
     for i in range(len(points)):
         if len(durations[i]) != len(points) or len(distances[i]) != len(points):
@@ -1921,14 +1911,10 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
             if distance_m_raw is None or duration_s_raw is None:
                 distance_matrix[i][j] = HUGE_DISTANCE_METERS
                 time_matrix[i][j] = HUGE_TIME_SECONDS
-                raw_time_matrix[i][j] = HUGE_TIME_SECONDS
                 continue
             distance_matrix[i][j] = int(round(float(distance_m_raw)))
-            raw_duration_s = int(round(float(duration_s_raw)))
-            duration_s = apply_traffic_time_multiplier(float(duration_s_raw))
-            raw_time_matrix[i][j] = raw_duration_s + (STOP_SERVICE_SECONDS if j != 0 else 0)
+            duration_s = int(round(float(duration_s_raw)))
             time_matrix[i][j] = duration_s + (STOP_SERVICE_SECONDS if j != 0 else 0)
-    RAW_SOLVER_TIME_MATRIX = raw_time_matrix
     return time_matrix, distance_matrix
 
 
@@ -2146,7 +2132,7 @@ def refine_with_real_road(
                     try:
                         distance_m, duration_s, _ = osrm_driving_direction(points[origin_node], points[destination_node])
                         distance_matrix[origin_node][destination_node] = distance_m
-                        time_matrix[origin_node][destination_node] = apply_traffic_time_multiplier(duration_s) + STOP_SERVICE_SECONDS
+                        time_matrix[origin_node][destination_node] = duration_s + STOP_SERVICE_SECONDS
                     except Exception as inner_exc:
                         log(f"[WARN] OSRM direction fallback failed: {points[origin_node]['address']} -> {points[destination_node]['address']} -> {inner_exc}")
     return time_matrix, distance_matrix
@@ -2231,21 +2217,19 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
                     (points[from_node]["plot_lat"], points[from_node]["plot_lng"]),
                     (points[to_node]["plot_lat"], points[to_node]["plot_lng"]),
                 ]
-            adjusted_duration_s = apply_traffic_time_multiplier(duration_s)
             stop_service_s = STOP_SERVICE_SECONDS if to_node != 0 else 0
             actual_distance_m += distance_m
             raw_osrm_time_s += int(duration_s)
             stop_service_time_s += stop_service_s
-            actual_time_s += adjusted_duration_s + stop_service_s
+            actual_time_s += duration_s + stop_service_s
             snap_connectors = _snap_connectors_for_leg(points[from_node], points[to_node], geometry_wgs)
             leg_details.append(
                 {
                     "from_node": from_node,
                     "to_node": to_node,
                     "distance_m": distance_m,
-                    "duration_s": adjusted_duration_s + stop_service_s,
+                    "duration_s": duration_s + stop_service_s,
                     "raw_osrm_duration_s": int(duration_s),
-                    "traffic_adjusted_duration_s": adjusted_duration_s,
                     "stop_service_s": stop_service_s,
                     "geometry": geometry_wgs,
                     "snap_connectors": snap_connectors,
@@ -2256,13 +2240,6 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
         route["time_s"] = actual_time_s
         route["distance_m"] = actual_distance_m
         route["raw_osrm_time_s"] = raw_osrm_time_s
-        try:
-            route_factor = float(route.get("traffic_buffer_factor"))
-        except (TypeError, ValueError):
-            route_factor = traffic_buffer_factor()
-        route_factor = max(0.1, route_factor)
-        route["traffic_buffer_factor"] = route_factor
-        route["traffic_adjusted_drive_time_s"] = int(round(raw_osrm_time_s * route_factor)) if raw_osrm_time_s else 0
         route["stop_service_time_s"] = stop_service_time_s
 
 
@@ -2332,10 +2309,7 @@ def build_map_summary_html(
     routes: list[dict[str, Any]],
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
 ) -> str:
-    traffic_note = (
-        f"{TRAFFIC_PROFILE_NAME} traffic assumption "
-        f"({TRAFFIC_TIME_MULTIPLIER:.2f}x travel-time multiplier; distance unchanged)"
-    )
+    traffic_note = f"{TRAFFIC_PROFILE_NAME} direct-provider validation policy"
     if str(TRAFFIC_PROFILE_CONTEXT).strip():
         traffic_note = f"{traffic_note}, {TRAFFIC_PROFILE_CONTEXT}"
     service_label = "To School" if is_to_school_direction() else "From School"
@@ -2371,23 +2345,8 @@ def build_map_summary_html(
                 private_access_by_pickup.setdefault(pickup_address, []).append(item)
     for route in routes:
         route_id = f"Bus {route['vehicle_id']}"
-        display_time_s = (
-            route.get("traffic_api_duration_s")
-            if bool(route.get("traffic_coverage_complete", True))
-            else None
-        )
-        display_time_source = str(route.get("traffic_time_source", "")).strip()
-        if display_time_s is None:
-            display_time_s = route.get("traffic_adjusted_drive_time_s")
-            display_time_source = "OSRM drive time * traffic buffer"
-        if display_time_s is None:
-            display_time_s = route.get("time_s")
-        raw_osrm_time_s = route.get("raw_osrm_time_s") or route.get("traffic_osrm_duration_s")
-        route_buffer_factor = route.get("traffic_buffer_factor")
-        try:
-            route_buffer_factor_float = float(route_buffer_factor)
-        except (TypeError, ValueError):
-            route_buffer_factor_float = None
+        display_time_s = route.get("time_s")
+        raw_osrm_time_s = route.get("raw_osrm_time_s")
         comfort_capacity = int(route.get("comfort_capacity", route.get("bus_capacity", 0)) or 0)
         bus_capacity = int(route.get("bus_capacity", 0) or 0)
         stop_count = int(route.get("stop_count", max(0, len(route.get("nodes", [])) - 1)) or 0)
@@ -2407,17 +2366,9 @@ def build_map_summary_html(
                 f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
             ]
         )
-        if display_time_source:
-            lines.append(f"<div>Time source: {html.escape(display_time_source)}</div>")
+        lines.append("<div>Time source: unscaled OSRM candidate time</div>")
         if raw_osrm_time_s:
             lines.append(f"<div>OSRM drive time: {seconds_to_human(raw_osrm_time_s)}</div>")
-        if route_buffer_factor_float is not None:
-            lines.append(f"<div>Traffic buffer: {route_buffer_factor_float:.2f}x</div>")
-        if route.get("traffic_sampled_leg_count") is not None and route.get("traffic_total_leg_count") is not None:
-            lines.append(
-                f"<div>AMap sampled legs: {int(route.get('traffic_sampled_leg_count') or 0)} / "
-                f"{int(route.get('traffic_total_leg_count') or 0)}</div>"
-            )
         if route.get("limit_stop_order") is not None:
             lines.append(
                 f"<div><b>{ANNOTATION_ROUTE_DURATION_SECONDS // 60}-minute mark:</b> Stop {route['limit_stop_order']} "

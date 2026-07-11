@@ -32,12 +32,6 @@ const ROUTE_TIMING_KEYS: PlannerConfigKey[] = [
   "stop_service_minutes",
 ];
 
-const AGGREGATION_SETTING_KEYS: PlannerConfigKey[] = [
-  "subway_search_radius_m",
-  "max_subway_walk_distance_m",
-  "nearby_cluster_radius_m",
-];
-
 const COMFORT_LOAD_FACTOR = 0.85;
 const FULL_CAPACITY_LOAD_FACTOR = 1.0;
 const ROUTE_BUDGET_AUTO_RETRY_LIMIT = 4;
@@ -87,15 +81,17 @@ export function NewJobPage() {
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
-    subwayAggregationBlocked = false,
+    _subwayAggregationBlocked = false,
     overrides = configOverridesRef.current,
   ) {
     const safeOverrides = { ...overrides };
     delete safeOverrides.max_route_duration_minutes;
-    if (subwayAggregationBlocked) {
-      delete safeOverrides.include_subway_aggregation_scenario;
-    }
-    const merged = { ...baseConfig, ...safeOverrides, traffic_coefficient_mode: DEFAULT_PLANNER_CONFIG.traffic_coefficient_mode };
+    const merged = {
+      ...baseConfig,
+      ...safeOverrides,
+      include_subway_aggregation_scenario: false,
+      include_nearby_aggregation_scenario: false,
+    };
     if (!Object.prototype.hasOwnProperty.call(safeOverrides, "route_stop_limit") && merged.route_stop_limit == null) {
       merged.route_stop_limit = DEFAULT_PLANNER_CONFIG.route_stop_limit;
     }
@@ -727,23 +723,6 @@ export function NewJobPage() {
                   />
                   <span>{t("Improve comfort")}</span>
                 </ToggleOption>
-                <ToggleOption tooltip="Adds a comparison scenario that groups eligible stops near subway stations before optimizing.">
-                  <input
-                    type="checkbox"
-                    checked={config.include_subway_aggregation_scenario}
-                    disabled={Boolean(preview?.subway_aggregation_block_reason)}
-                    onChange={(event) => updateUserConfig({ include_subway_aggregation_scenario: event.target.checked })}
-                  />
-                  <span>{t("Subway baseline")}</span>
-                </ToggleOption>
-                <ToggleOption tooltip="Adds a comparison scenario that clusters nearby stops before optimizing.">
-                  <input
-                    type="checkbox"
-                    checked={config.include_nearby_aggregation_scenario}
-                    onChange={(event) => updateUserConfig({ include_nearby_aggregation_scenario: event.target.checked })}
-                  />
-                  <span>{t("Nearby baseline")}</span>
-                </ToggleOption>
               </div>
 
               <SettingsSection
@@ -764,43 +743,6 @@ export function NewJobPage() {
                 </div>
               </SettingsSection>
 
-              <SettingsSection
-                title="Advanced aggregation settings"
-                description="Optional search and clustering radii; only used when Subway or Nearby baselines are enabled."
-                customized={hasUserConfigOverrides(AGGREGATION_SETTING_KEYS)}
-                onReset={() => clearUserConfigOverrides(AGGREGATION_SETTING_KEYS)}
-              >
-                <div className="grid gap-3 md:grid-cols-3">
-                  <NumberField
-                    label="Subway Search Radius (m)"
-                    value={config.subway_search_radius_m}
-                    min={100}
-                    max={5000}
-                    step={100}
-                    onChange={(value) => updateUserConfig({ subway_search_radius_m: value })}
-                  />
-                  <NumberField
-                    label="Max Subway Walk Distance (m)"
-                    value={config.max_subway_walk_distance_m}
-                    min={50}
-                    max={3000}
-                    step={50}
-                    onChange={(value) => updateUserConfig({ max_subway_walk_distance_m: value })}
-                  />
-                  <NumberField
-                    label="Nearby Cluster Radius (m)"
-                    value={config.nearby_cluster_radius_m}
-                    min={50}
-                    max={3000}
-                    step={50}
-                    onChange={(value) => updateUserConfig({ nearby_cluster_radius_m: value })}
-                  />
-                </div>
-              </SettingsSection>
-
-              {preview?.subway_aggregation_block_reason ? (
-                <InlineError message={preview.subway_aggregation_block_reason} />
-              ) : null}
               {submitMutation.error ? <InlineError message={(submitMutation.error as Error).message} /> : null}
 
               <div className="flex flex-col gap-3 sm:flex-row">

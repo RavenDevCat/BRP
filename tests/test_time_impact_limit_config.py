@@ -44,7 +44,7 @@ def test_time_impact_scenario_label_falls_back_to_config_limit():
             job_record["result"],
             "time_constrained",
         )
-        == "20-Minute Balanced Plan"
+        == "Strict Plan"
     )
 
 
@@ -84,6 +84,17 @@ def test_to_school_route_limit_respects_time_window():
     assert planner_core.effective_route_duration_limit_minutes(config) == 90
 
 
+def test_route_budget_does_not_shorten_user_time_window():
+    config = planner_core.PlannerConfig(
+        service_direction="To School",
+        max_route_duration_minutes=20,
+        time_window_start="06:30",
+        time_window_end="08:00",
+    )
+
+    assert planner_core.effective_route_duration_limit_minutes(config) == 90
+
+
 def test_from_school_does_not_inherit_default_am_window():
     config = planner_core.PlannerConfig(
         service_direction="From School",
@@ -91,8 +102,20 @@ def test_from_school_does_not_inherit_default_am_window():
         max_route_duration_minutes=122,
     )
 
-    assert planner_core.effective_route_duration_limit_minutes(config) == 132
+    assert planner_core.effective_route_duration_limit_minutes(config) == 120
     assert planner_core._from_school_time_window(config) == (15 * 60 + 40, 17 * 60 + 40)
+
+
+def test_from_school_route_limit_respects_custom_time_window():
+    config = planner_core.PlannerConfig(
+        service_direction="From School",
+        from_school_departure_time="15:40",
+        max_route_duration_minutes=122,
+        time_window_start="15:40",
+        time_window_end="17:10",
+    )
+
+    assert planner_core.effective_route_duration_limit_minutes(config) == 90
 
 
 def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
@@ -130,7 +153,7 @@ def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
     assert result["vehicle_ladder_search"]["attempts"][0]["all_constraints_passed"] is True
 
 
-def test_vehicle_ladder_more_vehicles_remains_fallback_when_saving_target_fails(monkeypatch):
+def test_vehicle_ladder_never_relaxes_the_hard_vehicle_saving_target(monkeypatch):
     seen_targets: list[int] = []
 
     def fake_compute(_planner, _points, _label, *, reduced_vehicle_limit=None, **_kwargs):
@@ -160,8 +183,9 @@ def test_vehicle_ladder_more_vehicles_remains_fallback_when_saving_target_fails(
         minimum_vehicle_reduction=2,
     )
 
-    assert seen_targets == [3, 4]
-    assert result["bus_count"] == 4
-    assert result["traffic_gate"]["status"] == "passed"
-    assert result["vehicle_saving_target"]["status"] == "failed"
+    assert seen_targets == [3, 2, 1]
+    assert 4 not in seen_targets
+    assert result["bus_count"] <= 3
+    assert result["traffic_gate"]["status"] == "failed"
+    assert result["vehicle_saving_target"]["status"] == "passed"
     assert result["feasibility_report"]["status"] == "failed"

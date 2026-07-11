@@ -95,19 +95,9 @@ def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _traffic_multiplier(value: float | None) -> float:
-    try:
-        return max(0.01, float(value if value is not None else 1.0))
-    except (TypeError, ValueError):
-        return 1.0
-
-
 def _build_osrm_matrix(
     points: list[dict[str, Any]],
-    *,
-    traffic_time_multiplier: float | None = 1.0,
 ) -> tuple[list[list[float]], list[list[float]]]:
-    multiplier = _traffic_multiplier(traffic_time_multiplier)
     duration_matrix: list[list[float]] = []
     distance_matrix: list[list[float]] = []
     for origin_index, origin in enumerate(points):
@@ -125,7 +115,7 @@ def _build_osrm_matrix(
             metric_index += 1
             duration_s = metric.get("duration_s")
             distance_m = metric.get("distance_m")
-            duration_row.append(float(duration_s) * multiplier if duration_s is not None else float(HUGE_COST))
+            duration_row.append(float(duration_s) if duration_s is not None else float(HUGE_COST))
             distance_row.append(float(distance_m) if distance_m is not None else float(HUGE_COST))
         duration_matrix.append(duration_row)
         distance_matrix.append(distance_row)
@@ -246,28 +236,12 @@ def _route_metrics_for_order(
     return total_duration_s, total_distance_m
 
 
-def _scale_leg_details(details: list[dict[str, Any]], traffic_time_multiplier: float | None) -> list[dict[str, Any]]:
-    multiplier = _traffic_multiplier(traffic_time_multiplier)
-    if abs(multiplier - 1.0) < 0.000001:
-        return details
-    scaled: list[dict[str, Any]] = []
-    for detail in details:
-        item = dict(detail)
-        duration_s = item.get("duration_s")
-        if duration_s is not None:
-            item["duration_s"] = float(duration_s) * multiplier
-        scaled.append(item)
-    return scaled
-
-
 def _route_leg_details_for_order(
     points: list[dict[str, Any]],
     order: list[int],
-    *,
-    traffic_time_multiplier: float | None = 1.0,
 ) -> list[dict[str, Any]]:
     ordered_points = [points[index] for index in order]
-    return _scale_leg_details(compute_osrm_route_leg_details(ordered_points), traffic_time_multiplier)
+    return compute_osrm_route_leg_details(ordered_points)
 
 
 def build_osrm_route_preview(
@@ -275,10 +249,8 @@ def build_osrm_route_preview(
     *,
     service_direction: str = "to_school",
     max_route_duration_minutes: int | None = None,
-    traffic_time_multiplier: float | None = 1.0,
     traffic_profile_name: str = "Off-Peak",
-    traffic_profile_context: str = "Global default",
-    live_traffic_sample: dict[str, Any] | None = None,
+    traffic_profile_context: str = "Unscaled OSRM candidate time",
 ) -> dict[str, Any]:
     school = dict(cluster_result.get("school") or {})
     if school.get("status") != "ok" or school.get("lat") is None or school.get("lng") is None:
@@ -291,7 +263,7 @@ def build_osrm_route_preview(
         if not cluster_points:
             continue
         points = [_point_payload(school), *[_point_payload(point) for point in cluster_points]]
-        duration_matrix, distance_matrix = _build_osrm_matrix(points, traffic_time_multiplier=traffic_time_multiplier)
+        duration_matrix, distance_matrix = _build_osrm_matrix(points)
         order, solver = _ortools_open_route_order(duration_matrix, service_direction)
         total_duration_s, total_distance_m = _route_metrics_for_order(order, duration_matrix, distance_matrix)
         selected_vehicle = dict(cluster.get("selected_vehicle") or {})
@@ -315,11 +287,7 @@ def build_osrm_route_preview(
                 "warnings": "; ".join(warnings),
             }
         )
-        leg_details = _route_leg_details_for_order(
-            points,
-            order,
-            traffic_time_multiplier=traffic_time_multiplier,
-        )
+        leg_details = _route_leg_details_for_order(points, order)
         ordered_points = _annotate_ordered_points_with_schedule(
             [points[index] for index in order],
             leg_details,
@@ -351,9 +319,7 @@ def build_osrm_route_preview(
             "service_direction": service_direction,
             "max_route_duration_minutes": max_route_duration_minutes,
             "traffic_profile_name": traffic_profile_name,
-            "traffic_time_multiplier": _traffic_multiplier(traffic_time_multiplier),
             "traffic_profile_context": traffic_profile_context,
-            "live_traffic_sample": live_traffic_sample,
         },
         "route_rows": route_rows,
     }

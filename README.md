@@ -180,29 +180,16 @@ patterns.
 
 BRP uses region-specific traffic timing sources:
 
-- CN traffic sampling uses AMap driving routes against saved current-plan jobs
-  or baseline JSON. The existing AM/PM timers are intended for workday peak
-  windows.
+- Candidate generation uses unscaled regional OSRM travel times.
+- CN Route Audit final validation uses direct AMap driving-route calls for each
+  candidate plan.
 - KR Route Audit final validation uses Kakao Navi future directions per job.
-  The old weekly KR coefficient sampler/timer is retired for normal production
-  operation. Google Routes is not used for KR driving checks because Seoul
-  driving probes returned empty routes in production diagnostics.
-- Bangkok currently uses a conservative static traffic multiplier until a richer
-  Bangkok traffic-profile sampling strategy is added.
+  Google Routes is not used for KR driving checks because Seoul driving probes
+  returned empty routes in production diagnostics.
+- Bangkok uses its configured direct/relay provider path where available.
 
-Useful checked-in wrappers:
-
-```bash
-# CN/general sampler
-ops/scripts/run_live_traffic_sampler.sh am_peak
-```
-
-Historical KR profile wrappers remain for manual diagnostics only. They should
-not be scheduled for normal production operation.
-
-```powershell
-.\ops\scripts\run_live_traffic_kr_profile.ps1 -Period all -DryRun
-```
+Historical sampled timing adjustments and their timers are retired. Provider
+route calls are the acceptance evidence; OSRM candidate times remain unscaled.
 
 ## Documentation
 
@@ -210,6 +197,8 @@ not be scheduled for normal production operation.
 - `docs/development-release-workflow.md`: local development, release, and deploy
   workflow
 - `docs/deployment-overview.md`: fresh environment checklist
+- `docs/solver-algorithm.md`: Strict/Protected hard-constraint solve flow and
+  validation evidence
 - `docs/updates.md`: major user/operator-facing updates
 - `docs/session-handoff.md`: public pointer explaining that current handoff
   content is not stored in the repository
@@ -238,3 +227,10 @@ selected routes, show route direction arrows, filter and search route lists,
 open in an in-page fullscreen viewer, and export a standalone interactive HTML
 map. Continue UI/product work in CN staging first; promote production only when
 explicitly approved.
+
+Route Audit optimization now exposes two adoption candidates. Strict Plan
+re-solves every stop under the user's hard time window, adverse time-impact
+limit, minimum vehicle saving, stop cap, and comfort target. Protected Plan
+freezes current routes that already violate those inputs and applies the same
+hard constraints to the remaining stops. Candidate generation uses unscaled
+OSRM; direct AMap or Kakao route checks decide final timing acceptance.

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import importlib
-import importlib.util
 import io
 import json
 import math
@@ -50,11 +49,9 @@ try:
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
-        normalize_traffic_coefficient_mode,
+        normalize_traffic_profile_name,
         rerender_html_from_structured_results,
-        resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
-        summarize_live_traffic_samples,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from job_queue import (
@@ -81,11 +78,9 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
-        normalize_traffic_coefficient_mode,
+        normalize_traffic_profile_name,
         rerender_html_from_structured_results,
-        resolve_traffic_profile,
         run_backend_planner_with_prepared_data,
-        summarize_live_traffic_samples,
     )
 
 
@@ -156,17 +151,14 @@ MAP_ARTIFACT_KEYS = {
     "time_constrained_optimization": "time_constrained",
     "exception_preserving": "exception_preserving",
     "exception_preserving_optimization": "exception_preserving",
-    "ep15min": "ep15min",
-    "ep15min_optimization": "ep15min",
 }
 MAP_SCENARIO_LABELS = {
     "current_plan": "Current Plan",
     "original": "Free Optimization Baseline",
     "subway": "Subway Aggregated",
     "nearby": "Nearby Aggregated",
-    "time_constrained": "15-Minute Balanced Plan",
-    "exception_preserving": "Protected Route Plan",
-    "ep15min": "Protected 15-Minute Plan",
+    "time_constrained": "Strict Plan",
+    "exception_preserving": "Protected Plan",
 }
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
@@ -175,7 +167,6 @@ MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "nearby": "nearby_html",
     "time_constrained": "time_constrained_html",
     "exception_preserving": "exception_preserving_html",
-    "ep15min": "ep15min_html",
 }
 WORKBOOK_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -241,9 +232,6 @@ SCHEDULED_JOBS_ENABLED = _env_flag(
 )
 JOB_QUEUE_SCOPE = _normalize_job_queue_scope(
     os.environ.get("BRP_JOB_QUEUE_SCOPE") or _default_job_queue_scope()
-)
-DEFAULT_TRAFFIC_COEFFICIENT_MODE = normalize_traffic_coefficient_mode(
-    os.environ.get("BRP_DEFAULT_TRAFFIC_COEFFICIENT_MODE", "legacy")
 )
 AMAP_DISPLAY_GEOMETRY_ENABLED = _env_flag("BRP_AMAP_DISPLAY_GEOMETRY_ENABLED", True)
 AMAP_DISPLAY_GEOMETRY_CACHE_PATH = Path(
@@ -467,11 +455,7 @@ def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
     normalized_input["time_impact_limit_minutes"] = _parse_time_impact_limit_payload(
         normalized_input.get("time_impact_limit_minutes")
     )
-    payload = asdict(_build_planner_config(normalized_input))
-    payload["traffic_coefficient_mode"] = normalize_traffic_coefficient_mode(
-        payload.get("traffic_coefficient_mode")
-    )
-    return payload
+    return asdict(_build_planner_config(normalized_input))
 
 
 def _client_core_module() -> Any:
@@ -1126,63 +1110,18 @@ def _fleet_default_traffic_profile(service_direction: str) -> str:
     return "AM Peak" if _fleet_service_direction_label(service_direction) == "To School" else "PM Peak"
 
 
-def _fleet_traffic_input_records(route_payload: dict[str, Any]) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    candidate_items: list[dict[str, Any]] = []
-    school = route_payload.get("school") or {}
-    if isinstance(school, dict):
-        candidate_items.append(dict(school))
-    for point in list(route_payload.get("demand_points") or []):
-        if isinstance(point, dict):
-            candidate_items.append(dict(point))
-    for cluster in list(route_payload.get("clusters") or []):
-        if not isinstance(cluster, dict):
-            continue
-        for point in list(cluster.get("points") or []):
-            if isinstance(point, dict):
-                candidate_items.append(dict(point))
-
-    for item in candidate_items:
-        records.append(
-            {
-                "country": str(item.get("country") or "").strip(),
-                "city": str(item.get("city") or "").strip(),
-                "address": str(item.get("address") or item.get("formatted_address") or "").strip(),
-            }
-        )
-    return records
-
-
 def _fleet_traffic_context(
-    geocode_result: dict[str, Any],
+    _geocode_result: dict[str, Any],
     *,
     service_direction: str,
     market: str | None = None,
     profile_name: str | None = None,
 ) -> dict[str, Any]:
-    records = _fleet_traffic_input_records(geocode_result)
     selected_profile = str(profile_name or "").strip() or _fleet_default_traffic_profile(service_direction)
-    traffic_profile_name, traffic_time_multiplier, traffic_profile_context = resolve_traffic_profile(
-        selected_profile,
-        records,
-    )
-    inferred_country, _inferred_city = infer_traffic_location(records)
-    normalized_market = str(market or "").strip().upper()
-    live_traffic_sample = None
-    if normalized_market == "KR" or inferred_country == "SOUTH KOREA":
-        live_traffic_sample = summarize_live_traffic_samples(
-            service_direction=_fleet_service_direction_label(service_direction),
-            input_records=records,
-        )
-    if live_traffic_sample:
-        traffic_profile_name = str(live_traffic_sample["traffic_profile_name"])
-        traffic_time_multiplier = float(live_traffic_sample["traffic_time_multiplier"])
-        traffic_profile_context = str(live_traffic_sample["traffic_profile_context"])
+    del market
     return {
-        "traffic_profile_name": traffic_profile_name,
-        "traffic_time_multiplier": float(traffic_time_multiplier),
-        "traffic_profile_context": traffic_profile_context,
-        "live_traffic_sample": live_traffic_sample,
+        "traffic_profile_name": normalize_traffic_profile_name(selected_profile),
+        "traffic_profile_context": "Unscaled OSRM candidate time; direct provider validation is authoritative.",
     }
 
 
@@ -1211,10 +1150,8 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
         cluster_result,
         service_direction=service_direction,
         max_route_duration_minutes=max_route_duration_minutes,
-        traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
         traffic_profile_name=str(traffic_context["traffic_profile_name"]),
         traffic_profile_context=str(traffic_context["traffic_profile_context"]),
-        live_traffic_sample=traffic_context.get("live_traffic_sample"),
     )
     overlong_route_ids = {
         str(row.get("cluster_id", "")).strip()
@@ -1237,10 +1174,8 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
             refined_cluster_result,
             service_direction=service_direction,
             max_route_duration_minutes=max_route_duration_minutes,
-            traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
             traffic_profile_name=str(traffic_context["traffic_profile_name"]),
             traffic_profile_context=str(traffic_context["traffic_profile_context"]),
-            live_traffic_sample=traffic_context.get("live_traffic_sample"),
         )
         route_preview["refinement_note"] = (
             "One or more clusters exceeded the route-duration target and were split once by distance from school."
@@ -1342,10 +1277,8 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         max_route_duration_minutes=max_route_duration_minutes,
         custom_catalog=custom_catalog,
         service_direction=service_direction,
-        traffic_time_multiplier=float(traffic_context["traffic_time_multiplier"]),
         traffic_profile_name=str(traffic_context["traffic_profile_name"]),
         traffic_profile_context=str(traffic_context["traffic_profile_context"]),
-        live_traffic_sample=traffic_context.get("live_traffic_sample"),
     )
     return _route_plan_response(
         global_plan, workbook_file_name="fleet_planner_global_plan.xlsx"
@@ -1669,7 +1602,6 @@ def _suggest_planner_config_from_current_plan(
         suggested[f"{slot_key}_bus_name"] = slot_name
         suggested[f"{slot_key}_bus_capacity"] = seat_count
         suggested[f"{slot_key}_bus_max_count"] = vehicle_count
-        suggested[f"free_baseline_{slot_key}_bus_ratio"] = float(vehicle_count)
     suggested["service_direction"] = str(
         current_plan.get("service_direction")
         or suggested.get("service_direction")
@@ -2165,7 +2097,6 @@ def _auto_current_plan_route_budget_details(
         return None
 
     planner = load_legacy_planner()
-    planner.TRAFFIC_TIME_MULTIPLIER = 1.0
     previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
     try:
         resolver = getattr(planner, "resolve_osrm_base_url", None)
@@ -2175,7 +2106,6 @@ def _auto_current_plan_route_budget_details(
     finally:
         if hasattr(planner, "OSRM_BASE_URL"):
             planner.OSRM_BASE_URL = previous_osrm_base_url
-    raw_time_matrix = getattr(planner, "RAW_SOLVER_TIME_MATRIX", None) or time_matrix
     longest_s = 0
     longest_route_id = ""
     longest_route_nodes: list[int] = []
@@ -2197,7 +2127,7 @@ def _auto_current_plan_route_budget_details(
         if len(nodes) < 2:
             continue
         route_nodes_by_id[str(route_id)] = nodes
-        route_s = sum(int(raw_time_matrix[a][b] or 0) for a, b in zip(nodes, nodes[1:]))
+        route_s = sum(int(time_matrix[a][b] or 0) for a, b in zip(nodes, nodes[1:]))
         measured_route_count += 1
         if route_s > longest_s:
             longest_s = route_s
@@ -2595,7 +2525,6 @@ def _deployment_features_payload() -> dict[str, Any]:
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
         "available_languages": available_languages,
         "scheduled_jobs_enabled": SCHEDULED_JOBS_ENABLED,
-        "default_traffic_coefficient_mode": DEFAULT_TRAFFIC_COEFFICIENT_MODE,
     }
 
 
@@ -2638,97 +2567,51 @@ def _osrm_manager_status_payload() -> dict[str, Any]:
     }
 
 
-_TRAFFIC_ROLLOUT_STATUS_MODULE: Any | None = None
-
-
-def _load_traffic_rollout_status_module() -> Any:
-    global _TRAFFIC_ROLLOUT_STATUS_MODULE
-    if _TRAFFIC_ROLLOUT_STATUS_MODULE is not None:
-        return _TRAFFIC_ROLLOUT_STATUS_MODULE
-    script_dir = REPO_ROOT / "ops" / "scripts"
-    script_path = script_dir / "report_traffic_rollout_status.py"
-    if not script_path.exists():
-        raise RuntimeError(f"missing traffic rollout status script: {script_path}")
-    if str(script_dir) not in sys.path:
-        sys.path.insert(0, str(script_dir))
-    spec = importlib.util.spec_from_file_location(
-        "brp_report_traffic_rollout_status",
-        script_path,
-    )
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"could not load traffic rollout status script: {script_path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    _TRAFFIC_ROLLOUT_STATUS_MODULE = module
-    return module
-
-
-def _query_bool(query_params: dict[str, str], name: str, default: bool = True) -> bool:
-    raw = str(query_params.get(name, "")).strip().lower()
-    if not raw:
-        return default
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    return default
-
-
-def _traffic_rollout_status_payload(query_params: dict[str, str] | None = None) -> dict[str, Any]:
-    query_params = dict(query_params or {})
-    try:
-        report_module = _load_traffic_rollout_status_module()
-        readiness_module = report_module.report_traffic_rollout_readiness
-        min_geo_ratio = float(query_params.get("min_geo_ratio") or 1.0)
-        min_geo_ratio = min(1.0, max(0.0, min_geo_ratio))
-        sample_dir = Path(
-            query_params.get("sample_dir")
-            or os.environ.get("BRP_LIVE_TRAFFIC_SAMPLE_DIR", "")
-            or readiness_module.report_live_traffic_readiness.DEFAULT_SAMPLE_DIR
+def _provider_status_payload() -> dict[str, Any]:
+    root_text = str(BASE_DIR).replace("\\", "/").lower()
+    if "/staging/" in root_text:
+        market_specs = (
+            ("CN", "China", "AMap", "AMAP_API_KEY"),
+            ("BK", "Bangkok", "Google", "GOOGLE_GEOCODE_API_KEY"),
+            ("KR", "Korea", "Kakao Navi", "KAKAO_MOBILITY_API_KEY"),
         )
-        min_measured_at = (
-            str(query_params.get("min_measured_at") or "").strip()
-            or os.environ.get("BRP_TRAFFIC_ROLLOUT_MIN_MEASURED_AT", "")
-            or readiness_module.DEFAULT_CUTOFF
+    elif "users/bus.eim/brp" in root_text:
+        market_specs = (("KR", "Korea", "Kakao Navi", "KAKAO_MOBILITY_API_KEY"),)
+    else:
+        market_specs = (
+            ("CN", "China", "AMap", "AMAP_API_KEY"),
+            ("BK", "Bangkok", "Google", "GOOGLE_GEOCODE_API_KEY"),
         )
-        local_timezone = str(
-            query_params.get("local_timezone")
-            or report_module.DEFAULT_LOCAL_TIMEZONE
+    markets = []
+    for market, label, provider, key_name in market_specs:
+        configured = bool(os.environ.get(key_name, "").strip())
+        if market == "KR":
+            configured = configured or bool(
+                os.environ.get("KAKAO_REST_API_KEY", "").strip()
+                or os.environ.get("KAKAO_API_KEY", "").strip()
+            )
+        markets.append(
+            {
+                "market": market,
+                "label": label,
+                "provider": provider,
+                "status": "ready" if configured else "warning",
+                "configured": configured,
+                "timing_source": "direct final-route validation",
+            }
         )
-        profiles = (
-            report_module.required_profiles_for_current_environment()
-            if hasattr(report_module, "required_profiles_for_current_environment")
-            else list(readiness_module.DEFAULT_PROFILES)
-        )
-        report = report_module.build_status(
-            sample_dir=sample_dir,
-            min_measured_at=min_measured_at,
-            profiles=profiles,
-            min_geo_ratio=min_geo_ratio,
-            include_timers=_query_bool(query_params, "include_timers", True),
-            include_osrm=_query_bool(query_params, "include_osrm", True),
-            include_budget=_query_bool(query_params, "include_budget", True),
-            include_remote=_query_bool(query_params, "include_remote", True),
-            local_timezone=local_timezone,
-        )
-        report["endpoint"] = {
-            "read_only": True,
-            "provider_api_called": bool(
-                dict(report.get("api_budget") or {}).get("provider_api_called")
-            ),
-            "osrm_started": bool(dict(report.get("api_budget") or {}).get("osrm_started")),
-        }
-        return report
-    except Exception as exc:
-        return {
-            "status": "error",
-            "error": str(exc),
-            "endpoint": {
-                "read_only": True,
-                "provider_api_called": False,
-                "osrm_started": False,
-            },
-        }
+    osrm_status = _osrm_manager_status_payload()
+    warnings = [market["market"] for market in markets if not market["configured"]]
+    return {
+        "status": "ready" if not warnings and osrm_status.get("status") == "ok" else "warning",
+        "read_only": True,
+        "provider_api_called": False,
+        "osrm_started": False,
+        "market_count": len(markets),
+        "warning_markets": warnings,
+        "markets": markets,
+        "osrm_manager": dict(osrm_status.get("summary") or {}),
+    }
 
 
 def _resolve_staleness_seconds(timestamp: datetime | None) -> float | None:
@@ -2793,7 +2676,6 @@ def _ai_audit_record_with_decision_context(job_record: dict[str, Any]) -> dict[s
     scenarios = (
         ("time_constrained", "time_constrained_optimization"),
         ("exception_preserving", "exception_preserving_optimization"),
-        ("ep15min", "ep15min_optimization"),
     )
     for scenario_key, result_key in scenarios:
         scenario = dict(result.get(result_key) or structured.get(scenario_key) or {})
@@ -3520,19 +3402,13 @@ def _job_map_scenario_label(
     for key in ("display_name", "scenario_label"):
         label = str(scenario.get(key) or "").strip()
         if label:
-            if scenario_key == "time_constrained" and label.endswith("-Minute Constrained"):
-                limit_label = label[: -len("-Minute Constrained")].strip()
-                return f"{limit_label}-Minute Balanced Plan"
-            if scenario_key == "exception_preserving" and label == "Exception Preserving":
-                return "Protected Route Plan"
-            if scenario_key == "ep15min" and label.startswith("EP ") and label.endswith("-Minute"):
-                limit_label = label[len("EP ") : -len("-Minute")].strip()
-                return f"Protected {limit_label}-Minute Plan"
+            if scenario_key == "time_constrained":
+                return "Strict Plan"
+            if scenario_key == "exception_preserving":
+                return "Protected Plan"
             return label
     if scenario_key == "time_constrained":
-        return f"{_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Balanced Plan"
-    if scenario_key == "ep15min":
-        return f"Protected {_format_time_impact_limit_minutes(_job_time_impact_limit_minutes(job_record, result, scenario_key))}-Minute Plan"
+        return "Strict Plan"
     return MAP_SCENARIO_LABELS.get(scenario_key, scenario_key)
 
 
@@ -4997,184 +4873,6 @@ def _build_job_map_payload(
             acceptance_threshold,
         )
     return payload, None
-
-
-def _traffic_as_dict(value: Any) -> dict[str, Any]:
-    return value if isinstance(value, dict) else {}
-
-
-def _traffic_as_list(value: Any) -> list[Any]:
-    return value if isinstance(value, list) else []
-
-
-def _traffic_method_counts(estimates: list[Any]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for item in estimates:
-        method = str(_traffic_as_dict(item).get("method") or "unknown")
-        counts[method] = counts.get(method, 0) + 1
-    return counts
-
-
-def _traffic_quality_counts(estimates: list[Any]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for item in estimates:
-        reason = str(_traffic_as_dict(item).get("quality_reason") or "unknown")
-        counts[reason] = counts.get(reason, 0) + 1
-    return counts
-
-
-def _traffic_non_geo_routes(estimates: list[Any], *, limit: int = 12) -> list[dict[str, Any]]:
-    routes: list[dict[str, Any]] = []
-    for item in estimates:
-        estimate = _traffic_as_dict(item)
-        method = str(estimate.get("method") or "unknown")
-        if method == "geo_route_similarity":
-            continue
-        routes.append(
-            {
-                "route_id": str(estimate.get("route_id") or ""),
-                "method": method,
-                "quality_reason": str(estimate.get("quality_reason") or "unknown"),
-                "reason": str(estimate.get("reason") or ""),
-                "factor": float(estimate.get("factor") or 0.0),
-                "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
-                "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
-                "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
-                "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
-            }
-        )
-    return routes[:limit]
-
-
-def _traffic_route_evidence(item: Any, *, include_top_matches: bool = False) -> dict[str, Any]:
-    estimate = _traffic_as_dict(item)
-    evidence: dict[str, Any] = {
-        "route_id": str(estimate.get("route_id") or ""),
-        "scenario": str(estimate.get("scenario") or ""),
-        "vehicle_id": str(estimate.get("vehicle_id") or ""),
-        "bus_type_name": str(estimate.get("bus_type_name") or ""),
-        "method": str(estimate.get("method") or "unknown"),
-        "quality_reason": str(estimate.get("quality_reason") or "unknown"),
-        "factor": float(estimate.get("factor") or 0.0),
-        "avg_similarity": float(estimate.get("avg_similarity") or 0.0),
-        "matched_sample_count": int(estimate.get("matched_sample_count") or 0),
-        "candidate_count": int(estimate.get("candidate_count") or 0),
-        "geo_candidate_count": int(estimate.get("geo_candidate_count") or 0),
-        "usable_geo_candidate_count": int(estimate.get("usable_geo_candidate_count") or 0),
-        "osrm_duration_min": round(float(estimate.get("osrm_duration_s") or 0.0) / 60.0, 2),
-        "stop_count": int(estimate.get("stop_count") or 0),
-        "fallback": bool(estimate.get("fallback")),
-        "reason": str(estimate.get("reason") or ""),
-    }
-    top_matches = _traffic_as_list(estimate.get("top_matches"))
-    if include_top_matches:
-        evidence["top_matches"] = [
-            {
-                "route_id": str(match.get("route_id") or ""),
-                "source_id": str(match.get("source_id") or ""),
-                "factor": float(match.get("factor") or 0.0),
-                "similarity_score": float(match.get("similarity_score") or 0.0),
-                "similarity_method": str(match.get("similarity_method") or "unknown"),
-                "geo_similarity_score": float(match.get("geo_similarity_score") or 0.0),
-                "corridor_overlap": float(match.get("corridor_overlap") or 0.0),
-                "center_distance_km": float(match.get("center_distance_km") or 0.0),
-                "bearing_score": float(match.get("bearing_score") or 0.0),
-                "duration_score": float(match.get("duration_score") or 0.0),
-                "stop_score": float(match.get("stop_score") or 0.0),
-                "scale_score": float(match.get("scale_score") or 0.0),
-            }
-            for match in (_traffic_as_dict(match) for match in top_matches)
-        ]
-    else:
-        evidence["top_match_count"] = len(top_matches)
-    return evidence
-
-
-def _traffic_scenario_summary(
-    name: str,
-    payload: dict[str, Any],
-    *,
-    include_route_evidence: bool = False,
-    include_top_matches: bool = False,
-) -> dict[str, Any]:
-    estimates = _traffic_as_list(payload.get("route_estimates"))
-    method_counts = _traffic_as_dict(payload.get("method_counts")) or _traffic_method_counts(estimates)
-    quality_counts = _traffic_as_dict(payload.get("quality_reason_counts")) or _traffic_quality_counts(estimates)
-    route_count = int(payload.get("route_count") or len(estimates) or 0)
-    geo_count = int(payload.get("geo_attributed_route_count") or method_counts.get("geo_route_similarity", 0) or 0)
-    summary: dict[str, Any] = {
-        "scenario": name,
-        "present": True,
-        "route_estimate_count": route_count,
-        "geo_attributed_route_count": geo_count,
-        "route_similarity_route_count": int(
-            payload.get("route_similarity_route_count") or method_counts.get("route_similarity", 0) or 0
-        ),
-        "fallback_route_count": int(payload.get("fallback_route_count") or method_counts.get("fallback", 0) or 0),
-        "non_geo_route_count": max(0, route_count - geo_count),
-        "non_geo_routes": _traffic_non_geo_routes(estimates),
-        "geo_attributed_route_ratio": (geo_count / route_count) if route_count else 0.0,
-        "observed_route_sample_count": int(payload.get("observed_route_sample_count") or 0),
-        "geo_route_sample_count": int(payload.get("geo_route_sample_count") or 0),
-        "scale_only_route_sample_count": int(payload.get("scale_only_route_sample_count") or 0),
-        "geo_route_sample_ratio": float(payload.get("geo_route_sample_ratio") or 0.0),
-        "geo_ready": bool(payload.get("geo_ready")),
-        "method_counts": method_counts,
-        "quality_reason_counts": quality_counts,
-    }
-    if include_route_evidence:
-        summary["route_evidence"] = [
-            _traffic_route_evidence(item, include_top_matches=include_top_matches)
-            for item in estimates
-        ]
-    return summary
-
-
-def _job_traffic_attribution_payload(
-    job_record: dict[str, Any],
-    *,
-    include_route_evidence: bool = False,
-    include_top_matches: bool = False,
-) -> dict[str, Any]:
-    result = _traffic_as_dict(job_record.get("result"))
-    structured = _traffic_as_dict(result.get("structured_results"))
-    traffic = _traffic_as_dict(structured.get("traffic_attribution") or result.get("traffic_attribution"))
-    scenario_estimates = _traffic_as_dict(traffic.get("scenario_route_estimates"))
-    scenarios: list[dict[str, Any]] = []
-    for name, payload in sorted(scenario_estimates.items()):
-        if isinstance(payload, dict):
-            scenarios.append(
-                _traffic_scenario_summary(
-                    str(name),
-                    payload,
-                    include_route_evidence=include_route_evidence,
-                    include_top_matches=include_top_matches,
-                )
-            )
-    return {
-        "job_id": str(job_record.get("job_id") or ""),
-        "status": str(job_record.get("status") or ""),
-        "service_direction": str(structured.get("service_direction") or result.get("service_direction") or ""),
-        "traffic_profile_name": str(structured.get("traffic_profile_name") or result.get("traffic_profile_name") or ""),
-        "traffic_time_multiplier": float(
-            structured.get("traffic_time_multiplier") or result.get("traffic_time_multiplier") or 0.0
-        ),
-        "traffic_coefficient_mode": str(structured.get("traffic_coefficient_mode") or ""),
-        "has_traffic_attribution": bool(traffic),
-        "attribution_enabled": bool(traffic.get("enabled")),
-        "attribution_succeeded": bool(traffic.get("succeeded")),
-        "attribution_mode": str(traffic.get("mode") or ""),
-        "attribution_method": str(traffic.get("method") or ""),
-        "attribution_reason": str(traffic.get("reason") or ""),
-        "attribution_confidence": str(traffic.get("confidence") or ""),
-        "route_level_applied": bool(traffic.get("route_level_applied")),
-        "observed_route_sample_count": int(traffic.get("observed_route_sample_count") or 0),
-        "geo_route_sample_count": int(traffic.get("geo_route_sample_count") or 0),
-        "scale_only_route_sample_count": int(traffic.get("scale_only_route_sample_count") or 0),
-        "geo_route_sample_ratio": float(traffic.get("geo_route_sample_ratio") or 0.0),
-        "scenario_count": len(scenarios),
-        "scenarios": scenarios,
-    }
 
 
 def _infer_output_directory_name(result: dict[str, Any]) -> str:

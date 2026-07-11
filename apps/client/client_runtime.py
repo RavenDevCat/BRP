@@ -1614,17 +1614,13 @@ def build_map_summary_html(
     points: list[dict[str, Any]],
     routes: list[dict[str, Any]],
     traffic_profile_name: str = "Off-Peak",
-    traffic_time_multiplier: float = 1.0,
     annotation_route_duration_seconds: int = ANNOTATION_ROUTE_DURATION_SECONDS,
     service_direction: str = "From School",
     route_palette: list[str] | None = None,
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
     private_access_mode: str = "private_drive_stop",
 ) -> str:
-    traffic_note = (
-        f"{traffic_profile_name} traffic assumption "
-        f"({float(traffic_time_multiplier):.2f}x travel-time multiplier; distance unchanged)"
-    )
+    traffic_note = f"{traffic_profile_name} profile using unscaled OSRM candidate time"
     palette = list(route_palette or route_colors(len(routes)))
     normalized_direction = "To School" if str(service_direction).strip() == "To School" else "From School"
     endpoint_note = (
@@ -1732,7 +1728,6 @@ def render_map(
     routes: list[dict[str, Any]],
     output_html: str,
     traffic_profile_name: str = "Off-Peak",
-    traffic_time_multiplier: float = 1.0,
     annotation_route_duration_seconds: int = ANNOTATION_ROUTE_DURATION_SECONDS,
     service_direction: str = "From School",
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
@@ -1963,7 +1958,7 @@ def render_map(
     panel = (
         "<div style='position:fixed;top:12px;right:12px;z-index:9999;width:340px;max-height:78vh;overflow:auto;"
         "background:rgba(255,255,255,0.94);padding:12px 14px;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,0.15);'>"
-        f"{build_map_summary_html(points, routes, traffic_profile_name=traffic_profile_name, traffic_time_multiplier=traffic_time_multiplier, annotation_route_duration_seconds=annotation_route_duration_seconds, service_direction=service_direction, route_palette=colors, outlying_private_access_rows=outlying_private_access_rows, private_access_mode=private_access_mode)}</div>"
+        f"{build_map_summary_html(points, routes, traffic_profile_name=traffic_profile_name, annotation_route_duration_seconds=annotation_route_duration_seconds, service_direction=service_direction, route_palette=colors, outlying_private_access_rows=outlying_private_access_rows, private_access_mode=private_access_mode)}</div>"
     )
     fmap.get_root().html.add_child(Element(panel))
     folium.LayerControl().add_to(fmap)

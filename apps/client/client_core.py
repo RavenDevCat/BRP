@@ -23,12 +23,6 @@ CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(BASE_DIR / "cache"))
 PLANNER_RESULT_CACHE_PATH = CACHE_DIR / "planner_result_cache.json"
 ROUTE_METRICS_CACHE_PATH = CACHE_DIR / "route_metrics_cache.json"
 ROUTE_GEOMETRY_CACHE_PATH = CACHE_DIR / "route_geometry_cache.json"
-TRAFFIC_PROFILE_MULTIPLIERS: dict[str, float] = {
-    "Off-Peak": 1.0,
-    "AM Peak": 1.2,
-    "PM Peak": 1.3,
-}
-TRAFFIC_PROFILE_OPTIONS: tuple[str, ...] = tuple(TRAFFIC_PROFILE_MULTIPLIERS.keys())
 SERVICE_DIRECTION_OPTIONS: tuple[str, ...] = ("From School", "To School")
 BACKEND_SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
@@ -68,9 +62,6 @@ class PlannerConfig:
     large_bus_max_count: int = 20
     mid_bus_max_count: int = 15
     small_bus_max_count: int = 10
-    free_baseline_large_bus_ratio: float = 20.0
-    free_baseline_mid_bus_ratio: float = 15.0
-    free_baseline_small_bus_ratio: float = 10.0
     express_threshold_km: float = 15.0
     reserved_express_buses: int = 4
     express_skip_inner_km: float = 8.0
@@ -824,7 +815,6 @@ def attach_output_paths_to_structured_results(results: dict[str, Any], config: P
 def rerender_html_from_structured_results(results: dict[str, Any], config: PlannerConfig) -> dict[str, Any]:
     hydrated = attach_output_paths_to_structured_results(results, config)
     traffic_profile_name = str(hydrated.get("traffic_profile_name") or config.traffic_profile_name or "Off-Peak")
-    traffic_time_multiplier = float(hydrated.get("traffic_time_multiplier") or TRAFFIC_PROFILE_MULTIPLIERS.get(traffic_profile_name, 1.0))
     service_direction = str(hydrated.get("service_direction") or config.service_direction or "From School")
     for scenario_key in ("original", "current_plan", "subway", "nearby", "further_most", "further_most_nearby"):
         scenario = hydrated.get(scenario_key) or {}
@@ -837,7 +827,6 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
                 routes,
                 output_html,
                 traffic_profile_name=traffic_profile_name,
-                traffic_time_multiplier=traffic_time_multiplier,
                 annotation_route_duration_seconds=int(config.max_route_duration_minutes) * 60,
                 service_direction=service_direction,
                 outlying_private_access_rows=list(scenario.get("outlying_private_access_rows") or []),

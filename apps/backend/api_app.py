@@ -353,16 +353,12 @@ def osrm_manager_status(
     return _json_response(200, backend_service._osrm_manager_status_payload())
 
 
-@_api_route("GET", "/traffic-rollout/status")
-def traffic_rollout_status(
-    request: Request,
+@_api_route("GET", "/provider-status")
+def provider_status(
     context: UserContext = Depends(require_admin_context),
 ) -> JSONResponse:
     _ = context
-    return _json_response(
-        200,
-        backend_service._traffic_rollout_status_payload(dict(request.query_params)),
-    )
+    return _json_response(200, backend_service._provider_status_payload())
 
 
 @_api_route("GET", "/workbooks/template", dependencies=[Depends(require_authorized_request)])
@@ -738,35 +734,6 @@ def get_job_map_data(
     return _json_response(200, map_data)
 
 
-@_api_route("GET", "/jobs/{job_id}/traffic-attribution")
-def get_job_traffic_attribution(
-    request: Request,
-    job_id: str,
-    context: UserContext = Depends(current_user_context),
-    _authorized: None = Depends(require_authorized_request),
-) -> JSONResponse:
-    job_record = _job_for_context(job_id, context)
-    query_params = _query_dict(request)
-    include_route_evidence = query_params.get("route_evidence") in {
-        "1",
-        "true",
-        "yes",
-    }
-    include_top_matches = query_params.get("top_matches") in {
-        "1",
-        "true",
-        "yes",
-    }
-    return _json_response(
-        200,
-        backend_service._job_traffic_attribution_payload(
-            job_record,
-            include_route_evidence=include_route_evidence,
-            include_top_matches=include_top_matches,
-        ),
-    )
-
-
 @_api_route("GET", "/jobs/{job_id}")
 def get_job(
     job_id: str,
@@ -1138,10 +1105,8 @@ def _refine_insert_proposals_with_osrm(
     if not candidates:
         return
     planner = backend_service.load_legacy_planner()
-    previous_multiplier = getattr(planner, "TRAFFIC_TIME_MULTIPLIER", 1.0)
     previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
     try:
-        planner.TRAFFIC_TIME_MULTIPLIER = 1.0
         for item in candidates:
             before = _insert_coord_payload(dict(item.get("insert_after_point") or {}), country, city)
             new_stop = _insert_coord_payload(dict(item.get("new_stop") or {}), country, city)
@@ -1173,7 +1138,6 @@ def _refine_insert_proposals_with_osrm(
                 item["refined"] = False
                 item["refine_error"] = str(exc)
     finally:
-        planner.TRAFFIC_TIME_MULTIPLIER = previous_multiplier
         if hasattr(planner, "OSRM_BASE_URL"):
             planner.OSRM_BASE_URL = previous_osrm_base_url
 

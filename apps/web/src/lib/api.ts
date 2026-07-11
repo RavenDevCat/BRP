@@ -28,108 +28,36 @@ export type GoogleGeocodeUsage = {
     label?: string;
 };
 
-export type TrafficRolloutStatusResponse = {
+export type ProviderMarketStatus = {
+    market: string;
+    label: string;
+    provider: string;
     status: string;
-    next_step?: string;
-    endpoint?: {
-        read_only?: boolean;
-        provider_api_called?: boolean;
-        osrm_started?: boolean;
-    };
-    rollout_gate?: {
-        status?: string;
-        passed_requirement_count?: number;
-        failed_requirement_count?: number;
-        missing_profiles?: Array<Record<string, unknown>>;
-        failure_reason_counts?: Record<string, number>;
-    };
-    timers?: {
-        problem_count?: number;
-        next_relevant_timer?: {
-            unit?: string;
-            next_elapse_local?: string;
-            seconds_until_next_elapse?: number;
-        } | null;
-    };
-    services?: {
-        problem_count?: number;
-        problem_services?: Array<Record<string, unknown>>;
-    };
-    api_budget?: {
-        problem?: boolean;
-        total_estimated_api_call_count?: number;
-        max_estimated_api_call_count?: number;
-        provider_api_called?: boolean;
-        osrm_started?: boolean;
-        safety_violation_reasons?: string[];
-    };
-    osrm_manager?: {
-        available?: boolean;
-        lock_count?: number;
-        stale_lock_count?: number;
+    configured: boolean;
+    timing_source: string;
+};
+
+export type ProviderStatusResponse = {
+    status: string;
+    read_only: boolean;
+    provider_api_called: boolean;
+    osrm_started: boolean;
+    market_count: number;
+    warning_markets: string[];
+    markets: ProviderMarketStatus[];
+    osrm_manager: {
         running_region_count?: number;
         running_regions?: string[];
+        stale_lock_count?: number;
+        lock_count?: number;
+        available_memory_mb?: number;
     };
-    market_overview?: TrafficMarketOverview;
-};
-
-export type TrafficMarketOverview = {
-    status?: string;
-    sample_dir?: string;
-    sample_file_count?: number;
-    filtered_file_count?: number;
-    unreadable_file_count?: number;
-    default_traffic_coefficient_mode?: string;
-    stale_after_hours?: number;
-    deployment_tier?: string;
-    market_scope?: string[];
-    blocked_count?: number;
-    warning_count?: number;
-    markets?: TrafficMarketStatus[];
-};
-
-export type TrafficMarketPeriodStatus = {
-    period: string;
-    status?: string;
-    sample_file_count?: number;
-    route_sample_count?: number;
-    geo_route_sample_count?: number;
-    geo_route_sample_ratio?: number;
-    latest_measured_at?: string;
-    latest_sample?: string;
-    providers?: string[];
-    weekdays?: string[];
-    age_hours?: number | null;
-};
-
-export type TrafficMarketStatus = {
-    market: string;
-    city: string;
-    label: string;
-    status: string;
-    traffic_mode: string;
-    provider: string;
-    observed_providers?: string[];
-    active_source?: string;
-    fallback_multiplier?: number | null;
-    requires_samples?: boolean;
-    required_periods?: string[];
-    sample_file_count?: number;
-    route_sample_count?: number;
-    geo_route_sample_count?: number;
-    geo_route_sample_ratio?: number;
-    latest_measured_at?: string;
-    latest_sample?: string;
-    stale_after_hours?: number;
-    warnings?: string[];
-    periods?: TrafficMarketPeriodStatus[];
 };
 
 export type DeploymentFeatures = {
     language_switch_enabled: boolean;
     scheduled_jobs_enabled: boolean;
     available_languages?: string[];
-    default_traffic_coefficient_mode?: string;
 };
 
 export type JobSummary = {
@@ -162,41 +90,6 @@ export type AiAuditResponse = {
     ai_audit_reports?: Record<string, Record<string, unknown>> | null;
     cached?: boolean;
     message?: string;
-};
-
-export type JobTrafficAttributionScenarioSummary = {
-    scenario_key: string;
-    scenario_label: string;
-    route_estimate_count: number;
-    attributed_route_count: number;
-    geo_attributed_route_count: number;
-    geo_attributed_route_ratio: number;
-    method_counts: Record<string, number>;
-    quality_reason_counts: Record<string, number>;
-    non_geo_routes: Array<Record<string, unknown>>;
-    route_evidence?: Array<Record<string, unknown>>;
-};
-
-export type JobTrafficAttributionResponse = {
-    job_id: string;
-    job_status?: string;
-    traffic_profile_name?: string;
-    traffic_time_multiplier?: number;
-    traffic_coefficient_mode?: string;
-    has_traffic_attribution: boolean;
-    attribution_enabled: boolean;
-    attribution_succeeded: boolean;
-    attribution_mode?: string;
-    attribution_method?: string;
-    attribution_reason?: string;
-    attribution_confidence?: string;
-    route_level_applied: boolean;
-    observed_route_sample_count: number;
-    geo_route_sample_count: number;
-    scale_only_route_sample_count: number;
-    geo_route_sample_ratio: number;
-    scenario_count: number;
-    scenarios: JobTrafficAttributionScenarioSummary[];
 };
 
 export type JobMapBounds = {
@@ -405,9 +298,6 @@ export type PlannerConfigPayload = {
     large_bus_max_count: number;
     mid_bus_max_count: number;
     small_bus_max_count: number;
-    free_baseline_large_bus_ratio: number;
-    free_baseline_mid_bus_ratio: number;
-    free_baseline_small_bus_ratio: number;
     express_threshold_km: number;
     reserved_express_buses: number;
     express_skip_inner_km: number;
@@ -419,7 +309,6 @@ export type PlannerConfigPayload = {
     nearby_cluster_radius_m: number;
     comfort_load_factor: number;
     traffic_profile_name: string;
-    traffic_coefficient_mode: string;
     service_direction: string;
     to_school_arrival_time: string;
     from_school_departure_time: string;
@@ -697,9 +586,7 @@ export type FleetPlannerRoutePreviewResponse = {
         candidate_vehicle_count?: number;
         solver?: string;
         traffic_profile_name?: string;
-        traffic_time_multiplier?: number;
         traffic_profile_context?: string;
-        live_traffic_sample?: Record<string, unknown> | null;
     };
     school: Record<string, unknown>;
     routes: Array<Record<string, unknown>>;
@@ -848,8 +735,8 @@ export function getDeploymentFeatures() {
     return apiFetch<DeploymentFeatures>("/deployment-features");
 }
 
-export function getTrafficRolloutStatus() {
-    return apiFetch<TrafficRolloutStatusResponse>("/traffic-rollout/status");
+export function getProviderStatus() {
+    return apiFetch<ProviderStatusResponse>("/provider-status");
 }
 
 export function getWorkbookTemplateUrl() {
@@ -889,23 +776,6 @@ export function getJobArtifactUrl(
 export function getJobMapData(jobId: string, scenarioKey: string) {
     return apiFetch<JobMapData>(
         `/jobs/${encodeURIComponent(jobId)}/map-data/${encodeURIComponent(scenarioKey)}`,
-    );
-}
-
-export function getJobTrafficAttribution(
-    jobId: string,
-    options: { routeEvidence?: boolean; topMatches?: boolean } = {},
-) {
-    const params = new URLSearchParams();
-    if (options.routeEvidence) {
-        params.set("route_evidence", "1");
-    }
-    if (options.topMatches) {
-        params.set("top_matches", "1");
-    }
-    const query = params.toString();
-    return apiFetch<JobTrafficAttributionResponse>(
-        `/jobs/${encodeURIComponent(jobId)}/traffic-attribution${query ? `?${query}` : ""}`,
     );
 }
 

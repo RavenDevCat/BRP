@@ -9,7 +9,6 @@ from demand_routing import (
     _point_payload,
     _route_leg_details_for_order,
     _route_metrics_for_order,
-    _traffic_multiplier,
 )
 from planning_assumptions import PlanningAssumptions, get_planning_assumptions
 from vehicle_catalog import get_vehicle_catalog
@@ -216,10 +215,8 @@ def build_global_ortools_plan(
     max_route_duration_minutes: int | None = None,
     custom_catalog: list[dict[str, Any]] | None = None,
     service_direction: str = "to_school",
-    traffic_time_multiplier: float | None = 1.0,
     traffic_profile_name: str = "Off-Peak",
-    traffic_profile_context: str = "Global default",
-    live_traffic_sample: dict[str, Any] | None = None,
+    traffic_profile_context: str = "Unscaled OSRM candidate time",
 ) -> dict[str, Any]:
     try:
         from ortools.constraint_solver import pywrapcp, routing_enums_pb2
@@ -263,7 +260,7 @@ def build_global_ortools_plan(
         raise ValueError("No candidate vehicles are available for global planning.")
 
     points = [_point_payload(school), *[_point_payload(point) for point in demand_points]]
-    duration_matrix, distance_matrix = _build_osrm_matrix(points, traffic_time_multiplier=traffic_time_multiplier)
+    duration_matrix, distance_matrix = _build_osrm_matrix(points)
     extended_duration, extended_distance, dummy_index = _build_extended_matrices(
         duration_matrix,
         distance_matrix,
@@ -361,11 +358,7 @@ def build_global_ortools_plan(
             continue
 
         total_duration_s, total_distance_m = _route_metrics_for_order(order, duration_matrix, distance_matrix)
-        leg_details = _route_leg_details_for_order(
-            points,
-            order,
-            traffic_time_multiplier=traffic_time_multiplier,
-        )
+        leg_details = _route_leg_details_for_order(points, order)
         ordered_points = _annotate_ordered_points_with_schedule(
             [points[node] for node in order],
             leg_details,
@@ -426,9 +419,7 @@ def build_global_ortools_plan(
             "candidate_vehicle_count": len(vehicle_pool),
             "solver": "global_ortools",
             "traffic_profile_name": traffic_profile_name,
-            "traffic_time_multiplier": _traffic_multiplier(traffic_time_multiplier),
             "traffic_profile_context": traffic_profile_context,
-            "live_traffic_sample": live_traffic_sample,
         },
         "route_rows": route_rows,
     }

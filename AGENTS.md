@@ -38,11 +38,12 @@ Codex session, then ask the operator for the current handoff.
   job id; those files are migration/archive material only.
 - Preserve runtime data and server-local env files unless the user explicitly
   asks for a cleanup.
-- KR traffic profile refresh is not the CN AMap live timer. It uses Kakao Navi
-  future weekday samples through the checked-in KR traffic profile wrappers,
-  and it keeps a separate Kakao Navi usage counter that must be preserved with
-  runtime state. Do not switch this back to Google Routes for Seoul driving
-  profiles; production diagnostics returned empty routes for KR/Seoul.
+- Route Audit final timing is validated per job: CN uses AMap and KR uses Kakao
+  Navi future directions. Historical coefficient, multiplier, sampler, timer,
+  and traffic-profile wrappers are retired and must not be restored. Preserve
+  provider usage counters with runtime state, and do not switch Seoul driving
+  validation back to Google Routes; production diagnostics returned empty
+  routes for KR/Seoul.
 
 ## Repository Hygiene
 

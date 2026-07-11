@@ -5,14 +5,32 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-07-11
+
+### Strict And Protected Hard-Constraint Solver
+
+- Route duration is now a true OR-Tools hard cap derived from the user time
+  window. The retired hidden 10-minute/20-percent solver allowance no longer
+  admits routes that the direct provider must reject later.
+- Strict Plan and Protected Plan both enforce the requested adverse time-impact
+  limit, minimum vehicle saving, stop cap, comfort capacity, and physical fleet
+  limits. Protected Plan ignores only the current routes explicitly frozen as
+  pre-existing violations.
+- If both plans pass, recommendation order is fewest vehicles, then lowest
+  direct-provider total duration. Contradictory vehicle-saving, capacity, and
+  stop-limit inputs return a lower-bound infeasibility reason before solving.
+- OR-Tools local search defaults to 10 seconds per vehicle-cap candidate. Final
+  AMap/Kakao checks and all hard acceptance gates are unchanged.
+- Existing completed jobs remain immutable and must be rerun to use this flow.
+
 ## 2026-07-10
 
 ### Hard-Constrained Scenario Selection
 
 - Route candidates now use unscaled OSRM travel times and direct AMap or Kakao
-  final-route validation; retired traffic coefficients no longer alter solver
-  inputs.
-- The balanced and protected scenarios run independently and apply the user's
+  final-route validation; retired sampled timing adjustments no longer alter
+  solver inputs.
+- The strict and protected scenarios run independently and apply the user's
   stop time-impact limit as a hard constraint across every optimized stop.
 - A scenario is recommended only when its provider time window, requested
   vehicle saving, and hard time-impact checks all pass. When several qualify,
@@ -66,16 +84,6 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-06-20
 
-### Korea Route-Level Traffic Attribution
-
-- KR jobs can use route-network traffic attribution similar to the CN model:
-  Kakao Navi samples are matched by route fingerprint and Seoul-metro
-  geography instead of applying one flat market coefficient.
-- Seoul, Incheon, Gyeonggi, and nearby cities share a reusable Seoul Metro
-  attribution bucket.
-- Existing completed jobs keep their stored results; rerun a job to regenerate
-  route timings with the attributed KR behavior.
-
 ### OSRM Manager Capacity Policy
 
 - On-demand OSRM startup has an explicit running-region capacity policy.
@@ -106,8 +114,8 @@ runtime architecture, or recommended rerun guidance changed.
 - Bangkok/BK routing support was added as the current Thailand-market focus.
 - Bangkok workbooks use Google geocoding by default and route through Bangkok
   OSRM when available.
-- Bangkok timing currently uses a conservative static traffic multiplier until
-  richer provider sampling is implemented.
+- Candidate timing uses unscaled Bangkok OSRM; final provider evidence is used
+  when the configured route provider is available.
 
 ### Bangkok Google Geocode Relay
 
@@ -134,15 +142,6 @@ runtime architecture, or recommended rerun guidance changed.
   an error.
 - Existing completed jobs are immutable; rerun an audit to generate new review
   warnings.
-
-### KR Weekday Traffic Profiles
-
-- KR traffic sampling uses Kakao Navi future directions against stable baseline
-  JSON exports.
-- To School profiles are anchored to arrival time; From School profiles are
-  anchored to departure time.
-- Weekly KR refreshes cover Monday-Friday AM peak, PM peak, and off-peak
-  profiles with independent Kakao usage caps.
 
 ## 2026-06-12
 

@@ -95,10 +95,14 @@ store. Preserve `BRP_QUOTA_DB_PATH` or `BRP_RUNTIME_DB_PATH` during deploys; if
 `apps/client/cache/google_geocode_usage.json` exists, keep it as a legacy
 migration source and do not reset it to an old verified value.
 KR Route Audit final route validation uses Kakao Navi future directions per job.
-The old weekly KR coefficient sampler/timer is retired for normal production
-operation; the checked-in KR traffic profile wrappers are manual diagnostics
-only. Do not use Google Routes for Seoul driving profiles unless a future
+The old weekly KR traffic sampler/timer is retired for normal production
+operation. Do not use Google Routes for Seoul driving profiles unless a future
 verified probe proves coverage has changed.
+
+`BRP_SOLVER_TIME_LIMIT_SECONDS` controls the OR-Tools local-search budget for
+each hard vehicle-cap candidate and defaults to `10`. Changing it must be
+validated against representative Strict and Protected jobs; it never relaxes
+the final provider or hard-constraint gates.
 
 External API QPS is also persistent runtime coordination state. Kakao, Google,
 AMap, DeepSeek, and the Google geocode relay use the SQLite quota store at

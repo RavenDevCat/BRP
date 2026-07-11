@@ -11,10 +11,6 @@ sys.path.insert(0, str(ROOT / "apps" / "client"))
 import client_runtime as runtime  # noqa: E402
 import distance_tool  # noqa: E402
 
-sys.path.insert(0, str(ROOT / "apps" / "backend"))
-from planner_core import resolve_traffic_profile  # noqa: E402
-
-
 class BangkokMarketTests(unittest.TestCase):
     def test_client_runtime_uses_google_and_bangkok_cache_keys(self) -> None:
         self.assertTrue(runtime.is_bangkok_market_country("ประเทศไทย"))
@@ -56,27 +52,6 @@ class BangkokMarketTests(unittest.TestCase):
             ]
         )
         self.assertEqual(endpoint, "http://127.0.0.1:5007")
-
-    def test_bangkok_traffic_profile_defaults_to_static_all_day_multiplier(self) -> None:
-        for profile_name in ("Off-Peak", "AM Peak", "PM Peak"):
-            resolved_name, multiplier, context = resolve_traffic_profile(
-                profile_name,
-                [{"country": "Bangkok", "city": "Bangkok"}],
-            )
-            self.assertEqual(resolved_name, profile_name)
-            self.assertEqual(multiplier, 1.75)
-            self.assertEqual(context, "Bangkok default")
-
-    def test_legacy_thailand_bangkok_traffic_profile_uses_bangkok_default(self) -> None:
-        resolved_name, multiplier, context = resolve_traffic_profile(
-            "AM Peak",
-            [{"country": "Thailand", "city": "Bangkok"}],
-        )
-
-        self.assertEqual(resolved_name, "AM Peak")
-        self.assertEqual(multiplier, 1.75)
-        self.assertEqual(context, "Bangkok default")
-
 
 class ThailandRouteAuditRuntimeTests(unittest.TestCase):
     def test_backend_runtime_routes_bangkok_to_google_and_osrm(self) -> None:

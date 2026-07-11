@@ -240,16 +240,11 @@ def _scenario_display_name(key: str, result: dict[str, Any], scenario: dict[str,
     if key == "current_plan":
         return "Current Plan"
     if key == "time_constrained":
-        limit = _format_time_impact_limit_minutes(_time_impact_limit_minutes(result, scenario, planner_config))
-        if not label or label.endswith("-Minute Constrained"):
-            return f"{limit}-Minute Balanced Plan"
+        if not label or label.endswith("-Minute Constrained") or label.endswith("-Minute Balanced Plan"):
+            return "Strict Plan"
     if key == "exception_preserving":
-        if not label or label == "Exception Preserving":
-            return "Protected Route Plan"
-    if key == "ep15min":
-        limit = _format_time_impact_limit_minutes(_time_impact_limit_minutes(result, scenario, planner_config))
-        if not label or (label.startswith("EP ") and label.endswith("-Minute")):
-            return f"Protected {limit}-Minute Plan"
+        if not label or label in {"Exception Preserving", "Protected Route Plan"}:
+            return "Protected Plan"
     return label or key
 
 
@@ -265,6 +260,10 @@ def _scenario_summary(
         dict(scenario.get("time_impact") or {})
         or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
     )
+    provider_total_duration_s = sum(
+        float(dict(route.get("final_route_traffic_gate") or {}).get("verified_total_duration_s", 0.0) or 0.0)
+        for route in list(scenario.get("routes") or [])
+    )
     return {
         "key": key,
         "name": _scenario_display_name(key, result, scenario, planner_config),
@@ -276,6 +275,7 @@ def _scenario_summary(
         "avg_route_duration_min": _float_minutes(scenario.get("avg_route_duration_s")),
         "avg_load_factor_pct": round(float(scenario.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
         "bus_mix": scenario.get("bus_mix"),
+        "provider_total_duration_s": provider_total_duration_s,
         "traffic_gate": _compact_traffic_gate(scenario),
         "exception_accepted": bool(dict(scenario.get("exception_preserving") or {}).get("accepted") or scenario.get("exception_feasible")),
         "time_constraint": {
@@ -313,7 +313,7 @@ def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
 
 
 def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
-    order = ["time_constrained", "ep15min", "exception_preserving"]
+    order = ["time_constrained", "exception_preserving"]
     order_index = {key: index for index, key in enumerate(order)}
     ready: list[dict[str, Any]] = []
     for item in scenarios:
@@ -322,7 +322,9 @@ def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | N
             continue
         gate = dict(item.get("traffic_gate") or {})
         saving = dict(gate.get("vehicle_saving_target") or {})
-        if gate.get("status") != "passed" or saving.get("status") == "failed":
+        provider_passed = gate.get("status") == "passed"
+        protected_passed = key == "exception_preserving" and bool(item.get("exception_accepted"))
+        if (not provider_passed and not protected_passed) or saving.get("status") == "failed":
             continue
         if not _scenario_time_impact_passed(item):
             continue
@@ -331,6 +333,7 @@ def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | N
         ready,
         key=lambda item: (
             int(item.get("route_count", 10**9) or 10**9),
+            float(item.get("provider_total_duration_s", float("inf")) or float("inf")),
             order_index[str(item.get("key") or "")],
         ),
         default=None,
@@ -361,60 +364,15 @@ def _input_address_review_summary(review: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _collect_traffic_estimates(result: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+def _provider_validation_summary(result: dict[str, Any]) -> dict[str, Any]:
     structured = dict(result.get("structured_results") or {})
-    attribution = dict(result.get("traffic_attribution") or structured.get("traffic_attribution") or {})
-    estimates_by_scenario = dict(attribution.get("scenario_route_estimates") or {})
-    estimates: list[dict[str, Any]] = []
-    for scenario_name, scenario_payload in estimates_by_scenario.items():
-        for item in list(dict(scenario_payload or {}).get("route_estimates") or []):
-            estimate = dict(item)
-            estimates.append(
-                {
-                    "scenario": estimate.get("scenario") or scenario_name,
-                    "route_id": estimate.get("route_id"),
-                    "method": estimate.get("method"),
-                    "quality_reason": estimate.get("quality_reason") or estimate.get("reason"),
-                    "factor": round(float(estimate.get("factor", 0.0) or 0.0), 3),
-                    "matched_sample_count": estimate.get("matched_sample_count"),
-                    "avg_similarity": round(float(estimate.get("avg_similarity", 0.0) or 0.0), 3),
-                }
-            )
-            if len(estimates) >= limit:
-                return estimates
-    return estimates
-
-
-def _traffic_confidence_summary(result: dict[str, Any]) -> dict[str, Any]:
-    structured = dict(result.get("structured_results") or {})
-    attribution = dict(result.get("traffic_attribution") or structured.get("traffic_attribution") or {})
-    scenario_payloads = [dict(item) for item in dict(attribution.get("scenario_route_estimates") or {}).values()]
-    method_counts: dict[str, int] = {}
-    fallback_route_count = 0
-    route_estimate_count = 0
-    for payload in scenario_payloads:
-        for estimate in list(payload.get("route_estimates") or []):
-            method = str(dict(estimate).get("method") or "unknown")
-            method_counts[method] = method_counts.get(method, 0) + 1
-            route_estimate_count += 1
-            if method == "fallback":
-                fallback_route_count += 1
-
+    strict = dict(result.get("time_constrained_optimization") or structured.get("time_constrained") or {})
+    protected = dict(result.get("exception_preserving_optimization") or structured.get("exception_preserving") or {})
     return {
         "traffic_profile_name": result.get("traffic_profile_name") or structured.get("traffic_profile_name"),
-        "traffic_time_multiplier": result.get("traffic_time_multiplier") or structured.get("traffic_time_multiplier"),
         "traffic_profile_context": result.get("traffic_profile_context") or structured.get("traffic_profile_context"),
-        "attribution_enabled": bool(attribution.get("enabled")),
-        "attribution_succeeded": bool(attribution.get("succeeded")),
-        "mode": attribution.get("mode"),
-        "confidence": attribution.get("confidence"),
-        "route_level_applied": bool(attribution.get("route_level_applied")),
-        "observed_route_sample_count": attribution.get("observed_route_sample_count"),
-        "geo_route_sample_count": attribution.get("geo_route_sample_count"),
-        "route_estimate_count": route_estimate_count,
-        "fallback_route_count": fallback_route_count,
-        "method_counts": method_counts,
-        "sample_route_estimates": _collect_traffic_estimates(result),
+        "strict_plan": _compact_traffic_gate(strict),
+        "protected_plan": _compact_traffic_gate(protected),
     }
 
 
@@ -485,7 +443,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "bus_mix": current_plan.get("bus_mix"),
         }
     exception_preserving = dict(result.get("exception_preserving_optimization") or structured.get("exception_preserving") or {})
-    ep15min = dict(result.get("ep15min_optimization") or structured.get("ep15min") or {})
     current_vs_baseline = dict(result.get("current_plan_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
     time_impact_limit_minutes = _time_impact_limit_minutes(result, time_constrained, planner_config)
@@ -493,7 +450,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         _scenario_summary("current_plan", result, current_plan_scenario, planner_config),
         _scenario_summary("time_constrained", result, time_constrained, planner_config),
         _scenario_summary("exception_preserving", result, exception_preserving, planner_config),
-        _scenario_summary("ep15min", result, ep15min, planner_config),
     ]
     recommended_scenario = _recommended_scenario(scenario_outcomes)
     route_summaries = list(current_plan.get("route_summaries") or [])
@@ -573,7 +529,7 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "input_address_review": _input_address_review_summary(
                 dict(result.get("input_address_review") or structured.get("input_address_review") or {})
             ),
-            "traffic_confidence": _traffic_confidence_summary(result),
+            "provider_validation": _provider_validation_summary(result),
             "aggregated_stop_batches": _demand_batch_summary(result),
         },
         "constraints": {

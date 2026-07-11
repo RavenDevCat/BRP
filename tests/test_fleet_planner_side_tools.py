@@ -13,7 +13,7 @@ import demand_routing  # noqa: E402
 
 
 class FleetPlannerSideToolTests(unittest.TestCase):
-    def test_osrm_matrix_applies_traffic_multiplier_to_duration_only(self) -> None:
+    def test_osrm_matrix_keeps_raw_duration_and_distance(self) -> None:
         original = demand_routing.compute_osrm_metrics_from_origin
 
         def fake_metrics(origin, destinations):
@@ -28,12 +28,12 @@ class FleetPlannerSideToolTests(unittest.TestCase):
                 {"lat": 1.0, "lng": 1.0},
                 {"lat": 1.1, "lng": 1.1},
             ]
-            durations, distances = demand_routing._build_osrm_matrix(points, traffic_time_multiplier=1.5)
+            durations, distances = demand_routing._build_osrm_matrix(points)
         finally:
             demand_routing.compute_osrm_metrics_from_origin = original
 
         self.assertEqual(durations[0][0], 0.0)
-        self.assertEqual(durations[0][1], 900.0)
+        self.assertEqual(durations[0][1], 600.0)
         self.assertEqual(distances[0][1], 1000.0)
 
     def test_route_preview_map_data_includes_estimated_stop_times(self) -> None:
@@ -138,54 +138,27 @@ class FleetPlannerTrafficContextTests(unittest.TestCase):
         self.assertEqual(len(map_data["stops"]), 2)
         self.assertEqual(map_data["scenario_name"], "Optimized Plan")
 
-    def test_live_traffic_sample_is_limited_to_kr_market(self) -> None:
+    def test_fleet_context_uses_unscaled_osrm_for_every_market(self) -> None:
         import backend_service  # noqa: E402
 
-        original = backend_service.summarize_live_traffic_samples
-        calls = []
-
-        def fake_live_sample(**kwargs):
-            calls.append(kwargs)
-            return {
-                "traffic_profile_name": "AM Peak (Live)",
-                "traffic_time_multiplier": 1.42,
-                "traffic_profile_context": "Live Seoul sample",
-            }
-
-        try:
-            backend_service.summarize_live_traffic_samples = fake_live_sample
-            cn_context = backend_service._fleet_traffic_context(
-                {"school": {"country": "China", "city": "Shanghai", "address": "School"}},
-                service_direction="to_school",
-                market="CN",
-            )
-            kr_context = backend_service._fleet_traffic_context(
-                {"school": {"country": "South Korea", "city": "Seoul", "address": "School"}},
-                service_direction="to_school",
-                market="KR",
-            )
-        finally:
-            backend_service.summarize_live_traffic_samples = original
-
-        self.assertEqual(
-            calls,
-            [
-                {
-                    "service_direction": "To School",
-                    "input_records": [
-                        {"country": "South Korea", "city": "Seoul", "address": "School"}
-                    ],
-                }
-            ],
+        cn_context = backend_service._fleet_traffic_context(
+            {"school": {"country": "China", "city": "Shanghai", "address": "School"}},
+            service_direction="to_school",
+            market="CN",
+        )
+        kr_context = backend_service._fleet_traffic_context(
+            {"school": {"country": "South Korea", "city": "Seoul", "address": "School"}},
+            service_direction="to_school",
+            market="KR",
         )
         self.assertEqual(cn_context["traffic_profile_name"], "AM Peak")
-        self.assertEqual(cn_context["traffic_time_multiplier"], 1.6)
-        self.assertEqual(cn_context["traffic_profile_context"], "Shanghai default")
-        self.assertIsNone(cn_context["live_traffic_sample"])
-        self.assertEqual(kr_context["traffic_profile_name"], "AM Peak (Live)")
-        self.assertEqual(kr_context["traffic_time_multiplier"], 1.42)
-        self.assertEqual(kr_context["traffic_profile_context"], "Live Seoul sample")
-        self.assertEqual(kr_context["live_traffic_sample"]["traffic_time_multiplier"], 1.42)
+        self.assertEqual(kr_context["traffic_profile_name"], "AM Peak")
+        self.assertEqual(
+            cn_context["traffic_profile_context"],
+            "Unscaled OSRM candidate time; direct provider validation is authoritative.",
+        )
+        self.assertEqual(cn_context, kr_context)
+        self.assertEqual(set(cn_context), {"traffic_profile_name", "traffic_profile_context"})
 
 
 if __name__ == "__main__":

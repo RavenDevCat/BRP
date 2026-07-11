@@ -105,7 +105,6 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
         "nearby",
         "time_constrained",
         "exception_preserving",
-        "ep15min",
     ):
         scenario = dict(structured.get(scenario_key) or {})
         routes = list(scenario.get("routes") or [])

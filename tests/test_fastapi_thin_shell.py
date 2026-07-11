@@ -269,45 +269,24 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(payload["status"], "ok")
         self.assertEqual(payload["summary"]["running_regions"], ["shanghai"])
 
-    def test_traffic_rollout_status_preserves_query_params(self) -> None:
-        calls: list[dict[str, object]] = []
-
-        class StubReadiness:
-            DEFAULT_CUTOFF = "2026-06-17T19:00:00+08:00"
-            DEFAULT_PROFILES = (("CN", "Shanghai", "am_peak"),)
-
-            class report_live_traffic_readiness:
-                DEFAULT_SAMPLE_DIR = Path("/tmp/traffic-samples")
-
-        class StubReportModule:
-            DEFAULT_LOCAL_TIMEZONE = "Asia/Shanghai"
-            report_traffic_rollout_readiness = StubReadiness
-
-            @staticmethod
-            def build_status(**kwargs: object) -> dict[str, object]:
-                calls.append(kwargs)
-                return {
-                    "status": "ready",
-                    "api_budget": {
-                        "provider_api_called": False,
-                        "osrm_started": False,
-                    },
-                }
-
+    def test_provider_status_uses_read_only_payload(self) -> None:
         with patched_backend(
             SERVICE_TOKEN="secret",
             ADMIN_EMAILS={"admin@example.com"},
-            _load_traffic_rollout_status_module=lambda: StubReportModule,
+            _provider_status_payload=lambda: {
+                "status": "ready",
+                "read_only": True,
+                "provider_api_called": False,
+            },
         ):
             response = self.client.get(
-                "/api/traffic-rollout/status?include_osrm=false&min_geo_ratio=0.80",
+                "/api/provider-status",
                 headers=auth_headers(),
             )
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["status"], "ready")
-        self.assertEqual(calls[0]["min_geo_ratio"], 0.8)
-        self.assertFalse(calls[0]["include_osrm"])
+        self.assertTrue(response.json()["read_only"])
 
     def test_template_downloads_keep_attachment_headers(self) -> None:
         with patched_backend(SERVICE_TOKEN="secret"):
@@ -492,7 +471,7 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(delete_response.status_code, 403)
         self.assertEqual(fleet_store.deleted, [])
 
-    def test_job_map_export_artifact_and_traffic_routes_use_existing_builders(self) -> None:
+    def test_job_map_export_and_artifact_routes_use_existing_builders(self) -> None:
         job_store = FakeJobStore()
         job_store.records["job-1"] = {
             "job_id": "job-1",
@@ -516,10 +495,6 @@ class FastApiThinShellTests(unittest.TestCase):
                     b"PKworkbook",
                     None,
                 ),
-                _job_traffic_attribution_payload=lambda record, **kwargs: {
-                    "job_id": record["job_id"],
-                    **kwargs,
-                },
             ):
                 map_response = self.client.get(
                     "/api/jobs/job-1/map-data/original", headers=auth_headers()
@@ -532,10 +507,6 @@ class FastApiThinShellTests(unittest.TestCase):
                     "/api/jobs/job-1/exports/time-impact-original",
                     headers=auth_headers(),
                 )
-                traffic_response = self.client.get(
-                    "/api/jobs/job-1/traffic-attribution?route_evidence=true&top_matches=yes",
-                    headers=auth_headers(),
-                )
         finally:
             artifact_path.unlink(missing_ok=True)
 
@@ -544,14 +515,6 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(artifact_response.text, "<html>map</html>")
         self.assertEqual(export_response.content, b"PKworkbook")
         self.assertIn("attachment;", export_response.headers["content-disposition"])
-        self.assertEqual(
-            traffic_response.json(),
-            {
-                "job_id": "job-1",
-                "include_route_evidence": True,
-                "include_top_matches": True,
-            },
-        )
 
     def test_map_tile_route_uses_tile_loader_and_cache_headers(self) -> None:
         with patched_backend(

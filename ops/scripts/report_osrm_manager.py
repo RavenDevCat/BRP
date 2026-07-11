@@ -43,12 +43,7 @@ sys.path.insert(0, str(BACKEND_DIR))
 import osrm_manager  # noqa: E402
 
 
-ACTIVE_WORKER_PATTERNS = (
-    "backend_job_runner.py",
-    "live_traffic_sampler.py",
-)
-ACTIVE_WRAPPER_PREFIX = "run_live_traffic_"
-SHELL_NAMES = {"bash", "dash", "sh", "zsh"}
+ACTIVE_WORKER_NAME = "backend_job_runner.py"
 
 
 def _basename(token: str) -> str:
@@ -66,22 +61,7 @@ def _is_active_worker_process(comm: str, args: str) -> bool:
     command_name = _basename(comm or tokens[0])
     basenames = [_basename(token) for token in tokens]
 
-    if command_name.startswith("python"):
-        return any(name in ACTIVE_WORKER_PATTERNS for name in basenames)
-
-    if command_name in SHELL_NAMES:
-        # Real wrapper processes are invoked as `bash /path/run_live_traffic_*.sh ...`.
-        # Ignore `bash -c "rg ... run_live_traffic_..."` diagnostics that merely
-        # mention wrapper names in a command string.
-        for token in tokens[1:]:
-            if token.startswith("-"):
-                if token == "-c":
-                    return False
-                continue
-            return _basename(token).startswith(ACTIVE_WRAPPER_PREFIX)
-        return False
-
-    return command_name.startswith(ACTIVE_WRAPPER_PREFIX)
+    return command_name.startswith("python") and ACTIVE_WORKER_NAME in basenames
 
 
 def _active_worker_processes() -> list[str]:

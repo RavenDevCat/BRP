@@ -174,7 +174,7 @@ export BRP_DEEPSEEK_MAX_QPS="1.0"
 The South Korea deployment validates Route Audit final route timing with Kakao
 Navi future directions per job. Do not use Google Routes for KR/Seoul driving
 checks; production probes returned HTTP 200 with empty route results. The old
-weekly KR coefficient sampler/timer is retired for normal production operation.
+weekly KR traffic sampler/timer is retired for normal production operation.
 
 Recommended defaults:
 
@@ -183,12 +183,7 @@ export BRP_KAKAO_NAVI_MAX_WAYPOINTS="5"
 export BRP_KAKAO_NAVI_TIMEOUT_SECONDS="20"
 export BRP_KAKAO_NAVI_MAX_QPS="2.8"
 export BRP_KAKAO_NAVI_INTER_SEGMENT_DWELL_SECONDS="0"
-```
-
-Historical KR profile wrappers remain available for manual diagnostics only:
-
-```bash
-ops/scripts/run_live_traffic_kr_weekday_profile.sh all --dry-run
+export BRP_SOLVER_TIME_LIMIT_SECONDS="10"
 ```
 
 KR production Windows wrapper:

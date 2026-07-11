@@ -58,7 +58,6 @@ def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatc
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
         OSRM_BASE_URL = ""
-        TRAFFIC_TIME_MULTIPLIER = 1.0
         INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
 
         def __init__(self):
@@ -155,7 +154,6 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
         OSRM_BASE_URL = ""
-        TRAFFIC_TIME_MULTIPLIER = 1.0
         INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
 
         def __init__(self):
@@ -247,7 +245,6 @@ def test_am_arrival_gate_stops_after_tighter_target_is_infeasible(monkeypatch):
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
         OSRM_BASE_URL = ""
-        TRAFFIC_TIME_MULTIPLIER = 1.0
         INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
 
         def __init__(self):
@@ -332,7 +329,6 @@ def test_am_arrival_gate_recovers_after_combined_replan_is_infeasible(monkeypatc
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
         OSRM_BASE_URL = ""
-        TRAFFIC_TIME_MULTIPLIER = 1.0
         INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
 
         def __init__(self):
@@ -410,11 +406,11 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
     class FakePlanner:
         AMAP_KEY = "fake"
         BUS_TYPE_CONFIGS = [{"name": "bus", "capacity": 99, "max_count": 21}]
+        NODE_TIME_LOWER_BOUNDS = {}
         NODE_TIME_UPPER_BOUNDS = {}
         MIN_SOLVER_VEHICLE_COUNT = 0
         MAX_ROUTE_DURATION_SECONDS = 3600
         OSRM_BASE_URL = ""
-        TRAFFIC_TIME_MULTIPLIER = 1.0
         INPUT_STOPS = [{"address": "Shanghai", "passenger_count": 1}]
 
         def __init__(self):
@@ -474,6 +470,7 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
         ],
         "15-minute smoke",
         reduced_vehicle_limit=20,
+        node_time_lower_bounds_builder=lambda _points: {1: 0},
         node_time_upper_bounds_builder=lambda _points: {1: 3600},
         time_constraint_metadata=metadata,
     )
@@ -576,9 +573,8 @@ def test_am_arrival_gate_fails_routes_outside_default_six_thirty_to_eight_window
         current_min_active_vehicle_count=0,
         max_vehicle_count=3,
     )
-    assert single_rider_report["status"] == "failed"
-    assert "single_rider_route" in single_rider_report["failure_reasons"]
-    assert single_rider_report["hard_constraints"]["single_rider_route"]["failed_route_ids"] == ["Bus 1"]
+    assert single_rider_report["status"] == "passed"
+    assert single_rider_report["failure_reasons"] == []
 
 
 def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
@@ -757,44 +753,6 @@ def test_korea_final_route_gate_uses_kakao_future_departure_and_chunks(monkeypat
     assert [item[1].strftime("%H:%M") for item in departures] == ["07:30", "07:40"]
 
 
-def test_failed_free_baseline_can_recover_from_passing_time_constrained_result():
-    failed_free = {
-        "bus_count": 15,
-        "traffic_gate": {"status": "failed", "failed_route_count": 3},
-        "feasibility_report": {"status": "failed", "failure_reasons": ["arrival_window"]},
-    }
-    passing_time_constrained = {
-        "bus_count": 18,
-        "traffic_gate": {"status": "passed", "failed_route_count": 0},
-        "feasibility_report": {"status": "passed", "failure_reasons": []},
-        "time_constraint": {"enabled": True},
-    }
-    recovered = planner_core._recover_free_baseline_from_time_constrained(
-        failed_free,
-        passing_time_constrained,
-        planner_core.PlannerConfig(),
-        [{"name": "bus", "capacity": 42, "max_count": 20}],
-    )
-
-    assert recovered["bus_count"] == 18
-    assert recovered["baseline_name"] == "free_optimization_baseline"
-    assert recovered["traffic_recovery"]["source"] == "time_constrained_optimization"
-    assert recovered["time_constraint"]["used_as_free_baseline_recovery"] is True
-
-    already_passing = {
-        "bus_count": 16,
-        "traffic_gate": {"status": "passed"},
-        "feasibility_report": {"status": "passed"},
-    }
-    unchanged = planner_core._recover_free_baseline_from_time_constrained(
-        already_passing,
-        passing_time_constrained,
-        planner_core.PlannerConfig(),
-        [{"name": "bus", "capacity": 42, "max_count": 20}],
-    )
-    assert unchanged is already_passing
-
-
 def test_pm_final_route_gate_caps_duration_at_two_hour_window(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
@@ -899,14 +857,11 @@ def test_scheduled_current_plan_refresh_keeps_solver_inputs_unchanged():
     evidence = planner_core.calibrate_scheduled_current_plan_traffic(
         scenario,
         gate,
-        config,
-        previous_multiplier=1.6,
     )
 
     assert evidence["status"] == "ready"
     assert evidence["solver_adjustment"] == "none"
     assert evidence["max_verified_total_duration_minutes"] == 2120 / 60
-    assert "traffic_time_multiplier" not in evidence
     assert config.max_route_duration_minutes == 60
     assert route["nodes"] == [0, 1, 2]
 
@@ -920,8 +875,6 @@ def test_scheduled_current_plan_refresh_requires_fresh_api_call():
             "api_calls": 0,
             "traffic_policy": {"provider": "amap"},
         },
-        planner_core.PlannerConfig(),
-        previous_multiplier=1.6,
     )
 
     assert evidence["status"] == "unavailable"

@@ -2774,11 +2774,21 @@ function trafficGateFailureText(gate: Record<string, unknown>): string {
   return trafficGateType(gate) === "route_duration" ? "route(s) over route-duration budget" : "route(s) outside final time window";
 }
 
+function scenarioRequiresFinalTimeImpact(
+  scenario: Partial<Pick<ScenarioRow, "timeConstraint">>,
+): boolean {
+  return scenario.timeConstraint?.enabled === true
+    && stringValue(scenario.timeConstraint.mode) === "hard";
+}
+
 function scenarioTrafficStatusLabel(
   scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">
-    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate">>,
+    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate" | "timeConstraint">>,
 ): string {
   const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate?.status);
+  if (scenarioRequiresFinalTimeImpact(scenario) && !finalTimeImpactStatus) {
+    return "Time impact unavailable";
+  }
   if (finalTimeImpactStatus === "failed") {
     return "Time impact failed";
   }
@@ -2814,7 +2824,11 @@ function scenarioTrafficStatusLabel(
   return "";
 }
 
-function scenarioCardDetail(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">, detail: string): string {
+function scenarioCardDetail(
+  scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">
+    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate" | "timeConstraint">>,
+  detail: string,
+): string {
   const status = scenarioTrafficStatusLabel(scenario);
   return status ? `${status}. ${detail}` : detail;
 }
@@ -2826,12 +2840,17 @@ function scenarioSkippedDetail(scenario: Pick<ScenarioRow, "skippedReason"> | un
 
 function scenarioTrafficTone(
   scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">
-    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate">>,
+    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate" | "timeConstraint">>,
   fallback: "neutral" | "success" | "warning" | "info",
 ): "neutral" | "success" | "warning" | "info" {
   const feasibilityStatus = stringValue(scenario.feasibilityReport?.status);
   const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate?.status);
-  if (feasibilityStatus === "failed" || finalTimeImpactStatus === "failed" || finalTimeImpactStatus === "unavailable") {
+  if (
+    (scenarioRequiresFinalTimeImpact(scenario) && !finalTimeImpactStatus)
+    || feasibilityStatus === "failed"
+    || finalTimeImpactStatus === "failed"
+    || finalTimeImpactStatus === "unavailable"
+  ) {
     return "warning";
   }
   const status = stringValue(scenario.trafficGate.status);
@@ -2863,7 +2882,8 @@ function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
   const bounded = Number(constraint.bounded_solver_stop_count || 0);
   const expected = Number(constraint.expected_solver_stop_count || scenario.stopCount || 0);
   const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate.status);
-  const timeImpactPassed = finalTimeImpactStatus
+  const finalTimeImpactRequired = scenarioRequiresFinalTimeImpact(scenario);
+  const timeImpactPassed = finalTimeImpactRequired || finalTimeImpactStatus
     ? finalTimeImpactStatus === "passed"
     : typeof strictSatisfied === "boolean"
       ? strictSatisfied
@@ -3271,12 +3291,14 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
         trafficGate: asRecord(scenario.traffic_gate),
         feasibilityReport: asRecord(scenario.feasibility_report),
         finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
+        timeConstraint: asRecord(scenario.time_constraint),
         exceptionAccepted,
       }),
       trafficStatusTone: scenarioTrafficTone({
         trafficGate: asRecord(scenario.traffic_gate),
         feasibilityReport: asRecord(scenario.feasibility_report),
         finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
+        timeConstraint: asRecord(scenario.time_constraint),
         exceptionAccepted,
       }, "neutral"),
     };

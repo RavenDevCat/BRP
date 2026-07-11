@@ -25,7 +25,9 @@ runtime architecture, or recommended rerun guidance changed.
   was correctly rejected because 28 stops exceeded the final provider-aligned
   limit.
 - Existing completed jobs remain immutable and must be rerun to receive the
-  corrected acceptance result.
+  corrected acceptance result. Historical hard-time-impact plans without the
+  new final provider gate are shown as unverified and are excluded from plan
+  recommendations and AI recommendations.
 
 ## 2026-07-11
 

@@ -300,6 +300,9 @@ def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
     final_gate = dict(scenario.get("final_time_impact_gate") or {})
     if final_gate:
         return str(final_gate.get("status") or "") == "passed"
+    constraint = dict(scenario.get("time_constraint") or {})
+    if constraint.get("enabled") is True and str(constraint.get("mode") or "") == "hard":
+        return False
     hard_constraint = dict(
         dict(scenario.get("feasibility_report") or {}).get("hard_constraints") or {}
     ).get("time_impact")
@@ -308,7 +311,6 @@ def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
     time_impact = dict(scenario.get("time_impact") or {})
     if time_impact.get("available"):
         return str(time_impact.get("decision") or "") == "acceptable"
-    constraint = dict(scenario.get("time_constraint") or {})
     strict_satisfied = constraint.get("strict_satisfied")
     if isinstance(strict_satisfied, bool):
         return strict_satisfied

@@ -151,6 +151,23 @@ def test_recommended_scenario_uses_provider_time_when_route_counts_tie() -> None
     assert ai_audit._recommended_scenario(scenarios)["key"] == "exception_preserving"
 
 
+def test_legacy_hard_time_impact_without_final_gate_is_not_passing() -> None:
+    scenario = {
+        "time_constraint": {
+            "enabled": True,
+            "mode": "hard",
+            "strict_satisfied": True,
+            "bounded_solver_stop_count": 116,
+            "expected_solver_stop_count": 116,
+        },
+        "feasibility_report": {
+            "hard_constraints": {"time_impact": {"status": "passed"}},
+        },
+    }
+
+    assert ai_audit._scenario_time_impact_passed(scenario) is False
+
+
 def test_ai_audit_prompt_headings_cover_new_sections() -> None:
     assert "## Executive conclusion" in ai_audit._ai_audit_section_headings("English")
     assert "## Time-window impact" in ai_audit._ai_audit_section_headings("English")

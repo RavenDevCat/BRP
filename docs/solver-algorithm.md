@@ -32,6 +32,8 @@ validates KR final routes.
 2. Build the regional OSRM matrix. Stop dwell is included in solver route time.
 3. Validate the current plan with the direct provider and derive each stop's
    current pickup or drop-off timing.
+   Repeated address rows are matched one-to-one to distinct service nodes;
+   one address key cannot silently overwrite another rider group.
 4. Build adverse-only hard time-impact bounds for every solver stop. Missing
    bound coverage makes the scenario invalid rather than best effort.
 5. Derive a minimum vehicle lower bound from total demand, comfort-adjusted
@@ -46,10 +48,13 @@ validates KR final routes.
    duration, and hard adverse time-impact bounds.
 4. Enrich the candidate and validate every complete route with the regional
    direct provider.
-5. If provider timing fails, tighten the solver duration target and re-solve.
-   Spare vehicles may split failed routes only within the user's maximum vehicle
-   count. No hard input is relaxed.
-6. Keep only candidates whose five hard constraints and direct-provider gate
+5. Rebuild pickup or drop-off times from the final provider-enriched route and
+   compare every stop with its current-plan time. Solver-bound coverage alone
+   is not acceptance evidence.
+6. If provider timing or final stop impact fails, tighten one violated target
+   and re-solve. Spare vehicles may split failed routes only within the user's
+   maximum vehicle count. No hard input is relaxed.
+7. Keep only candidates whose five hard constraints and direct-provider gates
    all pass. Rank accepted candidates by actual route count, direct-provider
    total duration, then modeled duration.
 
@@ -60,12 +65,20 @@ validates KR final routes.
 2. Freeze the full set of violating current routes and their assigned stops.
    Frozen routes retain their current bus slots and are the only accepted
    exceptions.
-3. Remove frozen stops and buses, then solve the unfrozen remainder with the
-   same Strict Plan hard constraints and provider feedback.
-4. Accept the candidate only when the unfrozen remainder has zero violations
-   and the combined plan still meets the requested minimum vehicle saving.
-5. Rank accepted Protected candidates with the same vehicle-count and provider
-   duration order as Strict Plan.
+3. First try route-preserving reallocation: remove exactly the requested number
+   of compliant donor routes and insert their stops into other compliant routes
+   without reordering those routes' existing stops.
+4. Rank insertions by adverse modeled-time increase before distance increase,
+   then assign available comfort-adjusted bus slots globally.
+5. Validate the complete combined plan with the direct provider and require
+   every compared stop, including frozen-route riders, to stay inside the user
+   time-impact limit. Frozen routes are exempt only from pre-existing route
+   constraints, not from newly introduced stop-time changes.
+6. If no route-preserving candidate passes, fall back to solving the unfrozen
+   remainder from scratch with the same Strict Plan hard constraints.
+7. Accept the candidate only when the unfrozen remainder has zero violations,
+   all service nodes appear exactly once, and the combined plan meets the
+   requested minimum vehicle saving.
 
 Protected Plan may carry a failed aggregate provider status because frozen
 current routes remain visible. Its adoption gate ignores only those named
@@ -96,14 +109,11 @@ The July 2026 staging validation used direct AMap calls and stayed far below the
 
 | Case | Coverage | Accepted result | Runtime after tuning | Provider calls |
 | --- | --- | --- | ---: | ---: |
-| Shanghai, 116 stops | repeated AM history | Strict 19 routes; Protected 18 routes; Protected recommended | 322 s | 215 |
-| Shanghai, 116 stops | minimum saving 3 | Strict 19 routes; Protected 17 routes; Protected recommended | 224 s | 162 |
-| Shanghai, 116 stops | prior dual-failure history | Strict and Protected 19 routes; Strict recommended | 809 s before runtime tuning | 245 |
-| Beijing, 33 stops | small AM history | Strict and Protected 6 routes; Strict recommended | 70 s | 48 |
-| Beijing, 33 stops | controlled From School, 15:40-17:40 | Strict and Protected 5 routes; Strict recommended | 53 s | 18 |
+| Shanghai, 116 stops | 15-minute impact, save 2, stop cap 10, comfort 85% | Strict rejected; Protected 20 routes, 0 over-limit stops, maximum adverse impact 13.07 minutes | 275.11 s | 203 |
 
-The controlled From School case reverses a real geocoded current-plan route set
-to school-departure order. It verifies direction semantics but is not presented
-as historical PM production evidence. Real provider traffic can change route
-grouping and duration between runs; reproducibility means the hard acceptance
-contract and recommendation order remain stable, not that route hashes match.
+This replay used the prepared payload equivalent to the former
+`59b54339df97` run. Earlier July rows were removed because the provider-aligned
+stop gate showed that their accepted labels were false positives. Real provider
+traffic can change route grouping and duration between runs; reproducibility
+means the hard acceptance contract and recommendation order remain stable, not
+that route hashes match.

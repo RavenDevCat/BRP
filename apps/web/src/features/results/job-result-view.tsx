@@ -2514,6 +2514,8 @@ type ScenarioRow = {
   skippedReason: string;
   trafficGate: Record<string, unknown>;
   timeConstraint: Record<string, unknown>;
+  feasibilityReport: Record<string, unknown>;
+  finalTimeImpactGate: Record<string, unknown>;
   exceptionAccepted: boolean;
   routeCount: unknown;
   stopCount: unknown;
@@ -2717,6 +2719,8 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     skippedReason: "",
     trafficGate: {},
     timeConstraint: {},
+    feasibilityReport: {},
+    finalTimeImpactGate: {},
     exceptionAccepted: false,
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
@@ -2738,6 +2742,8 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     skippedReason: stringValue(scenario.skipped_reason),
     trafficGate: asRecord(scenario.traffic_gate),
     timeConstraint: asRecord(scenario.time_constraint),
+    feasibilityReport: asRecord(scenario.feasibility_report),
+    finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
     exceptionAccepted: Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
@@ -2768,7 +2774,24 @@ function trafficGateFailureText(gate: Record<string, unknown>): string {
   return trafficGateType(gate) === "route_duration" ? "route(s) over route-duration budget" : "route(s) outside final time window";
 }
 
-function scenarioTrafficStatusLabel(scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">): string {
+function scenarioTrafficStatusLabel(
+  scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">
+    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate">>,
+): string {
+  const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate?.status);
+  if (finalTimeImpactStatus === "failed") {
+    return "Time impact failed";
+  }
+  if (finalTimeImpactStatus === "unavailable") {
+    return "Time impact unavailable";
+  }
+  const feasibilityStatus = stringValue(scenario.feasibilityReport?.status);
+  if (feasibilityStatus === "failed") {
+    return "Hard inputs failed";
+  }
+  if (feasibilityStatus === "passed") {
+    return "All hard inputs passed";
+  }
   const status = stringValue(scenario.trafficGate.status);
   const savingTarget = asRecord(scenario.trafficGate.vehicle_saving_target);
   const savingStatus = stringValue(savingTarget.status);
@@ -2802,9 +2825,15 @@ function scenarioSkippedDetail(scenario: Pick<ScenarioRow, "skippedReason"> | un
 }
 
 function scenarioTrafficTone(
-  scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">,
+  scenario: Pick<ScenarioRow, "trafficGate" | "exceptionAccepted">
+    & Partial<Pick<ScenarioRow, "feasibilityReport" | "finalTimeImpactGate">>,
   fallback: "neutral" | "success" | "warning" | "info",
 ): "neutral" | "success" | "warning" | "info" {
+  const feasibilityStatus = stringValue(scenario.feasibilityReport?.status);
+  const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate?.status);
+  if (feasibilityStatus === "failed" || finalTimeImpactStatus === "failed" || finalTimeImpactStatus === "unavailable") {
+    return "warning";
+  }
   const status = stringValue(scenario.trafficGate.status);
   const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
   if (scenario.exceptionAccepted && savingStatus !== "failed") {
@@ -2823,14 +2852,20 @@ function scenarioTrafficTone(
 }
 
 function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
+  const feasibilityStatus = stringValue(scenario.feasibilityReport.status);
+  if (feasibilityStatus && feasibilityStatus !== "passed") {
+    return false;
+  }
   const status = stringValue(scenario.trafficGate.status);
   const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
   const constraint = scenario.timeConstraint;
   const strictSatisfied = constraint.strict_satisfied;
   const bounded = Number(constraint.bounded_solver_stop_count || 0);
   const expected = Number(constraint.expected_solver_stop_count || scenario.stopCount || 0);
-  const timeImpactPassed =
-    typeof strictSatisfied === "boolean"
+  const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate.status);
+  const timeImpactPassed = finalTimeImpactStatus
+    ? finalTimeImpactStatus === "passed"
+    : typeof strictSatisfied === "boolean"
       ? strictSatisfied
       : constraint.enabled === true
         && stringValue(constraint.mode) === "hard"
@@ -3232,8 +3267,18 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
       longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
       exceptionAccepted,
-      trafficStatusLabel: scenarioTrafficStatusLabel({ trafficGate: asRecord(scenario.traffic_gate), exceptionAccepted }),
-      trafficStatusTone: scenarioTrafficTone({ trafficGate: asRecord(scenario.traffic_gate), exceptionAccepted }, "neutral"),
+      trafficStatusLabel: scenarioTrafficStatusLabel({
+        trafficGate: asRecord(scenario.traffic_gate),
+        feasibilityReport: asRecord(scenario.feasibility_report),
+        finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
+        exceptionAccepted,
+      }),
+      trafficStatusTone: scenarioTrafficTone({
+        trafficGate: asRecord(scenario.traffic_gate),
+        feasibilityReport: asRecord(scenario.feasibility_report),
+        finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
+        exceptionAccepted,
+      }, "neutral"),
     };
   });
 }

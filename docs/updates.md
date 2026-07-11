@@ -5,6 +5,28 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-07-12
+
+### Provider-Aligned Time-Impact Acceptance
+
+- Strict Plan and Protected Plan now recompute every compared pickup or
+  drop-off from the final AMap/Kakao-enriched routes. Solver-bound coverage no
+  longer qualifies a plan when the final provider timing exceeds the user's
+  adverse time-impact limit.
+- Protected Plan first removes the requested number of compliant donor routes
+  and inserts their stops into existing compliant routes while preserving the
+  existing stop order. Full remainder reoptimization remains a fallback.
+- Candidate plans must contain every service node exactly once. Repeated
+  current-plan addresses are matched one-to-one instead of overwriting another
+  node with the same normalized address.
+- A Shanghai 116-stop staging replay with a 15-minute limit, save-2 target,
+  10-stop cap, and 85% comfort target produced a 20-route Protected Plan with
+  zero over-limit stops and a 13.07-minute maximum adverse impact. Strict Plan
+  was correctly rejected because 28 stops exceeded the final provider-aligned
+  limit.
+- Existing completed jobs remain immutable and must be rerun to receive the
+  corrected acceptance result.
+
 ## 2026-07-11
 
 ### Strict And Protected Hard-Constraint Solver

@@ -1327,6 +1327,9 @@ def build_route_feasibility_report(
     time_impact_required = bool(time_constraint)
     expected_time_stops = int(time_constraint.get("expected_solver_stop_count", 0) or 0)
     bounded_time_stops = int(time_constraint.get("bounded_solver_stop_count", 0) or 0)
+    final_time_impact_gate = dict(scenario.get("final_time_impact_gate") or {})
+    final_time_impact_required = bool(time_constraint.get("final_validation_required"))
+    final_time_impact_status = str(final_time_impact_gate.get("status") or "not_checked")
     time_impact_passed = bool(
         not time_impact_required
         or (
@@ -1335,6 +1338,10 @@ def build_route_feasibility_report(
             and time_constraint.get("strict_satisfied") is True
             and expected_time_stops > 0
             and bounded_time_stops >= expected_time_stops
+            and (
+                not final_time_impact_required
+                or final_time_impact_status == "passed"
+            )
         )
     )
     failure_reasons: list[str] = []
@@ -1427,6 +1434,11 @@ def build_route_feasibility_report(
                 "limit_minutes": float(config.time_impact_limit_minutes),
                 "bounded_solver_stop_count": bounded_time_stops,
                 "expected_solver_stop_count": expected_time_stops,
+                "final_validation_status": final_time_impact_status,
+                "final_compared_stop_count": int(final_time_impact_gate.get("compared_stop_count", 0) or 0),
+                "final_over_limit_stop_count": int(final_time_impact_gate.get("over_limit_stop_count", 0) or 0),
+                "final_over_limit_rider_count": int(final_time_impact_gate.get("over_limit_rider_count", 0) or 0),
+                "final_max_adverse_minutes": float(final_time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
             },
             "stop_limit": {
                 "status": "failed" if over_stop_limit_routes else "passed",
@@ -3327,15 +3339,15 @@ def _build_bus_capacity_lookup(config: PlannerConfig, current_plan: dict[str, An
     return lookup
 
 
-def _make_point_lookup(points: list[dict[str, Any]]) -> dict[tuple[str, str, str], dict[str, Any]]:
-    lookup: dict[tuple[str, str, str], dict[str, Any]] = {}
+def _make_point_lookup(points: list[dict[str, Any]]) -> dict[tuple[str, str, str], list[dict[str, Any]]]:
+    lookup: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for point in points:
         key = (
             str(point.get("country", "")).strip().lower(),
             str(point.get("city", "")).strip().lower(),
             str(point.get("address", "")).strip().lower(),
         )
-        lookup[key] = point
+        lookup.setdefault(key, []).append(point)
     return lookup
 
 
@@ -3423,6 +3435,7 @@ def assess_current_plan(
     assignments = normalized["assignments"]
     route_groups: dict[str, list[dict[str, Any]]] = {}
     stop_id_lookup = {str(item["stop_id"]).strip(): item for item in stop_rows}
+    matched_service_node_ids: set[int] = set()
 
     for assignment in assignments:
         route_groups.setdefault(str(assignment["route_id"]).strip(), []).append(assignment)
@@ -3450,9 +3463,38 @@ def assess_current_plan(
                 str(stop.get("city", "")).strip().lower(),
                 str(stop.get("address", "")).strip().lower(),
             )
-            matched_point = point_lookup.get(key)
+            candidates = list(point_lookup.get(key) or [])
+            unused_candidates = [
+                point
+                for point in candidates
+                if bool(point.get("is_depot")) == bool(stop.get("is_depot"))
+                and (
+                    bool(stop.get("is_depot"))
+                    or int(point.get("node_id", 0) or 0) not in matched_service_node_ids
+                )
+            ]
+            matched_point = next(
+                (
+                    point
+                    for point in unused_candidates
+                    if int(point.get("passenger_count", 0) or 0)
+                    == int(stop.get("passenger_count", 0) or 0)
+                ),
+                unused_candidates[0] if unused_candidates else None,
+            )
+            if matched_point is None:
+                matched_point = next(
+                    (
+                        point
+                        for point in candidates
+                        if bool(point.get("is_depot")) == bool(stop.get("is_depot"))
+                    ),
+                    candidates[0] if candidates else None,
+                )
             if matched_point is not None:
                 matched_points.append(matched_point)
+                if not bool(matched_point.get("is_depot")):
+                    matched_service_node_ids.add(int(matched_point.get("node_id", 0) or 0))
         if optimize_stop_order and len(matched_points) >= 3:
             terminal_point = next((point for point in matched_points if bool(point.get("is_depot"))), matched_points[0])
             remaining_points = [point for point in matched_points if point is not terminal_point]
@@ -5904,6 +5946,7 @@ def _compute_scenario_without_render(
     node_time_upper_bounds_builder: Any | None = None,
     node_time_soft_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
+    final_time_impact_validator: Any | None = None,
     traffic_replan_attempt_limit: int | None = None,
     enable_vehicle_search: bool = True,
 ) -> dict[str, Any]:
@@ -6211,6 +6254,11 @@ def _compute_scenario_without_render(
                         max_vehicle_count,
                     )
                     gate = dict(result.get("traffic_gate") or {})
+                final_time_impact_gate = (
+                    final_time_impact_validator(result, points)
+                    if callable(final_time_impact_validator)
+                    else {}
+                )
                 current_min_vehicle_count = int(getattr(planner, "MIN_SOLVER_VEHICLE_COUNT", 0) or 0)
                 feasibility_report = build_route_feasibility_report(
                     result,
@@ -6223,6 +6271,22 @@ def _compute_scenario_without_render(
                 best_failed_candidate = _better_failed_candidate(
                     _failed_candidate_summary(result, max_vehicle_count),
                     best_failed_candidate,
+                )
+                fleet_constraint = dict(
+                    dict(feasibility_report.get("hard_constraints") or {}).get("fleet") or {}
+                )
+                working_time = transpose_matrix(solve_time) if not is_from_school else solve_time
+                direct_time_lower_bounds = {
+                    node_index: int(float(working_time[0][node_index] or 0.0))
+                    for node_index in range(1, len(points))
+                }
+                time_impact_bounds_tightened = bool(
+                    not fleet_constraint.get("can_add_vehicle")
+                    and _tighten_final_time_impact_bounds(
+                        planner,
+                        final_time_impact_gate,
+                        minimum_bounds=direct_time_lower_bounds,
+                    )
                 )
                 replan_limit = FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS if max_replans is None else max(0, int(max_replans))
                 if max_replans is None:
@@ -6251,10 +6315,20 @@ def _compute_scenario_without_render(
                         search_action = "tighten_route_target_and_increase_active_vehicles"
                     else:
                         next_min_vehicle_count = current_min_vehicle_count
+                elif time_impact_bounds_tightened:
+                    search_action = (
+                        "tighten_time_impact_bounds_and_increase_active_vehicles"
+                        if next_min_vehicle_count > current_min_vehicle_count
+                        else "tighten_time_impact_bounds"
+                    )
                 elif next_min_vehicle_count > current_min_vehicle_count:
                     next_limit_s = None
                     search_action = "increase_active_vehicles"
-                if next_limit_s is None and next_min_vehicle_count <= current_min_vehicle_count:
+                if (
+                    next_limit_s is None
+                    and next_min_vehicle_count <= current_min_vehicle_count
+                    and not time_impact_bounds_tightened
+                ):
                     break
                 traffic_replan_attempts.append(
                     {
@@ -6277,10 +6351,16 @@ def _compute_scenario_without_render(
                         "max_estimated_arrival_delay_minutes": float(
                             dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
                         ),
+                        "time_impact_over_limit_stop_count": int(
+                            dict(final_time_impact_gate or {}).get("over_limit_stop_count", 0) or 0
+                        ),
+                        "time_impact_max_adverse_minutes": float(
+                            dict(final_time_impact_gate or {}).get("max_adverse_minutes", 0.0) or 0.0
+                        ),
                     }
                 )
                 planner.log(
-                    f"[BACKEND] {scenario_label} failed {gate_name} gate; "
+                    f"[BACKEND] {scenario_label} failed final hard-constraint gate; "
                     f"action {search_action}; "
                     f"route target {route_limit_before_s / 60.0:.1f} "
                     f"to {(next_limit_s or route_limit_before_s) / 60.0:.1f} minutes; "
@@ -6465,6 +6545,7 @@ def _apply_vehicle_saving_target(
 
 def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -> dict[str, Any]:
     gate = dict(result.get("traffic_gate") or {})
+    time_impact_gate = dict(result.get("final_time_impact_gate") or {})
     report = dict(result.get("feasibility_report") or {})
     saving_target = dict(result.get("vehicle_saving_target") or {})
     return {
@@ -6474,6 +6555,9 @@ def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -
         "failure_reasons": list(report.get("failure_reasons") or []),
         "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
         "max_overrun_minutes": _traffic_gate_overrun_minutes(gate),
+        "time_impact_over_limit_stop_count": int(time_impact_gate.get("over_limit_stop_count", 0) or 0),
+        "time_impact_over_limit_rider_count": int(time_impact_gate.get("over_limit_rider_count", 0) or 0),
+        "time_impact_max_adverse_minutes": float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
         "saved_route_count": int(saving_target.get("saved_route_count", 0) or 0),
         "saving_target_status": str(saving_target.get("status") or ""),
     }
@@ -6514,12 +6598,15 @@ def _scenario_candidate_rank(result: dict[str, Any]) -> tuple[int, float, float]
     return _scenario_bus_count(result), provider_total, modeled_total
 
 
-def _failed_scenario_rank(result: dict[str, Any]) -> tuple[int, int, float, int]:
+def _failed_scenario_rank(result: dict[str, Any]) -> tuple[int, int, int, float, float, int]:
     gate = dict(result.get("traffic_gate") or {})
     report = dict(result.get("feasibility_report") or {})
+    time_impact_gate = dict(result.get("final_time_impact_gate") or {})
     return (
         len(list(report.get("failure_reasons") or [])),
         int(gate.get("failed_route_count", 0) or 0),
+        int(time_impact_gate.get("over_limit_stop_count", 0) or 0),
+        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
         _traffic_gate_overrun_minutes(gate),
         _scenario_bus_count(result),
     )
@@ -6537,6 +6624,7 @@ def _solve_vehicle_ladder_scenario(
     node_time_upper_bounds_builder: Any | None = None,
     node_time_soft_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
+    final_time_impact_validator: Any | None = None,
 ) -> dict[str, Any]:
     current_route_count = max(0, int(current_route_count or 0))
     minimum_vehicle_reduction = max(0, int(minimum_vehicle_reduction or 0))
@@ -6591,6 +6679,7 @@ def _solve_vehicle_ladder_scenario(
                 node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                 node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
                 time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+                final_time_impact_validator=final_time_impact_validator,
                 enable_vehicle_search=False,
             )
         except Exception as exc:
@@ -6821,13 +6910,375 @@ def _exception_candidate_accepted(
     )
 
 
-def _exception_candidate_rank(candidate_summary: dict[str, Any], candidate_route_count: int) -> tuple[int, int, float, int]:
+def _exception_candidate_rank(
+    candidate_summary: dict[str, Any],
+    candidate_route_count: int,
+    time_impact_gate: dict[str, Any] | None = None,
+) -> tuple[int, int, int, float, int, float, int]:
+    time_impact_gate = dict(time_impact_gate or {})
     return (
+        int(candidate_summary.get("failed_route_count", 0) or 0)
+        + (1 if int(time_impact_gate.get("over_limit_stop_count", 0) or 0) else 0),
         int(candidate_summary.get("failed_route_count", 0) or 0),
+        int(time_impact_gate.get("over_limit_stop_count", 0) or 0),
+        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
         int(candidate_summary.get("affected_rider_count", 0) or 0),
         float(candidate_summary.get("max_overrun_minutes", 0.0) or 0.0),
         int(candidate_route_count or 0),
     )
+
+
+def _protected_route_cost(nodes: list[int], solve_time: list[list[float]]) -> float:
+    route_nodes = [*nodes, 0]
+    return sum(
+        float(solve_time[left][right])
+        for left, right in zip(route_nodes[:-1], route_nodes[1:])
+    )
+
+
+def _protected_route_elapsed_by_node(
+    nodes: list[int],
+    solve_time: list[list[float]],
+) -> dict[int, float]:
+    reverse_nodes = [0, *reversed(nodes)]
+    elapsed = 0.0
+    values: dict[int, float] = {}
+    for left, right in zip(reverse_nodes[:-1], reverse_nodes[1:]):
+        elapsed += float(solve_time[right][left])
+        values[right] = elapsed
+    return values
+
+
+def _protected_route_within_solver_bounds(
+    nodes: list[int],
+    solve_time: list[list[float]],
+    bounds: dict[int, int],
+    route_limit_s: float,
+) -> bool:
+    elapsed_by_node = _protected_route_elapsed_by_node(nodes, solve_time)
+    return bool(elapsed_by_node) and all(
+        elapsed <= float(bounds.get(node, route_limit_s))
+        for node, elapsed in elapsed_by_node.items()
+    ) and max(elapsed_by_node.values(), default=0.0) <= route_limit_s
+
+
+def _assign_protected_route_fleet(
+    routes: list[dict[str, Any]],
+    frozen_route_ids: set[str],
+    config: PlannerConfig,
+) -> bool:
+    factor = min(1.0, max(0.1, float(config.comfort_load_factor)))
+    available: list[tuple[int, int, str]] = []
+    for item in _build_bus_type_configs(config):
+        capacity = max(1, int(item.get("capacity", 0) or 0))
+        comfort_capacity = max(1, int(math.floor(capacity * factor)))
+        for _ in range(max(0, int(item.get("max_count", 0) or 0))):
+            available.append((comfort_capacity, capacity, str(item.get("name") or "")))
+
+    for route in routes:
+        if _route_display_id(route, 0) not in frozen_route_ids:
+            continue
+        bus_type = str(route.get("bus_type_name") or route.get("bus_type") or "")
+        slot_index = next(
+            (index for index, item in enumerate(available) if item[2] == bus_type),
+            None,
+        )
+        if slot_index is None:
+            return False
+        available.pop(slot_index)
+
+    movable_routes = [
+        route for route in routes if _route_display_id(route, 0) not in frozen_route_ids
+    ]
+    for route in sorted(
+        movable_routes,
+        key=lambda item: int(item.get("load", 0) or 0),
+        reverse=True,
+    ):
+        load = max(0, int(route.get("load", 0) or 0))
+        eligible = sorted(
+            (
+                (item, index)
+                for index, item in enumerate(available)
+                if item[0] >= load
+            ),
+            key=lambda row: row[0],
+        )
+        if not eligible:
+            return False
+        (comfort_capacity, capacity, bus_type), slot_index = eligible[0]
+        available.pop(slot_index)
+        route["bus_type_name"] = bus_type
+        route["bus_capacity"] = capacity
+        route["comfort_capacity"] = comfort_capacity
+    return True
+
+
+def _build_route_preserving_protected_scenario(
+    planner: Any,
+    original_points: list[dict[str, Any]],
+    current_plan_scenario: dict[str, Any],
+    config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+    *,
+    node_time_upper_bounds_builder: Any,
+    time_constraint_metadata: dict[str, Any],
+    final_time_impact_validator: Any,
+    solve_time: list[list[float]],
+    baseline_name: str,
+    scenario_label: str,
+) -> dict[str, Any] | None:
+    if normalize_service_direction(config.service_direction) != "To School":
+        return None
+    current_routes = [deepcopy(route) for route in list(current_plan_scenario.get("routes") or [])]
+    current_route_count = len(current_routes)
+    saving_count = max(0, int(config.minimum_vehicle_reduction or 0))
+    if saving_count <= 0 or saving_count > 3:
+        return None
+    current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
+    frozen_route_ids = {str(item) for item in list(current_summary.get("failed_route_ids") or [])}
+    current_by_id = {
+        _route_display_id(route, index): route
+        for index, route in enumerate(current_routes, start=1)
+    }
+    movable_ids = sorted(set(current_by_id) - frozen_route_ids)
+    if len(movable_ids) <= saving_count:
+        return None
+
+    bounds = dict(node_time_upper_bounds_builder(original_points) or {})
+    if not bounds:
+        return None
+    current_elapsed: dict[int, float] = {}
+    for route in current_routes:
+        nodes = [int(node) for node in list(route.get("nodes") or []) if int(node) != 0]
+        current_elapsed.update(_protected_route_elapsed_by_node(nodes, solve_time))
+
+    stop_limit = _effective_route_stop_limit(config)
+    route_limit_s = effective_route_duration_limit_minutes(config) * 60.0
+    factor = min(1.0, max(0.1, float(config.comfort_load_factor)))
+    max_comfort_capacity = max(
+        int(math.floor(int(item.get("capacity", 0) or 0) * factor))
+        for item in _build_bus_type_configs(config)
+    )
+    plans: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for donor_ids in itertools.combinations(movable_ids, saving_count):
+        donor_nodes = [
+            int(node)
+            for donor_id in donor_ids
+            for node in list(current_by_id[donor_id].get("nodes") or [])
+            if int(node) != 0
+        ]
+        recipients = [route_id for route_id in movable_ids if route_id not in donor_ids]
+        base_nodes = {
+            route_id: [
+                int(node)
+                for node in list(current_by_id[route_id].get("nodes") or [])
+                if int(node) != 0
+            ]
+            for route_id in recipients
+        }
+        base_loads = {
+            route_id: sum(
+                int(original_points[node].get("passenger_count", 0) or 0)
+                for node in nodes
+            )
+            for route_id, nodes in base_nodes.items()
+        }
+        orderings = (
+            donor_nodes,
+            list(reversed(donor_nodes)),
+            sorted(donor_nodes, key=lambda node: float(solve_time[node][0]), reverse=True),
+            sorted(donor_nodes, key=lambda node: float(solve_time[node][0])),
+        )
+        for ordered_nodes in orderings:
+            candidate_nodes = deepcopy(base_nodes)
+            candidate_loads = dict(base_loads)
+            changed_route_ids: set[str] = set()
+            added_cost = 0.0
+            max_elapsed_increase = 0.0
+            total_elapsed_increase = 0.0
+            for node in ordered_nodes:
+                demand = max(0, int(original_points[node].get("passenger_count", 0) or 0))
+                options: list[tuple[float, float, float, str, list[int]]] = []
+                for route_id in recipients:
+                    existing = candidate_nodes[route_id]
+                    if (
+                        len(existing) >= stop_limit
+                        or candidate_loads[route_id] + demand > max_comfort_capacity
+                    ):
+                        continue
+                    before = _protected_route_cost(existing, solve_time)
+                    for position in range(len(existing) + 1):
+                        merged = [*existing[:position], node, *existing[position:]]
+                        if not _protected_route_within_solver_bounds(
+                            merged,
+                            solve_time,
+                            bounds,
+                            route_limit_s,
+                        ):
+                            continue
+                        elapsed_by_node = _protected_route_elapsed_by_node(merged, solve_time)
+                        increases = [
+                            max(0.0, elapsed - float(current_elapsed.get(item, elapsed)))
+                            for item, elapsed in elapsed_by_node.items()
+                        ]
+                        after = _protected_route_cost(merged, solve_time)
+                        options.append(
+                            (
+                                max(increases, default=0.0),
+                                sum(increases),
+                                after - before,
+                                route_id,
+                                merged,
+                            )
+                        )
+                if not options:
+                    break
+                worst_increase, summed_increase, delta, route_id, merged = min(options)
+                candidate_nodes[route_id] = merged
+                candidate_loads[route_id] += demand
+                changed_route_ids.add(route_id)
+                added_cost += delta
+                max_elapsed_increase = max(max_elapsed_increase, worst_increase)
+                total_elapsed_increase += summed_increase
+            else:
+                signature = tuple(
+                    (route_id, tuple(candidate_nodes[route_id]))
+                    for route_id in sorted(changed_route_ids)
+                )
+                rank = (
+                    max_elapsed_increase,
+                    total_elapsed_increase,
+                    added_cost,
+                    len(changed_route_ids),
+                )
+                previous = plans.get(signature)
+                if previous is None or rank < previous["rank"]:
+                    plans[signature] = {
+                        "rank": rank,
+                        "donor_ids": donor_ids,
+                        "nodes": candidate_nodes,
+                        "loads": candidate_loads,
+                        "changed_route_ids": changed_route_ids,
+                    }
+
+    target_vehicle_count = max(0, current_route_count - saving_count)
+    previous_osrm_base_url = planner.OSRM_BASE_URL
+    planner.OSRM_BASE_URL = planner.resolve_osrm_base_url(original_points)
+    try:
+        for attempt_index, plan in enumerate(
+            sorted(plans.values(), key=lambda item: item["rank"])[:60],
+            start=1,
+        ):
+            candidate_routes: list[dict[str, Any]] = []
+            changed_routes: list[dict[str, Any]] = []
+            for route_id, current_route in current_by_id.items():
+                if route_id in plan["donor_ids"]:
+                    continue
+                route = deepcopy(current_route)
+                if route_id in frozen_route_ids:
+                    route["exception_role"] = "frozen_current"
+                elif route_id in plan["changed_route_ids"]:
+                    route["nodes"] = [*plan["nodes"][route_id], 0]
+                    route["load"] = int(plan["loads"][route_id])
+                    route["exception_role"] = "optimized_remainder"
+                    changed_routes.append(route)
+                else:
+                    route["exception_role"] = "protected_unchanged"
+                candidate_routes.append(route)
+            service_nodes = [
+                int(node)
+                for route in candidate_routes
+                for node in list(route.get("nodes") or [])
+                if int(node) != 0
+            ]
+            if sorted(service_nodes) != list(range(1, len(original_points))):
+                continue
+            planner.enrich_routes_with_actual_driving(original_points, changed_routes)
+            planner.annotate_and_price_routes(original_points, changed_routes)
+            if not _assign_protected_route_fleet(candidate_routes, frozen_route_ids, config):
+                continue
+            candidate = planner.build_scenario_result(original_points, candidate_routes, "")
+            candidate["output_html"] = ""
+            candidate["baseline_name"] = baseline_name
+            remaining_stop_count = len(
+                set(range(1, len(original_points)))
+                - set().union(
+                    *[
+                        _route_service_node_ids(current_by_id[route_id])
+                        for route_id in frozen_route_ids
+                    ]
+                )
+            )
+            candidate["time_constraint"] = {
+                **deepcopy(time_constraint_metadata or {}),
+                "enabled": True,
+                "mode": "hard",
+                "best_effort": False,
+                "strict_satisfied": True,
+                "bounded_solver_stop_count": remaining_stop_count,
+                "expected_solver_stop_count": remaining_stop_count,
+                "applies_to": "exception_preserving_remainder",
+                "frozen_route_count": len(frozen_route_ids),
+            }
+            gate = attach_final_route_traffic_gate(
+                planner,
+                candidate,
+                original_points,
+                config,
+                input_records,
+                scenario_label,
+            )
+            final_time_impact_validator(candidate, original_points)
+            candidate["feasibility_report"] = build_route_feasibility_report(
+                candidate,
+                gate,
+                config,
+                current_min_active_vehicle_count=max(
+                    0,
+                    len(candidate_routes) - len(frozen_route_ids),
+                ),
+                max_vehicle_count=target_vehicle_count,
+                ignored_route_ids=frozen_route_ids,
+            )
+            candidate = _apply_vehicle_saving_target(
+                candidate,
+                current_route_count,
+                saving_count,
+                frozen_route_count=len(frozen_route_ids),
+            )
+            accepted = _scenario_feasibility_passed(candidate)
+            candidate["route_preserving_search"] = {
+                "enabled": True,
+                "status": "passed" if accepted else "candidate_failed",
+                "attempt": attempt_index,
+                "candidate_count": len(plans),
+                "donor_route_ids": list(plan["donor_ids"]),
+                "changed_route_ids": sorted(plan["changed_route_ids"]),
+            }
+            candidate["exception_preserving"] = {
+                "enabled": True,
+                "accepted": accepted,
+                "strategy": "route_preserving_reallocation",
+                "frozen_route_count": len(frozen_route_ids),
+                "frozen_route_ids": sorted(frozen_route_ids),
+                "current_failure_summary": current_summary,
+                "remaining_vehicle_limit": max(0, target_vehicle_count - len(frozen_route_ids)),
+                "vehicle_limit_relaxed": False,
+            }
+            candidate["exception_feasible"] = accepted
+            if accepted:
+                candidate["constraint_search_outcome"] = {
+                    "status": "passed",
+                    "strategy": "route_preserving_reallocation",
+                    "frozen_route_count": len(frozen_route_ids),
+                    "allowed_max_vehicle_count": target_vehicle_count,
+                    "feasible_candidate_count": 1,
+                }
+                return candidate
+    finally:
+        planner.OSRM_BASE_URL = previous_osrm_base_url
+    return None
 
 
 def build_exception_preserving_scenario(
@@ -6843,6 +7294,7 @@ def build_exception_preserving_scenario(
     node_time_lower_bounds_builder: Any | None = None,
     node_time_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
+    final_time_impact_validator: Any | None = None,
     solve_time: list[list[float]] | None = None,
     baseline_name: str = "exception_preserving_optimization",
     scenario_label: str = "Exception preserving optimization",
@@ -6850,6 +7302,27 @@ def build_exception_preserving_scenario(
     del standard_scenarios, reduced_vehicle_limit
     if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
         return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
+
+    if (
+        callable(node_time_upper_bounds_builder)
+        and callable(final_time_impact_validator)
+        and solve_time is not None
+    ):
+        route_preserving = _build_route_preserving_protected_scenario(
+            planner,
+            original_points,
+            current_plan_scenario,
+            config,
+            input_records,
+            node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+            time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+            final_time_impact_validator=final_time_impact_validator,
+            solve_time=solve_time,
+            baseline_name=baseline_name,
+            scenario_label=scenario_label,
+        )
+        if route_preserving is not None:
+            return route_preserving
 
     current_routes = [dict(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
@@ -6924,6 +7397,7 @@ def build_exception_preserving_scenario(
                         node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+                        final_time_impact_validator=final_time_impact_validator,
                         enable_vehicle_search=False,
                     )
                     optimized_points = list(optimized.get("points") or subset_points)
@@ -6956,6 +7430,8 @@ def build_exception_preserving_scenario(
                     input_records,
                     scenario_label,
                 )
+                if callable(final_time_impact_validator):
+                    final_time_impact_validator(candidate, original_points)
                 candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
                 frozen_route_ids = {
                     _route_display_id(route, index)
@@ -7044,6 +7520,16 @@ def build_exception_preserving_scenario(
                     )
                 )
                 attempt["accepted"] = accepted
+                candidate_time_impact_gate = dict(candidate.get("final_time_impact_gate") or {})
+                attempt["time_impact_over_limit_stop_count"] = int(
+                    candidate_time_impact_gate.get("over_limit_stop_count", 0) or 0
+                )
+                attempt["time_impact_over_limit_rider_count"] = int(
+                    candidate_time_impact_gate.get("over_limit_rider_count", 0) or 0
+                )
+                attempt["time_impact_max_adverse_minutes"] = float(
+                    candidate_time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0
+                )
                 candidate["exception_preserving"] = {
                     "enabled": True,
                     "accepted": accepted,
@@ -7066,6 +7552,7 @@ def build_exception_preserving_scenario(
                 elif best_failed_candidate is None or _exception_candidate_rank(
                     candidate_remainder_summary,
                     candidate_route_count,
+                    candidate_time_impact_gate,
                 ) < _exception_candidate_rank(
                     _scenario_exception_summary(
                         best_failed_candidate,
@@ -7077,6 +7564,7 @@ def build_exception_preserving_scenario(
                         or len(list(best_failed_candidate.get("routes") or []))
                         or 0
                     ),
+                    dict(best_failed_candidate.get("final_time_impact_gate") or {}),
                 ):
                     best_failed_candidate = candidate
             except Exception as exc:
@@ -7198,6 +7686,216 @@ def _point_time_constraint_keys(point: dict[str, Any], fallback_index: int) -> l
             keys.append(f"addr:{country}|{city}|{address}")
         keys.append(f"addr:{address}")
     return keys
+
+
+def _scenario_time_impact_rows(
+    scenario: dict[str, Any],
+    points: list[dict[str, Any]],
+    config: PlannerConfig,
+) -> tuple[list[dict[str, Any]], int]:
+    service_direction = normalize_service_direction(config.service_direction)
+    dwell_seconds = max(0.0, float(config.stop_service_minutes or 1) * 60.0)
+    rows: list[dict[str, Any]] = []
+    unavailable_route_count = 0
+    for route_index, route in enumerate(list(scenario.get("routes") or []), start=1):
+        nodes = list(route.get("nodes") or [])
+        legs = list(route.get("leg_details") or [])
+        route_id = _route_display_id(route, route_index)
+        gate = dict(route.get("final_route_traffic_gate") or {})
+        verified_drive_s = float(gate.get("verified_drive_duration_s", 0.0) or 0.0)
+        raw_duration_s = float(route.get("time_s", 0.0) or 0.0)
+        max_cumulative_s = sum(float(dict(leg or {}).get("duration_s", 0.0) or 0.0) for leg in legs)
+        modeled_route_drive_s = float(route.get("raw_osrm_time_s", 0.0) or 0.0) or sum(
+            float(
+                dict(leg or {}).get(
+                    "raw_osrm_duration_s",
+                    dict(leg or {}).get("duration_s", 0.0),
+                )
+                or 0.0
+            )
+            for leg in legs
+        )
+        base_duration_s = raw_duration_s if raw_duration_s > 0 else max_cumulative_s
+        if verified_drive_s <= 0 or base_duration_s <= 0 or modeled_route_drive_s <= 0:
+            unavailable_route_count += 1
+            continue
+        scale = verified_drive_s / base_duration_s
+        route_duration_s = max(verified_drive_s, max_cumulative_s * scale)
+        service_orders = [order for order, node in enumerate(nodes) if int(node) != 0]
+        cumulative_s = 0.0
+        modeled_cumulative_s = 0.0
+        for order, node in enumerate(nodes):
+            if order > 0 and order - 1 < len(legs):
+                leg = dict(legs[order - 1] or {})
+                cumulative_s += float(leg.get("duration_s", 0.0) or 0.0)
+                modeled_cumulative_s += float(
+                    leg.get("raw_osrm_duration_s", leg.get("duration_s", 0.0)) or 0.0
+                )
+            node_index = int(node)
+            if node_index == 0 or node_index < 0 or node_index >= len(points):
+                continue
+            if service_direction == "To School":
+                downstream_dwell_count = sum(1 for item in service_orders if item >= order)
+                remaining_drive_s = max(0.0, route_duration_s - cumulative_s * scale)
+                offset_s = -(remaining_drive_s + downstream_dwell_count * dwell_seconds)
+                modeled_elapsed_s = max(0.0, modeled_route_drive_s - modeled_cumulative_s)
+            else:
+                prior_dwell_count = sum(1 for item in service_orders if item < order)
+                offset_s = cumulative_s * scale + prior_dwell_count * dwell_seconds
+                modeled_elapsed_s = modeled_cumulative_s
+            point = dict(points[node_index] or {})
+            rows.append(
+                {
+                    "route_id": route_id,
+                    "node_index": node_index,
+                    "keys": _point_time_constraint_keys(point, node_index),
+                    "offset_s": offset_s,
+                    "modeled_elapsed_s": modeled_elapsed_s,
+                    "affected_rider_count": max(0, int(point.get("passenger_count", 0) or 0)),
+                }
+            )
+    return rows, unavailable_route_count
+
+
+def _build_final_time_impact_validator(
+    current_plan_scenario: dict[str, Any],
+    original_points: list[dict[str, Any]],
+    config: PlannerConfig,
+    threshold_minutes: float,
+) -> Any:
+    current_rows, current_unavailable_route_count = _scenario_time_impact_rows(
+        current_plan_scenario,
+        original_points,
+        config,
+    )
+    current_lookup: dict[str, dict[str, Any]] = {}
+    for row in current_rows:
+        for key in list(row.get("keys") or []):
+            current_lookup.setdefault(str(key), row)
+    threshold_minutes = max(0.0, float(threshold_minutes))
+    service_direction = normalize_service_direction(config.service_direction)
+
+    def validate(scenario: dict[str, Any], scenario_points: list[dict[str, Any]]) -> dict[str, Any]:
+        candidate_rows, unavailable_route_count = _scenario_time_impact_rows(
+            scenario,
+            scenario_points,
+            config,
+        )
+        violations: list[dict[str, Any]] = []
+        unavailable_stop_count = 0
+        compared_stop_count = 0
+        compared_rider_count = 0
+        over_limit_rider_count = 0
+        max_adverse_minutes = 0.0
+        for row in candidate_rows:
+            current_row = next(
+                (
+                    current_lookup[str(key)]
+                    for key in list(row.get("keys") or [])
+                    if str(key) in current_lookup
+                ),
+                None,
+            )
+            if current_row is None:
+                unavailable_stop_count += 1
+                continue
+            compared_stop_count += 1
+            affected_rider_count = max(
+                int(row.get("affected_rider_count", 0) or 0),
+                int(current_row.get("affected_rider_count", 0) or 0),
+            )
+            compared_rider_count += affected_rider_count
+            delta_s = float(row.get("offset_s", 0.0) or 0.0) - float(
+                current_row.get("offset_s", 0.0) or 0.0
+            )
+            adverse_minutes = max(0.0, -delta_s if service_direction == "To School" else delta_s) / 60.0
+            max_adverse_minutes = max(max_adverse_minutes, adverse_minutes)
+            if adverse_minutes <= threshold_minutes + 1e-9:
+                continue
+            over_limit_rider_count += affected_rider_count
+            violations.append(
+                {
+                    "route_id": str(row.get("route_id") or ""),
+                    "node_index": int(row.get("node_index", 0) or 0),
+                    "adverse_minutes": adverse_minutes,
+                    "over_limit_minutes": adverse_minutes - threshold_minutes,
+                    "modeled_elapsed_s": float(row.get("modeled_elapsed_s", 0.0) or 0.0),
+                    "affected_rider_count": affected_rider_count,
+                }
+            )
+        unavailable_stop_count += max(0, len(scenario_points) - 1 - len(candidate_rows))
+        status = "passed"
+        if current_unavailable_route_count or unavailable_route_count or unavailable_stop_count:
+            status = "unavailable"
+        elif violations:
+            status = "failed"
+        gate = {
+            "status": status,
+            "threshold_minutes": threshold_minutes,
+            "expected_stop_count": max(0, len(scenario_points) - 1),
+            "compared_stop_count": compared_stop_count,
+            "compared_rider_count": compared_rider_count,
+            "unavailable_stop_count": unavailable_stop_count,
+            "unavailable_route_count": unavailable_route_count + current_unavailable_route_count,
+            "over_limit_stop_count": len(violations),
+            "over_limit_rider_count": over_limit_rider_count,
+            "max_adverse_minutes": max_adverse_minutes,
+            "max_over_limit_minutes": max(
+                [float(item["over_limit_minutes"]) for item in violations],
+                default=0.0,
+            ),
+            "violations": violations,
+        }
+        scenario["final_time_impact_gate"] = gate
+        time_constraint = dict(scenario.get("time_constraint") or {})
+        time_constraint["final_validation_required"] = True
+        time_constraint["final_validation_status"] = status
+        time_constraint["final_satisfied"] = status == "passed"
+        scenario["time_constraint"] = time_constraint
+        return gate
+
+    return validate
+
+
+def _tighten_final_time_impact_bounds(
+    planner: Any,
+    gate: dict[str, Any] | None,
+    *,
+    limit: int = 1,
+    minimum_bounds: dict[int, int] | None = None,
+) -> bool:
+    gate = dict(gate or {})
+    if str(gate.get("status") or "") != "failed":
+        return False
+    bounds = dict(getattr(planner, "NODE_TIME_UPPER_BOUNDS", {}) or {})
+    tightened: list[dict[str, int]] = []
+    violations = sorted(
+        list(gate.get("violations") or []),
+        key=lambda item: float(dict(item).get("over_limit_minutes", 0.0) or 0.0),
+        reverse=True,
+    )
+    for violation in violations[: max(1, int(limit or 1))]:
+        node_index = int(dict(violation).get("node_index", 0) or 0)
+        current_bound = bounds.get(node_index)
+        modeled_elapsed_s = float(dict(violation).get("modeled_elapsed_s", 0.0) or 0.0)
+        over_limit_s = float(dict(violation).get("over_limit_minutes", 0.0) or 0.0) * 60.0
+        if current_bound is None or modeled_elapsed_s <= 0 or over_limit_s <= 0:
+            continue
+        target_bound = max(
+            int(dict(minimum_bounds or {}).get(node_index, 0) or 0),
+            int(math.floor(modeled_elapsed_s - over_limit_s - 30.0)),
+        )
+        next_bound = min(int(current_bound) - 1, target_bound)
+        if next_bound < 0 or next_bound >= int(current_bound):
+            continue
+        bounds[node_index] = next_bound
+        tightened.append({"node_index": node_index, "from_s": int(current_bound), "to_s": next_bound})
+    if not tightened:
+        return False
+    planner.NODE_TIME_UPPER_BOUNDS = bounds
+    gate["bound_tightening_count"] = len(tightened)
+    gate["bound_tightenings"] = tightened
+    return True
 
 
 def _route_nodes_for_time_constraint(route_summary: dict[str, Any], service_direction: str) -> list[int]:
@@ -7472,7 +8170,14 @@ def run_backend_planner_with_prepared_data(
             {
                 "display_name": time_constrained_display_label,
                 "time_impact_limit_minutes": time_impact_limit_minutes,
+                "final_validation_required": True,
             }
+        )
+        final_time_impact_validator = _build_final_time_impact_validator(
+            current_plan_scenario,
+            original_points,
+            config,
+            time_impact_limit_minutes,
         )
         if time_constraint_builder is not None:
             try:
@@ -7487,14 +8192,15 @@ def run_backend_planner_with_prepared_data(
                     node_time_lower_bounds_builder=time_constraint_lower_builder,
                     node_time_upper_bounds_builder=time_constraint_builder,
                     time_constraint_metadata=hard_time_constraint_metadata,
+                    final_time_impact_validator=final_time_impact_validator,
                 )
                 time_constrained_result["baseline_name"] = "time_constrained_optimization"
                 time_constrained_result["display_name"] = time_constrained_display_label
                 time_constrained_result["scenario_label"] = time_constrained_display_label
                 time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
                 time_constrained_result["time_constraint"] = {
-                    **dict(time_constrained_result.get("time_constraint") or {}),
                     **hard_time_constraint_metadata,
+                    **dict(time_constrained_result.get("time_constraint") or {}),
                     "enabled": True,
                     "bounded_solver_stop_count": int(
                         dict(time_constrained_result.get("time_constraint") or {}).get(
@@ -7550,6 +8256,7 @@ def run_backend_planner_with_prepared_data(
                 node_time_lower_bounds_builder=time_constraint_lower_builder,
                 node_time_upper_bounds_builder=time_constraint_builder,
                 time_constraint_metadata=protected_time_constraint_metadata,
+                final_time_impact_validator=final_time_impact_validator,
                 solve_time=assessment_time,
             )
             exception_preserving_result["display_name"] = "Protected Plan"

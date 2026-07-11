@@ -277,6 +277,8 @@ def _scenario_summary(
         "bus_mix": scenario.get("bus_mix"),
         "provider_total_duration_s": provider_total_duration_s,
         "traffic_gate": _compact_traffic_gate(scenario),
+        "feasibility_report": dict(scenario.get("feasibility_report") or {}),
+        "final_time_impact_gate": dict(scenario.get("final_time_impact_gate") or {}),
         "exception_accepted": bool(dict(scenario.get("exception_preserving") or {}).get("accepted") or scenario.get("exception_feasible")),
         "time_constraint": {
             key: time_constraint.get(key)
@@ -295,6 +297,14 @@ def _scenario_summary(
 
 
 def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
+    final_gate = dict(scenario.get("final_time_impact_gate") or {})
+    if final_gate:
+        return str(final_gate.get("status") or "") == "passed"
+    hard_constraint = dict(
+        dict(scenario.get("feasibility_report") or {}).get("hard_constraints") or {}
+    ).get("time_impact")
+    if isinstance(hard_constraint, dict) and hard_constraint:
+        return str(hard_constraint.get("status") or "") == "passed"
     time_impact = dict(scenario.get("time_impact") or {})
     if time_impact.get("available"):
         return str(time_impact.get("decision") or "") == "acceptable"

@@ -9,6 +9,95 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend")
 planner_core = importlib.import_module("planner_core")
 
 
+def test_final_time_impact_gate_uses_provider_scaled_stop_times():
+    config = planner_core.PlannerConfig(
+        service_direction="To School",
+        stop_service_minutes=1,
+        time_impact_limit_minutes=15,
+    )
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "stop", "passenger_count": 3},
+    ]
+    current = {
+        "routes": [
+            {
+                "route_id": "R1",
+                "nodes": [1, 0],
+                "time_s": 600,
+                "leg_details": [{"duration_s": 600}],
+                "final_route_traffic_gate": {"verified_drive_duration_s": 600},
+            }
+        ]
+    }
+    candidate = {
+        "routes": [
+            {
+                "route_id": "Bus 1",
+                "nodes": [1, 0],
+                "time_s": 600,
+                "leg_details": [{"duration_s": 600}],
+                "final_route_traffic_gate": {"verified_drive_duration_s": 1800},
+            }
+        ],
+        "bus_count": 1,
+        "time_constraint": {
+            "enabled": True,
+            "mode": "hard",
+            "strict_satisfied": True,
+            "bounded_solver_stop_count": 1,
+            "expected_solver_stop_count": 1,
+        },
+    }
+
+    gate = planner_core._build_final_time_impact_validator(current, points, config, 15)(
+        candidate,
+        points,
+    )
+
+    assert gate["status"] == "failed"
+    assert gate["over_limit_stop_count"] == 1
+    assert gate["over_limit_rider_count"] == 3
+    assert gate["max_adverse_minutes"] == 20
+    report = planner_core.build_route_feasibility_report(
+        candidate,
+        {"status": "passed", "gate_type": "arrival_window"},
+        config,
+        max_vehicle_count=2,
+    )
+    assert report["status"] == "failed"
+    assert report["failure_reasons"] == ["time_impact"]
+    assert report["hard_constraints"]["time_impact"]["final_over_limit_stop_count"] == 1
+
+
+def test_final_time_impact_failure_tightens_the_violating_solver_node():
+    class Planner:
+        NODE_TIME_UPPER_BOUNDS = {1: 1500}
+
+    gate = {
+        "status": "failed",
+        "violations": [
+            {
+                "node_index": 1,
+                "modeled_elapsed_s": 600,
+                "over_limit_minutes": 5,
+            }
+        ],
+    }
+
+    planner = Planner()
+    assert planner_core._tighten_final_time_impact_bounds(planner, gate) is True
+    assert planner.NODE_TIME_UPPER_BOUNDS[1] == 270
+
+    planner = Planner()
+    assert planner_core._tighten_final_time_impact_bounds(
+        planner,
+        gate,
+        minimum_bounds={1: 400},
+    ) is True
+    assert planner.NODE_TIME_UPPER_BOUNDS[1] == 400
+
+
 def test_arrival_feedback_can_tighten_below_thirty_minutes(monkeypatch):
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_STEP_MINUTES", 5)

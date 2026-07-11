@@ -7,7 +7,7 @@ import MapView, {
     type MapLayerMouseEvent,
     type MapRef,
 } from "react-map-gl/maplibre";
-import type { StyleSpecification } from "maplibre-gl";
+import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -133,6 +133,23 @@ const INTERACTIVE_LAYER_IDS = [
     "selected-route-line",
     "route-lines",
 ];
+
+function zoomScaledStopRadius(
+    stopRadii: [number, number, number],
+    depotRadii: [number, number, number] = stopRadii,
+): ExpressionSpecification {
+    return [
+        "interpolate",
+        ["linear"],
+        ["zoom"],
+        10,
+        ["case", ["get", "is_depot"], depotRadii[0], stopRadii[0]],
+        14,
+        ["case", ["get", "is_depot"], depotRadii[1], stopRadii[1]],
+        16,
+        ["case", ["get", "is_depot"], depotRadii[2], stopRadii[2]],
+    ];
+}
 
 export function InteractiveRouteMap({
     data,
@@ -1102,22 +1119,10 @@ export function InteractiveRouteMap({
                                           16,
                                           7,
                                       ]
-                                    : [
-                                          "case",
-                                          ["get", "is_depot"],
-                                          8,
-                                          [
-                                              "interpolate",
-                                              ["linear"],
-                                              ["zoom"],
-                                              10,
-                                              4,
-                                              14,
-                                              5.5,
-                                              16,
-                                              7,
-                                          ],
-                                      ],
+                                    : zoomScaledStopRadius(
+                                          [4, 5.5, 7],
+                                          [8, 8, 8],
+                                      ),
                                 "circle-opacity": selectedRouteId
                                     ? showRouteContext
                                         ? 0.18
@@ -1143,22 +1148,10 @@ export function InteractiveRouteMap({
                                           16,
                                           4.5,
                                       ]
-                                    : [
-                                          "case",
-                                          ["get", "is_depot"],
-                                          5,
-                                          [
-                                              "interpolate",
-                                              ["linear"],
-                                              ["zoom"],
-                                              10,
-                                              3,
-                                              14,
-                                              4,
-                                              16,
-                                              5,
-                                          ],
-                                      ],
+                                    : zoomScaledStopRadius(
+                                          [3, 4, 5],
+                                          [5, 5, 5],
+                                      ),
                                 "circle-opacity": selectedRouteId
                                     ? showRouteContext
                                         ? 0.34
@@ -1211,22 +1204,10 @@ export function InteractiveRouteMap({
                             type="circle"
                             paint={{
                                 "circle-color": "#ffffff",
-                                "circle-radius": [
-                                    "case",
-                                    ["get", "is_depot"],
-                                    20,
-                                    [
-                                        "interpolate",
-                                        ["linear"],
-                                        ["zoom"],
-                                        10,
-                                        13,
-                                        14,
-                                        16,
-                                        16,
-                                        18,
-                                    ],
-                                ],
+                                "circle-radius": zoomScaledStopRadius(
+                                    [13, 16, 18],
+                                    [20, 20, 20],
+                                ),
                                 "circle-opacity": selectedRouteId ? 0.98 : 0,
                             }}
                         />
@@ -1240,22 +1221,10 @@ export function InteractiveRouteMap({
                                     "#111827",
                                     ["get", "color"],
                                 ],
-                                "circle-radius": [
-                                    "case",
-                                    ["get", "is_depot"],
-                                    15,
-                                    [
-                                        "interpolate",
-                                        ["linear"],
-                                        ["zoom"],
-                                        10,
-                                        9,
-                                        14,
-                                        12,
-                                        16,
-                                        14,
-                                    ],
-                                ],
+                                "circle-radius": zoomScaledStopRadius(
+                                    [9, 12, 14],
+                                    [15, 15, 15],
+                                ),
                                 "circle-opacity": selectedRouteId ? 0.98 : 0,
                                 "circle-stroke-color": "#111827",
                                 "circle-stroke-width": 3,
@@ -1302,22 +1271,10 @@ export function InteractiveRouteMap({
                             type="circle"
                             paint={{
                                 "circle-color": "#ffffff",
-                                "circle-radius": [
-                                    "case",
-                                    ["get", "is_depot"],
-                                    16,
-                                    [
-                                        "interpolate",
-                                        ["linear"],
-                                        ["zoom"],
-                                        10,
-                                        10,
-                                        14,
-                                        13,
-                                        16,
-                                        16,
-                                    ],
-                                ],
+                                "circle-radius": zoomScaledStopRadius(
+                                    [10, 13, 16],
+                                    [16, 16, 16],
+                                ),
                                 "circle-opacity": 0.001,
                             }}
                         />

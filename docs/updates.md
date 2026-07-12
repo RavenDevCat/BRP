@@ -7,6 +7,20 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-07-12
 
+### Shared KR Algorithm And Kakao Rollout
+
+- KR production now runs the same solver revision and frontend artifact as CN;
+  there is no KR-only algorithm fork or server-local business-code patch.
+- Environment scope selects the South Korea runtime and Kakao Navi future
+  directions for final route timing, while China continues to use AMap.
+- Real Seoul To School and From School replays exercised Kakao API calls, cache
+  reuse, service-window checks, final stop-impact checks, and both Strict and
+  Protected plans. Failed hard constraints remained ineligible for
+  recommendation.
+- The first replay exposed a missing Seoul service-timezone helper. The shared
+  fix and regression test were released to CN staging, CN production, and KR
+  production together.
+
 ### Provider-Aligned Time-Impact Acceptance
 
 - Strict Plan and Protected Plan now recompute every compared pickup or

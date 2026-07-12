@@ -774,6 +774,20 @@ def test_korea_final_route_traffic_policy_requires_kakao_key(monkeypatch):
     assert gate["traffic_policy"]["status"] == "unavailable"
 
 
+def test_korea_provider_departure_time_uses_seoul_timezone():
+    departure = planner_core._route_provider_departure_datetime(
+        country="SOUTH KOREA",
+        is_to_school=True,
+        planned_total_s=30 * 60,
+        latest_arrival_minutes=8 * 60,
+        departure_minutes=6 * 60 + 30,
+    )
+
+    assert departure is not None
+    assert getattr(departure.tzinfo, "key", "") == "Asia/Seoul"
+    assert departure.weekday() < 5
+
+
 def test_korea_final_route_gate_uses_kakao_future_departure_and_chunks(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("SOUTH KOREA", "Seoul Metro"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)

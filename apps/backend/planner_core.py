@@ -713,6 +713,12 @@ def _kakao_navi_departure_time(value: datetime) -> str:
     return value.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y%m%d%H%M")
 
 
+def _traffic_timezone(country: str) -> ZoneInfo:
+    if str(country or "").strip().upper() == "SOUTH KOREA":
+        return ZoneInfo("Asia/Seoul")
+    return DIRECT_PROVIDER_CACHE_TZ
+
+
 def _next_service_datetime(minutes: float | int, country: str) -> datetime:
     tz = _traffic_timezone(country)
     now = datetime.now(tz)

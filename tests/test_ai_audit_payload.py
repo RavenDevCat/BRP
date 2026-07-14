@@ -132,7 +132,10 @@ def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> No
         },
     ]
 
-    assert ai_audit._recommended_scenario(scenarios)["key"] == "exception_preserving"
+    recommended = ai_audit._recommended_scenario(scenarios)
+    assert recommended["key"] == "exception_preserving"
+    assert recommended["recommendation_type"] == "adoption_ready"
+    assert recommended["adoption_ready"] is True
 
 
 def test_recommended_scenario_uses_provider_time_when_route_counts_tie() -> None:
@@ -149,6 +152,117 @@ def test_recommended_scenario_uses_provider_time_when_route_counts_tie() -> None
     ]
 
     assert ai_audit._recommended_scenario(scenarios)["key"] == "exception_preserving"
+
+
+def test_scenario_decision_metrics_unions_affected_riders_and_tracks_worst_miss() -> None:
+    metrics = ai_audit._scenario_decision_metrics(
+        {
+            "points": [
+                {"node_id": 0, "passenger_count": 0},
+                {"node_id": 1, "passenger_count": 4},
+                {"node_id": 2, "passenger_count": 3},
+                {"node_id": 3, "passenger_count": 2},
+            ],
+            "routes": [
+                {
+                    "route_id": "Bus 1",
+                    "nodes": [0, 1, 2],
+                    "load": 7,
+                    "final_route_traffic_gate": {
+                        "status": "failed",
+                        "time_window_overrun_minutes": 6,
+                    },
+                },
+                {
+                    "route_id": "Bus 2",
+                    "nodes": [0, 3],
+                    "load": 2,
+                    "final_route_traffic_gate": {"status": "passed"},
+                },
+            ],
+            "traffic_gate": {
+                "status": "failed",
+                "checked_route_count": 2,
+                "failed_route_ids": ["Bus 1"],
+                "failed_route_count": 1,
+                "unavailable_route_count": 0,
+                "max_time_window_overrun_minutes": 6,
+            },
+            "final_time_impact_gate": {
+                "status": "failed",
+                "threshold_minutes": 15,
+                "over_limit_rider_count": 5,
+                "max_over_limit_minutes": 9,
+                "unavailable_stop_count": 0,
+                "unavailable_route_count": 0,
+                "violations": [
+                    {"node_index": 2, "affected_rider_count": 3, "over_limit_minutes": 9},
+                    {"node_index": 3, "affected_rider_count": 2, "over_limit_minutes": 4},
+                ],
+            },
+        }
+    )
+
+    assert metrics["evidence_complete"] is True
+    assert metrics["affected_rider_count"] == 9
+    assert metrics["worst_over_limit_minutes"] == 9
+    assert metrics["worst_source"] == "time_impact"
+    assert metrics["excess_rider_minutes"] == 77
+
+
+def test_recommended_scenario_uses_least_harm_reference_when_both_fail() -> None:
+    scenarios = [
+        {
+            "key": "time_constrained",
+            "enabled": True,
+            "route_count": 16,
+            "provider_total_duration_s": 7000,
+            "traffic_gate": {"status": "failed"},
+            "decision_metrics": {
+                "evidence_complete": True,
+                "affected_rider_count": 50,
+                "worst_over_limit_minutes": 20,
+                "excess_rider_minutes": 400,
+            },
+        },
+        {
+            "key": "exception_preserving",
+            "enabled": True,
+            "route_count": 18,
+            "provider_total_duration_s": 7600,
+            "traffic_gate": {"status": "failed"},
+            "decision_metrics": {
+                "evidence_complete": True,
+                "affected_rider_count": 25,
+                "worst_over_limit_minutes": 12,
+                "excess_rider_minutes": 180,
+            },
+        },
+    ]
+
+    recommended = ai_audit._recommended_scenario(scenarios)
+    assert recommended["key"] == "exception_preserving"
+    assert recommended["recommendation_type"] == "review_reference"
+    assert recommended["adoption_ready"] is False
+
+
+def test_recommended_scenario_does_not_guess_when_failed_evidence_is_incomplete() -> None:
+    scenarios = [
+        {
+            "key": "time_constrained",
+            "enabled": True,
+            "traffic_gate": {"status": "failed"},
+            "decision_metrics": {"evidence_complete": False},
+        },
+        {
+            "key": "exception_preserving",
+            "enabled": True,
+            "traffic_gate": {"status": "failed"},
+            "decision_metrics": {"evidence_complete": True},
+        },
+    ]
+
+    assert ai_audit._recommended_scenario(scenarios) is None
 
 
 def test_legacy_hard_time_impact_without_final_gate_is_not_passing() -> None:

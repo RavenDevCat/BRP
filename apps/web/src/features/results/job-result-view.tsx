@@ -204,10 +204,17 @@ function SummaryPanel({
           detail={currentPlanRow ? scenarioCardDetail(currentPlanRow, "Uploaded plan used as the control case.") : ""}
         />
         <MetricCard
-          label="Recommended plan"
+          label={recommended?.adoptionReady ? "Recommended plan" : recommended ? "Review reference" : "Recommended plan"}
           value={recommended ? `${formatNumber(recommended.routeCount)} ${t("routes")}` : t("Needs review")}
-          tone={recommended ? scenarioTrafficTone(recommended, "info") : "warning"}
-          detail={recommended ? scenarioCardDetail(recommended, recommended.name) : "No adoption-ready optimized plan was produced."}
+          tone={recommended?.adoptionReady ? scenarioTrafficTone(recommended, "info") : "warning"}
+          detail={
+            recommended?.adoptionReady
+              ? scenarioCardDetail(recommended, recommended.name)
+              : recommended
+                ? "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence."
+                : "No adoption-ready optimized plan was produced."
+          }
+          supporting={recommended ? <ScenarioDecisionMetricsLine scenario={recommended} /> : null}
         />
         <MetricCard
           label={timeConstrained?.name || "Strict Plan"}
@@ -221,6 +228,7 @@ function SummaryPanel({
                   "Adjust the time-impact limit, time window, stop limit, minimum saving, or fleet settings, then rerun.",
                 )
           }
+          supporting={timeConstrained ? <ScenarioDecisionMetricsLine scenario={timeConstrained} /> : null}
         />
         <MetricCard
           label="Protected Plan"
@@ -234,6 +242,7 @@ function SummaryPanel({
                   "Review current-plan failed routes or relax the optimization settings, then rerun.",
                 )
           }
+          supporting={exceptionPreserving ? <ScenarioDecisionMetricsLine scenario={exceptionPreserving} /> : null}
         />
         <MetricCard
           label="Data review"
@@ -663,6 +672,8 @@ function AiAuditPanel({
                     <th className="px-3 py-2">{t("Service stops")}</th>
                     <th className="px-3 py-2">{t("Avg time")}</th>
                     <th className="px-3 py-2">{t("Avg distance")}</th>
+                    <th className="px-3 py-2">{t("Affected riders")}</th>
+                    <th className="px-3 py-2">{t("Worst miss")}</th>
                     <th className="px-3 py-2">{t("Bus mix")}</th>
                   </tr>
                 </thead>
@@ -674,6 +685,8 @@ function AiAuditPanel({
                       <td className="px-3 py-2">{formatNumber(scenario.stopCount)}</td>
                       <td className="px-3 py-2">{formatDurationMinFromSeconds(scenario.avgDurationS)}</td>
                       <td className="px-3 py-2">{formatDistanceKmFromMeters(scenario.avgDistanceM)}</td>
+                      <td className="px-3 py-2">{scenarioAffectedRidersLabel(scenario, t)}</td>
+                      <td className="px-3 py-2">{scenarioWorstMissLabel(scenario, t)}</td>
                       <td className="px-3 py-2">{formatBusMix(scenario.busMix)}</td>
                     </tr>
                   ))}
@@ -764,6 +777,8 @@ function BaselinePanel({
                   <ReadoutItem label="Service stops" value={formatNumber(scenario.stopCount)} />
                   <ReadoutItem label="Avg distance" value={formatDistanceKmFromMeters(scenario.avgDistanceM)} />
                   <ReadoutItem label="Avg duration" value={formatDurationMinFromSeconds(scenario.avgDurationS)} />
+                  <ReadoutItem label="Affected riders" value={scenarioAffectedRidersLabel(scenario, t)} />
+                  <ReadoutItem label="Worst miss" value={scenarioWorstMissLabel(scenario, t)} />
                   <div className="col-span-2">
                     <ReadoutItem label="Bus mix" value={formatBusMix(scenario.busMix)} />
                   </div>
@@ -1984,6 +1999,12 @@ function MapsPanel({
                     {t(summary.trafficStatusLabel)}
                   </div>
                 ) : null}
+                {summary.key === "time_constrained" || summary.key === "exception_preserving" ? (
+                  <div className="col-span-2 mt-1 space-y-1 border-t border-border pt-2">
+                    <div>{t("Affected riders")}: {scenarioAffectedRidersLabel(summary, t)}</div>
+                    <div>{t("Worst miss")}: {scenarioWorstMissLabel(summary, t)}</div>
+                  </div>
+                ) : null}
                 {excludedStopCount ? <div className="col-span-2 text-amber-700">{t("Excluded")}: {formatNumber(excludedStopCount)} {t("stop(s)")}</div> : null}
               </div>
             </button>
@@ -2321,11 +2342,13 @@ function MetricCard({
   value,
   tone = "neutral",
   detail = "",
+  supporting,
 }: {
   label: string;
   value: string;
   tone?: "neutral" | "success" | "warning" | "info";
   detail?: string;
+  supporting?: ReactNode;
 }) {
   const t = useT();
   return (
@@ -2335,6 +2358,17 @@ function MetricCard({
       </div>
       <div className={cn("mt-3 text-2xl font-semibold", metricValueClassName(tone))}>{value}</div>
       {detail ? <div className="mt-2 text-xs leading-5 text-muted-foreground">{t(detail)}</div> : null}
+      {supporting}
+    </div>
+  );
+}
+
+function ScenarioDecisionMetricsLine({ scenario }: { scenario: ScenarioRow }) {
+  const t = useT();
+  return (
+    <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-current/10 pt-2 text-xs text-muted-foreground">
+      <span>{t("Affected riders")}: {scenarioAffectedRidersLabel(scenario, t)}</span>
+      <span>{t("Worst miss")}: {scenarioWorstMissLabel(scenario, t)}</span>
     </div>
   );
 }
@@ -2523,7 +2557,26 @@ type ScenarioRow = {
   avgDurationS: unknown;
   busMix: Record<string, unknown>;
   routes: Array<Record<string, unknown>>;
+  points: Array<Record<string, unknown>>;
   providerTotalDurationS: number;
+  decisionMetrics: ScenarioDecisionMetrics;
+};
+
+type ScenarioDecisionMetrics = {
+  evidenceComplete: boolean;
+  affectedRiderCount: number;
+  worstOverLimitMinutes: number;
+  worstSource: "time_window" | "time_impact" | "none";
+  timeWindowAffectedRiderCount: number;
+  timeWindowMaxOverrunMinutes: number;
+  timeImpactOverLimitRiderCount: number;
+  timeImpactMaxOverLimitMinutes: number;
+  excessRiderMinutes: number;
+};
+
+type RecommendedScenario = ScenarioRow & {
+  adoptionReady: boolean;
+  recommendationType: "adoption_ready" | "review_reference";
 };
 
 type ArrivalReverseCheck = {
@@ -2728,12 +2781,15 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     avgDurationS: assessment.avg_route_duration_s,
     busMix: asRecord(assessment.bus_mix),
     routes: asRecordArray(assessment.route_summaries),
+    points: [],
     providerTotalDurationS: 0,
+    decisionMetrics: emptyScenarioDecisionMetrics(),
   };
 }
 
 function scenarioFromScenario(key: string, name: string, detail: string, scenario: Record<string, unknown>): ScenarioRow {
   const routes = asRecordArray(scenario.routes);
+  const points = asRecordArray(scenario.points);
   return {
     key,
     name,
@@ -2751,10 +2807,146 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     avgDurationS: scenario.avg_route_duration_s,
     busMix: asRecord(scenario.bus_mix),
     routes,
+    points,
     providerTotalDurationS: routes.reduce(
       (total, route) => total + Number(asRecord(route.final_route_traffic_gate).verified_total_duration_s || 0),
       0,
     ),
+    decisionMetrics: buildScenarioDecisionMetrics(scenario, routes, points),
+  };
+}
+
+function emptyScenarioDecisionMetrics(): ScenarioDecisionMetrics {
+  return {
+    evidenceComplete: false,
+    affectedRiderCount: 0,
+    worstOverLimitMinutes: 0,
+    worstSource: "none",
+    timeWindowAffectedRiderCount: 0,
+    timeWindowMaxOverrunMinutes: 0,
+    timeImpactOverLimitRiderCount: 0,
+    timeImpactMaxOverLimitMinutes: 0,
+    excessRiderMinutes: 0,
+  };
+}
+
+function buildScenarioDecisionMetrics(
+  scenario: Record<string, unknown>,
+  routes = asRecordArray(scenario.routes),
+  points = asRecordArray(scenario.points),
+): ScenarioDecisionMetrics {
+  const explicit = asRecord(scenario.decision_metrics);
+  if (Object.keys(explicit).length) {
+    const worstSource = stringValue(explicit.worst_source);
+    return {
+      evidenceComplete: Boolean(explicit.evidence_complete),
+      affectedRiderCount: Number(explicit.affected_rider_count || 0),
+      worstOverLimitMinutes: Number(explicit.worst_over_limit_minutes || 0),
+      worstSource: worstSource === "time_window" || worstSource === "time_impact" ? worstSource : "none",
+      timeWindowAffectedRiderCount: Number(explicit.time_window_affected_rider_count || 0),
+      timeWindowMaxOverrunMinutes: Number(explicit.time_window_max_overrun_minutes || 0),
+      timeImpactOverLimitRiderCount: Number(explicit.time_impact_over_limit_rider_count || 0),
+      timeImpactMaxOverLimitMinutes: Number(explicit.time_impact_max_over_limit_minutes || 0),
+      excessRiderMinutes: Number(explicit.excess_rider_minutes || 0),
+    };
+  }
+
+  const trafficGate = asRecord(scenario.traffic_gate);
+  const timeImpactGate = asRecord(scenario.final_time_impact_gate);
+  const failedRouteIds = new Set(asStringArray(trafficGate.failed_route_ids));
+  const riderCountByNode = new globalThis.Map<number, number>();
+  points.forEach((point, pointIndex) => {
+    const riderCount = Math.max(0, Number(point.passenger_count || 0));
+    riderCountByNode.set(pointIndex, riderCount);
+    const nodeId = Number(point.node_id);
+    if (point.node_id !== null && point.node_id !== undefined && Number.isInteger(nodeId)) {
+      riderCountByNode.set(nodeId, riderCount);
+    }
+  });
+
+  const affectedNodeIds = new Set<number>();
+  let timeWindowAffectedRiderCount = 0;
+  let timeWindowExcessRiderMinutes = 0;
+  let timeWindowMaxOverrunMinutes = Number(
+    trafficGate.max_time_window_overrun_minutes
+      || trafficGate.max_estimated_arrival_delay_minutes
+      || trafficGate.max_route_duration_overrun_minutes
+      || 0,
+  );
+  routes.forEach((route, routeIndex) => {
+    const routeId = stringValue(route.route_id || route.id || route.vehicle_id || `Bus ${routeIndex + 1}`);
+    const routeGate = asRecord(route.final_route_traffic_gate || route.am_arrival_gate);
+    const routeFailed = failedRouteIds.has(routeId)
+      || routeGate.passes === false
+      || stringValue(routeGate.status).toLowerCase() === "failed";
+    if (!routeFailed) return;
+
+    const riderCount = Math.max(0, Number(routePassengerCount(route) || 0));
+    timeWindowAffectedRiderCount += riderCount;
+    (Array.isArray(route.nodes) ? route.nodes : []).forEach((rawNodeId) => {
+      const nodeId = Number(rawNodeId);
+      if (rawNodeId !== null && rawNodeId !== undefined && Number.isInteger(nodeId)) affectedNodeIds.add(nodeId);
+    });
+    const overrunMinutes = Number(
+      routeGate.time_window_overrun_minutes
+        || routeGate.estimated_arrival_delay_minutes
+        || routeGate.route_duration_overrun_minutes
+        || 0,
+    );
+    timeWindowMaxOverrunMinutes = Math.max(timeWindowMaxOverrunMinutes, overrunMinutes);
+    timeWindowExcessRiderMinutes += riderCount * overrunMinutes;
+  });
+  if (!timeWindowExcessRiderMinutes && timeWindowAffectedRiderCount) {
+    timeWindowExcessRiderMinutes = timeWindowAffectedRiderCount * timeWindowMaxOverrunMinutes;
+  }
+
+  let timeImpactExcessRiderMinutes = 0;
+  asRecordArray(timeImpactGate.violations).forEach((violation) => {
+    const nodeId = Number(violation.node_index);
+    if (violation.node_index !== null && violation.node_index !== undefined && Number.isInteger(nodeId)) {
+      affectedNodeIds.add(nodeId);
+    }
+    timeImpactExcessRiderMinutes += Math.max(0, Number(violation.affected_rider_count || 0))
+      * Math.max(0, Number(violation.over_limit_minutes || 0));
+  });
+
+  const timeImpactOverLimitRiderCount = Math.max(0, Number(timeImpactGate.over_limit_rider_count || 0));
+  let timeImpactMaxOverLimitMinutes = Number(timeImpactGate.max_over_limit_minutes || 0);
+  if (timeImpactMaxOverLimitMinutes <= 0) {
+    timeImpactMaxOverLimitMinutes = Math.max(
+      0,
+      Number(timeImpactGate.max_adverse_minutes || 0) - Number(timeImpactGate.threshold_minutes || 0),
+    );
+  }
+  const affectedRiderCount = Math.max(
+    [...affectedNodeIds].reduce((total, nodeId) => total + (riderCountByNode.get(nodeId) || 0), 0),
+    timeWindowAffectedRiderCount,
+    timeImpactOverLimitRiderCount,
+  );
+  const worstOverLimitMinutes = Math.max(timeWindowMaxOverrunMinutes, timeImpactMaxOverLimitMinutes);
+  const trafficStatus = stringValue(trafficGate.status).toLowerCase();
+  const timeImpactStatus = stringValue(timeImpactGate.status).toLowerCase();
+  const trafficEvidenceComplete = ["passed", "failed"].includes(trafficStatus)
+    && Number(trafficGate.unavailable_route_count || 0) === 0
+    && (!routes.length || Number(trafficGate.checked_route_count || 0) >= routes.length);
+  const timeImpactEvidenceComplete = ["passed", "failed"].includes(timeImpactStatus)
+    && Number(timeImpactGate.unavailable_stop_count || 0) === 0
+    && Number(timeImpactGate.unavailable_route_count || 0) === 0;
+
+  return {
+    evidenceComplete: trafficEvidenceComplete && timeImpactEvidenceComplete,
+    affectedRiderCount,
+    worstOverLimitMinutes,
+    worstSource: worstOverLimitMinutes <= 0
+      ? "none"
+      : timeWindowMaxOverrunMinutes >= timeImpactMaxOverLimitMinutes
+        ? "time_window"
+        : "time_impact",
+    timeWindowAffectedRiderCount,
+    timeWindowMaxOverrunMinutes,
+    timeImpactOverLimitRiderCount,
+    timeImpactMaxOverLimitMinutes,
+    excessRiderMinutes: timeWindowExcessRiderMinutes + timeImpactExcessRiderMinutes,
   };
 }
 
@@ -2896,9 +3088,31 @@ function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
   return (providerPassed || protectedPassed) && savingStatus !== "failed" && timeImpactPassed;
 }
 
-function pickRecommendedScenario(scenarios: ScenarioRow[]): ScenarioRow | undefined {
+function scenarioAffectedRidersLabel(
+  scenario: Pick<ScenarioRow, "key" | "decisionMetrics">,
+  t: (key: string, fallback?: string) => string,
+): string {
+  if (scenario.key === "current_plan") return t("Not applicable");
+  return scenario.decisionMetrics.evidenceComplete
+    ? formatNumber(scenario.decisionMetrics.affectedRiderCount)
+    : t("Incomplete evidence");
+}
+
+function scenarioWorstMissLabel(
+  scenario: Pick<ScenarioRow, "key" | "decisionMetrics">,
+  t: (key: string, fallback?: string) => string,
+): string {
+  if (scenario.key === "current_plan") return t("Not applicable");
+  const metrics = scenario.decisionMetrics;
+  if (!metrics.evidenceComplete) return t("Incomplete evidence");
+  if (metrics.worstOverLimitMinutes <= 0) return t("Within limits");
+  const source = metrics.worstSource === "time_window" ? t("Time window") : t("Time impact");
+  return `${formatNumber(metrics.worstOverLimitMinutes)} ${t("min")} · ${source}`;
+}
+
+function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario | undefined {
   const optimized = ["time_constrained", "exception_preserving"];
-  return scenarios
+  const adoptionReady = scenarios
     .filter((scenario) => optimized.includes(scenario.key) && scenario.enabled && scenarioIsAdoptionReady(scenario))
     .sort((left, right) => {
       const routeDifference = Number(left.routeCount || Number.MAX_SAFE_INTEGER)
@@ -2906,6 +3120,27 @@ function pickRecommendedScenario(scenarios: ScenarioRow[]): ScenarioRow | undefi
       const durationDifference = left.providerTotalDurationS - right.providerTotalDurationS;
       return routeDifference || durationDifference || optimized.indexOf(left.key) - optimized.indexOf(right.key);
     })[0];
+  if (adoptionReady) {
+    return { ...adoptionReady, adoptionReady: true, recommendationType: "adoption_ready" };
+  }
+
+  const comparable = optimized
+    .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
+    .filter((scenario): scenario is ScenarioRow => Boolean(scenario));
+  if (comparable.length !== optimized.length || comparable.some((scenario) => !scenario.decisionMetrics.evidenceComplete)) {
+    return undefined;
+  }
+  const reviewReference = comparable.sort((left, right) => {
+    const leftMetrics = left.decisionMetrics;
+    const rightMetrics = right.decisionMetrics;
+    return leftMetrics.excessRiderMinutes - rightMetrics.excessRiderMinutes
+      || leftMetrics.affectedRiderCount - rightMetrics.affectedRiderCount
+      || leftMetrics.worstOverLimitMinutes - rightMetrics.worstOverLimitMinutes
+      || Number(left.routeCount || Number.MAX_SAFE_INTEGER) - Number(right.routeCount || Number.MAX_SAFE_INTEGER)
+      || left.providerTotalDurationS - right.providerTotalDurationS
+      || optimized.indexOf(left.key) - optimized.indexOf(right.key);
+  })[0];
+  return { ...reviewReference, adoptionReady: false, recommendationType: "review_reference" };
 }
 
 function buildBenchmarkGateWarnings(result: Record<string, unknown>): string[] {
@@ -3228,6 +3463,7 @@ type MapScenarioSummary = {
   totalDistanceM: number;
   longestDurationS: number;
   exceptionAccepted: boolean;
+  decisionMetrics: ScenarioDecisionMetrics;
   trafficStatusLabel: string;
   trafficStatusTone: "neutral" | "success" | "warning" | "info";
 };
@@ -3287,6 +3523,7 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
       longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
       exceptionAccepted,
+      decisionMetrics: buildScenarioDecisionMetrics(scenario, routes, asRecordArray(scenario.points)),
       trafficStatusLabel: scenarioTrafficStatusLabel({
         trafficGate: asRecord(scenario.traffic_gate),
         feasibilityReport: asRecord(scenario.feasibility_report),
@@ -3358,6 +3595,8 @@ function buildAiReportHtml({
           <td>${htmlEscape(t(scenarioTrafficStatusLabel(scenario) || "Not applicable"))}</td>
           <td>${htmlEscape(formatDurationMinFromSeconds(scenario.avgDurationS))}</td>
           <td>${htmlEscape(formatDistanceKmFromMeters(scenario.avgDistanceM))}</td>
+          <td>${htmlEscape(scenarioAffectedRidersLabel(scenario, t))}</td>
+          <td>${htmlEscape(scenarioWorstMissLabel(scenario, t))}</td>
           <td>${htmlEscape(formatBusMix(scenario.busMix))}</td>
         </tr>`,
     )
@@ -3408,7 +3647,7 @@ function buildAiReportHtml({
   ${markdownToHtml(stringValue(report.report_markdown))}
   <h2>${htmlEscape(t("Scenario Evidence"))}</h2>
   <table>
-    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("Time Window"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
+    <thead><tr><th>${htmlEscape(t("Scenario"))}</th><th>${htmlEscape(t("Routes"))}</th><th>${htmlEscape(t("Time Window"))}</th><th>${htmlEscape(t("Avg Time"))}</th><th>${htmlEscape(t("Avg Distance"))}</th><th>${htmlEscape(t("Affected riders"))}</th><th>${htmlEscape(t("Worst miss"))}</th><th>${htmlEscape(t("Bus Mix"))}</th></tr></thead>
     <tbody>${scenarioRows}</tbody>
   </table>
   <h2>${htmlEscape(t("Top Suggested Actions"))}</h2>

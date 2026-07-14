@@ -193,8 +193,15 @@ const en: Translations = {
     "Current plan comparison": "Current plan comparison",
     "Uploaded plan used as the control case.": "Uploaded plan used as the control case.",
     "Recommended plan": "Recommended plan",
+    "Review reference": "Review reference",
     "Needs review": "Needs review",
     "No adoption-ready optimized plan was produced.": "No adoption-ready optimized plan was produced.",
+    "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
+        "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.",
+    "Affected riders": "Affected riders",
+    "Worst miss": "Maximum breach",
+    "Within limits": "Within limits",
+    "Incomplete evidence": "Incomplete evidence",
     "Optimization scenarios": "Optimization scenarios",
     "Compare the uploaded current plan against the balanced and protected-route optimization results.":
         "Compare the uploaded current plan against the balanced and protected-route optimization results.",

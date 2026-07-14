@@ -255,6 +255,7 @@ def _scenario_summary(
     planner_config: dict[str, Any],
 ) -> dict[str, Any]:
     enabled = bool(scenario) and scenario.get("enabled") is not False
+    decision_metrics = _scenario_decision_metrics(scenario)
     time_constraint = dict(scenario.get("time_constraint") or {})
     time_impact = _compact_time_impact(
         dict(scenario.get("time_impact") or {})
@@ -276,6 +277,7 @@ def _scenario_summary(
         "avg_load_factor_pct": round(float(scenario.get("avg_load_factor", 0.0) or 0.0) * 100.0, 1),
         "bus_mix": scenario.get("bus_mix"),
         "provider_total_duration_s": provider_total_duration_s,
+        "decision_metrics": decision_metrics,
         "traffic_gate": _compact_traffic_gate(scenario),
         "feasibility_report": dict(scenario.get("feasibility_report") or {}),
         "final_time_impact_gate": dict(scenario.get("final_time_impact_gate") or {}),
@@ -324,6 +326,161 @@ def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
     )
 
 
+def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
+    existing = dict(scenario.get("decision_metrics") or {})
+    if existing:
+        return existing
+
+    routes = [dict(item) for item in list(scenario.get("routes") or [])]
+    points = [dict(item) for item in list(scenario.get("points") or [])]
+    traffic_gate = dict(scenario.get("traffic_gate") or {})
+    time_impact_gate = dict(scenario.get("final_time_impact_gate") or {})
+    failed_route_ids = {
+        str(item) for item in list(traffic_gate.get("failed_route_ids") or [])
+    }
+    rider_count_by_node: dict[int, int] = {}
+    for point_index, point in enumerate(points):
+        node_id = _finite_int(point.get("node_id"))
+        rider_count = max(0, _finite_int(point.get("passenger_count")) or 0)
+        rider_count_by_node[point_index] = rider_count
+        if node_id is not None:
+            rider_count_by_node[node_id] = rider_count
+
+    affected_node_ids: set[int] = set()
+    window_affected_rider_count = 0
+    window_excess_rider_minutes = 0.0
+    window_max_overrun_minutes = float(
+        traffic_gate.get("max_time_window_overrun_minutes")
+        or traffic_gate.get("max_estimated_arrival_delay_minutes")
+        or traffic_gate.get("max_route_duration_overrun_minutes")
+        or 0.0
+    )
+    for route_index, route in enumerate(routes, start=1):
+        route_id = str(
+            route.get("route_id")
+            or route.get("id")
+            or route.get("vehicle_id")
+            or f"Bus {route_index}"
+        )
+        route_gate = dict(
+            route.get("final_route_traffic_gate")
+            or route.get("am_arrival_gate")
+            or {}
+        )
+        route_failed = (
+            route_id in failed_route_ids
+            or route_gate.get("passes") is False
+            or str(route_gate.get("status") or "").strip().lower() == "failed"
+        )
+        if not route_failed:
+            continue
+        route_rider_count = max(
+            0,
+            _finite_int(
+                route.get("load")
+                or route.get("passenger_count")
+                or route.get("passengers")
+            )
+            or 0,
+        )
+        window_affected_rider_count += route_rider_count
+        for raw_node_id in list(route.get("nodes") or []):
+            node_id = _finite_int(raw_node_id)
+            if node_id is not None:
+                affected_node_ids.add(node_id)
+        route_overrun_minutes = float(
+            route_gate.get("time_window_overrun_minutes")
+            or route_gate.get("estimated_arrival_delay_minutes")
+            or route_gate.get("route_duration_overrun_minutes")
+            or 0.0
+        )
+        window_max_overrun_minutes = max(
+            window_max_overrun_minutes, route_overrun_minutes
+        )
+        window_excess_rider_minutes += route_rider_count * route_overrun_minutes
+    if window_excess_rider_minutes <= 0 and window_affected_rider_count:
+        window_excess_rider_minutes = (
+            window_affected_rider_count * window_max_overrun_minutes
+        )
+
+    impact_excess_rider_minutes = 0.0
+    for violation in list(time_impact_gate.get("violations") or []):
+        violation = dict(violation or {})
+        node_id = _finite_int(violation.get("node_index"))
+        if node_id is not None:
+            affected_node_ids.add(node_id)
+        rider_count = max(
+            0, _finite_int(violation.get("affected_rider_count")) or 0
+        )
+        over_limit_minutes = max(
+            0.0, float(violation.get("over_limit_minutes", 0.0) or 0.0)
+        )
+        impact_excess_rider_minutes += rider_count * over_limit_minutes
+
+    impact_affected_rider_count = max(
+        0, _finite_int(time_impact_gate.get("over_limit_rider_count")) or 0
+    )
+    impact_max_over_limit_minutes = float(
+        time_impact_gate.get("max_over_limit_minutes", 0.0) or 0.0
+    )
+    if impact_max_over_limit_minutes <= 0:
+        impact_max_over_limit_minutes = max(
+            0.0,
+            float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0)
+            - float(time_impact_gate.get("threshold_minutes", 0.0) or 0.0),
+        )
+
+    affected_rider_count = sum(
+        rider_count_by_node.get(node_id, 0) for node_id in affected_node_ids
+    )
+    affected_rider_count = max(
+        affected_rider_count,
+        window_affected_rider_count,
+        impact_affected_rider_count,
+    )
+    worst_over_limit_minutes = max(
+        window_max_overrun_minutes, impact_max_over_limit_minutes
+    )
+    if worst_over_limit_minutes <= 0:
+        worst_source = "none"
+    elif window_max_overrun_minutes >= impact_max_over_limit_minutes:
+        worst_source = "time_window"
+    else:
+        worst_source = "time_impact"
+
+    traffic_status = str(traffic_gate.get("status") or "").strip().lower()
+    time_impact_status = str(time_impact_gate.get("status") or "").strip().lower()
+    traffic_evidence_complete = (
+        traffic_status in {"passed", "failed"}
+        and int(traffic_gate.get("unavailable_route_count", 0) or 0) == 0
+        and (
+            not routes
+            or int(traffic_gate.get("checked_route_count", 0) or 0) >= len(routes)
+        )
+    )
+    time_impact_evidence_complete = (
+        time_impact_status in {"passed", "failed"}
+        and int(time_impact_gate.get("unavailable_stop_count", 0) or 0) == 0
+        and int(time_impact_gate.get("unavailable_route_count", 0) or 0) == 0
+    )
+    return {
+        "evidence_complete": traffic_evidence_complete
+        and time_impact_evidence_complete,
+        "affected_rider_count": affected_rider_count,
+        "worst_over_limit_minutes": round(worst_over_limit_minutes, 1),
+        "worst_source": worst_source,
+        "time_window_affected_rider_count": window_affected_rider_count,
+        "time_window_max_overrun_minutes": round(window_max_overrun_minutes, 1),
+        "time_impact_over_limit_rider_count": impact_affected_rider_count,
+        "time_impact_max_over_limit_minutes": round(
+            impact_max_over_limit_minutes, 1
+        ),
+        "excess_rider_minutes": round(
+            window_excess_rider_minutes + impact_excess_rider_minutes, 1
+        ),
+    }
+
+
 def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
     order = ["time_constrained", "exception_preserving"]
     order_index = {key: index for index, key in enumerate(order)}
@@ -341,7 +498,7 @@ def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | N
         if not _scenario_time_impact_passed(item):
             continue
         ready.append(item)
-    return min(
+    recommended = min(
         ready,
         key=lambda item: (
             int(item.get("route_count", 10**9) or 10**9),
@@ -350,6 +507,41 @@ def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | N
         ),
         default=None,
     )
+    if recommended:
+        return {
+            **recommended,
+            "recommendation_type": "adoption_ready",
+            "adoption_ready": True,
+            "recommendation_reason": "maximum_vehicle_saving",
+        }
+
+    comparable = [
+        item
+        for item in scenarios
+        if str(item.get("key") or "") in order_index and item.get("enabled")
+    ]
+    if len(comparable) != len(order) or any(
+        not bool(dict(item.get("decision_metrics") or {}).get("evidence_complete"))
+        for item in comparable
+    ):
+        return None
+    reference = min(
+        comparable,
+        key=lambda item: (
+            float(dict(item.get("decision_metrics") or {}).get("excess_rider_minutes", float("inf"))),
+            int(dict(item.get("decision_metrics") or {}).get("affected_rider_count", 10**9)),
+            float(dict(item.get("decision_metrics") or {}).get("worst_over_limit_minutes", float("inf"))),
+            int(item.get("route_count", 10**9) or 10**9),
+            float(item.get("provider_total_duration_s", float("inf")) or float("inf")),
+            order_index[str(item.get("key") or "")],
+        ),
+    )
+    return {
+        **reference,
+        "recommendation_type": "review_reference",
+        "adoption_ready": False,
+        "recommendation_reason": "minimum_combined_constraint_harm",
+    }
 
 
 def _input_address_review_summary(review: dict[str, Any]) -> dict[str, Any]:
@@ -570,6 +762,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "Prefer readable business language over template language. "
         "Treat scenario_outcomes, recommended_scenario, and decision_review as deterministic evidence. "
         "Do not recommend adopting a scenario whose traffic_gate status is failed or unavailable unless exception_accepted is true. "
+        "A recommended_scenario with recommendation_type review_reference is only the least-harm comparison reference, never adoption-ready. "
         "Keep recommendations practical and clearly separate measured facts from interpretation."
     )
     user_prompt = (
@@ -583,7 +776,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         "- Use route IDs only when present in the facts.\n"
         "- Make recommendations specific but do not repeat every candidate action.\n"
         "- Do not mention student names or full addresses.\n"
-        "- Prefer recommended_scenario when it is adoption-ready; explain why skipped or failed scenarios are not recommended.\n"
+        "- Prefer recommended_scenario when it is adoption-ready. If it is a review_reference, call it the closest non-adoption-ready reference and state its remaining constraint misses.\n"
         "- Cover input address review, time impact, and traffic confidence when facts are available.\n"
         "- If evidence is insufficient, state the validation question plainly.\n\n"
         f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"

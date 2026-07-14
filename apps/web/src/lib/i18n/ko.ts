@@ -684,8 +684,15 @@ const ko: Translations = {
     "Protected time-impact plan": "보호 시간 영향 계획",
     "Uploaded plan used as the control case.": "업로드된 계획을 비교 기준으로 사용합니다.",
     "Recommended plan": "권장 계획",
+    "Review reference": "검토 참고안",
     "Needs review": "검토 필요",
     "No adoption-ready optimized plan was produced.": "바로 적용 가능한 최적화 계획이 생성되지 않았습니다.",
+    "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
+        "바로 적용할 수 없습니다. 근거가 완전한 계획 중 시간 창과 시간 영향의 종합 위반이 가장 적은 참고안입니다.",
+    "Affected riders": "영향받는 탑승자",
+    "Worst miss": "최대 초과",
+    "Within limits": "기준 이내",
+    "Incomplete evidence": "근거 불완전",
     "Keeps current exception routes protected, then optimizes the remaining stops.":
         "현행 예외 노선을 보호한 뒤 나머지 정류장을 최적화합니다.",
     "Further Most": "최원거리 기준",

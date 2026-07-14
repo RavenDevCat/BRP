@@ -237,8 +237,15 @@ const zh: Translations = {
     "Current plan comparison": "当前计划对比",
     "Uploaded plan used as the control case.": "上传的当前计划作为对照方案。",
     "Recommended plan": "推荐方案",
+    "Review reference": "复核参考方案",
     "Needs review": "需要复核",
     "No adoption-ready optimized plan was produced.": "没有生成可直接采用的优化方案。",
+    "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
+        "不可直接采用；这是在证据完整的方案中，时间窗与时间影响综合损害最小的参考方案。",
+    "Affected riders": "受影响人数",
+    "Worst miss": "最大超限",
+    "Within limits": "均在限制内",
+    "Incomplete evidence": "证据不完整",
     "Optimization scenarios": "优化方案",
     "Compare the uploaded current plan against the balanced and protected-route optimization results.":
         "对比上传的当前计划、均衡优化方案和保护线路优化方案。",

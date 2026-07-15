@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, History, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowRight, GitCompareArrows, History, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -22,6 +22,9 @@ export function HistorySidebar<T>({
   onOpen,
   onDelete,
   onBulkDelete,
+  selectionActionLabel,
+  selectionActionMin = 1,
+  onSelectionAction,
   canDelete = () => true,
   renderItem,
   className = "",
@@ -42,6 +45,9 @@ export function HistorySidebar<T>({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
   onBulkDelete: (ids: string[]) => void;
+  selectionActionLabel?: string;
+  selectionActionMin?: number;
+  onSelectionAction?: (ids: string[]) => void;
   canDelete?: (item: T) => boolean;
   renderItem: (item: T, active: boolean) => ReactNode;
   className?: string;
@@ -78,6 +84,9 @@ export function HistorySidebar<T>({
       return next;
     });
   };
+  const selectedDeletableIds = items
+    .filter((item) => selectedIds.has(itemId(item)) && canDelete(item))
+    .map(itemId);
 
   if (collapsed) {
     return (
@@ -168,22 +177,34 @@ export function HistorySidebar<T>({
                 {t(selecting ? "Cancel" : "Select")}
               </button>
               {selecting ? (
-                <button
-                  type="button"
-                  className={buttonClassName("secondary")}
-                  disabled={!selectedIds.size || bulkDeleting}
-                  onClick={() => {
-                    const ids = [...selectedIds];
-                    if (ids.length && window.confirm(t("Delete selected history items? This cannot be undone."))) {
-                      onBulkDelete(ids);
-                      setSelectedIds(new Set());
-                      setSelecting(false);
-                    }
-                  }}
-                >
-                  {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                  {t("Delete selected")} {selectedIds.size ? `(${selectedIds.size})` : ""}
-                </button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  {onSelectionAction && selectionActionLabel ? (
+                    <button
+                      type="button"
+                      className={buttonClassName("primary")}
+                      disabled={selectedIds.size < selectionActionMin}
+                      onClick={() => onSelectionAction([...selectedIds])}
+                    >
+                      <GitCompareArrows className="h-4 w-4" aria-hidden="true" />
+                      {t(selectionActionLabel)} {selectedIds.size ? `(${selectedIds.size})` : ""}
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className={buttonClassName("secondary")}
+                    disabled={!selectedDeletableIds.length || bulkDeleting}
+                    onClick={() => {
+                      if (selectedDeletableIds.length && window.confirm(t("Delete selected history items? This cannot be undone."))) {
+                        onBulkDelete(selectedDeletableIds);
+                        setSelectedIds(new Set());
+                        setSelecting(false);
+                      }
+                    }}
+                  >
+                    {bulkDeleting ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+                    {t("Delete selected")} {selectedDeletableIds.length ? `(${selectedDeletableIds.length})` : ""}
+                  </button>
+                </div>
               ) : null}
             </div>
           ) : null}
@@ -202,7 +223,7 @@ export function HistorySidebar<T>({
                       : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
                   ].join(" ")}
                 >
-                  {selecting && deletable ? (
+                  {selecting && (deletable || onSelectionAction) ? (
                     <input
                       type="checkbox"
                       className="mt-2 h-4 w-4 shrink-0 accent-primary"

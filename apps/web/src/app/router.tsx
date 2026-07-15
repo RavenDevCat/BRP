@@ -17,6 +17,9 @@ const RouteInsertAdvisorPage = lazy(() =>
 const NewJobPage = lazy(() =>
   import("@/features/planner/new-job-page").then((module) => ({ default: module.NewJobPage })),
 );
+const OperationsReviewPage = lazy(() =>
+  import("@/features/operations/operations-review-page").then((module) => ({ default: module.OperationsReviewPage })),
+);
 
 function lazyRoutePage(render: () => ReactNode) {
   return function LazyRoutePage() {
@@ -80,6 +83,12 @@ const jobDetailRoute = createRoute({
   component: JobDetailPage,
 });
 
+const operationsReviewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/operations-review/$jobIds",
+  component: lazyRoutePage(() => <OperationsReviewPage />),
+});
+
 const routeTree = rootRoute.addChildren([
   dashboardRoute,
   newJobRoute,
@@ -89,6 +98,7 @@ const routeTree = rootRoute.addChildren([
   adminRoute,
   jobsRoute,
   jobDetailRoute,
+  operationsReviewRoute,
 ]);
 
 export const router = createRouter({ routeTree });

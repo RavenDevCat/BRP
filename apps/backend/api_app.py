@@ -21,6 +21,7 @@ try:
         payload_to_dict,
     )
     from . import backend_service
+    from .operations_review import build_operations_review
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from api_models import (  # type: ignore
         AiAuditRequest,
@@ -30,6 +31,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         payload_to_dict,
     )
     import backend_service  # type: ignore
+    from operations_review import build_operations_review  # type: ignore
 
 
 class BackendHttpError(Exception):
@@ -631,6 +633,38 @@ def list_jobs(context: UserContext = Depends(current_user_context)) -> JSONRespo
             )
         },
     )
+
+
+@_api_route(
+    "POST",
+    "/operations-review/preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def preview_operations_review(
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    job_ids = [
+        str(job_id or "").strip()
+        for job_id in list(_payload_dict(payload).get("job_ids") or [])
+        if str(job_id or "").strip()
+    ]
+    job_ids = list(dict.fromkeys(job_ids))
+    if len(job_ids) < 2:
+        raise BackendHttpError(
+            400, {"error": "Select at least two jobs for operations review."}
+        )
+    if len(job_ids) > 14:
+        raise BackendHttpError(
+            400, {"error": "Operations review supports up to 14 jobs at a time."}
+        )
+    try:
+        review = build_operations_review(
+            [_job_for_context(job_id, context) for job_id in job_ids]
+        )
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    return _json_response(200, review)
 
 
 @_api_route("GET", "/jobs/{job_id}/exports/{export_key}")

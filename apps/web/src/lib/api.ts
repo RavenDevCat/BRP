@@ -83,6 +83,70 @@ export type JobRecord = JobSummary & {
     ai_audit_error?: string | null;
 };
 
+export type OperationsReviewCompatibility = {
+    compatible: boolean;
+    issues: Array<{ job_id?: string; fields: string[] }>;
+    profile: {
+        service_direction?: string | null;
+        traffic_profile?: string | null;
+        time_window_start?: string | null;
+        time_window_end?: string | null;
+    };
+};
+
+export type OperationsReviewEvidence = {
+    job_id: string;
+    job_name: string;
+    scheduled_at?: string | null;
+    started_at?: string | null;
+    schedule_delay_minutes?: number | null;
+    qualified: boolean;
+    exclusion_reasons: string[];
+    scenario_key?: string | null;
+    scenario_name?: string | null;
+    recommendation_type?: string | null;
+    adoption_ready: boolean;
+    route_count?: number | null;
+    affected_rider_count?: number | null;
+    worst_over_limit_minutes?: number | null;
+    worst_source?: string | null;
+    excess_rider_minutes?: number | null;
+    provider_total_duration_minutes?: number | null;
+    plan_fingerprint?: string | null;
+};
+
+export type OperationsReviewCandidate = {
+    candidate_id: string;
+    status: string;
+    sample_count: number;
+    valid_sample_count: number;
+    recurrence_ratio: number;
+    adoption_ready_day_count: number;
+    route_count?: number | null;
+    scenario_key: string;
+    scenario_name: string;
+    representative_job_id: string;
+    representative_job_name: string;
+    sample_job_ids: string[];
+    sample_dates: Array<string | null>;
+    max_affected_rider_count: number;
+    max_over_limit_minutes: number;
+    average_excess_rider_minutes: number;
+    average_provider_duration_minutes: number;
+};
+
+export type OperationsReviewResponse = {
+    compatibility: OperationsReviewCompatibility;
+    selected_job_count: number;
+    qualified_sample_count: number;
+    excluded_sample_count: number;
+    status: string;
+    recommendation?: OperationsReviewCandidate | null;
+    candidates: OperationsReviewCandidate[];
+    daily_evidence: OperationsReviewEvidence[];
+    generated_at: string;
+};
+
 export type AiAuditResponse = {
     job_id: string;
     ai_audit_status: string;
@@ -750,6 +814,14 @@ export function getDemandTemplateUrl() {
 export async function listJobs() {
     const payload = await apiFetch<JobsResponse>("/jobs");
     return payload.jobs;
+}
+
+export function previewOperationsReview(jobIds: string[]) {
+    return apiFetch<OperationsReviewResponse>("/operations-review/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ job_ids: jobIds }),
+    });
 }
 
 export function getJob(jobId: string) {

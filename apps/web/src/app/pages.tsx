@@ -288,6 +288,14 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                     }}
                     onDelete={(jobId) => historyDeleteMutation.mutate(jobId)}
                     onBulkDelete={(jobIds) => bulkHistoryDeleteMutation.mutate(jobIds)}
+                    selectionActionLabel="Compare operations"
+                    selectionActionMin={2}
+                    onSelectionAction={(jobIds) => {
+                        void navigate({
+                            to: "/operations-review/$jobIds",
+                            params: { jobIds: jobIds.join(",") },
+                        });
+                    }}
                     renderItem={(job, active) => (
                         <AuditHistoryItem job={job} active={active} />
                     )}

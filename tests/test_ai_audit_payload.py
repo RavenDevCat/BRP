@@ -192,6 +192,7 @@ def test_scenario_decision_metrics_unions_affected_riders_and_tracks_worst_miss(
                 "status": "failed",
                 "threshold_minutes": 15,
                 "over_limit_rider_count": 5,
+                "max_adverse_minutes": 24,
                 "max_over_limit_minutes": 9,
                 "unavailable_stop_count": 0,
                 "unavailable_route_count": 0,
@@ -207,6 +208,8 @@ def test_scenario_decision_metrics_unions_affected_riders_and_tracks_worst_miss(
     assert metrics["affected_rider_count"] == 9
     assert metrics["worst_over_limit_minutes"] == 9
     assert metrics["worst_source"] == "time_impact"
+    assert metrics["time_impact_over_limit_rider_count"] == 5
+    assert metrics["time_impact_max_adverse_minutes"] == 24
     assert metrics["excess_rider_minutes"] == 77
 
 

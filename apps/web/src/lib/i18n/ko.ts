@@ -690,7 +690,7 @@ const ko: Translations = {
     "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
         "바로 적용할 수 없습니다. 근거가 완전한 계획 중 시간 창과 시간 영향의 종합 위반이 가장 적은 참고안입니다.",
     "Affected riders": "영향받는 탑승자",
-    "Worst miss": "최대 초과",
+    "Worst miss": "최대 탑승 시간 변화",
     "Within limits": "기준 이내",
     "Incomplete evidence": "근거 불완전",
     "Keeps current exception routes protected, then optimizes the remaining stops.":
@@ -1130,8 +1130,8 @@ const ko: Translations = {
     "Operator reference": "운영 기준안",
     "Days matched": "일치 일수",
     "Affected riders, worst day": "최악일 영향 탑승자",
-    "Maximum breach": "최대 초과",
-    "Maximum breach, worst day": "최악일 최대 초과",
+    "Maximum breach": "최대 탑승 시간 변화",
+    "Maximum breach, worst day": "최악일 최대 탑승 시간 변화",
     "Strict Plan": "엄격 계획",
     "Protected Plan": "보호 계획",
     "Average excess rider-minutes": "평균 초과 탑승자-분",

@@ -329,6 +329,15 @@ def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
 def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
     existing = dict(scenario.get("decision_metrics") or {})
     if existing:
+        time_impact_gate = dict(scenario.get("final_time_impact_gate") or {})
+        existing.setdefault(
+            "time_impact_over_limit_rider_count",
+            max(0, _finite_int(time_impact_gate.get("over_limit_rider_count")) or 0),
+        )
+        existing.setdefault(
+            "time_impact_max_adverse_minutes",
+            round(float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0), 1),
+        )
         return existing
 
     routes = [dict(item) for item in list(scenario.get("routes") or [])]
@@ -420,6 +429,9 @@ def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
     impact_affected_rider_count = max(
         0, _finite_int(time_impact_gate.get("over_limit_rider_count")) or 0
     )
+    impact_max_adverse_minutes = float(
+        time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0
+    )
     impact_max_over_limit_minutes = float(
         time_impact_gate.get("max_over_limit_minutes", 0.0) or 0.0
     )
@@ -472,6 +484,7 @@ def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
         "time_window_affected_rider_count": window_affected_rider_count,
         "time_window_max_overrun_minutes": round(window_max_overrun_minutes, 1),
         "time_impact_over_limit_rider_count": impact_affected_rider_count,
+        "time_impact_max_adverse_minutes": round(impact_max_adverse_minutes, 1),
         "time_impact_max_over_limit_minutes": round(
             impact_max_over_limit_minutes, 1
         ),

@@ -110,6 +110,8 @@ export type OperationsReviewEvidence = {
     affected_rider_count?: number | null;
     worst_over_limit_minutes?: number | null;
     worst_source?: string | null;
+    time_impact_affected_rider_count?: number | null;
+    time_impact_max_adverse_minutes?: number | null;
     excess_rider_minutes?: number | null;
     provider_total_duration_minutes?: number | null;
     plan_fingerprint?: string | null;
@@ -131,6 +133,8 @@ export type OperationsReviewCandidate = {
     sample_dates: Array<string | null>;
     max_affected_rider_count: number;
     max_over_limit_minutes: number;
+    max_time_impact_affected_rider_count: number;
+    max_time_impact_adverse_minutes: number;
     average_excess_rider_minutes: number;
     average_provider_duration_minutes: number;
 };

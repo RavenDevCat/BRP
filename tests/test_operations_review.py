@@ -39,6 +39,7 @@ def _scenario(route_label: str, *, excess: float, affected: int, worst: float) -
         "final_time_impact_gate": {
             "status": "failed",
             "over_limit_rider_count": affected,
+            "max_adverse_minutes": worst + 15,
             "max_over_limit_minutes": worst,
             "unavailable_stop_count": 0,
             "unavailable_route_count": 0,
@@ -109,6 +110,10 @@ def test_four_day_review_excludes_weekend_and_late_start_then_groups_stable_plan
     assert review["recommendation"]["sample_count"] == 2
     assert review["recommendation"]["representative_job_id"] == "wed"
     assert review["recommendation"]["scenario_key"] == "exception_preserving"
+    assert review["recommendation"]["max_time_impact_affected_rider_count"] == 7
+    assert review["recommendation"]["max_time_impact_adverse_minutes"] == 25
+    assert review["daily_evidence"][-1]["time_impact_affected_rider_count"] == 7
+    assert review["daily_evidence"][-1]["time_impact_max_adverse_minutes"] == 25
     assert all("plan_fingerprint" not in item for item in review["daily_evidence"])
 
 

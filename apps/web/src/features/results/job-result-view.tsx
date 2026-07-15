@@ -2570,6 +2570,7 @@ type ScenarioDecisionMetrics = {
   timeWindowAffectedRiderCount: number;
   timeWindowMaxOverrunMinutes: number;
   timeImpactOverLimitRiderCount: number;
+  timeImpactMaxAdverseMinutes: number;
   timeImpactMaxOverLimitMinutes: number;
   excessRiderMinutes: number;
 };
@@ -2825,6 +2826,7 @@ function emptyScenarioDecisionMetrics(): ScenarioDecisionMetrics {
     timeWindowAffectedRiderCount: 0,
     timeWindowMaxOverrunMinutes: 0,
     timeImpactOverLimitRiderCount: 0,
+    timeImpactMaxAdverseMinutes: 0,
     timeImpactMaxOverLimitMinutes: 0,
     excessRiderMinutes: 0,
   };
@@ -2836,6 +2838,7 @@ function buildScenarioDecisionMetrics(
   points = asRecordArray(scenario.points),
 ): ScenarioDecisionMetrics {
   const explicit = asRecord(scenario.decision_metrics);
+  const timeImpactGate = asRecord(scenario.final_time_impact_gate);
   if (Object.keys(explicit).length) {
     const worstSource = stringValue(explicit.worst_source);
     return {
@@ -2846,13 +2849,15 @@ function buildScenarioDecisionMetrics(
       timeWindowAffectedRiderCount: Number(explicit.time_window_affected_rider_count || 0),
       timeWindowMaxOverrunMinutes: Number(explicit.time_window_max_overrun_minutes || 0),
       timeImpactOverLimitRiderCount: Number(explicit.time_impact_over_limit_rider_count || 0),
+      timeImpactMaxAdverseMinutes: Number(
+        explicit.time_impact_max_adverse_minutes ?? timeImpactGate.max_adverse_minutes ?? 0,
+      ),
       timeImpactMaxOverLimitMinutes: Number(explicit.time_impact_max_over_limit_minutes || 0),
       excessRiderMinutes: Number(explicit.excess_rider_minutes || 0),
     };
   }
 
   const trafficGate = asRecord(scenario.traffic_gate);
-  const timeImpactGate = asRecord(scenario.final_time_impact_gate);
   const failedRouteIds = new Set(asStringArray(trafficGate.failed_route_ids));
   const riderCountByNode = new globalThis.Map<number, number>();
   points.forEach((point, pointIndex) => {
@@ -2911,6 +2916,7 @@ function buildScenarioDecisionMetrics(
   });
 
   const timeImpactOverLimitRiderCount = Math.max(0, Number(timeImpactGate.over_limit_rider_count || 0));
+  const timeImpactMaxAdverseMinutes = Math.max(0, Number(timeImpactGate.max_adverse_minutes || 0));
   let timeImpactMaxOverLimitMinutes = Number(timeImpactGate.max_over_limit_minutes || 0);
   if (timeImpactMaxOverLimitMinutes <= 0) {
     timeImpactMaxOverLimitMinutes = Math.max(
@@ -2945,6 +2951,7 @@ function buildScenarioDecisionMetrics(
     timeWindowAffectedRiderCount,
     timeWindowMaxOverrunMinutes,
     timeImpactOverLimitRiderCount,
+    timeImpactMaxAdverseMinutes,
     timeImpactMaxOverLimitMinutes,
     excessRiderMinutes: timeWindowExcessRiderMinutes + timeImpactExcessRiderMinutes,
   };
@@ -3094,7 +3101,7 @@ function scenarioAffectedRidersLabel(
 ): string {
   if (scenario.key === "current_plan") return t("Not applicable");
   return scenario.decisionMetrics.evidenceComplete
-    ? formatNumber(scenario.decisionMetrics.affectedRiderCount)
+    ? formatNumber(scenario.decisionMetrics.timeImpactOverLimitRiderCount)
     : t("Incomplete evidence");
 }
 
@@ -3105,9 +3112,8 @@ function scenarioWorstMissLabel(
   if (scenario.key === "current_plan") return t("Not applicable");
   const metrics = scenario.decisionMetrics;
   if (!metrics.evidenceComplete) return t("Incomplete evidence");
-  if (metrics.worstOverLimitMinutes <= 0) return t("Within limits");
-  const source = metrics.worstSource === "time_window" ? t("Time window") : t("Time impact");
-  return `${formatNumber(metrics.worstOverLimitMinutes)} ${t("min")} · ${source}`;
+  if (metrics.timeImpactMaxAdverseMinutes <= 0) return t("Within limits");
+  return `${formatNumber(metrics.timeImpactMaxAdverseMinutes)} ${t("min")}`;
 }
 
 function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario | undefined {

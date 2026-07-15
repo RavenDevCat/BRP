@@ -235,6 +235,8 @@ def _daily_evidence(job: dict[str, Any]) -> dict[str, Any]:
         "affected_rider_count": metrics.get("affected_rider_count"),
         "worst_over_limit_minutes": metrics.get("worst_over_limit_minutes"),
         "worst_source": metrics.get("worst_source"),
+        "time_impact_affected_rider_count": metrics.get("time_impact_over_limit_rider_count"),
+        "time_impact_max_adverse_minutes": metrics.get("time_impact_max_adverse_minutes"),
         "excess_rider_minutes": metrics.get("excess_rider_minutes"),
         "provider_total_duration_minutes": round(
             float((recommended or {}).get("provider_total_duration_s", 0.0) or 0.0) / 60.0,
@@ -289,6 +291,12 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
         "sample_dates": [item.get("scheduled_at") for item in items],
         "max_affected_rider_count": int(max(_number(item, "affected_rider_count") for item in items)),
         "max_over_limit_minutes": round(max(_number(item, "worst_over_limit_minutes") for item in items), 1),
+        "max_time_impact_affected_rider_count": int(
+            max(_number(item, "time_impact_affected_rider_count") for item in items)
+        ),
+        "max_time_impact_adverse_minutes": round(
+            max(_number(item, "time_impact_max_adverse_minutes") for item in items), 1
+        ),
         "average_excess_rider_minutes": round(sum(_number(item, "excess_rider_minutes") for item in items) / count, 1),
         "average_provider_duration_minutes": round(sum(_number(item, "provider_total_duration_minutes") for item in items) / count, 1),
     }

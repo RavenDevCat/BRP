@@ -261,8 +261,8 @@ function DecisionPanel({ candidate }: { candidate: OperationsReviewCandidate }) 
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <Metric label={t("Routes")} value={formatNumber(candidate.route_count)} />
                     <Metric label={t("Days matched")} value={`${formatNumber(candidate.sample_count)} / ${formatNumber(candidate.valid_sample_count)}`} tone="success" />
-                    <Metric label={t("Affected riders, worst day")} value={formatNumber(candidate.max_affected_rider_count)} tone={candidate.max_affected_rider_count ? "warning" : "success"} />
-                    <Metric label={t("Maximum breach, worst day")} value={`${formatNumber(candidate.max_over_limit_minutes)} ${t("min")}`} tone={candidate.max_over_limit_minutes ? "warning" : "success"} />
+                    <Metric label={t("Affected riders, worst day")} value={formatNumber(candidate.max_time_impact_affected_rider_count)} tone={candidate.max_time_impact_affected_rider_count ? "warning" : "success"} />
+                    <Metric label={t("Maximum breach, worst day")} value={`${formatNumber(candidate.max_time_impact_adverse_minutes)} ${t("min")}`} tone={candidate.max_time_impact_adverse_minutes ? "warning" : "success"} />
                     <Metric label={t("Average excess rider-minutes")} value={formatNumber(candidate.average_excess_rider_minutes)} tone={candidate.average_excess_rider_minutes ? "warning" : "success"} />
                 </div>
                 <p className="text-sm leading-6 text-muted-foreground">
@@ -287,6 +287,8 @@ function DailyEvidenceTable({ evidence }: { evidence: Array<{
     route_count?: number | null;
     affected_rider_count?: number | null;
     worst_over_limit_minutes?: number | null;
+    time_impact_affected_rider_count?: number | null;
+    time_impact_max_adverse_minutes?: number | null;
 }> }) {
     const t = useT();
     const { lang } = useLanguage();
@@ -321,8 +323,8 @@ function DailyEvidenceTable({ evidence }: { evidence: Array<{
                                 </td>
                                 <td className="px-4 py-3">{item.scenario_name ? t(item.scenario_name) : t("Not available")}</td>
                                 <td className="px-4 py-3">{formatNumber(item.route_count)}</td>
-                                <td className="px-4 py-3">{formatNumber(item.affected_rider_count)}</td>
-                                <td className="px-4 py-3">{formatNumber(item.worst_over_limit_minutes)} {t("min")}</td>
+                                <td className="px-4 py-3">{formatNumber(item.time_impact_affected_rider_count)}</td>
+                                <td className="px-4 py-3">{formatNumber(item.time_impact_max_adverse_minutes)} {t("min")}</td>
                                 <td className="px-4 py-3">
                                     <Badge tone={item.qualified ? "success" : "neutral"}>
                                         {t(item.qualified ? "Qualified" : "Excluded")}

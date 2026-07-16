@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://brp.example/schema/shanghai-bus-lane-feature.json",
+  "title": "Shanghai bus-lane candidate feature",
+  "type": "object",
+  "required": ["type", "geometry", "properties"],
+  "properties": {
+    "type": {"const": "Feature"},
+    "geometry": {
+      "type": "object",
+      "required": ["type", "coordinates"],
+      "properties": {
+        "type": {"enum": ["LineString", "MultiLineString"]},
+        "coordinates": {"type": "array"}
+      }
+    },
+    "properties": {
+      "type": "object",
+      "required": [
+        "asset_id",
+        "source",
+        "source_ref",
+        "lane_kind",
+        "directions",
+        "active_conditions",
+        "verification_status",
+        "school_bus_eligible",
+        "length_m",
+        "osm_tags"
+      ],
+      "properties": {
+        "asset_id": {"type": "string"},
+        "source": {"const": "openstreetmap"},
+        "source_ref": {"type": "string"},
+        "lane_kind": {
+          "enum": ["separate_busway", "designated_lane", "legacy_busway"]
+        },
+        "directions": {
+          "type": "array",
+          "items": {"enum": ["forward", "backward"]},
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "active_conditions": {"type": "object"},
+        "verification_status": {"const": "candidate"},
+        "school_bus_eligible": {"type": "null"},
+        "length_m": {"type": "number", "minimum": 0},
+        "osm_tags": {"type": "object"}
+      }
+    }
+  }
+}

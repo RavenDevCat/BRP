@@ -1,0 +1,64 @@
+{
+  "asset": "shanghai_bus_lane_foundation",
+  "updated": "2026-07-16",
+  "sources": [
+    {
+      "id": "osm_geofabrik_china",
+      "role": "geometry_bootstrap",
+      "license": "ODbL-1.0",
+      "url": "https://download.geofabrik.de/asia/china.html",
+      "authority": "community",
+      "verification": "candidate_only",
+      "municipality_boundary_relation": 913067,
+      "municipality_boundary_code": "CN-SH",
+      "accepted_tags": [
+        "highway=busway",
+        "busway*",
+        "lanes:bus*",
+        "bus:lanes*",
+        "lanes:psv*",
+        "psv:lanes*"
+      ]
+    },
+    {
+      "id": "shanghai_transport_commission",
+      "role": "authoritative_verification_target",
+      "authority": "official",
+      "geometry_available": false,
+      "reference_network_km": 535.9,
+      "urls": [
+        "https://jtw.sh.gov.cn/jyjabljg/20241123/9703531e0f714902ade3bbcf41a237f9.html",
+        "https://jtw.sh.gov.cn/zxzfxx/20230511/be605a612fc5438d95b120f2f45bec5d.html",
+        "https://data.sh.gov.cn/view/"
+      ],
+      "required_fields": [
+        "geometry",
+        "direction",
+        "active_windows",
+        "current_status",
+        "source_date"
+      ]
+    },
+    {
+      "id": "shanghai_traffic_police_notices",
+      "role": "segment_level_official_patch",
+      "authority": "official",
+      "urls": [
+        "https://gaj.sh.gov.cn/",
+        "https://gaj.sh.gov.cn/shga/wzXxfbZfgkxx/importToWord?pa=7e6fb2fa2038e383c184de1ea0d08df7e0c4efbac55ca3ba01b9b4d8e5009990a5df93fc5877efa9"
+      ],
+      "verification": "manual_geometry_match_required"
+    },
+    {
+      "id": "commercial_map_providers",
+      "role": "bounded_runtime_cross_check_only",
+      "authority": "provider",
+      "verification": "not_a_citywide_source",
+      "restrictions": [
+        "Do not infer dedicated lanes from passenger bus routes.",
+        "Do not crawl or persist a citywide provider road database.",
+        "Do not store provider credentials in this directory."
+      ]
+    }
+  ]
+}

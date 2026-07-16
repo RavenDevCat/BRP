@@ -1059,6 +1059,7 @@ const en: Translations = {
     "Started outside the schedule tolerance": "Started outside the schedule tolerance",
     "No comparable plan evidence": "No comparable plan evidence",
     "Provider evidence is incomplete": "Provider evidence is incomplete",
+    "Frozen route": "Frozen route",
 };
 
 export default en;

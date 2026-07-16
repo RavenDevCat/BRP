@@ -969,6 +969,7 @@ const zh: Translations = {
     "Started outside the schedule tolerance": "开始时间超出允许偏差",
     "No comparable plan evidence": "没有可对比的方案证据",
     "Provider evidence is incomplete": "地图服务证据不完整",
+    "Frozen route": "冻结线路",
 };
 
 export default zh;

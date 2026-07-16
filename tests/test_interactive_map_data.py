@@ -71,6 +71,149 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(payload["stops"][1]["address"], "Stop A")
         self.assertEqual(payload["bounds"]["min_lng"], 121.4)
 
+    def test_optimized_map_names_routes_and_preserves_frozen_source_identity(self) -> None:
+        points = [
+            {
+                "address": "School",
+                "plot_lat": 31.2,
+                "plot_lng": 121.4,
+                "passenger_count": 0,
+                "is_depot": True,
+            },
+            {
+                "address": "Stop A",
+                "plot_lat": 31.21,
+                "plot_lng": 121.41,
+                "passenger_count": 2,
+                "is_depot": False,
+            },
+            {
+                "address": "Stop B",
+                "plot_lat": 31.22,
+                "plot_lng": 121.42,
+                "passenger_count": 3,
+                "is_depot": False,
+            },
+        ]
+
+        def route(route_id: str, node: int, **extra):
+            return {
+                "route_id": route_id,
+                "vehicle_id": node,
+                "bus_type_name": "Large Bus",
+                "load": points[node]["passenger_count"],
+                "nodes": [node, 0],
+                "time_s": 600,
+                "distance_m": 1200,
+                "leg_details": [
+                    {
+                        "duration_s": 600,
+                        "distance_m": 1200,
+                        "geometry": [
+                            [points[node]["plot_lat"], points[node]["plot_lng"]],
+                            [points[0]["plot_lat"], points[0]["plot_lng"]],
+                        ],
+                    }
+                ],
+                **extra,
+            }
+
+        job_record = {
+            "job_id": "job-route-display",
+            "result": {
+                "structured_results": {
+                    "time_constrained": {
+                        "points": points,
+                        "routes": [route("R8", 1), route("R9", 2)],
+                    },
+                    "exception_preserving": {
+                        "points": points,
+                        "routes": [
+                            route("R1", 1, exception_role="frozen_current"),
+                            route("R2", 2, exception_role="optimized_remainder"),
+                        ],
+                    },
+                }
+            },
+        }
+
+        strict, strict_error = self.service._build_job_map_payload(
+            job_record,
+            "time_constrained",
+            "time_constrained",
+            attach_impact=False,
+        )
+        protected, protected_error = self.service._build_job_map_payload(
+            job_record,
+            "exception_preserving",
+            "exception_preserving",
+            attach_impact=False,
+        )
+
+        self.assertIsNone(strict_error)
+        self.assertIsNone(protected_error)
+        assert strict is not None and protected is not None
+        self.assertEqual(
+            [route_payload["id"] for route_payload in strict["routes"]],
+            ["Opt Bus 1", "Opt Bus 2"],
+        )
+        self.assertEqual(
+            [route_payload["source_route_id"] for route_payload in strict["routes"]],
+            ["R8", "R9"],
+        )
+        self.assertEqual(
+            [route_payload["id"] for route_payload in protected["routes"]],
+            ["R1", "Opt Bus 1"],
+        )
+        self.assertEqual(
+            protected["routes"][0]["exception_role"],
+            "frozen_current",
+        )
+        self.assertEqual(
+            protected["stops"][-2]["source_route_id"],
+            "R2",
+        )
+
+    def test_schedule_impact_uses_source_route_identity(self) -> None:
+        current = {
+            "service_direction": "From School",
+            "stops": [
+                {
+                    "id": "R2:0:1",
+                    "route_id": "R2",
+                    "source_route_id": "R2",
+                    "node_index": 1,
+                    "order": 0,
+                    "passenger_count": 3,
+                    "scheduled_time_minutes": 960,
+                    "scheduled_time_label": "16:00",
+                }
+            ],
+        }
+        optimized = {
+            "service_direction": "From School",
+            "stops": [
+                {
+                    "id": "Opt Bus 1:0:1",
+                    "route_id": "Opt Bus 1",
+                    "source_route_id": "R2",
+                    "node_index": 1,
+                    "order": 0,
+                    "passenger_count": 3,
+                    "scheduled_time_minutes": 965,
+                    "scheduled_time_label": "16:05",
+                }
+            ],
+            "routes": [{"id": "Opt Bus 1"}],
+        }
+
+        self.service._attach_schedule_impact(optimized, current)
+
+        impact = optimized["stops"][0]["time_impact"]
+        self.assertFalse(impact["route_changed"])
+        self.assertEqual(impact["current_route_id"], "R2")
+        self.assertEqual(impact["new_route_id"], "Opt Bus 1")
+
     def test_china_map_payload_adds_amap_display_geometry_and_duration(self) -> None:
         old_key = os.environ.get("AMAP_API_KEY")
         old_enabled = self.service.AMAP_DISPLAY_GEOMETRY_ENABLED

@@ -169,6 +169,8 @@ export type JobMapBounds = {
 
 export type JobMapRoute = {
     id: string;
+    source_route_id?: string;
+    exception_role?: string;
     route_index: number;
     vehicle_id?: string | number | null;
     bus_type_name: string;
@@ -192,6 +194,7 @@ export type JobMapRoute = {
 export type JobMapStop = {
     id: string;
     route_id: string;
+    source_route_id?: string;
     route_index: number;
     order: number;
     display_label?: string;

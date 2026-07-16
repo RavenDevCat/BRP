@@ -69,6 +69,7 @@ def test_scenario_template_workbook_includes_am_window_gate():
             "routes": [
                 {
                     "route_id": "Bus 1",
+                    "display_route_id": "Opt Bus 1",
                     "bus_type_name": "18-fbus",
                     "bus_capacity": 18,
                     "nodes": [0, 1],
@@ -88,6 +89,7 @@ def test_scenario_template_workbook_includes_am_window_gate():
     workbook = load_workbook(io.BytesIO(content), read_only=True)
     rows = list(workbook["current_plan_assignments"].iter_rows(values_only=True))
     assert "am window status" in rows[0]
+    assert rows[1][0] == "Opt Bus 1"
     assert rows[1][-5:-1] == ("failed", "06:00", "08:12", 12)
 
 

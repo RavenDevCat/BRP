@@ -240,6 +240,7 @@ export function InteractiveRouteMap({
             if (normalizedSearch) {
                 const haystack = [
                     route.id,
+                    route.source_route_id,
                     route.bus_type_name,
                     String(route.vehicle_id ?? ""),
                     String(route.route_index + 1),
@@ -780,6 +781,7 @@ export function InteractiveRouteMap({
                     )}
                     {visibleRoutes.map((route) => {
                         const active = selectedRouteId === route.id;
+                        const frozen = routeIsFrozen(route);
                         const routeStops = stopsByRouteId.get(route.id) || [];
                         return (
                             <div
@@ -796,9 +798,13 @@ export function InteractiveRouteMap({
                                         "flex w-full items-start gap-3 border-l-2 px-3 py-3 text-left transition",
                                         fullscreen ? "rounded-lg" : "",
                                         active
-                                            ? fullscreen
-                                                ? "bg-white/56 backdrop-blur"
-                                                : "bg-primary/10"
+                                            ? frozen
+                                                ? "bg-indigo-100/90"
+                                                : fullscreen
+                                                  ? "bg-white/56 backdrop-blur"
+                                                  : "bg-primary/10"
+                                            : frozen
+                                              ? "bg-indigo-50/80 hover:bg-indigo-100/80"
                                             : fullscreen
                                               ? "hover:bg-white/42"
                                               : "hover:bg-muted",
@@ -817,7 +823,14 @@ export function InteractiveRouteMap({
                                     />
                                     <span className="min-w-0 flex-1">
                                         <span className="flex min-w-0 items-center gap-2">
-                                            <span className="truncate text-sm font-semibold text-foreground">
+                                            <span
+                                                className={cn(
+                                                    "truncate text-sm font-semibold",
+                                                    frozen
+                                                        ? "text-indigo-800"
+                                                        : "text-foreground",
+                                                )}
+                                            >
                                                 {routeLabel(route)}
                                             </span>
                                             <RouteStatusBadge route={route} />
@@ -1461,7 +1474,14 @@ export function InteractiveRouteMap({
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">
-                                    <div className="truncate text-sm font-semibold">
+                                    <div
+                                        className={cn(
+                                            "truncate text-sm font-semibold",
+                                            routeIsFrozen(selectedRoute)
+                                                ? "text-indigo-800"
+                                                : "text-foreground",
+                                        )}
+                                    >
                                         {routeLabel(selectedRoute)}
                                     </div>
                                     <RouteStatusBadge route={selectedRoute} />
@@ -1658,6 +1678,9 @@ function routeVehicleLabel(route: JobMapRoute) {
 }
 
 function routeStatusLabel(route: JobMapRoute) {
+    if (routeIsFrozen(route)) {
+        return "Frozen route";
+    }
     const loadRatio = routeLoadRatio(route);
     if (loadRatio >= 1) {
         return "Capacity";
@@ -1673,6 +1696,9 @@ function routeStatusLabel(route: JobMapRoute) {
 
 function routeListAccentClass(route: JobMapRoute) {
     const status = routeStatusLabel(route);
+    if (status === "Frozen route") {
+        return "border-l-indigo-400";
+    }
     if (status === "Capacity") {
         return "border-l-rose-300";
     }
@@ -1686,6 +1712,7 @@ function routeListAccentClass(route: JobMapRoute) {
 }
 
 function RouteStatusBadge({ route }: { route: JobMapRoute }) {
+    const t = useT();
     const label = routeStatusLabel(route);
     if (!label) {
         return null;
@@ -1694,16 +1721,22 @@ function RouteStatusBadge({ route }: { route: JobMapRoute }) {
         <span
             className={cn(
                 "shrink-0 rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                label === "Capacity"
+                label === "Frozen route"
+                    ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                    : label === "Capacity"
                     ? "border-rose-200 bg-rose-50 text-rose-700"
                     : label === "High load"
                       ? "border-amber-200 bg-amber-50 text-amber-700"
                       : "border-sky-200 bg-sky-50 text-sky-700",
             )}
         >
-            {label}
+            {t(label)}
         </span>
     );
+}
+
+function routeIsFrozen(route: JobMapRoute) {
+    return route.exception_role === "frozen_current";
 }
 
 function RouteMetric({ label, value }: { label: string; value: string }) {

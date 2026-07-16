@@ -160,6 +160,7 @@ MAP_SCENARIO_LABELS = {
     "time_constrained": "Strict Plan",
     "exception_preserving": "Protected Plan",
 }
+OPTIMIZED_ROUTE_SCENARIOS = {"time_constrained", "exception_preserving"}
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
     "original": "original_html",
@@ -3361,6 +3362,37 @@ def _job_result_scenario(result: dict[str, Any], scenario_key: str) -> dict[str,
     return merged
 
 
+def _routes_with_display_ids(
+    routes: list[dict[str, Any]],
+    scenario_key: str,
+) -> list[dict[str, Any]]:
+    optimized_index = 0
+    decorated: list[dict[str, Any]] = []
+    for route_index, raw_route in enumerate(routes, start=1):
+        route = dict(raw_route or {})
+        source_route_id = str(
+            route.get("source_route_id")
+            or route.get("route_id")
+            or route.get("id")
+            or f"Bus {route_index}"
+        ).strip()
+        route["source_route_id"] = source_route_id
+        if (
+            scenario_key in OPTIMIZED_ROUTE_SCENARIOS
+            and str(route.get("exception_role") or "") != "frozen_current"
+        ):
+            optimized_index += 1
+            route["display_route_id"] = str(
+                route.get("display_route_id") or f"Opt Bus {optimized_index}"
+            ).strip()
+        else:
+            route["display_route_id"] = str(
+                route.get("display_route_id") or source_route_id
+            ).strip()
+        decorated.append(route)
+    return decorated
+
+
 def _format_time_impact_limit_minutes(value: Any) -> str:
     try:
         numeric = max(0.0, float(value))
@@ -4517,7 +4549,11 @@ def _attach_schedule_impact(
         else:
             adverse_delta_minutes = max(0.0, delta_minutes)
             adverse_direction = "later_dropoff"
-        route_changed = str(current_stop.get("route_id") or "") != str(stop.get("route_id") or "")
+        current_route_identity = str(
+            current_stop.get("source_route_id") or current_stop.get("route_id") or ""
+        )
+        new_route_identity = str(stop.get("source_route_id") or stop.get("route_id") or "")
+        route_changed = current_route_identity != new_route_identity
         affected_rider_count = max(
             int(current_stop.get("passenger_count", 0) or 0),
             int(stop.get("passenger_count", 0) or 0),
@@ -4608,7 +4644,10 @@ def _build_job_map_payload(
     structured = dict(result.get("structured_results") or {})
     scenario = _job_result_scenario(result, scenario_key)
     points = list(scenario.get("points") or [])
-    routes = list(scenario.get("routes") or [])
+    routes = _routes_with_display_ids(
+        [dict(route or {}) for route in list(scenario.get("routes") or [])],
+        scenario_key,
+    )
     if not points or not routes:
         return None, f"Map data is not available: {artifact_key}"
 
@@ -4627,8 +4666,11 @@ def _build_job_map_payload(
 
     for route_index, route in enumerate(routes):
         route_id = str(
-            route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}"
+            route.get("display_route_id")
+            or route.get("route_id")
+            or f"Bus {route.get('vehicle_id', route_index + 1)}"
         )
+        source_route_id = str(route.get("source_route_id") or route_id)
         geometry = _route_geometry_coordinates(dict(route))
         nodes = list(route.get("nodes") or [])
         display_geometry: list[list[float]] | None = None
@@ -4704,6 +4746,7 @@ def _build_job_map_payload(
                 {
                     "id": stop_id,
                     "route_id": route_id,
+                    "source_route_id": source_route_id,
                     "route_index": route_index,
                     "order": order,
                     "node_index": node_index,
@@ -4726,6 +4769,8 @@ def _build_job_map_payload(
         route_payloads.append(
             {
                 "id": route_id,
+                "source_route_id": source_route_id,
+                "exception_role": str(route.get("exception_role") or "").strip(),
                 "route_index": route_index,
                 "vehicle_id": route.get("vehicle_id"),
                 "bus_type_name": str(route.get("bus_type_name") or "").strip(),
@@ -4940,6 +4985,11 @@ def _build_scenario_template_export(
     scenario = _job_result_scenario(result, scenario_key)
     if not list(scenario.get("routes") or []) or not list(scenario.get("points") or []):
         return None, f"{scenario_label} has no route table to export."
+    scenario = dict(scenario)
+    scenario["routes"] = _routes_with_display_ids(
+        [dict(route or {}) for route in list(scenario.get("routes") or [])],
+        scenario_key,
+    )
     planner_config = dict(
         result.get("planner_config") or job_record.get("config") or {}
     )
@@ -4978,7 +5028,9 @@ def _build_scenario_template_export(
         for route_index, route in enumerate(list(scenario.get("routes") or [])):
             route = dict(route or {})
             route_id = str(
-                route.get("route_id") or f"Bus {route.get('vehicle_id', route_index + 1)}"
+                route.get("display_route_id")
+                or route.get("route_id")
+                or f"Bus {route.get('vehicle_id', route_index + 1)}"
             ).strip()
             route_gate = route_gate_by_id.get(route_id)
             if route_gate:

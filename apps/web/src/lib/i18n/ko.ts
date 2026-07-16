@@ -1150,6 +1150,7 @@ const ko: Translations = {
     "Started outside the schedule tolerance": "예약 허용 오차 밖에서 시작됨",
     "No comparable plan evidence": "비교 가능한 계획 근거 없음",
     "Provider evidence is incomplete": "지도 제공자 근거 불완전",
+    "Frozen route": "고정 노선",
 };
 
 export default ko;

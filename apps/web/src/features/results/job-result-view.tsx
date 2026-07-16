@@ -803,7 +803,7 @@ function BaselinePanel({
                 </div>
               </CardHeader>
               <CardContent>
-                <BaselineRouteTable routes={scenario.routes} />
+                <BaselineRouteTable routes={scenario.routes} scenarioKey={scenario.key} />
               </CardContent>
             </Card>
           ))}
@@ -2146,8 +2146,30 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
   );
 }
 
-function BaselineRouteTable({ routes }: { routes: Array<Record<string, unknown>> }) {
+function BaselineRouteTable({
+  routes,
+  scenarioKey,
+}: {
+  routes: Array<Record<string, unknown>>;
+  scenarioKey: string;
+}) {
   const t = useT();
+  let optimizedIndex = 0;
+  const displayRoutes = routes.map((route, index) => {
+    const frozen = stringValue(route.exception_role) === "frozen_current";
+    const sourceRouteId = stringValue(
+      route.source_route_id || route.route_id || route.vehicle_id || index + 1,
+    );
+    const optimized = ["time_constrained", "exception_preserving"].includes(scenarioKey) && !frozen;
+    if (optimized) optimizedIndex += 1;
+    return {
+      route,
+      frozen,
+      displayRouteId: stringValue(
+        route.display_route_id || (optimized ? `Opt Bus ${optimizedIndex}` : sourceRouteId),
+      ),
+    };
+  });
   return (
     <div className="max-h-[420px] overflow-auto">
       <table className="w-full min-w-[760px] border-collapse text-sm">
@@ -2164,9 +2186,24 @@ function BaselineRouteTable({ routes }: { routes: Array<Record<string, unknown>>
           </tr>
         </thead>
         <tbody>
-          {routes.map((route, index) => (
-            <tr key={`${stringValue(route.route_id || route.vehicle_id)}-${index}`} className="border-t border-border">
-              <td className="px-3 py-2 font-medium">{stringValue(route.route_id || route.vehicle_id || index + 1)}</td>
+          {displayRoutes.map(({ route, frozen, displayRouteId }, index) => (
+            <tr
+              key={`${displayRouteId}-${index}`}
+              className={cn(
+                "border-t border-border",
+                frozen ? "bg-indigo-50/80 text-indigo-900" : "",
+              )}
+            >
+              <td className="px-3 py-2 font-medium">
+                <span className="flex items-center gap-2">
+                  {displayRouteId}
+                  {frozen ? (
+                    <span className="rounded-sm border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
+                      {t("Frozen route")}
+                    </span>
+                  ) : null}
+                </span>
+              </td>
               <td className="px-3 py-2">{stringValue(route.bus_type_name || route.bus_type)}</td>
               <td className="px-3 py-2">{formatNumber(routeStopCount(route))}</td>
               <td className="px-3 py-2">{formatNumber(routePassengerCount(route))}</td>
@@ -3245,6 +3282,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     capacity: t("CAPACITY"),
     highLoadBadge: t("HIGH LOAD"),
     longBadge: t("LONG"),
+    frozenRoute: t("Frozen route"),
     min: t("min"),
   }).replace(/</g, "\\u003c");
   return `<!doctype html>
@@ -3284,6 +3322,9 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     .routes { min-height: 0; flex: 1; overflow: auto; padding: 9px; display: flex; flex-direction: column; gap: 8px; }
     .route-card { flex: 0 0 auto; overflow: hidden; border: 1px solid rgba(255,255,255,.38); border-radius: 12px; background: rgba(255,255,255,.28); box-shadow: 0 4px 16px rgba(15,23,42,.10); backdrop-filter: blur(20px); }
     .route-card.active { background: rgba(255,255,255,.58); }
+    .route-card.frozen { border-color: #a5b4fc; background: rgba(238,242,255,.86); }
+    .route-card.frozen.active { background: rgba(224,231,255,.94); }
+    .route-card.frozen .route-title { color: #3730a3; }
     .route-main { width: 100%; min-height: 76px; display: flex; gap: 12px; align-items: flex-start; border: 0; border-left: 3px solid transparent; background: transparent; padding: 13px 12px; text-align: left; cursor: pointer; color: #111827; }
     .dot { width: 12px; height: 12px; margin-top: 5px; flex: none; border-radius: 999px; box-shadow: 0 0 0 2px rgba(255,255,255,.9); }
     .route-text { display: block; min-width: 0; flex: 1; }
@@ -3399,8 +3440,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function selectedRouteGeojson() { const route = routesById.get(selectedRouteId); return { type: "FeatureCollection", features: route && routeGeometry(route).length >= 2 ? [{ type: "Feature", properties: { route_id: route.id, color: color(route.route_index) }, geometry: { type: "LineString", coordinates: routeGeometry(route) } }] : [] }; }
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }
     function updateMapSources() { if (!map.getSource("routes")) return; map.getSource("route-connectors").setData(connectorGeojson(Boolean(selectedRouteId))); map.getSource("routes").setData(routeGeojson(Boolean(selectedRouteId))); map.getSource("selected-route-connectors").setData(selectedConnectorGeojson()); map.getSource("selected-route").setData(selectedRouteGeojson()); map.getSource("stops").setData(stopGeojson()); }
-    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
-    function routeCard(route) { const active = route.id === selectedRouteId; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
+    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.source_route_id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
+    function routeCard(route) { const active = route.id === selectedRouteId; const frozen = route.exception_role === 'frozen_current'; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active ' : '') + (frozen ? 'frozen' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + frozenBadge(route) + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
     function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? labels.schoolStart : labels.stop + ' ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' ' + labels.riders + '</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
     function fitAll() { if (!bounds) return; map.fitBounds([[bounds.min_lng, bounds.min_lat], [bounds.max_lng, bounds.max_lat]], { padding: 72, duration: 500 }); }
@@ -3416,6 +3457,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     }
     function fitRoute(route) { const geometry = routeGeometry(route); if (!route || geometry.length < 2) return; const connectorPoints = routeConnectors.filter(connector => connector.route_id === route.id).flatMap(connector => connector.geometry || []); const points = geometry.concat(connectorPoints); const lngs = points.map(p => p[0]).filter(Number.isFinite); const lats = points.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
     function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? labels.timeWindow : gate.status === 'unavailable' ? labels.unverified : route.load / (route.bus_capacity || 0) >= 1 ? labels.capacity : route.load / (route.bus_capacity || 1) >= .85 ? labels.highLoadBadge : route.duration_s >= 3600 ? labels.longBadge : ''; if (!status) return ''; return '<span class="badge ' + (status === labels.capacity || status === labels.timeWindow ? 'capacity' : status === labels.highLoadBadge || status === labels.unverified ? 'high' : '') + '">' + esc(status) + '</span>'; }
+    function frozenBadge(route) { return route.exception_role === 'frozen_current' ? '<span class="badge">' + esc(labels.frozenRoute) + '</span>' : ''; }
     function stopTiming(stop) { return (stop.scheduled_time_label ? esc(stop.scheduled_time_label) + ' · ' : '') + duration(stop.cumulative_duration_s); }
     function color(index) { return colors[index % colors.length]; }
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }

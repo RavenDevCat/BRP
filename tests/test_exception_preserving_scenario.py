@@ -725,3 +725,187 @@ def test_protected_prefers_route_preserving_reallocation(monkeypatch):
     assert result["exception_preserving"]["strategy"] == "route_preserving_reallocation"
     assert next(route for route in result["routes"] if route["route_id"] == "R0")["nodes"] == [1, 0]
     assert result["feasibility_report"]["status"] == "passed"
+
+
+def test_protected_continues_below_minimum_saving(monkeypatch):
+    points = [
+        {"node_id": 0, "is_depot": True, "passenger_count": 0},
+        *[
+            {"node_id": node_id, "passenger_count": 1}
+            for node_id in range(1, 5)
+        ],
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 4,
+        "routes": [
+            {
+                "route_id": "R0",
+                "nodes": [1, 0],
+                "load": 1,
+                "bus_type_name": "Large Bus",
+                "bus_capacity": 42,
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 5,
+                },
+            },
+            *[
+                {
+                    "route_id": f"R{node_id}",
+                    "nodes": [node_id, 0],
+                    "load": 1,
+                    "bus_type_name": "Large Bus",
+                    "bus_capacity": 42,
+                    "final_route_traffic_gate": {"status": "passed"},
+                }
+                for node_id in range(2, 5)
+            ],
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R0"],
+            "max_time_window_overrun_minutes": 5,
+        },
+    }
+    route_preserving = {
+        "points": points,
+        "routes": [
+            {**current["routes"][0], "exception_role": "frozen_current"},
+            {
+                "route_id": "R2",
+                "nodes": [2, 3, 0],
+                "load": 2,
+                "bus_type_name": "Large Bus",
+                "bus_capacity": 42,
+            },
+            current["routes"][3],
+        ],
+        "bus_count": 3,
+        "traffic_gate": current["traffic_gate"],
+        "final_time_impact_gate": {
+            "status": "passed",
+            "over_limit_stop_count": 0,
+            "over_limit_rider_count": 0,
+            "max_adverse_minutes": 0,
+        },
+        "feasibility_report": {"status": "passed", "failure_reasons": []},
+        "vehicle_saving_target": {
+            "status": "passed",
+            "saved_route_count": 1,
+            "minimum_vehicle_reduction": 1,
+        },
+        "exception_preserving": {
+            "accepted": True,
+            "strategy": "route_preserving_reallocation",
+            "frozen_route_count": 1,
+            "frozen_route_ids": ["R0"],
+        },
+    }
+    attempted_limits = []
+
+    def fake_compute(_planner, subset_points, *_args, reduced_vehicle_limit=None, **_kwargs):
+        attempted_limits.append(reduced_vehicle_limit)
+        return {
+            "points": subset_points,
+            "routes": [
+                {
+                    "route_id": "Bus 1",
+                    "nodes": [1, 2, 3, 0],
+                    "load": 3,
+                    "bus_type_name": "Large Bus",
+                    "bus_capacity": 42,
+                }
+            ],
+            "time_constraint": {
+                "enabled": True,
+                "mode": "hard",
+                "strict_satisfied": True,
+                "bounded_solver_stop_count": 3,
+                "expected_solver_stop_count": 3,
+            },
+        }
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {
+            "status": "failed",
+            "gate_type": "arrival_window",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R0"],
+            "max_time_window_overrun_minutes": 5,
+        }
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = (
+                {"status": "failed", "time_window_overrun_minutes": 5}
+                if route["route_id"] == "R0"
+                else {"status": "passed"}
+            )
+        return scenario["traffic_gate"]
+
+    def final_validator(scenario, _points):
+        scenario["final_time_impact_gate"] = {
+            "status": "passed",
+            "compared_stop_count": 3,
+            "over_limit_stop_count": 0,
+            "over_limit_rider_count": 0,
+            "max_adverse_minutes": 0,
+        }
+        return scenario["final_time_impact_gate"]
+
+    monkeypatch.setattr(
+        planner_core,
+        "_build_route_preserving_protected_scenario",
+        lambda *_args, **_kwargs: route_preserving,
+    )
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+    monkeypatch.setattr(
+        planner_core,
+        "_repair_failed_routes_with_spare_vehicles",
+        lambda _planner, candidate, *_args, **_kwargs: candidate,
+    )
+
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(
+            service_direction="To School",
+            minimum_vehicle_reduction=1,
+            route_stop_limit=10,
+            mid_bus_max_count=0,
+            small_bus_max_count=0,
+        ),
+        [],
+        [{"name": "Large Bus", "capacity": 42, "max_count": 4}],
+        3,
+        standard_scenarios=[],
+        node_time_upper_bounds_builder=lambda _points: {
+            node_id: 900 for node_id in range(1, 5)
+        },
+        time_constraint_metadata={
+            "enabled": True,
+            "mode": "hard",
+            "final_validation_required": True,
+            "expected_solver_stop_count": 3,
+        },
+        final_time_impact_validator=final_validator,
+        solve_time=[
+            [0 if left == right else 60 for right in range(5)]
+            for left in range(5)
+        ],
+    )
+
+    assert attempted_limits == [1]
+    assert result["bus_count"] == 2
+    assert result["vehicle_saving_target"]["saved_route_count"] == 2
+    assert result["constraint_search_outcome"]["selected_vehicle_count"] == 2
+    assert next(route for route in result["routes"] if route["route_id"] == "R0")[
+        "display_route_id"
+    ] == "R0"
+    assert {
+        route["display_route_id"]
+        for route in result["routes"]
+        if route["route_id"] != "R0"
+    } == {"Opt Bus 1"}

@@ -2137,8 +2137,11 @@ def build_baseline_template_workbook_bytes(
     fleet_counts: dict[tuple[str, int], int] = {}
 
     for route_index, route in enumerate(routes, start=1):
-        route_id = str(route.get("route_id") or route.get("vehicle_id") or route_index).strip()
-        if not route_id.upper().startswith("R"):
+        display_route_id = str(route.get("display_route_id") or "").strip()
+        route_id = display_route_id or str(
+            route.get("route_id") or route.get("vehicle_id") or route_index
+        ).strip()
+        if not display_route_id and not route_id.upper().startswith("R"):
             route_id = f"R{route_id}"
         bus_type = str(route.get("bus_type_name") or route.get("bus_type") or "").strip() or "Unknown"
         bus_capacity = int(route.get("bus_capacity", 0) or 0)
@@ -6569,6 +6572,24 @@ def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -
     }
 
 
+def _attach_optimized_route_display_ids(result: dict[str, Any]) -> dict[str, Any]:
+    optimized_index = 0
+    for route_index, route in enumerate(list(result.get("routes") or []), start=1):
+        source_route_id = str(
+            route.get("source_route_id")
+            or route.get("route_id")
+            or route.get("id")
+            or f"Bus {route_index}"
+        ).strip()
+        route["source_route_id"] = source_route_id
+        if str(route.get("exception_role") or "") == "frozen_current":
+            route["display_route_id"] = source_route_id
+            continue
+        optimized_index += 1
+        route["display_route_id"] = f"Opt Bus {optimized_index}"
+    return result
+
+
 def _attach_vehicle_ladder_metadata(
     result: dict[str, Any],
     attempts: list[dict[str, Any]],
@@ -6578,6 +6599,7 @@ def _attach_vehicle_ladder_metadata(
     selected_target_vehicle_count: int | None,
     frozen_route_count: int = 0,
 ) -> dict[str, Any]:
+    _attach_optimized_route_display_ids(result)
     metadata = {
         "enabled": True,
         "current_route_count": max(0, int(current_route_count or 0)),
@@ -7309,6 +7331,7 @@ def build_exception_preserving_scenario(
     if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
         return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
 
+    route_preserving: dict[str, Any] | None = None
     if (
         callable(node_time_upper_bounds_builder)
         and callable(final_time_impact_validator)
@@ -7327,8 +7350,6 @@ def build_exception_preserving_scenario(
             baseline_name=baseline_name,
             scenario_label=scenario_label,
         )
-        if route_preserving is not None:
-            return route_preserving
 
     current_routes = [dict(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
@@ -7343,7 +7364,7 @@ def build_exception_preserving_scenario(
     minimum_vehicle_reduction = max(0, int(config.minimum_vehicle_reduction or 0))
     target_vehicle_count = max(0, current_route_count - minimum_vehicle_reduction)
     attempts: list[dict[str, Any]] = []
-    best_accepted_candidate: dict[str, Any] | None = None
+    best_accepted_candidate: dict[str, Any] | None = route_preserving
     best_failed_candidate: dict[str, Any] | None = None
     remaining_min_vehicle_count = 0
     preflight_infeasible = False
@@ -7372,7 +7393,36 @@ def build_exception_preserving_scenario(
             )
         else:
             remaining_limits = [0]
-        if remaining_service_count and not remaining_limits:
+        if route_preserving is not None:
+            protected = dict(route_preserving.get("exception_preserving") or {})
+            route_preserving_frozen_count = int(protected.get("frozen_route_count", 0) or 0)
+            if route_preserving_frozen_count == frozen_count:
+                route_preserving_route_count = _scenario_bus_count(route_preserving)
+                route_preserving_remaining_limit = max(
+                    0,
+                    route_preserving_route_count - frozen_count,
+                )
+                attempts.append(
+                    {
+                        "strategy": "route_preserving_reallocation",
+                        "frozen_route_count": frozen_count,
+                        "frozen_route_ids": list(protected.get("frozen_route_ids") or []),
+                        "remaining_stop_count": remaining_service_count,
+                        "remaining_vehicle_limit": route_preserving_remaining_limit,
+                        "route_count": route_preserving_route_count,
+                        "accepted": True,
+                        "vehicle_limit_relaxed": False,
+                        "vehicle_saving_target": dict(
+                            route_preserving.get("vehicle_saving_target") or {}
+                        ),
+                    }
+                )
+                remaining_limits = [
+                    limit
+                    for limit in remaining_limits
+                    if limit < route_preserving_remaining_limit
+                ]
+        if remaining_service_count and not remaining_limits and best_accepted_candidate is None:
             preflight_infeasible = True
             attempts.append(
                 {
@@ -7607,6 +7657,7 @@ def build_exception_preserving_scenario(
             "frozen_route_count": len(failed_routes),
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
+            "selected_vehicle_count": _scenario_bus_count(best_candidate) if accepted else None,
             "attempted_remainder_vehicle_caps": [
                 int(item["remaining_vehicle_limit"])
                 for item in attempts
@@ -7614,6 +7665,7 @@ def build_exception_preserving_scenario(
             ],
             "feasible_candidate_count": sum(1 for item in attempts if item.get("accepted")),
         }
+        _attach_optimized_route_display_ids(best_candidate)
         return best_candidate
     error_attempts = [dict(attempt) for attempt in attempts if attempt.get("error")]
     tried_limits = [

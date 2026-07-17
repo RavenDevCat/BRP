@@ -257,6 +257,18 @@ def _scenario_summary(
     enabled = bool(scenario) and scenario.get("enabled") is not False
     decision_metrics = _scenario_decision_metrics(scenario)
     time_constraint = dict(scenario.get("time_constraint") or {})
+    protected = dict(scenario.get("exception_preserving") or {})
+    protected_outcome = dict(scenario.get("constraint_search_outcome") or {})
+    protected_attempts = [dict(item) for item in list(protected.get("attempts") or [])]
+    frozen_route_count = int(
+        protected.get("frozen_route_count")
+        or protected_outcome.get("frozen_route_count")
+        or time_constraint.get("frozen_route_count")
+        or 0
+    )
+    frozen_route_ids = list(protected.get("frozen_route_ids") or [])
+    if not frozen_route_ids and protected_attempts:
+        frozen_route_ids = list(protected_attempts[0].get("frozen_route_ids") or [])
     time_impact = _compact_time_impact(
         dict(scenario.get("time_impact") or {})
         or dict(dict(scenario.get("summary") or {}).get("time_impact") or {})
@@ -268,8 +280,15 @@ def _scenario_summary(
     return {
         "key": key,
         "name": _scenario_display_name(key, result, scenario, planner_config),
+        "solver_role": {
+            "current_plan": "control_plan_only",
+            "time_constrained": "all_routes_under_configured_hard_constraints",
+            "exception_preserving": "freeze_existing_noncompliant_routes_and_optimize_the_remainder",
+        }.get(key),
         "enabled": enabled,
         "skipped_reason": scenario.get("skipped_reason"),
+        "frozen_route_count": frozen_route_count,
+        "frozen_route_ids": _take(frozen_route_ids, 12),
         "route_count": scenario.get("route_count") or scenario.get("bus_count"),
         "stop_count": _scenario_service_stop_count(scenario),
         "avg_route_distance_km": _float_km(scenario.get("avg_route_distance_m")),
@@ -663,6 +682,19 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     current_vs_baseline = dict(result.get("current_plan_comparison") or {})
     planner_config = dict(metadata.get("planner_config") or job_record.get("config") or {})
     time_impact_limit_minutes = _time_impact_limit_minutes(result, time_constrained, planner_config)
+    service_direction = str(
+        result.get("service_direction") or planner_config.get("service_direction") or ""
+    ).strip()
+    traffic_profile = (
+        result.get("traffic_profile_name") or planner_config.get("traffic_profile_name")
+    )
+    try:
+        comfort_load_factor = min(
+            1.0,
+            max(0.1, float(planner_config.get("comfort_load_factor", 1.0) or 1.0)),
+        )
+    except (TypeError, ValueError):
+        comfort_load_factor = 1.0
     scenario_outcomes = [
         _scenario_summary("current_plan", result, current_plan_scenario, planner_config),
         _scenario_summary("time_constrained", result, time_constrained, planner_config),
@@ -683,10 +715,33 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "job_id": job_record.get("job_id"),
             "job_name": metadata.get("job_name") or metadata.get("source_label"),
             "owner_email": job_record.get("owner_email"),
-            "service_direction": result.get("service_direction") or planner_config.get("service_direction"),
-            "traffic_profile": result.get("traffic_profile_name") or planner_config.get("traffic_profile_name"),
+            "service_direction": service_direction,
+            "traffic_profile": traffic_profile,
             "target_route_duration_min": planner_config.get("max_route_duration_minutes"),
             "time_impact_limit_minutes": time_impact_limit_minutes,
+        },
+        "run_parameters": {
+            "service_direction": service_direction,
+            "traffic_profile": traffic_profile,
+            "time_window_start": planner_config.get("time_window_start"),
+            "time_window_end": planner_config.get("time_window_end"),
+            "school_arrival_time": (
+                planner_config.get("to_school_arrival_time")
+                if service_direction.lower() == "to school"
+                else None
+            ),
+            "school_departure_time": (
+                planner_config.get("from_school_departure_time")
+                if service_direction.lower() == "from school"
+                else None
+            ),
+            "osrm_route_budget_minutes": planner_config.get("max_route_duration_minutes"),
+            "route_stop_limit": planner_config.get("route_stop_limit"),
+            "minimum_vehicle_reduction": planner_config.get("minimum_vehicle_reduction"),
+            "time_impact_limit_minutes": time_impact_limit_minutes,
+            "comfort_enabled": comfort_load_factor < 1.0,
+            "comfort_load_factor": round(comfort_load_factor, 2),
+            "stop_dwell_minutes": planner_config.get("stop_service_minutes"),
         },
         "current_plan": {
             "route_count": current_plan.get("route_count"),
@@ -757,6 +812,45 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _ai_audit_prompts(payload: dict[str, Any], report_language: str) -> tuple[str, str]:
+    system_prompt = (
+        "You are a school bus operations audit analyst. Use only the supplied JSON facts and write for operators. "
+        "Current Plan is the control case, not an optimization candidate. "
+        "The two optimization candidates are Strict Plan and Protected Plan. "
+        "Strict Plan applies every configured hard constraint to the complete optimized plan. "
+        "Protected Plan may freeze current routes that were already noncompliant, then applies every configured hard constraint to the optimized remainder; "
+        "always disclose its frozen-route count and never claim those inherited exceptions were fixed. "
+        "Treat run_parameters as the operator's configured inputs: a null route_stop_limit means no stop cap, "
+        "comfort is enabled only when comfort_load_factor is below 1.0, and osrm_route_budget_minutes is a solver budget rather than final live-traffic timing. "
+        "Final provider validation and final time-impact gates determine adoption readiness. "
+        "Follow recommended_scenario exactly; do not replace BRP's deterministic decision with your own ranking. "
+        "A review_reference is the least-harm comparison reference and is never adoption-ready. "
+        "Do not use legacy Free Optimization, 15-Minute Constrained, EP, EP15, coefficient, or route-network-profile terminology. "
+        "Do not invent addresses, route metrics, savings, timing changes, decisions, or passed constraints."
+    )
+    user_prompt = (
+        f"Write the report in {report_language}. Maximum 3,200 characters.\n"
+        "Format as a readable Markdown briefing with these section headings only:\n"
+        f"{_ai_audit_section_headings(report_language)}\n\n"
+        "Content requirements:\n"
+        "- Executive conclusion: name the deterministic recommendation, its adoption status, route count, and vehicle saving versus Current Plan.\n"
+        "- Plan comparison: compare Strict and Protected on route count, provider time-window gate, time-impact gate, affected riders, worst passenger adverse change, and frozen exceptions.\n"
+        "- Constraint compliance: state the configured time window, minimum vehicle saving, stop cap or no cap, time-impact limit, comfort target, route budget, dwell, and traffic profile; identify each miss.\n"
+        "- Operational tradeoffs: explain what is gained and what remains operationally unresolved without changing the deterministic ranking.\n"
+        "- Routes to review: use only route IDs present in the facts and prioritize failed, frozen, or highest-impact routes.\n"
+        "- Caveats: cover address-review warnings, unavailable evidence, provider confidence, and inherited Protected Plan exceptions when present.\n\n"
+        "Style rules:\n"
+        "- Start directly with the first heading; do not add a title line.\n"
+        "- Use 2 to 3 short bullets per section, maximum 24 words per bullet.\n"
+        "- Do not use horizontal rules, quote blocks, tables, code fences, decorative separators, student names, or full addresses.\n"
+        "- If recommended_scenario is null, say evidence is insufficient to select a plan.\n"
+        "- If recommended_scenario is a review_reference, call it the closest non-adoption-ready reference and state its remaining constraint misses.\n"
+        "- Clearly separate measured facts from interpretation and state unavailable facts plainly.\n\n"
+        f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+    )
+    return system_prompt, user_prompt
+
+
 def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False, language: str | None = None) -> dict[str, Any]:
     existing = job_record.get("ai_audit_report")
     if existing and not force:
@@ -768,32 +862,7 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
 
     payload = build_ai_audit_payload(job_record)
     report_language = (language or AI_AUDIT_LANGUAGE or "English").strip()
-    system_prompt = (
-        "You are a school bus operations audit analyst. Use only the supplied JSON facts. "
-        "Do not invent addresses, route metrics, savings, timing changes, or decisions. "
-        "Write a clean management briefing for operators. "
-        "Prefer readable business language over template language. "
-        "Treat scenario_outcomes, recommended_scenario, and decision_review as deterministic evidence. "
-        "Do not recommend adopting a scenario whose traffic_gate status is failed or unavailable unless exception_accepted is true. "
-        "A recommended_scenario with recommendation_type review_reference is only the least-harm comparison reference, never adoption-ready. "
-        "Keep recommendations practical and clearly separate measured facts from interpretation."
-    )
-    user_prompt = (
-        f"Write the report in {report_language}. Maximum 3,200 characters.\n"
-        "Format as a readable Markdown briefing with these section headings only:\n"
-        f"{_ai_audit_section_headings(report_language)}\n\n"
-        "Style rules:\n"
-        "- Start directly with the first heading; do not add a title line.\n"
-        "- Do not use horizontal rules, quote blocks, tables, code fences, or decorative separators.\n"
-        "- Use 2 to 3 short bullets per section, maximum 24 words per bullet.\n"
-        "- Use route IDs only when present in the facts.\n"
-        "- Make recommendations specific but do not repeat every candidate action.\n"
-        "- Do not mention student names or full addresses.\n"
-        "- Prefer recommended_scenario when it is adoption-ready. If it is a review_reference, call it the closest non-adoption-ready reference and state its remaining constraint misses.\n"
-        "- Cover input address review, time impact, and traffic confidence when facts are available.\n"
-        "- If evidence is insufficient, state the validation question plainly.\n\n"
-        f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
-    )
+    system_prompt, user_prompt = _ai_audit_prompts(payload, report_language)
     DEEPSEEK_LIMITER.wait()
     response = requests.post(
         DEEPSEEK_API_URL,
@@ -844,8 +913,8 @@ def _ai_audit_section_headings(language: str) -> str:
         return "\n".join(
             [
                 "## 执行结论",
-                "## 为什么选择这个方案",
-                "## 时间窗影响",
+                "## 方案对比",
+                "## 约束符合情况",
                 "## 运营取舍",
                 "## 优先复核线路",
                 "## 注意事项",
@@ -855,8 +924,8 @@ def _ai_audit_section_headings(language: str) -> str:
         return "\n".join(
             [
                 "## 종합 결론",
-                "## 이 계획을 선택한 이유",
-                "## 시간창 영향",
+                "## 계획 비교",
+                "## 제약조건 충족 여부",
                 "## 운영상 절충점",
                 "## 우선 검토 노선",
                 "## 유의 사항",
@@ -865,8 +934,8 @@ def _ai_audit_section_headings(language: str) -> str:
     return "\n".join(
         [
             "## Executive conclusion",
-            "## Why this plan",
-            "## Time-window impact",
+            "## Plan comparison",
+            "## Constraint compliance",
             "## Operational tradeoffs",
             "## Routes to review",
             "## Caveats",

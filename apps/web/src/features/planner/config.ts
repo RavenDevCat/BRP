@@ -26,7 +26,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   from_school_departure_time: "15:40",
   time_window_start: "06:30",
   time_window_end: "08:00",
-  route_stop_limit: 10,
+  route_stop_limit: null,
   minimum_vehicle_reduction: 2,
   include_subway_aggregation_scenario: false,
   include_nearby_aggregation_scenario: false,

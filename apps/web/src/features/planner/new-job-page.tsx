@@ -301,6 +301,9 @@ export function NewJobPage() {
         : "";
   const busy = previewMutation.isPending || submitMutation.isPending || clearAddressCacheMutation.isPending;
   const timeWindowReady = Boolean(config.time_window_start && config.time_window_end && config.time_window_start < config.time_window_end);
+  const comfortEnabled =
+    Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) <
+    FULL_CAPACITY_LOAD_FACTOR;
   const scheduledReady = Boolean(!scheduledJob || !scheduledJobsEnabled || scheduledDates.length > 0);
   const routeBudgetUnavailableRetryable = Boolean(
     preview &&
@@ -627,7 +630,7 @@ export function NewJobPage() {
                 />
               ) : null}
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
                 <Field label="Window Start">
                   <input
                     className={fieldClassName}
@@ -697,6 +700,39 @@ export function NewJobPage() {
                     {t("Used by the X-minute time-impact scenarios.")}
                   </div>
                 </Field>
+                <Field label="Improve comfort">
+                  <div className="flex h-10 items-center">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={comfortEnabled}
+                      aria-label={t("Improve comfort")}
+                      className={[
+                        "relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
+                        comfortEnabled ? "border-primary bg-primary" : "border-border bg-muted",
+                      ].join(" ")}
+                      title={t(
+                        "Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.",
+                      )}
+                      onClick={() =>
+                        updateUserConfig({
+                          comfort_load_factor: comfortEnabled
+                            ? FULL_CAPACITY_LOAD_FACTOR
+                            : COMFORT_LOAD_FACTOR,
+                        })
+                      }
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={[
+                          "pointer-events-none absolute top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform",
+                          comfortEnabled ? "translate-x-5" : "translate-x-0.5",
+                        ].join(" ")}
+                      />
+                    </button>
+                  </div>
+                </Field>
               </div>
 
               {!timeWindowReady ? <InlineError message={t("Time window start must be before end.")} /> : null}
@@ -709,21 +745,6 @@ export function NewJobPage() {
                   placeholder={t("May audit before parent review")}
                 />
               </Field>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <ToggleOption tooltip="Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.">
-                  <input
-                    type="checkbox"
-                    checked={Number(config.comfort_load_factor ?? FULL_CAPACITY_LOAD_FACTOR) < FULL_CAPACITY_LOAD_FACTOR}
-                    onChange={(event) =>
-                      updateUserConfig({
-                        comfort_load_factor: event.target.checked ? COMFORT_LOAD_FACTOR : FULL_CAPACITY_LOAD_FACTOR,
-                      })
-                    }
-                  />
-                  <span>{t("Improve comfort")}</span>
-                </ToggleOption>
-              </div>
 
               <SettingsSection
                 title="Route timing"
@@ -792,9 +813,6 @@ export function NewJobPage() {
 
 const fieldClassName =
   "h-10 w-full rounded-md border border-border bg-surface px-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20";
-
-const toggleClassName =
-  "flex h-11 items-center gap-3 rounded-md border border-border bg-surface px-3 text-sm font-medium text-foreground";
 
 function normalizeReviewAddress(value?: string) {
   return String(value || "").trim().toLowerCase();
@@ -953,18 +971,6 @@ function CurrentPlanReviewPanel({
         </div>
       </CardContent>
     </Card>
-  );
-}
-
-function ToggleOption({ tooltip, children }: { tooltip: string; children: ReactNode }) {
-  const t = useT();
-  return (
-    <label className={`${toggleClassName} group relative cursor-pointer`}>
-      {children}
-      <span className="pointer-events-none absolute left-3 top-[calc(100%+6px)] z-20 w-72 translate-y-1 rounded-md border border-border bg-surface px-3 py-2 text-xs font-normal leading-relaxed text-muted-foreground opacity-0 shadow-lg transition group-hover:translate-y-0 group-hover:opacity-100 group-focus-within:translate-y-0 group-focus-within:opacity-100">
-        {t(tooltip)}
-      </span>
-    </label>
   );
 }
 

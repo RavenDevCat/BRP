@@ -18,7 +18,19 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
             "job_id": "audit-123",
             "owner_email": "ops@example.com",
             "metadata": {"job_name": "Seoul AM test"},
-            "config": {"service_direction": "To School", "max_route_duration_minutes": 75, "time_impact_limit_minutes": 20},
+            "config": {
+                "service_direction": "To School",
+                "traffic_profile_name": "AM Peak",
+                "time_window_start": "06:30",
+                "time_window_end": "08:00",
+                "to_school_arrival_time": "08:00",
+                "max_route_duration_minutes": 75,
+                "route_stop_limit": None,
+                "minimum_vehicle_reduction": 2,
+                "time_impact_limit_minutes": 20,
+                "comfort_load_factor": 0.85,
+                "stop_service_minutes": 1,
+            },
             "result": {
                 "service_direction": "To School",
                 "traffic_profile_name": "AM Peak",
@@ -100,6 +112,21 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
 
     review = payload["decision_review"]
     assert payload["job"]["time_impact_limit_minutes"] == 20
+    assert payload["run_parameters"] == {
+        "service_direction": "To School",
+        "traffic_profile": "AM Peak",
+        "time_window_start": "06:30",
+        "time_window_end": "08:00",
+        "school_arrival_time": "08:00",
+        "school_departure_time": None,
+        "osrm_route_budget_minutes": 75,
+        "route_stop_limit": None,
+        "minimum_vehicle_reduction": 2,
+        "time_impact_limit_minutes": 20,
+        "comfort_enabled": True,
+        "comfort_load_factor": 0.85,
+        "stop_dwell_minutes": 1,
+    }
     assert payload["scenario_outcomes"][1]["name"] == "Strict Plan"
     assert payload["recommended_scenario"] is None
     assert review["time_impact"]["decision"] == "review_needed"
@@ -285,11 +312,75 @@ def test_legacy_hard_time_impact_without_final_gate_is_not_passing() -> None:
     assert ai_audit._scenario_time_impact_passed(scenario) is False
 
 
+def test_scenario_summaries_explain_strict_and_protected_roles() -> None:
+    strict = ai_audit._scenario_summary(
+        "time_constrained",
+        {},
+        {"enabled": True, "route_count": 18},
+        {},
+    )
+    protected = ai_audit._scenario_summary(
+        "exception_preserving",
+        {},
+        {
+            "enabled": True,
+            "route_count": 19,
+            "exception_preserving": {
+                "accepted": True,
+                "frozen_route_count": 2,
+                "frozen_route_ids": ["R12", "R18"],
+            },
+        },
+        {},
+    )
+    failed_protected = ai_audit._scenario_summary(
+        "exception_preserving",
+        {},
+        {
+            "enabled": True,
+            "constraint_search_outcome": {"frozen_route_count": 1},
+            "exception_preserving": {
+                "accepted": False,
+                "attempts": [{"frozen_route_ids": ["R12"]}],
+            },
+        },
+        {},
+    )
+
+    assert strict["solver_role"] == "all_routes_under_configured_hard_constraints"
+    assert strict["frozen_route_count"] == 0
+    assert protected["solver_role"] == "freeze_existing_noncompliant_routes_and_optimize_the_remainder"
+    assert protected["frozen_route_count"] == 2
+    assert protected["frozen_route_ids"] == ["R12", "R18"]
+    assert failed_protected["frozen_route_count"] == 1
+    assert failed_protected["frozen_route_ids"] == ["R12"]
+
+
 def test_ai_audit_prompt_headings_cover_new_sections() -> None:
     assert "## Executive conclusion" in ai_audit._ai_audit_section_headings("English")
-    assert "## Time-window impact" in ai_audit._ai_audit_section_headings("English")
-    assert "## 이 계획을 선택한 이유" in ai_audit._ai_audit_section_headings("Korean")
-    assert "## 为什么选择这个方案" in ai_audit._ai_audit_section_headings("Chinese")
+    assert "## Constraint compliance" in ai_audit._ai_audit_section_headings("English")
+    assert "## 계획 비교" in ai_audit._ai_audit_section_headings("Korean")
+    assert "## 方案对比" in ai_audit._ai_audit_section_headings("Chinese")
+
+
+def test_ai_audit_prompt_uses_current_two_plan_contract_and_run_parameters() -> None:
+    system_prompt, user_prompt = ai_audit._ai_audit_prompts(
+        {
+            "run_parameters": {"route_stop_limit": None},
+            "scenario_outcomes": [],
+            "recommended_scenario": None,
+        },
+        "English",
+    )
+
+    assert "Strict Plan and Protected Plan" in system_prompt
+    assert "Current Plan is the control case" in system_prompt
+    assert "freeze current routes that were already noncompliant" in system_prompt
+    assert "null route_stop_limit means no stop cap" in system_prompt
+    assert "Follow recommended_scenario exactly" in system_prompt
+    assert "## Plan comparison" in user_prompt
+    assert "minimum vehicle saving" in user_prompt
+    assert '"route_stop_limit":null' in user_prompt
 
 
 def test_backend_ai_audit_injects_time_impact_context(monkeypatch) -> None:

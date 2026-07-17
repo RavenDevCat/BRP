@@ -833,6 +833,7 @@ export function InteractiveRouteMap({
                                             >
                                                 {routeLabel(route)}
                                             </span>
+                                            <RouteLineageBadge route={route} />
                                             <RouteStatusBadge route={route} />
                                         </span>
                                         <span className="mt-1 block text-xs text-muted-foreground">
@@ -1308,9 +1309,10 @@ export function InteractiveRouteMap({
                                                 : hoverInfo.label}
                                         </span>
                                         {hoveredRoute ? (
-                                            <RouteStatusBadge
-                                                route={hoveredRoute}
-                                            />
+                                            <>
+                                                <RouteLineageBadge route={hoveredRoute} />
+                                                <RouteStatusBadge route={hoveredRoute} />
+                                            </>
                                         ) : null}
                                     </div>
                                     {hoveredRoute ? (
@@ -1484,6 +1486,7 @@ export function InteractiveRouteMap({
                                     >
                                         {routeLabel(selectedRoute)}
                                     </div>
+                                    <RouteLineageBadge route={selectedRoute} />
                                     <RouteStatusBadge route={selectedRoute} />
                                 </div>
                                 <div className="mt-1 text-xs text-muted-foreground">
@@ -1678,9 +1681,6 @@ function routeVehicleLabel(route: JobMapRoute) {
 }
 
 function routeStatusLabel(route: JobMapRoute) {
-    if (routeIsFrozen(route)) {
-        return "Frozen route";
-    }
     const loadRatio = routeLoadRatio(route);
     if (loadRatio >= 1) {
         return "Capacity";
@@ -1695,10 +1695,16 @@ function routeStatusLabel(route: JobMapRoute) {
 }
 
 function routeListAccentClass(route: JobMapRoute) {
-    const status = routeStatusLabel(route);
-    if (status === "Frozen route") {
+    if (route.exception_role === "frozen_current") {
         return "border-l-indigo-400";
     }
+    if (route.exception_role === "optimized_remainder") {
+        return "border-l-cyan-400";
+    }
+    if (route.exception_role === "protected_unchanged") {
+        return "border-l-slate-300";
+    }
+    const status = routeStatusLabel(route);
     if (status === "Capacity") {
         return "border-l-rose-300";
     }
@@ -1721,13 +1727,38 @@ function RouteStatusBadge({ route }: { route: JobMapRoute }) {
         <span
             className={cn(
                 "shrink-0 rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                label === "Frozen route"
-                    ? "border-indigo-200 bg-indigo-50 text-indigo-700"
-                    : label === "Capacity"
+                label === "Capacity"
                     ? "border-rose-200 bg-rose-50 text-rose-700"
                     : label === "High load"
                       ? "border-amber-200 bg-amber-50 text-amber-700"
                       : "border-sky-200 bg-sky-50 text-sky-700",
+            )}
+        >
+            {t(label)}
+        </span>
+    );
+}
+
+function routeLineageLabel(route: JobMapRoute) {
+    if (route.exception_role === "frozen_current") return "Frozen route";
+    if (route.exception_role === "optimized_remainder") return "Merged route";
+    if (route.exception_role === "protected_unchanged") return "Retained route";
+    return "";
+}
+
+function RouteLineageBadge({ route }: { route: JobMapRoute }) {
+    const t = useT();
+    const label = routeLineageLabel(route);
+    if (!label) return null;
+    return (
+        <span
+            className={cn(
+                "shrink-0 rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+                label === "Frozen route"
+                    ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+                    : label === "Merged route"
+                      ? "border-cyan-200 bg-cyan-50 text-cyan-800"
+                      : "border-slate-200 bg-slate-50 text-slate-700",
             )}
         >
             {t(label)}

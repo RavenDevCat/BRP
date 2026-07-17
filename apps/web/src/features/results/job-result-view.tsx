@@ -830,6 +830,14 @@ function BaselinePanel({
 function ArrivalReverseCheckPanel({ checks }: { checks: ArrivalReverseCheck[] }) {
   const t = useT();
   const routes = checks.flatMap((check) => check.routes);
+  const changeRoutes = routes.filter((route) => route.changeType !== "current");
+  const frozenCount = changeRoutes.filter((route) => route.changeType === "frozen").length;
+  const mergedCount = changeRoutes.filter((route) => route.changeType === "merged").length;
+  const retainedCount = changeRoutes.filter((route) => route.changeType === "retained").length;
+  const newCount = changeRoutes.filter((route) => route.changeType === "new").length;
+  const absorbedCurrentRouteIds = Array.from(
+    new Set(checks.flatMap((check) => check.absorbedCurrentRouteIds)),
+  );
   const warningCount = checks.reduce((total, check) => total + check.warningRouteCount, 0);
   const checkedCount = checks.reduce((total, check) => total + check.checkedRouteCount, 0);
   const maxOverrun = Math.max(...checks.map((check) => check.maxDepartureWindowOverrunMinutes), 0);
@@ -861,12 +869,31 @@ function ArrivalReverseCheckPanel({ checks }: { checks: ArrivalReverseCheck[] })
           <MetricCard label="Earliest required departure" value={earliestRequiredLabel || t("Not available")} tone={warningCount > 0 ? "warning" : "neutral"} />
           <MetricCard label="Max early departure gap" value={`${formatNumber(Math.round(maxOverrun))} ${t("min")}`} tone={maxOverrun > 0 ? "warning" : "success"} />
         </div>
+        {changeRoutes.length ? (
+          <div className="border-y border-border py-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 text-xs font-semibold uppercase text-muted-foreground">
+                {t("Route changes")}
+              </span>
+              {frozenCount ? <Badge tone="info">{formatNumber(frozenCount)} {t("Frozen routes")}</Badge> : null}
+              {mergedCount ? <Badge tone="info">{formatNumber(mergedCount)} {t("Merged routes")}</Badge> : null}
+              {retainedCount ? <Badge tone="neutral">{formatNumber(retainedCount)} {t("Retained routes")}</Badge> : null}
+              {newCount ? <Badge tone="success">{formatNumber(newCount)} {t("New optimized routes")}</Badge> : null}
+            </div>
+            {absorbedCurrentRouteIds.length ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                {t("Absorbed current routes")}: <span className="font-medium text-foreground">{absorbedCurrentRouteIds.join(", ")}</span>
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <div className="max-h-[360px] overflow-auto">
-          <table className="w-full min-w-[820px] border-collapse text-sm">
+          <table className="w-full min-w-[1080px] border-collapse text-sm">
             <thead className="sticky top-0 bg-muted text-left text-xs uppercase text-muted-foreground">
               <tr>
                 <th className="px-3 py-2">{t("Scenario")}</th>
                 <th className="px-3 py-2">{t("Route")}</th>
+                <th className="px-3 py-2">{t("Route change")}</th>
                 <th className="px-3 py-2">{t("Bus")}</th>
                 <th className="px-3 py-2">{t("Passengers")}</th>
                 <th className="px-3 py-2">{t("Service stops")}</th>
@@ -882,7 +909,30 @@ function ArrivalReverseCheckPanel({ checks }: { checks: ArrivalReverseCheck[] })
                   className={cn("border-t border-border", route.beforeEarliestDeparture ? "bg-amber-50/60" : "")}
                 >
                   <td className="px-3 py-2">{t(route.scenarioName)}</td>
-                  <td className="px-3 py-2 font-medium">{route.routeId}</td>
+                  <td className="px-3 py-2">
+                    <div className="font-medium">{route.routeId}</div>
+                    {route.sourceRouteId && route.sourceRouteId !== route.routeId ? (
+                      <div className="mt-0.5 text-xs text-muted-foreground">{t("Based on")} {route.sourceRouteId}</div>
+                    ) : null}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={routeChangeBadgeClass(route.changeType)}>
+                      {t(routeChangeLabel(route.changeType))}
+                    </span>
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      {route.changeType === "merged"
+                        ? route.absorbedRouteIds.length
+                          ? `${t("Absorbs stops from")} ${route.absorbedRouteIds.join(", ")}`
+                          : t("Station grouping changed")
+                        : route.changeType === "frozen"
+                          ? t("Kept unchanged from current plan")
+                          : route.changeType === "retained"
+                            ? t("Unchanged from current plan")
+                            : route.changeType === "new"
+                              ? t("New station grouping")
+                              : t("Uploaded route")}
+                    </div>
+                  </td>
                   <td className="px-3 py-2">{route.busType || t("Not available")}</td>
                   <td className="px-3 py-2">{formatNumber(route.riderCount)}</td>
                   <td className="px-3 py-2">{formatNumber(route.serviceStopCount)}</td>
@@ -2157,6 +2207,7 @@ function BaselineRouteTable({
   let optimizedIndex = 0;
   const displayRoutes = routes.map((route, index) => {
     const frozen = stringValue(route.exception_role) === "frozen_current";
+    const role = stringValue(route.exception_role);
     const sourceRouteId = stringValue(
       route.source_route_id || route.route_id || route.vehicle_id || index + 1,
     );
@@ -2165,6 +2216,18 @@ function BaselineRouteTable({
     return {
       route,
       frozen,
+      sourceRouteId,
+      changeType: (
+        scenarioKey === "current_plan"
+          ? "current"
+          : scenarioKey === "exception_preserving"
+            ? role === "frozen_current"
+              ? "frozen"
+              : role === "protected_unchanged"
+                ? "retained"
+                : "merged"
+            : "new"
+      ) as RouteChangeType,
       displayRouteId: stringValue(
         route.display_route_id || (optimized ? `Opt Bus ${optimizedIndex}` : sourceRouteId),
       ),
@@ -2186,7 +2249,7 @@ function BaselineRouteTable({
           </tr>
         </thead>
         <tbody>
-          {displayRoutes.map(({ route, frozen, displayRouteId }, index) => (
+          {displayRoutes.map(({ route, frozen, sourceRouteId, changeType, displayRouteId }, index) => (
             <tr
               key={`${displayRouteId}-${index}`}
               className={cn(
@@ -2195,14 +2258,13 @@ function BaselineRouteTable({
               )}
             >
               <td className="px-3 py-2 font-medium">
-                <span className="flex items-center gap-2">
-                  {displayRouteId}
-                  {frozen ? (
-                    <span className="rounded-sm border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase text-indigo-700">
-                      {t("Frozen route")}
-                    </span>
-                  ) : null}
+                <span className="flex flex-wrap items-center gap-2">
+                  <span>{displayRouteId}</span>
+                  <span className={routeChangeBadgeClass(changeType)}>{t(routeChangeLabel(changeType))}</span>
                 </span>
+                {sourceRouteId && sourceRouteId !== displayRouteId ? (
+                  <span className="mt-0.5 block text-xs font-normal text-muted-foreground">{t("Based on")} {sourceRouteId}</span>
+                ) : null}
               </td>
               <td className="px-3 py-2">{stringValue(route.bus_type_name || route.bus_type)}</td>
               <td className="px-3 py-2">{formatNumber(routeStopCount(route))}</td>
@@ -2624,12 +2686,19 @@ type ArrivalReverseCheck = {
   unavailableRouteCount: number;
   maxDepartureWindowOverrunMinutes: number;
   earliestRequiredDepartureMinutes: number | null;
+  absorbedCurrentRouteIds: string[];
   routes: ArrivalReverseRoute[];
 };
+
+type RouteChangeType = "current" | "new" | "frozen" | "merged" | "retained";
 
 type ArrivalReverseRoute = {
   scenarioName: string;
   routeId: string;
+  sourceRouteId: string;
+  changeType: RouteChangeType;
+  contributorRouteIds: string[];
+  absorbedRouteIds: string[];
   busType: string;
   riderCount: unknown;
   serviceStopCount: unknown;
@@ -2639,6 +2708,75 @@ type ArrivalReverseRoute = {
   beforeEarliestDeparture: boolean;
   available: boolean;
 };
+
+type CurrentRouteContext = {
+  routeIds: string[];
+  nodeOwners: globalThis.Map<number, string>;
+};
+
+function routeChangeLabel(changeType: RouteChangeType): string {
+  if (changeType === "frozen") return "Frozen route";
+  if (changeType === "merged") return "Merged route";
+  if (changeType === "retained") return "Retained route";
+  if (changeType === "new") return "New optimized route";
+  return "Current route";
+}
+
+function routeChangeBadgeClass(changeType: RouteChangeType): string {
+  return cn(
+    "inline-flex rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
+    changeType === "frozen"
+      ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+      : changeType === "merged"
+        ? "border-cyan-200 bg-cyan-50 text-cyan-800"
+        : changeType === "new"
+          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+          : "border-slate-200 bg-slate-50 text-slate-700",
+  );
+}
+
+function currentRouteContext(currentPlan: Record<string, unknown>): CurrentRouteContext {
+  const routeIds: string[] = [];
+  const nodeOwners = new globalThis.Map<number, string>();
+  asRecordArray(currentPlan.routes).forEach((route, index) => {
+    const routeId = stringValue(route.source_route_id || route.route_id || route.vehicle_id || `R${index + 1}`);
+    if (!routeId) return;
+    routeIds.push(routeId);
+    (Array.isArray(route.nodes) ? route.nodes : []).forEach((rawNode) => {
+      const node = Number(rawNode);
+      if (Number.isInteger(node) && node > 0) nodeOwners.set(node, routeId);
+    });
+  });
+  return { routeIds, nodeOwners };
+}
+
+function routeLineage(
+  scenarioKey: string,
+  route: Record<string, unknown>,
+  currentContext: CurrentRouteContext,
+): Pick<ArrivalReverseRoute, "sourceRouteId" | "changeType" | "contributorRouteIds" | "absorbedRouteIds"> {
+  const sourceRouteId = stringValue(route.source_route_id || route.route_id || route.vehicle_id);
+  const contributorRouteIds = Array.from(
+    new Set(
+      (Array.isArray(route.nodes) ? route.nodes : [])
+        .map((rawNode) => currentContext.nodeOwners.get(Number(rawNode)) || "")
+        .filter(Boolean),
+    ),
+  );
+  const absorbedRouteIds = contributorRouteIds.filter((routeId) => routeId !== sourceRouteId);
+  const role = stringValue(route.exception_role);
+  const changeType: RouteChangeType =
+    scenarioKey === "current_plan"
+      ? "current"
+      : scenarioKey === "exception_preserving"
+        ? role === "frozen_current"
+          ? "frozen"
+          : role === "protected_unchanged"
+            ? "retained"
+            : "merged"
+        : "new";
+  return { sourceRouteId, changeType, contributorRouteIds, absorbedRouteIds };
+}
 
 function formatTimeImpactLimitMinutes(value: unknown): string {
   const rawValue = Number(value === null || value === undefined || value === "" ? 15 : value);
@@ -2699,29 +2837,62 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
 
 function buildArrivalReverseChecks(result: Record<string, unknown>, selectedScenarioKey = ""): ArrivalReverseCheck[] {
   const structured = asRecord(result.structured_results);
+  const currentPlanScenario = asRecord(structured.current_plan || result.current_plan_scenario);
+  const currentContext = currentRouteContext(currentPlanScenario);
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization || structured.time_constrained);
   const scenarios: Record<string, [string, Record<string, unknown>]> = {
-    current_plan: ["Current Plan", asRecord(structured.current_plan || result.current_plan_scenario)],
+    current_plan: ["Current Plan", currentPlanScenario],
     time_constrained: [timeImpactScenarioName(result, timeConstrainedScenario), timeConstrainedScenario],
     exception_preserving: ["Protected Plan", asRecord(result.exception_preserving_optimization || structured.exception_preserving)],
     subway: ["Subway Aggregated", asRecord(structured.subway || result.subway)],
     nearby: ["Nearby Aggregated", asRecord(structured.nearby || result.nearby)],
   };
   const selected = scenarios[selectedScenarioKey];
-  return (selected ? [selected] : Object.values(scenarios))
-    .map(([scenarioName, scenario]) => buildArrivalReverseCheck(scenarioName, scenario))
+  const entries = selected
+    ? [[selectedScenarioKey, selected] as const]
+    : Object.entries(scenarios);
+  return entries
+    .map(([scenarioKey, [scenarioName, scenario]]) =>
+      buildArrivalReverseCheck(scenarioKey, scenarioName, scenario, currentContext),
+    )
     .filter((check): check is ArrivalReverseCheck => Boolean(check));
 }
 
-function buildArrivalReverseCheck(scenarioName: string, scenario: Record<string, unknown>): ArrivalReverseCheck | null {
+function buildArrivalReverseCheck(
+  scenarioKey: string,
+  scenarioName: string,
+  scenario: Record<string, unknown>,
+  currentContext: CurrentRouteContext,
+): ArrivalReverseCheck | null {
   if (!Object.keys(scenario).length || scenario.enabled === false) {
     return null;
   }
   const explicit = asRecord(scenario.arrival_reverse_check);
   const explicitRoutes = asRecordArray(explicit.routes);
-  const sourceRoutes = explicitRoutes.length ? explicitRoutes : asRecordArray(scenario.routes);
+  const scenarioRoutes = asRecordArray(scenario.routes);
+  const scenarioRouteById = new globalThis.Map<string, Record<string, unknown>>();
+  scenarioRoutes.forEach((route) => {
+    [route.route_id, route.source_route_id, route.display_route_id, route.vehicle_id]
+      .map(stringValue)
+      .filter(Boolean)
+      .forEach((routeId) => scenarioRouteById.set(routeId, route));
+  });
+  const sourceRoutes = explicitRoutes.length ? explicitRoutes : scenarioRoutes;
   const routes = sourceRoutes
-    .map((route, index) => normalizeArrivalReverseRoute(scenarioName, route, index, Boolean(explicitRoutes.length)))
+    .map((route, index) => {
+      const scenarioRoute = explicitRoutes.length
+        ? scenarioRouteById.get(stringValue(route.route_id || route.source_route_id || route.display_route_id)) || route
+        : route;
+      return normalizeArrivalReverseRoute(
+        scenarioKey,
+        scenarioName,
+        route,
+        scenarioRoute,
+        index,
+        Boolean(explicitRoutes.length),
+        currentContext,
+      );
+    })
     .filter((route): route is ArrivalReverseRoute => Boolean(route));
   if (!routes.length) {
     return null;
@@ -2734,6 +2905,14 @@ function buildArrivalReverseCheck(scenarioName: string, scenario: Record<string,
   const derivedEarliestRequired = routes
     .map((route) => parseClockMinutes(route.requiredDepartureLabel))
     .filter((value): value is number => value !== null);
+  const routePreservingSearch = asRecord(scenario.route_preserving_search);
+  const directAbsorbedRouteIds = asStringArray(routePreservingSearch.donor_route_ids);
+  const outputSourceRouteIds = new Set(routes.map((route) => route.sourceRouteId).filter(Boolean));
+  const derivedAbsorbedRouteIds = currentContext.routeIds.filter(
+    (routeId) =>
+      !outputSourceRouteIds.has(routeId) &&
+      routes.some((route) => route.contributorRouteIds.includes(routeId)),
+  );
   return {
     scenarioName,
     checkedRouteCount: Number.isFinite(Number(explicit.checked_route_count)) ? Number(explicit.checked_route_count) : checkedRouteCount,
@@ -2747,21 +2926,40 @@ function buildArrivalReverseCheck(scenarioName: string, scenario: Record<string,
       : derivedEarliestRequired.length
         ? Math.min(...derivedEarliestRequired)
         : null,
+    absorbedCurrentRouteIds:
+      scenarioKey === "exception_preserving"
+        ? directAbsorbedRouteIds.length
+          ? directAbsorbedRouteIds
+          : derivedAbsorbedRouteIds
+        : [],
     routes,
   };
 }
 
 function normalizeArrivalReverseRoute(
+  scenarioKey: string,
   scenarioName: string,
   route: Record<string, unknown>,
+  scenarioRoute: Record<string, unknown>,
   index: number,
   routeIsExplicitCheck: boolean,
+  currentContext: CurrentRouteContext,
 ): ArrivalReverseRoute | null {
+  const lineage = routeLineage(scenarioKey, scenarioRoute, currentContext);
+  const displayRouteId = stringValue(
+    scenarioRoute.display_route_id ||
+      (lineage.changeType === "frozen" ? lineage.sourceRouteId : "") ||
+      scenarioRoute.route_id ||
+      route.route_id ||
+      route.vehicle_id ||
+      `Bus ${index + 1}`,
+  );
   const explicit = routeIsExplicitCheck ? route : asRecord(route.arrival_reverse_check);
   if (Object.keys(explicit).length) {
     return {
       scenarioName,
-      routeId: stringValue(explicit.route_id || route.route_id || route.vehicle_id || `Bus ${index + 1}`),
+      routeId: displayRouteId,
+      ...lineage,
       busType: stringValue(explicit.bus_type || route.bus_type_name || route.bus_type),
       riderCount: explicit.rider_count ?? routePassengerCount(route),
       serviceStopCount: explicit.service_stop_count ?? routeStopCount(route),
@@ -2786,7 +2984,8 @@ function normalizeArrivalReverseRoute(
   const available = stringValue(gate.status) !== "unavailable" && Number.isFinite(requiredDepartureMinutes);
   return {
     scenarioName,
-    routeId: stringValue(route.route_id || route.vehicle_id || gate.route_id || `Bus ${index + 1}`),
+    routeId: displayRouteId,
+    ...lineage,
     busType: stringValue(route.bus_type_name || route.bus_type),
     riderCount: routePassengerCount(route),
     serviceStopCount: routeStopCount(route),
@@ -3283,6 +3482,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     highLoadBadge: t("HIGH LOAD"),
     longBadge: t("LONG"),
     frozenRoute: t("Frozen route"),
+    mergedRoute: t("Merged route"),
+    retainedRoute: t("Retained route"),
     min: t("min"),
   }).replace(/</g, "\\u003c");
   return `<!doctype html>
@@ -3441,7 +3642,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }
     function updateMapSources() { if (!map.getSource("routes")) return; map.getSource("route-connectors").setData(connectorGeojson(Boolean(selectedRouteId))); map.getSource("routes").setData(routeGeojson(Boolean(selectedRouteId))); map.getSource("selected-route-connectors").setData(selectedConnectorGeojson()); map.getSource("selected-route").setData(selectedRouteGeojson()); map.getSource("stops").setData(stopGeojson()); }
     function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.source_route_id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
-    function routeCard(route) { const active = route.id === selectedRouteId; const frozen = route.exception_role === 'frozen_current'; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active ' : '') + (frozen ? 'frozen' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + frozenBadge(route) + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
+    function routeCard(route) { const active = route.id === selectedRouteId; const frozen = route.exception_role === 'frozen_current'; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active ' : '') + (frozen ? 'frozen' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + lineageBadge(route) + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active ' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
     function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? labels.schoolStart : labels.stop + ' ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' ' + labels.riders + '</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
     function fitAll() { if (!bounds) return; map.fitBounds([[bounds.min_lng, bounds.min_lat], [bounds.max_lng, bounds.max_lat]], { padding: 72, duration: 500 }); }
@@ -3457,7 +3658,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     }
     function fitRoute(route) { const geometry = routeGeometry(route); if (!route || geometry.length < 2) return; const connectorPoints = routeConnectors.filter(connector => connector.route_id === route.id).flatMap(connector => connector.geometry || []); const points = geometry.concat(connectorPoints); const lngs = points.map(p => p[0]).filter(Number.isFinite); const lats = points.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
     function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? labels.timeWindow : gate.status === 'unavailable' ? labels.unverified : route.load / (route.bus_capacity || 0) >= 1 ? labels.capacity : route.load / (route.bus_capacity || 1) >= .85 ? labels.highLoadBadge : route.duration_s >= 3600 ? labels.longBadge : ''; if (!status) return ''; return '<span class="badge ' + (status === labels.capacity || status === labels.timeWindow ? 'capacity' : status === labels.highLoadBadge || status === labels.unverified ? 'high' : '') + '">' + esc(status) + '</span>'; }
-    function frozenBadge(route) { return route.exception_role === 'frozen_current' ? '<span class="badge">' + esc(labels.frozenRoute) + '</span>' : ''; }
+    function lineageBadge(route) { const label = route.exception_role === 'frozen_current' ? labels.frozenRoute : route.exception_role === 'optimized_remainder' ? labels.mergedRoute : route.exception_role === 'protected_unchanged' ? labels.retainedRoute : ''; return label ? '<span class="badge">' + esc(label) + '</span>' : ''; }
     function stopTiming(stop) { return (stop.scheduled_time_label ? esc(stop.scheduled_time_label) + ' · ' : '') + duration(stop.cumulative_duration_s); }
     function color(index) { return colors[index % colors.length]; }
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }

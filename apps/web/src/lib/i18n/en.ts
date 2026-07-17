@@ -582,6 +582,8 @@ const en: Translations = {
         "Route budget service is not ready yet; retrying automatically.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "Upload a workbook to calculate the route budget from the current plan.",
+    "Service direction, school time, traffic assumptions, and route budget update automatically from the uploaded workbook.":
+        "Service direction, school time, traffic assumptions, and route budget update automatically from the uploaded workbook.",
     "AMap drive time": "AMap drive time",
     Unavailable: "Unavailable",
     Calculating: "Calculating",

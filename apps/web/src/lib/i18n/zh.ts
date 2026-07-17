@@ -533,6 +533,8 @@ const zh: Translations = {
         "路线预算服务暂时未就绪，系统正在自动重试。",
     "Upload a workbook to calculate the route budget from the current plan.":
         "上传 workbook 后会根据当前计划自动计算路线预算。",
+    "Service direction, school time, traffic assumptions, and route budget update automatically from the uploaded workbook.":
+        "服务方向、学校时间、交通假设和路线预算会根据上传的工作簿自动更新。",
     "AMap drive time": "高德实况行驶时长",
     Unavailable: "不可用",
     Calculating: "计算中",

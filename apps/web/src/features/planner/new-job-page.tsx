@@ -288,17 +288,6 @@ export function NewJobPage() {
   const routeBudgetReady = Boolean(
     preview && autoRouteBudget?.status === "ready" && Number.isFinite(Number(autoRouteBudget.minutes)),
   );
-  const amapRouteDetail =
-    autoRouteBudget?.amap_route_status === "ready" &&
-    Number.isFinite(Number(autoRouteBudget.amap_route_duration_minutes))
-      ? `${t("AMap drive time")}: ${formatNumber(autoRouteBudget.amap_route_duration_minutes)} min${
-          Number.isFinite(Number(autoRouteBudget.amap_route_distance_km))
-            ? ` · ${formatNumber(autoRouteBudget.amap_route_distance_km)} km`
-            : ""
-        }`
-      : autoRouteBudget?.amap_route_status === "unavailable"
-        ? `${t("AMap drive time")}: ${t("Unavailable")}`
-        : "";
   const busy = previewMutation.isPending || submitMutation.isPending || clearAddressCacheMutation.isPending;
   const timeWindowReady = Boolean(config.time_window_start && config.time_window_end && config.time_window_start < config.time_window_end);
   const comfortEnabled =
@@ -319,23 +308,6 @@ export function NewJobPage() {
   );
   const routeBudgetAutoRetrying = routeBudgetShouldRetry && routeBudgetRetryAttempts < ROUTE_BUDGET_AUTO_RETRY_LIMIT;
   const routeBudgetRetryExhausted = routeBudgetShouldRetry && !routeBudgetAutoRetrying;
-  const routeBudgetDetail = routeBudgetPending
-    ? t("Calculating current-plan longest route. Please wait before running the audit.")
-    : previewMutation.isPending && preview && !routeBudgetReady
-      ? t("Calculating current-plan longest route. Please wait before running the audit.")
-    : autoRouteBudget?.status === "ready"
-      ? `${t("Auto-filled from longest current-plan route")}: ${
-          autoRouteBudget.longest_route_id || t("Unknown")
-        } · ${formatNumber(autoRouteBudget.minutes)} min${
-          autoRouteBudget.longest_route_duration_minutes
-            ? ` (${formatNumber(autoRouteBudget.longest_route_duration_minutes)} min OSRM)`
-            : ""
-        }${amapRouteDetail ? ` · ${amapRouteDetail}` : ""}`
-      : routeBudgetAutoRetrying
-        ? t("Route budget service is not ready yet; retrying automatically.")
-      : preview
-        ? t("Route budget calculation unavailable; fix the workbook or OSRM route data before running audit.")
-        : t("Upload a workbook to calculate the route budget from the current plan.");
   const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
@@ -490,7 +462,8 @@ export function NewJobPage() {
                 </div>
               ) : null}
 
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <fieldset disabled className="rounded-lg border border-border bg-muted/40 p-3">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <Field label="Service Direction">
                   <select
                     className={fieldClassName}
@@ -558,25 +531,25 @@ export function NewJobPage() {
                     value={routeBudgetPending ? "" : config.max_route_duration_minutes}
                     placeholder={routeBudgetPending ? t("Calculating") : undefined}
                     readOnly
-                    disabled={!preview}
                     title={t("Auto-set from the uploaded current plan after geocoding. This is not a live traffic estimate.")}
                   />
-                  <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {routeBudgetDetail}
-                  </div>
-                  {canRetryRouteBudget ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="mt-2 h-8 text-xs"
-                      icon={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
-                      onClick={retryRouteBudgetPreview}
-                    >
-                      {t("Recalculate route budget")}
-                    </Button>
-                  ) : null}
                 </Field>
-              </div>
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">
+                  {t("Service direction, school time, traffic assumptions, and route budget update automatically from the uploaded workbook.")}
+                </p>
+              </fieldset>
+              {canRetryRouteBudget ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="h-8 text-xs"
+                  icon={<RefreshCw className="h-3.5 w-3.5" aria-hidden="true" />}
+                  onClick={retryRouteBudgetPreview}
+                >
+                  {t("Recalculate route budget")}
+                </Button>
+              ) : null}
 
               {scheduledJobsEnabled && scheduledJob ? (
                 <div className="rounded-lg border border-border bg-surface p-3">
@@ -812,7 +785,7 @@ export function NewJobPage() {
 }
 
 const fieldClassName =
-  "h-10 w-full rounded-md border border-border bg-surface px-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20";
+  "h-10 w-full rounded-md border border-border bg-surface px-3 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/20 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground";
 
 function normalizeReviewAddress(value?: string) {
   return String(value || "").trim().toLowerCase();

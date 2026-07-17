@@ -882,6 +882,8 @@ const ko: Translations = {
         "노선 시간 예산 서비스가 아직 준비되지 않았습니다. 자동으로 다시 시도합니다.",
     "Upload a workbook to calculate the route budget from the current plan.":
         "워크북을 업로드하면 현재 계획 기준으로 노선 시간 예산을 계산합니다.",
+    "Service direction, school time, traffic assumptions, and route budget update automatically from the uploaded workbook.":
+        "운행 방향, 학교 시간, 교통 가정 및 노선 예산은 업로드한 워크북에 따라 자동으로 업데이트됩니다.",
     "AMap drive time": "AMap 주행 시간",
     Unavailable: "사용 불가",
     Calculating: "계산 중",

@@ -1322,6 +1322,13 @@ function TimeImpactPanel({
                   <Badge tone="neutral">{formatNumber(stopRows.length)} {t("shown")}</Badge>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <a
+                    href={getJobExportUrl(jobId, `time-impact-${selected.key}`)}
+                    className={cn(buttonClassName("secondary"), "h-8")}
+                  >
+                    <Download className="h-4 w-4" aria-hidden="true" />
+                    {t("Export Excel")}
+                  </a>
                   {(["all", "worse", "over_acceptance", "high_risk", "route_changed", "unavailable"] as const).map((key) => (
                     <button
                       key={key}

@@ -172,19 +172,6 @@ function buildRunParameterItems(job: JobRecord): RunParameterItem[] {
     });
   }
 
-  items.push(
-    {
-      label: "Subway baseline",
-      value: booleanValue(config.include_subway_aggregation_scenario) ? "On" : "Off",
-      translateValue: true,
-    },
-    {
-      label: "Nearby baseline",
-      value: booleanValue(config.include_nearby_aggregation_scenario) ? "On" : "Off",
-      translateValue: true,
-    },
-  );
-
   const fleetLimits = formatFleetLimits(config);
   if (fleetLimits) {
     items.push({ label: "Fleet limits", value: fleetLimits });
@@ -210,10 +197,6 @@ function formatFleetLimits(config: Record<string, unknown>): string {
 function finiteNumber(value: unknown): number | null {
   const numberValue = Number(value);
   return Number.isFinite(numberValue) ? numberValue : null;
-}
-
-function booleanValue(value: unknown): boolean {
-  return value === true || stringValue(value).trim().toLowerCase() === "true";
 }
 
 function stringValue(value: unknown): string {

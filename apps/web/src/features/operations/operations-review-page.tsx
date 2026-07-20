@@ -31,17 +31,14 @@ const STATUS_LABELS: Record<string, string> = {
 
 const REASON_LABELS: Record<string, string> = {
     job_not_succeeded: "Job did not succeed",
-    not_scheduled: "Not a scheduled sample",
-    weekend_sample: "Weekend sample excluded",
-    missing_actual_start: "Actual start time is missing",
-    started_outside_schedule_tolerance: "Started outside the schedule tolerance",
     no_recommended_plan: "No comparable plan evidence",
-    incomplete_provider_evidence: "Provider evidence is incomplete",
 };
 
 const COMPATIBILITY_LABELS: Record<string, string> = {
     input_stops: "Workbook stops",
     input_stops_unavailable: "Workbook stops unavailable",
+    current_plan: "Current Plan",
+    current_plan_unavailable: "Current plan unavailable",
     service_direction: "Service direction",
     market: "Market",
     time_window: "Time window",
@@ -118,11 +115,11 @@ export function OperationsReviewPage() {
                     <div className="mt-4 flex items-center gap-2">
                         <GitCompareArrows className="h-5 w-5 text-primary" aria-hidden="true" />
                         <h1 className="text-2xl font-semibold tracking-normal">
-                            {t("Multi-day Operations Review")}
+                            {t("Operations Plan Review")}
                         </h1>
                     </div>
                     <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                        {t("Compare qualified scheduled runs, find repeated plans, and select an operator reference without rerunning the solver or provider APIs.")}
+                        {t("Compare compatible completed runs, find repeated plans, and select an operator reference without rerunning the solver or provider APIs.")}
                     </p>
                 </div>
                 <Badge tone={statusTone}>{t(STATUS_LABELS[review.status] ?? review.status)}</Badge>
@@ -133,7 +130,7 @@ export function OperationsReviewPage() {
                 <Metric label={t("Qualified samples")} value={formatNumber(review.qualified_sample_count)} tone="success" />
                 <Metric label={t("Excluded samples")} value={formatNumber(review.excluded_sample_count)} tone={review.excluded_sample_count ? "warning" : "neutral"} />
                 <Metric
-                    label={t("Repeated plan days")}
+                    label={t("Repeated plan samples")}
                     value={formatNumber(review.recommendation?.sample_count ?? 0)}
                     tone={review.recommendation?.sample_count && review.recommendation.sample_count > 1 ? "success" : "warning"}
                 />
@@ -162,7 +159,7 @@ export function OperationsReviewPage() {
             ) : (
                 <Card>
                     <CardContent className="text-sm text-muted-foreground">
-                        {t("At least two compatible weekday samples with complete provider evidence are required before a reference plan can be selected.")}
+                        {t("At least two compatible successful runs with comparable plan results are required before a reference plan can be selected.")}
                     </CardContent>
                 </Card>
             )}
@@ -182,7 +179,7 @@ export function OperationsReviewPage() {
                                 }
                                 onClick={() => setSelectedCandidateId(candidate.candidate_id)}
                             >
-                                {t(candidate.scenario_name)} · {formatNumber(candidate.route_count)} {t("routes")} · {formatNumber(candidate.sample_count)} {t("days")}
+                                {t(candidate.scenario_name)} · {formatNumber(candidate.route_count)} {t("routes")} · {formatNumber(candidate.sample_count)} {t("samples")}
                             </button>
                         ))}
                     </div>
@@ -260,7 +257,7 @@ function DecisionPanel({ candidate }: { candidate: OperationsReviewCandidate }) 
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <Metric label={t("Routes")} value={formatNumber(candidate.route_count)} />
-                    <Metric label={t("Days matched")} value={`${formatNumber(candidate.sample_count)} / ${formatNumber(candidate.valid_sample_count)}`} tone="success" />
+                    <Metric label={t("Samples matched")} value={`${formatNumber(candidate.sample_count)} / ${formatNumber(candidate.valid_sample_count)}`} tone="success" />
                     <Metric label={t("Affected riders, worst day")} value={formatNumber(candidate.max_time_impact_affected_rider_count)} tone={candidate.max_time_impact_affected_rider_count ? "warning" : "success"} />
                     <Metric label={t("Maximum breach, worst day")} value={`${formatNumber(candidate.max_time_impact_adverse_minutes)} ${t("min")}`} tone={candidate.max_time_impact_adverse_minutes ? "warning" : "success"} />
                     <Metric label={t("Average excess rider-minutes")} value={formatNumber(candidate.average_excess_rider_minutes)} tone={candidate.average_excess_rider_minutes ? "warning" : "success"} />
@@ -280,7 +277,7 @@ function DecisionPanel({ candidate }: { candidate: OperationsReviewCandidate }) 
 function DailyEvidenceTable({ evidence }: { evidence: Array<{
     job_id: string;
     job_name: string;
-    scheduled_at?: string | null;
+    sample_at?: string | null;
     qualified: boolean;
     exclusion_reasons: string[];
     scenario_name?: string | null;
@@ -297,14 +294,14 @@ function DailyEvidenceTable({ evidence }: { evidence: Array<{
             <CardHeader>
                 <div className="flex items-center gap-2">
                     <CalendarDays className="h-4 w-4 text-primary" aria-hidden="true" />
-                    <h2 className="text-sm font-semibold">{t("Daily evidence")}</h2>
+                    <h2 className="text-sm font-semibold">{t("Run evidence")}</h2>
                 </div>
             </CardHeader>
             <CardContent className="overflow-x-auto p-0">
                 <table className="w-full min-w-[820px] border-collapse text-sm">
                     <thead className="bg-muted text-left text-xs uppercase text-muted-foreground">
                         <tr>
-                            <th className="px-4 py-3">{t("Scheduled date")}</th>
+                            <th className="px-4 py-3">{t("Run time")}</th>
                             <th className="px-4 py-3">{t("Job")}</th>
                             <th className="px-4 py-3">{t("Plan")}</th>
                             <th className="px-4 py-3">{t("Routes")}</th>
@@ -316,7 +313,7 @@ function DailyEvidenceTable({ evidence }: { evidence: Array<{
                     <tbody>
                         {evidence.map((item) => (
                             <tr key={item.job_id} className="border-t border-border">
-                                <td className="px-4 py-3">{item.scheduled_at ? formatScheduledDate(item.scheduled_at, lang) : t("Not available")}</td>
+                                <td className="px-4 py-3">{item.sample_at ? formatRunTime(item.sample_at, lang) : t("Not available")}</td>
                                 <td className="px-4 py-3">
                                     <div className="font-medium">{item.job_name}</div>
                                     <div className="mt-1 text-xs text-muted-foreground">{item.job_id}</div>
@@ -377,7 +374,7 @@ function LoadingState({ label, compact = false }: { label: string; compact?: boo
     );
 }
 
-function formatScheduledDate(value: string, lang: "en" | "ko" | "zh") {
+function formatRunTime(value: string, lang: "en" | "ko" | "zh") {
     const date = new Date(value);
     if (Number.isNaN(date.getTime())) return value;
     const locale = {

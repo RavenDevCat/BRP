@@ -12,7 +12,6 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from ai_audit import build_ai_audit_payload  # type: ignore
 
 
-SCHEDULE_TOLERANCE_MINUTES = 5.0
 SCENARIO_RESULT_KEYS = {
     "time_constrained": "time_constrained_optimization",
     "exception_preserving": "exception_preserving_optimization",
@@ -73,8 +72,14 @@ def _input_stop_signature(job: dict[str, Any]) -> str:
 def _compatibility_parts(job: dict[str, Any]) -> dict[str, Any]:
     config = dict(job.get("config") or dict(job.get("metadata") or {}).get("planner_config") or {})
     summary = dict(job.get("prepared_payload_summary") or {})
+    current_plan = _current_plan_scenario(job)
     return {
         "input_stops": _input_stop_signature(job),
+        "current_plan": (
+            _plan_fingerprint(current_plan, input_signature=True)
+            if current_plan.get("points") and current_plan.get("routes")
+            else ""
+        ),
         "service_direction": config.get("service_direction"),
         "market": {
             "countries": sorted(str(value) for value in list(summary.get("country_samples") or [])),
@@ -105,6 +110,16 @@ def _compatibility_parts(job: dict[str, Any]) -> dict[str, Any]:
                 "small_bus_max_count",
                 "include_nearby_aggregation_scenario",
                 "include_subway_aggregation_scenario",
+                "matrix_candidate_radius_km",
+                "matrix_nearest_neighbors",
+                "nearby_cluster_radius_m",
+                "subway_search_radius_m",
+                "max_subway_walk_distance_m",
+                "reserved_express_buses",
+                "express_threshold_km",
+                "express_skip_inner_km",
+                "to_school_arrival_time",
+                "from_school_departure_time",
             )
         },
     }
@@ -120,6 +135,8 @@ def _compatibility(jobs: list[dict[str, Any]]) -> dict[str, Any]:
             issues.append({"job_id": job.get("job_id"), "fields": fields})
     if not baseline.get("input_stops"):
         issues.append({"job_id": jobs[0].get("job_id"), "fields": ["input_stops_unavailable"]})
+    if not baseline.get("current_plan"):
+        issues.append({"job_id": jobs[0].get("job_id"), "fields": ["current_plan_unavailable"]})
     config = dict(jobs[0].get("config") or {})
     return {
         "compatible": not issues,
@@ -133,24 +150,42 @@ def _compatibility(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _plan_fingerprint(scenario: dict[str, Any]) -> str:
+def _plan_fingerprint(
+    scenario: dict[str, Any], *, input_signature: bool = False
+) -> str:
     points = [dict(item or {}) for item in list(scenario.get("points") or [])]
     point_keys: dict[int, str] = {}
     for index, point in enumerate(points):
         if bool(point.get("is_depot")):
-            key = "depot"
-        else:
-            key = _json_hash(
-                {
-                    "address": _normalized_text(
-                        point.get("requested_address")
-                        or point.get("address")
-                        or point.get("formatted_address")
-                    ),
-                    "lat": round(float(point.get("lat", 0.0) or 0.0), 6),
-                    "lng": round(float(point.get("lng", 0.0) or 0.0), 6),
-                }
+            key = (
+                _json_hash(
+                    {
+                        "depot": _normalized_text(
+                            point.get("requested_address")
+                            or point.get("address")
+                            or point.get("formatted_address")
+                        )
+                    }
+                )
+                if input_signature
+                else "depot"
             )
+        else:
+            point_signature = {
+                "address": _normalized_text(
+                    point.get("requested_address")
+                    or point.get("address")
+                    or point.get("formatted_address")
+                )
+            }
+            if input_signature:
+                point_signature["passenger_count"] = int(
+                    point.get("passenger_count", 0) or 0
+                )
+            else:
+                point_signature["lat"] = round(float(point.get("lat", 0.0) or 0.0), 6)
+                point_signature["lng"] = round(float(point.get("lng", 0.0) or 0.0), 6)
+            key = _json_hash(point_signature)
         point_keys[index] = key
         try:
             point_keys[int(point.get("node_id"))] = key
@@ -178,43 +213,28 @@ def _plan_fingerprint(scenario: dict[str, Any]) -> str:
 
 def _sample_qualification(
     job: dict[str, Any], recommended: dict[str, Any] | None
-) -> tuple[list[str], float | None, str | None]:
+) -> tuple[list[str], str | None]:
     reasons: list[str] = []
     if str(job.get("status") or "") != "succeeded":
         reasons.append("job_not_succeeded")
 
-    scheduled = _parse_datetime(
-        job.get("scheduled_start_at")
+    sample_at = _parse_datetime(
+        job.get("started_at")
+        or job.get("scheduled_start_at")
         or dict(job.get("metadata") or {}).get("scheduled_start_at")
+        or job.get("finished_at")
+        or job.get("created_at")
     )
-    started = _parse_datetime(job.get("started_at"))
-    if scheduled is None:
-        reasons.append("not_scheduled")
-    elif scheduled.weekday() >= 5:
-        reasons.append("weekend_sample")
-
-    delay_minutes = None
-    if scheduled is not None and started is not None:
-        try:
-            delay_minutes = round(abs((started - scheduled).total_seconds()) / 60.0, 1)
-        except TypeError:
-            delay_minutes = None
-    if scheduled is not None and delay_minutes is None:
-        reasons.append("missing_actual_start")
-    elif delay_minutes is not None and delay_minutes > SCHEDULE_TOLERANCE_MINUTES:
-        reasons.append("started_outside_schedule_tolerance")
 
     if not recommended:
         reasons.append("no_recommended_plan")
-    elif not bool(dict(recommended.get("decision_metrics") or {}).get("evidence_complete")):
-        reasons.append("incomplete_provider_evidence")
-    return reasons, delay_minutes, scheduled.isoformat() if scheduled else None
+    return reasons, sample_at.isoformat() if sample_at else None
 
 
 def _daily_evidence(job: dict[str, Any]) -> dict[str, Any]:
     audit = build_ai_audit_payload(job)
     recommended = dict(audit.get("recommended_scenario") or {}) or None
-    reasons, delay_minutes, scheduled_at = _sample_qualification(job, recommended)
+    reasons, sample_at = _sample_qualification(job, recommended)
     metrics = dict((recommended or {}).get("decision_metrics") or {})
     scenario_key = str((recommended or {}).get("key") or "")
     scenario = _scenario_record(job, scenario_key) if scenario_key else {}
@@ -222,9 +242,8 @@ def _daily_evidence(job: dict[str, Any]) -> dict[str, Any]:
     return {
         "job_id": str(job.get("job_id") or ""),
         "job_name": metadata.get("job_name") or metadata.get("source_label") or job.get("job_id"),
-        "scheduled_at": scheduled_at,
+        "sample_at": sample_at,
         "started_at": job.get("started_at"),
-        "schedule_delay_minutes": delay_minutes,
         "qualified": not reasons,
         "exclusion_reasons": reasons,
         "scenario_key": scenario_key or None,
@@ -264,7 +283,7 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
             _number(item, "affected_rider_count", float("inf")),
             _number(item, "worst_over_limit_minutes", float("inf")),
             _number(item, "provider_total_duration_minutes", float("inf")),
-            -(_parse_datetime(item.get("scheduled_at")).timestamp() if _parse_datetime(item.get("scheduled_at")) else 0),
+            -(_parse_datetime(item.get("sample_at")).timestamp() if _parse_datetime(item.get("sample_at")) else 0),
         ),
     )
     adoption_count = sum(bool(item.get("adoption_ready")) for item in items)
@@ -288,7 +307,7 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
         "representative_job_id": representative.get("job_id"),
         "representative_job_name": representative.get("job_name"),
         "sample_job_ids": [item.get("job_id") for item in items],
-        "sample_dates": [item.get("scheduled_at") for item in items],
+        "sample_dates": [item.get("sample_at") for item in items],
         "max_affected_rider_count": int(max(_number(item, "affected_rider_count") for item in items)),
         "max_over_limit_minutes": round(max(_number(item, "worst_over_limit_minutes") for item in items), 1),
         "max_time_impact_affected_rider_count": int(
@@ -309,7 +328,7 @@ def build_operations_review(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     compatibility = _compatibility(jobs)
     evidence = sorted(
         [_daily_evidence(job) for job in jobs],
-        key=lambda item: str(item.get("scheduled_at") or item.get("job_id") or ""),
+        key=lambda item: str(item.get("sample_at") or item.get("job_id") or ""),
     )
     valid = [item for item in evidence if item.get("qualified")]
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)

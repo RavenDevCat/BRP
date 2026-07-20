@@ -48,7 +48,7 @@ def _scenario(route_label: str, *, excess: float, affected: int, worst: float) -
     }
 
 
-def _job(job_id: str, scheduled_at: str, started_at: str, route_label: str, excess: float) -> dict:
+def _job(job_id: str, scheduled_at: str | None, started_at: str, route_label: str, excess: float) -> dict:
     protected = _scenario(route_label, excess=excess, affected=7, worst=10)
     strict = _scenario(f"strict-{route_label}", excess=excess + 100, affected=7, worst=20)
     config = {
@@ -93,27 +93,27 @@ def test_plan_fingerprint_ignores_route_label_but_keeps_stop_order() -> None:
     assert operations_review._plan_fingerprint(first) != operations_review._plan_fingerprint(reversed_plan)
 
 
-def test_four_day_review_excludes_weekend_and_late_start_then_groups_stable_plan() -> None:
+def test_review_accepts_scheduled_weekend_late_and_immediate_runs() -> None:
     jobs = [
-        _job("sun", "2026-07-12T06:30:00+08:00", "2026-07-12T06:50:00+08:00", "Bus 1", 300),
-        _job("mon", "2026-07-13T06:30:00+08:00", "2026-07-13T06:50:00+08:00", "Bus 2", 250),
-        _job("tue", "2026-07-14T06:30:00+08:00", "2026-07-14T06:30:00+08:00", "Bus 3", 200),
-        _job("wed", "2026-07-15T06:30:00+08:00", "2026-07-15T06:30:00+08:00", "Bus 4", 180),
+        _job("late", "2026-07-17T06:30:00+08:00", "2026-07-17T06:45:00+08:00", "Bus 1", 300),
+        _job("weekend", "2026-07-18T06:30:00+08:00", "2026-07-18T06:30:00+08:00", "Bus 2", 250),
+        _job("ordinary", None, "2026-07-19T09:00:00+08:00", "Bus 3", 180),
+        _job("scheduled", "2026-07-20T06:30:00+08:00", "2026-07-20T06:30:00+08:00", "Bus 4", 200),
     ]
 
     review = operations_review.build_operations_review(jobs)
 
     assert review["compatibility"]["compatible"] is True
-    assert review["qualified_sample_count"] == 2
-    assert review["excluded_sample_count"] == 2
-    assert review["status"] == "review_reference"
-    assert review["recommendation"]["sample_count"] == 2
-    assert review["recommendation"]["representative_job_id"] == "wed"
+    assert review["qualified_sample_count"] == 4
+    assert review["excluded_sample_count"] == 0
+    assert review["recommendation"]["sample_count"] == 4
+    assert review["recommendation"]["representative_job_id"] == "ordinary"
     assert review["recommendation"]["scenario_key"] == "exception_preserving"
     assert review["recommendation"]["max_time_impact_affected_rider_count"] == 7
     assert review["recommendation"]["max_time_impact_adverse_minutes"] == 25
     assert review["daily_evidence"][-1]["time_impact_affected_rider_count"] == 7
     assert review["daily_evidence"][-1]["time_impact_max_adverse_minutes"] == 25
+    assert next(item for item in review["daily_evidence"] if item["job_id"] == "ordinary")["sample_at"] == "2026-07-19T09:00:00+08:00"
     assert all("plan_fingerprint" not in item for item in review["daily_evidence"])
 
 
@@ -127,3 +127,16 @@ def test_review_rejects_incompatible_time_windows() -> None:
     assert review["compatibility"]["compatible"] is False
     assert review["status"] == "insufficient_evidence"
     assert review["candidates"] == []
+
+
+def test_review_rejects_different_current_plan_route_order() -> None:
+    first = _job("first", None, "2026-07-14T06:30:00+08:00", "Bus 1", 10)
+    second = _job("second", None, "2026-07-15T06:30:00+08:00", "Bus 2", 10)
+    second["result"]["current_plan_scenario"]["routes"][0]["nodes"] = [2, 1, 0]
+
+    review = operations_review.build_operations_review([first, second])
+
+    assert review["compatibility"]["compatible"] is False
+    assert review["compatibility"]["issues"] == [
+        {"job_id": "second", "fields": ["current_plan"]}
+    ]

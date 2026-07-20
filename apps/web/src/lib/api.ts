@@ -97,9 +97,8 @@ export type OperationsReviewCompatibility = {
 export type OperationsReviewEvidence = {
     job_id: string;
     job_name: string;
-    scheduled_at?: string | null;
+    sample_at?: string | null;
     started_at?: string | null;
-    schedule_delay_minutes?: number | null;
     qualified: boolean;
     exclusion_reasons: string[];
     scenario_key?: string | null;

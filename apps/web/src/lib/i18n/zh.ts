@@ -546,6 +546,9 @@ const zh: Translations = {
     "Cancel is available only while a job is scheduled, queued, or running.":
         "只有定时、排队或运行中的任务可以取消。",
     Select: "选择",
+    "Group selected": "分组选中项",
+    "Group name": "分组名称",
+    "Rename group": "重命名分组",
     "Delete selected": "删除所选",
     "Delete selected history items? This cannot be undone.":
         "删除所选历史记录？此操作无法撤销。",

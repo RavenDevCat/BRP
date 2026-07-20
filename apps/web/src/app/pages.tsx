@@ -290,6 +290,7 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                     onBulkDelete={(jobIds) => bulkHistoryDeleteMutation.mutate(jobIds)}
                     selectionActionLabel="Compare operations"
                     selectionActionMin={2}
+                    groupScope="route_audit"
                     onSelectionAction={(jobIds) => {
                         void navigate({
                             to: "/operations-review/$jobIds",

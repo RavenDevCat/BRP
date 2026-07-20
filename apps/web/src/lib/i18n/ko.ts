@@ -896,6 +896,9 @@ const ko: Translations = {
     Delete: "삭제",
     Cancel: "취소",
     Select: "선택",
+    "Group selected": "선택 항목 그룹화",
+    "Group name": "그룹 이름",
+    "Rename group": "그룹 이름 변경",
     "Delete selected": "선택 삭제",
     "Delete selected history items? This cannot be undone.":
         "선택한 기록을 삭제하시겠습니까? 되돌릴 수 없습니다.",

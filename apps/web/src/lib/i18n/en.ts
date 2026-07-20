@@ -596,6 +596,9 @@ const en: Translations = {
     Delete: "Delete",
     Cancel: "Cancel",
     Select: "Select",
+    "Group selected": "Group selected",
+    "Group name": "Group name",
+    "Rename group": "Rename group",
     "Delete selected": "Delete selected",
     "Delete selected history items? This cannot be undone.":
         "Delete selected history items? This cannot be undone.",

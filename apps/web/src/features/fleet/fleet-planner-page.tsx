@@ -536,6 +536,7 @@ export function FleetPlannerPage() {
           onOpen={(runId) => loadHistoryMutation.mutate(runId)}
           onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
           onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate(runIds)}
+          groupScope="fleet_planner"
           canDelete={(job) => !job.shared_with_all || Boolean(currentUserQuery.data?.is_admin)}
           renderItem={(job, active) => <FleetHistoryItem job={job} active={active} />}
           className="min-w-0 lg:sticky lg:top-20 lg:self-start"

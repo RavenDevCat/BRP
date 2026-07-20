@@ -471,6 +471,7 @@ export function DistanceCheckerPage() {
           onOpen={(runId) => openHistoryMutation.mutate({ toolMode: activeTool, runId })}
           onDelete={(runId) => deleteHistoryMutation.mutate({ toolMode: activeTool, runId })}
           onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate({ toolMode: activeTool, runIds })}
+          groupScope={activeTool === "route_cost" ? "distance_route_cost" : "distance_reference"}
           renderItem={(job, active) => (
             <DistanceHistoryItem job={job} active={active} toolMode={activeTool} />
           )}

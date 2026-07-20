@@ -8,8 +8,17 @@ from pathlib import Path
 import sqlite3
 import threading
 from typing import Any, Iterable
+from uuid import uuid4
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+SIDE_TOOL_HISTORY_SCOPES = {
+    "distance_checker": ("distance_reference", "distance_route_cost"),
+    "reference_distance": ("distance_reference",),
+    "route_cost": ("distance_route_cost",),
+    "fleet_planner": ("fleet_planner",),
+    "route_insert_advisor": ("route_insert_advisor",),
+}
 
 
 def utc_now_iso() -> str:
@@ -152,6 +161,27 @@ class SqliteRuntimeStore:
                     ON side_tool_runs(tool_key, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_side_tool_runs_owner
                     ON side_tool_runs(owner_email);
+                CREATE TABLE IF NOT EXISTS history_groups (
+                    group_id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    owner_email TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_history_groups_owner_scope_name
+                    ON history_groups(owner_email, scope, name COLLATE NOCASE);
+                CREATE TABLE IF NOT EXISTS history_group_items (
+                    scope TEXT NOT NULL,
+                    owner_email TEXT NOT NULL,
+                    item_id TEXT NOT NULL,
+                    group_id TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(scope, owner_email, item_id),
+                    FOREIGN KEY(group_id) REFERENCES history_groups(group_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_history_group_items_group
+                    ON history_group_items(group_id);
                 """
                 )
                 conn.execute(
@@ -309,6 +339,8 @@ class SqliteRuntimeStore:
         self.initialize()
         with self.connect() as conn:
             cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+            if cursor.rowcount:
+                self._delete_history_group_items(conn, ("route_audit",), job_id)
             return cursor.rowcount > 0
 
     def upsert_side_tool_run(self, tool_key: str, record: dict[str, Any]) -> None:
@@ -383,7 +415,211 @@ class SqliteRuntimeStore:
                 "DELETE FROM side_tool_runs WHERE tool_key = ? AND run_id = ?",
                 (tool_key, run_id),
             )
+            if cursor.rowcount:
+                self._delete_history_group_items(
+                    conn, SIDE_TOOL_HISTORY_SCOPES.get(tool_key, ()), run_id
+                )
             return cursor.rowcount > 0
+
+    def list_history_groups(
+        self, scope: str, owner_email: str
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        normalized_owner = normalize_email(owner_email)
+        with self.connect() as conn:
+            groups = conn.execute(
+                """
+                SELECT group_id, name, created_at, updated_at
+                FROM history_groups
+                WHERE scope = ? AND owner_email = ?
+                ORDER BY updated_at DESC, name COLLATE NOCASE
+                """,
+                (scope, normalized_owner),
+            ).fetchall()
+            items = conn.execute(
+                """
+                SELECT group_id, item_id
+                FROM history_group_items
+                WHERE scope = ? AND owner_email = ?
+                ORDER BY created_at, item_id
+                """,
+                (scope, normalized_owner),
+            ).fetchall()
+        item_ids_by_group: dict[str, list[str]] = {}
+        for item in items:
+            item_ids_by_group.setdefault(str(item["group_id"]), []).append(
+                str(item["item_id"])
+            )
+        return [
+            {
+                "group_id": str(group["group_id"]),
+                "name": str(group["name"]),
+                "item_ids": item_ids_by_group.get(str(group["group_id"]), []),
+                "created_at": str(group["created_at"]),
+                "updated_at": str(group["updated_at"]),
+            }
+            for group in groups
+        ]
+
+    def assign_history_group(
+        self,
+        scope: str,
+        owner_email: str,
+        name: str,
+        item_ids: Iterable[str],
+    ) -> dict[str, Any]:
+        normalized_owner = normalize_email(owner_email)
+        normalized_name = str(name or "").strip()
+        normalized_ids = list(
+            dict.fromkeys(
+                str(item_id or "").strip()
+                for item_id in item_ids
+                if str(item_id or "").strip()
+            )
+        )
+        if not scope or not normalized_owner or not normalized_name or not normalized_ids:
+            raise ValueError("scope, owner_email, name, and item_ids are required")
+        self.initialize()
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT group_id FROM history_groups
+                WHERE scope = ? AND owner_email = ? AND name = ? COLLATE NOCASE
+                """,
+                (scope, normalized_owner, normalized_name),
+            ).fetchone()
+            group_id = str(row["group_id"]) if row else uuid4().hex
+            if not row:
+                conn.execute(
+                    """
+                    INSERT INTO history_groups(
+                        group_id, scope, owner_email, name, created_at, updated_at
+                    ) VALUES(?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        group_id,
+                        scope,
+                        normalized_owner,
+                        normalized_name,
+                        now,
+                        now,
+                    ),
+                )
+            placeholders = ",".join("?" for _ in normalized_ids)
+            conn.execute(
+                f"""
+                DELETE FROM history_group_items
+                WHERE scope = ? AND owner_email = ? AND item_id IN ({placeholders})
+                """,
+                (scope, normalized_owner, *normalized_ids),
+            )
+            conn.executemany(
+                """
+                INSERT INTO history_group_items(
+                    scope, owner_email, item_id, group_id, created_at
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                [
+                    (scope, normalized_owner, item_id, group_id, now)
+                    for item_id in normalized_ids
+                ],
+            )
+            conn.execute(
+                "UPDATE history_groups SET updated_at = ? WHERE group_id = ?",
+                (now, group_id),
+            )
+            self._delete_empty_history_groups(conn, scope, normalized_owner)
+            conn.commit()
+        return next(
+            group
+            for group in self.list_history_groups(scope, normalized_owner)
+            if group["group_id"] == group_id
+        )
+
+    def rename_history_group(
+        self, scope: str, owner_email: str, group_id: str, name: str
+    ) -> dict[str, Any] | None:
+        normalized_owner = normalize_email(owner_email)
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            raise ValueError("name is required")
+        self.initialize()
+        with self.connect() as conn:
+            duplicate = conn.execute(
+                """
+                SELECT 1 FROM history_groups
+                WHERE scope = ? AND owner_email = ? AND name = ? COLLATE NOCASE
+                    AND group_id <> ?
+                """,
+                (scope, normalized_owner, normalized_name, group_id),
+            ).fetchone()
+            if duplicate:
+                raise ValueError("A history group with this name already exists.")
+            cursor = conn.execute(
+                """
+                UPDATE history_groups SET name = ?, updated_at = ?
+                WHERE group_id = ? AND scope = ? AND owner_email = ?
+                """,
+                (
+                    normalized_name,
+                    utc_now_iso(),
+                    group_id,
+                    scope,
+                    normalized_owner,
+                ),
+            )
+        if not cursor.rowcount:
+            return None
+        return next(
+            group
+            for group in self.list_history_groups(scope, normalized_owner)
+            if group["group_id"] == group_id
+        )
+
+    @staticmethod
+    def _delete_empty_history_groups(
+        conn: sqlite3.Connection, scope: str, owner_email: str
+    ) -> None:
+        conn.execute(
+            """
+            DELETE FROM history_groups
+            WHERE scope = ? AND owner_email = ?
+                AND NOT EXISTS(
+                    SELECT 1 FROM history_group_items
+                    WHERE history_group_items.group_id = history_groups.group_id
+                )
+            """,
+            (scope, owner_email),
+        )
+
+    @classmethod
+    def _delete_history_group_items(
+        cls, conn: sqlite3.Connection, scopes: Iterable[str], item_id: str
+    ) -> None:
+        normalized_scopes = tuple(scope for scope in scopes if scope)
+        if not normalized_scopes:
+            return
+        placeholders = ",".join("?" for _ in normalized_scopes)
+        owners = conn.execute(
+            f"""
+            SELECT DISTINCT scope, owner_email FROM history_group_items
+            WHERE scope IN ({placeholders}) AND item_id = ?
+            """,
+            (*normalized_scopes, item_id),
+        ).fetchall()
+        conn.execute(
+            f"""
+            DELETE FROM history_group_items
+            WHERE scope IN ({placeholders}) AND item_id = ?
+            """,
+            (*normalized_scopes, item_id),
+        )
+        for owner in owners:
+            cls._delete_empty_history_groups(
+                conn, str(owner["scope"]), str(owner["owner_email"])
+            )
 
     def count_jobs(self) -> int:
         self.initialize()

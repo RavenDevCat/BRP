@@ -264,6 +264,82 @@ def _route_insert_history_for_context(
     return record
 
 
+HISTORY_GROUP_SCOPES = {
+    "route_audit",
+    "fleet_planner",
+    "distance_reference",
+    "distance_route_cost",
+    "route_insert_advisor",
+}
+
+
+def _history_entries_for_scope(
+    scope: str, context: UserContext
+) -> list[dict[str, Any]]:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    if scope == "route_audit":
+        return backend_service.JOB_STORE.list_jobs(
+            user_email=context.email, include_all=context.is_admin
+        )
+    if scope == "fleet_planner":
+        return backend_service.FLEET_PLANNER_HISTORY_STORE.list(
+            user_email=context.email, include_all=context.is_admin
+        )
+    if scope == "distance_reference":
+        return backend_service._list_distance_history(
+            "reference", user_email=context.email, include_all=context.is_admin
+        )
+    if scope == "distance_route_cost":
+        return backend_service._list_distance_history(
+            "route_cost", user_email=context.email, include_all=context.is_admin
+        )
+    if scope == "route_insert_advisor":
+        return backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE.list(
+            user_email=context.email, include_all=context.is_admin
+        )
+    return []
+
+
+def _history_item_ids_for_scope(scope: str, context: UserContext) -> set[str]:
+    id_key = "job_id" if scope == "route_audit" else "run_id"
+    return {
+        str(entry.get(id_key) or "").strip()
+        for entry in _history_entries_for_scope(scope, context)
+        if str(entry.get(id_key) or "").strip()
+    }
+
+
+def _history_group_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise BackendHttpError(400, {"error": "History group name is required."})
+    if len(name) > 80:
+        raise BackendHttpError(
+            400, {"error": "History group name must be 80 characters or fewer."}
+        )
+    return name
+
+
+def _history_group_item_ids(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        raise BackendHttpError(400, {"error": "History item_ids must be a list."})
+    item_ids = list(
+        dict.fromkeys(
+            str(item_id or "").strip()
+            for item_id in value
+            if str(item_id or "").strip()
+        )
+    )
+    if not item_ids:
+        raise BackendHttpError(
+            400, {"error": "Select at least one history item to group."}
+        )
+    if len(item_ids) > 200 or any(len(item_id) > 128 for item_id in item_ids):
+        raise BackendHttpError(400, {"error": "Invalid history group selection."})
+    return item_ids
+
+
 def _api_route(method: str, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         route_kwargs = {"response_model": None, **kwargs}
@@ -345,6 +421,94 @@ def google_geocode_usage() -> JSONResponse:
 )
 def deployment_features() -> JSONResponse:
     return _json_response(200, backend_service._deployment_features_payload())
+
+
+@_api_route(
+    "GET",
+    "/history-groups/{scope}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_history_groups(
+    scope: str, context: UserContext = Depends(current_user_context)
+) -> JSONResponse:
+    visible_ids = _history_item_ids_for_scope(scope, context)
+    groups = backend_service._runtime_sqlite_store().list_history_groups(
+        scope, context.email
+    )
+    return _json_response(
+        200,
+        {
+            "groups": [
+                {
+                    **group,
+                    "item_ids": [
+                        item_id
+                        for item_id in list(group.get("item_ids") or [])
+                        if item_id in visible_ids
+                    ],
+                }
+                for group in groups
+            ]
+        },
+    )
+
+
+@_api_route(
+    "POST",
+    "/history-groups/{scope}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def assign_history_group(
+    scope: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    body = _payload_dict(payload)
+    name = _history_group_name(body.get("name"))
+    item_ids = _history_group_item_ids(body.get("item_ids"))
+    unavailable = sorted(set(item_ids) - _history_item_ids_for_scope(scope, context))
+    if unavailable:
+        raise BackendHttpError(
+            400,
+            {
+                "error": "Some selected history items are no longer available.",
+                "item_ids": unavailable,
+            },
+        )
+    try:
+        group = backend_service._runtime_sqlite_store().assign_history_group(
+            scope, context.email, name, item_ids
+        )
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "PATCH",
+    "/history-groups/{scope}/{group_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def rename_history_group(
+    scope: str,
+    group_id: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    try:
+        group = backend_service._runtime_sqlite_store().rename_history_group(
+            scope,
+            context.email,
+            str(group_id or "").strip(),
+            _history_group_name(_payload_dict(payload).get("name")),
+        )
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if not group:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"group": group})
 
 
 @_api_route("GET", "/osrm-manager/status")

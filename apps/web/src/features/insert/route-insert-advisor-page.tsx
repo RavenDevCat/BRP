@@ -241,6 +241,7 @@ export function RouteInsertAdvisorPage() {
           onOpen={(runId) => openHistoryMutation.mutate(runId)}
           onDelete={(runId) => deleteHistoryMutation.mutate(runId)}
           onBulkDelete={(runIds) => bulkDeleteHistoryMutation.mutate(runIds)}
+          groupScope="route_insert_advisor"
           renderItem={(job, active) => (
             <RouteInsertHistoryItem job={job} active={active} />
           )}

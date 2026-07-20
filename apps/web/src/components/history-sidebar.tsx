@@ -1,8 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ArrowRight, GitCompareArrows, History, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ArrowRight, Folder, FolderPlus, GitCompareArrows, History, Loader2, Pencil, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import {
+  assignHistoryGroup,
+  listHistoryGroups,
+  renameHistoryGroup,
+  type HistoryGroupScope,
+} from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
 
 export function HistorySidebar<T>({
@@ -25,6 +32,7 @@ export function HistorySidebar<T>({
   selectionActionLabel,
   selectionActionMin = 1,
   onSelectionAction,
+  groupScope,
   canDelete = () => true,
   renderItem,
   className = "",
@@ -48,14 +56,40 @@ export function HistorySidebar<T>({
   selectionActionLabel?: string;
   selectionActionMin?: number;
   onSelectionAction?: (ids: string[]) => void;
+  groupScope?: HistoryGroupScope;
   canDelete?: (item: T) => boolean;
   renderItem: (item: T, active: boolean) => ReactNode;
   className?: string;
 }) {
   const t = useT();
+  const queryClient = useQueryClient();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [selecting, setSelecting] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const groupsQuery = useQuery({
+    queryKey: ["history-groups", groupScope],
+    queryFn: () => listHistoryGroups(groupScope as HistoryGroupScope),
+    enabled: Boolean(groupScope),
+  });
+  const assignGroupMutation = useMutation({
+    mutationFn: ({ name, itemIds }: { name: string; itemIds: string[] }) => {
+      if (!groupScope) throw new Error("History grouping is unavailable.");
+      return assignHistoryGroup(groupScope, name, itemIds);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] });
+      setSelectedIds(new Set());
+      setSelecting(false);
+    },
+  });
+  const renameGroupMutation = useMutation({
+    mutationFn: ({ groupId, name }: { groupId: string; name: string }) => {
+      if (!groupScope) throw new Error("History grouping is unavailable.");
+      return renameHistoryGroup(groupScope, groupId, name);
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] }),
+  });
 
   useEffect(() => {
     const currentIds = new Set(items.map(itemId));
@@ -87,6 +121,75 @@ export function HistorySidebar<T>({
   const selectedDeletableIds = items
     .filter((item) => selectedIds.has(itemId(item)) && canDelete(item))
     .map(itemId);
+  const itemIds = new Set(items.map(itemId));
+  const groups = (groupsQuery.data || [])
+    .map((group) => ({
+      ...group,
+      item_ids: group.item_ids.filter((id) => itemIds.has(id)),
+    }))
+    .filter((group) => group.item_ids.length);
+  const groupedIds = new Set(groups.flatMap((group) => group.item_ids));
+  const ungroupedItems = items.filter((item) => !groupedIds.has(itemId(item)));
+  const groupError = (
+    groupsQuery.error ||
+    assignGroupMutation.error ||
+    renameGroupMutation.error
+  ) as Error | null;
+
+  const renderHistoryItem = (item: T) => {
+    const id = itemId(item);
+    const active = id === activeId;
+    const deletable = canDelete(item);
+    return (
+      <div
+        key={id}
+        className={[
+          "flex items-stretch gap-1 rounded-md border p-2 transition",
+          active
+            ? "border-primary bg-primary text-primary-foreground"
+            : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
+        ].join(" ")}
+      >
+        {selecting && (deletable || onSelectionAction || groupScope) ? (
+          <input
+            type="checkbox"
+            className="mt-2 h-4 w-4 shrink-0 accent-primary"
+            checked={selectedIds.has(id)}
+            aria-label={`${t("Select")} ${id}`}
+            onChange={() => toggleSelected(id)}
+          />
+        ) : null}
+        <button
+          type="button"
+          className="min-w-0 flex-1 text-left"
+          onClick={() => {
+            onOpen(id);
+            onCollapsedChange(true);
+          }}
+        >
+          {renderItem(item, active)}
+        </button>
+        {!selecting && deletable ? (
+          <button
+            type="button"
+            className={[
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+              active
+                ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
+                : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+            ].join(" ")}
+            aria-label={t("Delete history item")}
+            disabled={deletingId === id}
+            onClick={() => {
+              if (window.confirm(t("Delete this history item? This cannot be undone."))) onDelete(id);
+            }}
+          >
+            {deletingId === id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+          </button>
+        ) : null}
+      </div>
+    );
+  };
 
   if (collapsed) {
     return (
@@ -148,9 +251,9 @@ export function HistorySidebar<T>({
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
-          {error ? (
+          {error || groupError ? (
             <div className="rounded-md border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
-              {error.message}
+              {(error || groupError)?.message}
             </div>
           ) : null}
           {isLoading ? (
@@ -178,6 +281,29 @@ export function HistorySidebar<T>({
               </button>
               {selecting ? (
                 <div className="flex flex-wrap justify-end gap-2">
+                  {groupScope ? (
+                    <button
+                      type="button"
+                      className={buttonClassName("secondary")}
+                      disabled={!selectedIds.size || assignGroupMutation.isPending}
+                      onClick={() => {
+                        const name = window.prompt(t("Group name"))?.trim();
+                        if (name) {
+                          assignGroupMutation.mutate({
+                            name,
+                            itemIds: [...selectedIds],
+                          });
+                        }
+                      }}
+                    >
+                      {assignGroupMutation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      ) : (
+                        <FolderPlus className="h-4 w-4" aria-hidden="true" />
+                      )}
+                      {t("Group selected")} {selectedIds.size ? `(${selectedIds.size})` : ""}
+                    </button>
+                  ) : null}
                   {onSelectionAction && selectionActionLabel ? (
                     <button
                       type="button"
@@ -209,60 +335,42 @@ export function HistorySidebar<T>({
             </div>
           ) : null}
           <div className="max-h-72 space-y-2 overflow-y-auto pr-1 lg:max-h-[calc(100vh-220px)]">
-            {items.map((item) => {
-              const id = itemId(item);
-              const active = id === activeId;
-              const deletable = canDelete(item);
-              return (
-                <div
-                  key={id}
-                  className={[
-                    "flex items-stretch gap-1 rounded-md border p-2 transition",
-                    active
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
-                  ].join(" ")}
+            {groups.map((group) => (
+              <details
+                key={group.group_id}
+                className="relative overflow-hidden rounded-md border border-border bg-muted/30"
+              >
+                <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 pr-12 text-sm font-semibold hover:bg-muted [&::-webkit-details-marker]:hidden">
+                  <Folder className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                  <Badge tone="neutral">{group.item_ids.length}</Badge>
+                </summary>
+                <button
+                  type="button"
+                  className="absolute right-1 top-1 flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-surface hover:text-foreground"
+                  aria-label={t("Rename group")}
+                  title={t("Rename group")}
+                  disabled={renameGroupMutation.isPending}
+                  onClick={() => {
+                    const name = window.prompt(t("Group name"), group.name)?.trim();
+                    if (name && name !== group.name) {
+                      renameGroupMutation.mutate({
+                        groupId: group.group_id,
+                        name,
+                      });
+                    }
+                  }}
                 >
-                  {selecting && (deletable || onSelectionAction) ? (
-                    <input
-                      type="checkbox"
-                      className="mt-2 h-4 w-4 shrink-0 accent-primary"
-                      checked={selectedIds.has(id)}
-                      aria-label={`${t("Select")} ${id}`}
-                      onChange={() => toggleSelected(id)}
-                    />
-                  ) : null}
-                  <button
-                    type="button"
-                    className="min-w-0 flex-1 text-left"
-                    onClick={() => {
-                      onOpen(id);
-                      onCollapsedChange(true);
-                    }}
-                  >
-                    {renderItem(item, active)}
-                  </button>
-                  {!selecting && deletable ? (
-                    <button
-                      type="button"
-                      className={[
-                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-                        active
-                          ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
-                          : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-                      ].join(" ")}
-                      aria-label={t("Delete history item")}
-                      disabled={deletingId === id}
-                      onClick={() => {
-                        if (window.confirm(t("Delete this history item? This cannot be undone."))) onDelete(id);
-                      }}
-                    >
-                      {deletingId === id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
-                    </button>
-                  ) : null}
+                  <Pencil className="h-4 w-4" aria-hidden="true" />
+                </button>
+                <div className="space-y-2 border-t border-border p-2">
+                  {items
+                    .filter((item) => group.item_ids.includes(itemId(item)))
+                    .map(renderHistoryItem)}
                 </div>
-              );
-            })}
+              </details>
+            ))}
+            {ungroupedItems.map(renderHistoryItem)}
           </div>
         </CardContent>
       </Card>

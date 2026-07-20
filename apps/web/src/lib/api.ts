@@ -83,6 +83,21 @@ export type JobRecord = JobSummary & {
     ai_audit_error?: string | null;
 };
 
+export type HistoryGroupScope =
+    | "route_audit"
+    | "fleet_planner"
+    | "distance_reference"
+    | "distance_route_cost"
+    | "route_insert_advisor";
+
+export type HistoryGroup = {
+    group_id: string;
+    name: string;
+    item_ids: string[];
+    created_at: string;
+    updated_at: string;
+};
+
 export type OperationsReviewCompatibility = {
     compatible: boolean;
     issues: Array<{ job_id?: string; fields: string[] }>;
@@ -820,6 +835,43 @@ export function getDemandTemplateUrl() {
 export async function listJobs() {
     const payload = await apiFetch<JobsResponse>("/jobs");
     return payload.jobs;
+}
+
+export async function listHistoryGroups(scope: HistoryGroupScope) {
+    const payload = await apiFetch<{ groups: HistoryGroup[] }>(
+        `/history-groups/${encodeURIComponent(scope)}`,
+    );
+    return payload.groups;
+}
+
+export function assignHistoryGroup(
+    scope: HistoryGroupScope,
+    name: string,
+    itemIds: string[],
+) {
+    return apiFetch<{ group: HistoryGroup }>(
+        `/history-groups/${encodeURIComponent(scope)}`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name, item_ids: itemIds }),
+        },
+    );
+}
+
+export function renameHistoryGroup(
+    scope: HistoryGroupScope,
+    groupId: string,
+    name: string,
+) {
+    return apiFetch<{ group: HistoryGroup }>(
+        `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+        },
+    );
 }
 
 export function previewOperationsReview(jobIds: string[]) {

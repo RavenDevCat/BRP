@@ -162,6 +162,48 @@ def test_sqlite_side_tool_store_filters_and_deletes(tmp_path: Path) -> None:
     assert store.get_side_tool_run("fleet_planner", "run1") is None
 
 
+def test_history_groups_move_rename_and_cleanup_with_history_items(
+    tmp_path: Path,
+) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    store.upsert_job(job_record("job2", "alice@example.com"))
+
+    first = store.assign_history_group(
+        "route_audit", "alice@example.com", "June", ["job1", "job2"]
+    )
+    second = store.assign_history_group(
+        "route_audit", "alice@example.com", "Follow up", ["job2"]
+    )
+    groups = store.list_history_groups("route_audit", "alice@example.com")
+    assert {group["name"]: group["item_ids"] for group in groups} == {
+        "June": ["job1"],
+        "Follow up": ["job2"],
+    }
+
+    renamed = store.rename_history_group(
+        "route_audit", "alice@example.com", first["group_id"], "June archive"
+    )
+    assert renamed is not None
+    assert renamed["name"] == "June archive"
+
+    assert store.delete_job("job1") is True
+    assert [group["group_id"] for group in store.list_history_groups(
+        "route_audit", "alice@example.com"
+    )] == [second["group_id"]]
+    assert store.delete_job("job2") is True
+    assert store.list_history_groups("route_audit", "alice@example.com") == []
+
+    store.upsert_side_tool_run(
+        "fleet_planner", side_tool_record("run1", "alice@example.com")
+    )
+    store.assign_history_group(
+        "fleet_planner", "alice@example.com", "Fleet", ["run1"]
+    )
+    assert store.delete_side_tool_run("fleet_planner", "run1") is True
+    assert store.list_history_groups("fleet_planner", "alice@example.com") == []
+
+
 def test_json_to_sqlite_migration_and_parity(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     side_tools_dir = tmp_path / "side_tools"

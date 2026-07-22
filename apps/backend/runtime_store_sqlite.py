@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -20,6 +20,19 @@ SIDE_TOOL_HISTORY_SCOPES = {
     "route_cost": ("distance_route_cost",),
     "fleet_planner": ("fleet_planner",),
     "route_insert_advisor": ("route_insert_advisor",),
+}
+
+HISTORY_SCOPE_TOOL_KEYS = {
+    scope: tuple(
+        tool_key
+        for tool_key, scopes in SIDE_TOOL_HISTORY_SCOPES.items()
+        if scope in scopes
+    )
+    for scope in {
+        scope
+        for scopes in SIDE_TOOL_HISTORY_SCOPES.values()
+        for scope in scopes
+    }
 }
 
 
@@ -195,6 +208,17 @@ class SqliteRuntimeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_history_group_members_email
                     ON history_group_members(member_email);
+                CREATE TABLE IF NOT EXISTS history_group_preferences (
+                    scope TEXT NOT NULL,
+                    user_email TEXT NOT NULL,
+                    group_id TEXT NOT NULL,
+                    fixed INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(scope, user_email),
+                    FOREIGN KEY(group_id) REFERENCES history_groups(group_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_history_group_preferences_group
+                    ON history_group_preferences(group_id);
                 """
                 )
                 duplicate_item = conn.execute(
@@ -291,6 +315,9 @@ class SqliteRuntimeStore:
                     json_dumps(record),
                     utc_now_iso(),
                 ),
+            )
+            self._apply_history_group_preference(
+                conn, "route_audit", job_id, summary["owner_email"]
             )
 
     def claim_queued_job(
@@ -451,6 +478,10 @@ class SqliteRuntimeStore:
                     utc_now_iso(),
                 ),
             )
+            for scope in SIDE_TOOL_HISTORY_SCOPES.get(normalized_tool_key, ()):
+                self._apply_history_group_preference(
+                    conn, scope, run_id, summary["owner_email"]
+                )
 
     def get_side_tool_run(self, tool_key: str, run_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -575,17 +606,34 @@ class SqliteRuntimeStore:
                 """,
                 group_ids,
             ).fetchall()
+            preferences = conn.execute(
+                f"""
+                SELECT group_id, user_email, fixed
+                FROM history_group_preferences
+                WHERE group_id IN ({placeholders})
+                """,
+                group_ids,
+            ).fetchall()
         item_ids_by_group: dict[str, list[str]] = {}
         for item in items:
             item_ids_by_group.setdefault(str(item["group_id"]), []).append(
                 str(item["item_id"])
             )
-        members_by_group: dict[str, list[dict[str, str]]] = {}
+        members_by_group: dict[str, list[dict[str, Any]]] = {}
+        preferences_by_group: dict[str, dict[str, bool]] = {}
+        for preference in preferences:
+            preferences_by_group.setdefault(str(preference["group_id"]), {})[
+                str(preference["user_email"])
+            ] = bool(preference["fixed"])
         for member in members:
+            group_preferences = preferences_by_group.get(str(member["group_id"]), {})
+            member_email = str(member["member_email"])
             members_by_group.setdefault(str(member["group_id"]), []).append(
                 {
-                    "member_email": str(member["member_email"]),
+                    "member_email": member_email,
                     "role": str(member["role"]),
+                    "is_default": member_email in group_preferences,
+                    "is_fixed": bool(group_preferences.get(member_email)),
                 }
             )
         return [
@@ -602,6 +650,13 @@ class SqliteRuntimeStore:
                     else str(group["member_role"] or "viewer")
                 ),
                 "members": members_by_group.get(str(group["group_id"]), []),
+                "is_default": normalized_user
+                in preferences_by_group.get(str(group["group_id"]), {}),
+                "is_fixed": bool(
+                    preferences_by_group.get(str(group["group_id"]), {}).get(
+                        normalized_user
+                    )
+                ),
                 "created_at": str(group["created_at"]),
                 "updated_at": str(group["updated_at"]),
             }
@@ -672,6 +727,344 @@ class SqliteRuntimeStore:
         role = str(row["role"] or "").strip().lower()
         return role if role in HISTORY_GROUP_MEMBER_ROLES else None
 
+    @staticmethod
+    def _history_item_owner(
+        conn: sqlite3.Connection, scope: str, item_id: str
+    ) -> str:
+        if scope == "route_audit":
+            row = conn.execute(
+                "SELECT owner_email FROM jobs WHERE job_id = ?", (item_id,)
+            ).fetchone()
+        else:
+            tool_keys = HISTORY_SCOPE_TOOL_KEYS.get(scope, ())
+            if not tool_keys:
+                return ""
+            placeholders = ",".join("?" for _ in tool_keys)
+            row = conn.execute(
+                f"""
+                SELECT owner_email FROM side_tool_runs
+                WHERE run_id = ? AND tool_key IN ({placeholders})
+                LIMIT 1
+                """,
+                (item_id, *tool_keys),
+            ).fetchone()
+        return normalize_email(row["owner_email"]) if row else ""
+
+    @classmethod
+    def _fixed_history_group_for_item(
+        cls, conn: sqlite3.Connection, scope: str, item_id: str
+    ) -> str | None:
+        owner_email = cls._history_item_owner(conn, scope, item_id)
+        if not owner_email:
+            return None
+        row = conn.execute(
+            """
+            SELECT group_id FROM history_group_preferences
+            WHERE scope = ? AND user_email = ? AND fixed = 1
+            """,
+            (scope, owner_email),
+        ).fetchone()
+        return str(row["group_id"]) if row else None
+
+    @staticmethod
+    def _apply_history_group_preference(
+        conn: sqlite3.Connection,
+        scope: str,
+        item_id: str,
+        owner_email: str,
+    ) -> None:
+        normalized_owner = normalize_email(owner_email)
+        if not normalized_owner:
+            return
+        existing = conn.execute(
+            """
+            SELECT 1 FROM history_group_items
+            WHERE scope = ? AND item_id = ?
+            """,
+            (scope, item_id),
+        ).fetchone()
+        if existing:
+            return
+        preference = conn.execute(
+            """
+            SELECT history_group_preferences.group_id, history_groups.owner_email
+            FROM history_group_preferences
+            JOIN history_groups
+                ON history_groups.group_id = history_group_preferences.group_id
+                AND history_groups.scope = history_group_preferences.scope
+            LEFT JOIN history_group_members
+                ON history_group_members.group_id = history_groups.group_id
+                AND history_group_members.member_email = ?
+            WHERE history_group_preferences.scope = ?
+                AND history_group_preferences.user_email = ?
+                AND (
+                    history_groups.owner_email = ?
+                    OR history_group_members.role = 'editor'
+                )
+            """,
+            (normalized_owner, scope, normalized_owner, normalized_owner),
+        ).fetchone()
+        if not preference:
+            return
+        now = utc_now_iso()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO history_group_items(
+                scope, owner_email, item_id, group_id, created_at
+            ) VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                scope,
+                normalize_email(preference["owner_email"]),
+                item_id,
+                str(preference["group_id"]),
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE history_groups SET updated_at = ? WHERE group_id = ?",
+            (now, str(preference["group_id"])),
+        )
+
+    def set_history_group_preference(
+        self,
+        scope: str,
+        actor_email: str,
+        group_id: str | None,
+        *,
+        account_email: str | None = None,
+        fixed: bool = False,
+        include_all: bool = False,
+    ) -> dict[str, Any] | None:
+        normalized_actor = normalize_email(actor_email)
+        normalized_account = normalize_email(account_email or actor_email)
+        target_group_id = str(group_id or "").strip() or None
+        if not scope or not normalized_actor or not normalized_account:
+            raise ValueError("scope and account_email are required")
+        if normalized_account != normalized_actor and not include_all:
+            raise PermissionError(
+                "Only an admin can set another account's default workspace."
+            )
+        if fixed and not include_all:
+            raise PermissionError("Only an admin can fix an account to a workspace.")
+        self.initialize()
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                """
+                SELECT group_id, fixed FROM history_group_preferences
+                WHERE scope = ? AND user_email = ?
+                """,
+                (scope, normalized_account),
+            ).fetchone()
+            if existing and bool(existing["fixed"]) and not include_all:
+                raise PermissionError(
+                    "This account is fixed to a workspace by an admin."
+                )
+            if not target_group_id:
+                conn.execute(
+                    """
+                    DELETE FROM history_group_preferences
+                    WHERE scope = ? AND user_email = ?
+                    """,
+                    (scope, normalized_account),
+                )
+                conn.commit()
+                return None
+            target = conn.execute(
+                """
+                SELECT group_id FROM history_groups
+                WHERE scope = ? AND group_id = ?
+                """,
+                (scope, target_group_id),
+            ).fetchone()
+            if not target:
+                conn.rollback()
+                return None
+            account_role = self._history_group_role(
+                conn,
+                scope,
+                target_group_id,
+                normalized_account,
+                include_all=False,
+            )
+            if account_role not in {"owner", "editor"}:
+                raise PermissionError(
+                    "A default workspace requires Owner or Editor access."
+                )
+            conn.execute(
+                """
+                INSERT INTO history_group_preferences(
+                    scope, user_email, group_id, fixed, updated_at
+                ) VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(scope, user_email) DO UPDATE SET
+                    group_id = excluded.group_id,
+                    fixed = excluded.fixed,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    scope,
+                    normalized_account,
+                    target_group_id,
+                    1 if fixed else 0,
+                    now,
+                ),
+            )
+            if fixed:
+                if scope == "route_audit":
+                    item_rows = conn.execute(
+                        "SELECT job_id AS item_id FROM jobs WHERE owner_email = ?",
+                        (normalized_account,),
+                    ).fetchall()
+                else:
+                    tool_keys = HISTORY_SCOPE_TOOL_KEYS.get(scope, ())
+                    placeholders = ",".join("?" for _ in tool_keys)
+                    item_rows = (
+                        conn.execute(
+                            f"""
+                            SELECT DISTINCT run_id AS item_id FROM side_tool_runs
+                            WHERE owner_email = ? AND tool_key IN ({placeholders})
+                            """,
+                            (normalized_account, *tool_keys),
+                        ).fetchall()
+                        if tool_keys
+                        else []
+                    )
+                item_ids = [str(row["item_id"]) for row in item_rows]
+                if item_ids:
+                    placeholders = ",".join("?" for _ in item_ids)
+                    conn.execute(
+                        f"""
+                        DELETE FROM history_group_items
+                        WHERE scope = ? AND item_id IN ({placeholders})
+                        """,
+                        (scope, *item_ids),
+                    )
+                    group_owner = conn.execute(
+                        "SELECT owner_email FROM history_groups WHERE group_id = ?",
+                        (target_group_id,),
+                    ).fetchone()["owner_email"]
+                    conn.executemany(
+                        """
+                        INSERT INTO history_group_items(
+                            scope, owner_email, item_id, group_id, created_at
+                        ) VALUES(?, ?, ?, ?, ?)
+                        """,
+                        [
+                            (scope, group_owner, item_id, target_group_id, now)
+                            for item_id in item_ids
+                        ],
+                    )
+                conn.execute(
+                    "UPDATE history_groups SET updated_at = ? WHERE group_id = ?",
+                    (now, target_group_id),
+                )
+            conn.commit()
+        return {
+            "scope": scope,
+            "user_email": normalized_account,
+            "group_id": target_group_id,
+            "fixed": bool(fixed),
+        }
+
+    def transfer_history_group_owner(
+        self,
+        scope: str,
+        actor_email: str,
+        group_id: str,
+        owner_email: str,
+        *,
+        include_all: bool = False,
+    ) -> dict[str, Any] | None:
+        normalized_owner = normalize_email(owner_email)
+        if not normalized_owner:
+            raise ValueError("owner_email is required")
+        self.initialize()
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            group = conn.execute(
+                """
+                SELECT owner_email, name FROM history_groups
+                WHERE group_id = ? AND scope = ?
+                """,
+                (group_id, scope),
+            ).fetchone()
+            if not group:
+                conn.rollback()
+                return None
+            actor_role = self._history_group_role(
+                conn,
+                scope,
+                group_id,
+                actor_email,
+                include_all=include_all,
+            )
+            if actor_role not in {"owner", "admin"}:
+                raise PermissionError(
+                    "Workspace ownership can only be transferred by the owner or an admin."
+                )
+            previous_owner = normalize_email(group["owner_email"])
+            if previous_owner == normalized_owner:
+                conn.commit()
+            else:
+                duplicate = conn.execute(
+                    """
+                    SELECT 1 FROM history_groups
+                    WHERE scope = ? AND owner_email = ? AND name = ? COLLATE NOCASE
+                        AND group_id <> ?
+                    """,
+                    (scope, normalized_owner, str(group["name"]), group_id),
+                ).fetchone()
+                if duplicate:
+                    raise ValueError(
+                        "The new owner already has a workspace with this name."
+                    )
+                conn.execute(
+                    """
+                    UPDATE history_groups
+                    SET owner_email = ?, updated_at = ?
+                    WHERE group_id = ? AND scope = ?
+                    """,
+                    (normalized_owner, now, group_id, scope),
+                )
+                conn.execute(
+                    """
+                    UPDATE history_group_items SET owner_email = ?
+                    WHERE group_id = ? AND scope = ?
+                    """,
+                    (normalized_owner, group_id, scope),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO history_group_members(
+                        group_id, member_email, role, created_at, updated_at
+                    ) VALUES(?, ?, 'owner', ?, ?)
+                    ON CONFLICT(group_id, member_email) DO UPDATE SET
+                        role = 'owner', updated_at = excluded.updated_at
+                    """,
+                    (group_id, normalized_owner, now, now),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO history_group_members(
+                        group_id, member_email, role, created_at, updated_at
+                    ) VALUES(?, ?, 'editor', ?, ?)
+                    ON CONFLICT(group_id, member_email) DO UPDATE SET
+                        role = 'editor', updated_at = excluded.updated_at
+                    """,
+                    (group_id, previous_owner, now, now),
+                )
+                conn.commit()
+        return next(
+            group
+            for group in self.list_history_groups(
+                scope, actor_email, include_all=include_all
+            )
+            if group["group_id"] == group_id
+        )
+
     def assign_history_group(
         self,
         scope: str,
@@ -731,6 +1124,15 @@ class SqliteRuntimeStore:
                 """,
                 (group_id, normalized_owner, now, now),
             )
+            if not include_all:
+                for item_id in normalized_ids:
+                    fixed_group_id = self._fixed_history_group_for_item(
+                        conn, scope, item_id
+                    )
+                    if fixed_group_id and fixed_group_id != group_id:
+                        raise PermissionError(
+                            "This history item is fixed to another workspace by an admin."
+                        )
             placeholders = ",".join("?" for _ in normalized_ids)
             source_groups = conn.execute(
                 f"""
@@ -904,6 +1306,14 @@ class SqliteRuntimeStore:
                 """,
                 (group_id, normalized_member, normalized_role, now, now),
             )
+            if normalized_role == "viewer":
+                conn.execute(
+                    """
+                    DELETE FROM history_group_preferences
+                    WHERE scope = ? AND user_email = ? AND group_id = ?
+                    """,
+                    (scope, normalized_member, group_id),
+                )
         return next(
             group
             for group in self.list_history_groups(
@@ -954,6 +1364,13 @@ class SqliteRuntimeStore:
                 WHERE group_id = ? AND member_email = ?
                 """,
                 (group_id, normalized_member),
+            )
+            conn.execute(
+                """
+                DELETE FROM history_group_preferences
+                WHERE scope = ? AND user_email = ? AND group_id = ?
+                """,
+                (scope, normalized_member, group_id),
             )
         return next(
             group
@@ -1011,6 +1428,15 @@ class SqliteRuntimeStore:
                         "owner, or admin."
                     )
                 target_owner = normalize_email(target["owner_email"])
+            if not include_all:
+                for item_id in normalized_ids:
+                    fixed_group_id = self._fixed_history_group_for_item(
+                        conn, scope, item_id
+                    )
+                    if fixed_group_id and fixed_group_id != target_group_id:
+                        raise PermissionError(
+                            "This history item is fixed to another workspace by an admin."
+                        )
             placeholders = ",".join("?" for _ in normalized_ids)
             source_groups = conn.execute(
                 f"""

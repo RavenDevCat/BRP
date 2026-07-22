@@ -352,6 +352,75 @@ class FastApiThinShellTests(unittest.TestCase):
             self.assertEqual(remaining[0]["name"], "Source")
             self.assertEqual(remaining[0]["item_ids"], [])
 
+    def test_workspace_api_sets_preferences_and_transfers_owner(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = SqliteRuntimeStore(Path(temp_dir) / "runtime.sqlite")
+            store.upsert_job(
+                {
+                    "job_id": "job1",
+                    "owner_email": "owner@example.com",
+                    "shared_with_all": False,
+                    "status": "succeeded",
+                    "metadata": {"job_name": "Private"},
+                }
+            )
+            group = store.assign_history_group(
+                "route_audit", "owner@example.com", "Operations", ["job1"]
+            )
+            store.set_history_group_member(
+                "route_audit",
+                "owner@example.com",
+                group["group_id"],
+                "editor@example.com",
+                "editor",
+            )
+
+            with patched_backend(
+                SERVICE_TOKEN="secret",
+                ADMIN_EMAILS={"admin@example.com"},
+                JOB_STORE=store,
+                _runtime_sqlite_store=lambda: store,
+            ):
+                default_response = self.client.put(
+                    "/api/history-groups/route_audit/preference",
+                    headers=auth_headers("owner@example.com"),
+                    json={"group_id": group["group_id"]},
+                )
+                fixed_denied = self.client.put(
+                    "/api/history-groups/route_audit/preference",
+                    headers=auth_headers("owner@example.com"),
+                    json={
+                        "group_id": group["group_id"],
+                        "account_email": "editor@example.com",
+                        "fixed": True,
+                    },
+                )
+                fixed_response = self.client.put(
+                    "/api/history-groups/route_audit/preference",
+                    headers=auth_headers("admin@example.com"),
+                    json={
+                        "group_id": group["group_id"],
+                        "account_email": "editor@example.com",
+                        "fixed": True,
+                    },
+                )
+                transfer_response = self.client.post(
+                    f"/api/history-groups/route_audit/{group['group_id']}/owner",
+                    headers=auth_headers("owner@example.com"),
+                    json={"owner_email": "editor@example.com"},
+                )
+
+            self.assertEqual(default_response.status_code, 200)
+            self.assertFalse(default_response.json()["preference"]["fixed"])
+            self.assertEqual(fixed_denied.status_code, 403)
+            self.assertEqual(fixed_response.status_code, 200)
+            self.assertTrue(fixed_response.json()["preference"]["fixed"])
+            self.assertEqual(transfer_response.status_code, 200)
+            self.assertEqual(
+                transfer_response.json()["group"]["owner_email"],
+                "editor@example.com",
+            )
+
     def test_osrm_manager_status_uses_existing_payload_builder(self) -> None:
         class StubOsrmManager:
             @staticmethod

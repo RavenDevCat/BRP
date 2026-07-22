@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Folder, FolderInput, FolderPlus, GitCompareArrows, History, Loader2, Pencil, RefreshCw, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ArrowRight, Crown, Folder, FolderInput, FolderPlus, GitCompareArrows, History, Loader2, LockKeyhole, Pencil, RefreshCw, Star, Trash2, UserPlus, Users, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -11,7 +11,9 @@ import {
   moveHistoryGroupItems,
   removeHistoryGroupMember,
   renameHistoryGroup,
+  setHistoryGroupPreference,
   setHistoryGroupMember,
+  transferHistoryGroupOwner,
   type HistoryGroupScope,
 } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
@@ -126,6 +128,24 @@ export function HistorySidebar<T>({
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] }),
   });
+  const preferenceMutation = useMutation({
+    mutationFn: ({ groupId, accountEmail, fixed = false }: { groupId: string | null; accountEmail?: string; fixed?: boolean }) => {
+      if (!groupScope) throw new Error("History grouping is unavailable.");
+      return setHistoryGroupPreference(groupScope, groupId, { accountEmail, fixed });
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] }),
+  });
+  const transferOwnerMutation = useMutation({
+    mutationFn: ({ groupId, email }: { groupId: string; email: string }) => {
+      if (!groupScope) throw new Error("History grouping is unavailable.");
+      return transferHistoryGroupOwner(groupScope, groupId, email);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] });
+      setManagingGroupId(null);
+    },
+  });
   const deleteGroupMutation = useMutation({
     mutationFn: (groupId: string) => {
       if (!groupScope) throw new Error("History grouping is unavailable.");
@@ -188,6 +208,8 @@ export function HistorySidebar<T>({
     moveGroupMutation.error ||
     memberMutation.error ||
     removeMemberMutation.error ||
+    preferenceMutation.error ||
+    transferOwnerMutation.error ||
     deleteGroupMutation.error
   ) as Error | null;
 
@@ -437,6 +459,7 @@ export function HistorySidebar<T>({
             {groups.map((group) => {
               const canEditGroup = ["owner", "editor", "admin"].includes(group.role);
               const canManageGroup = ["owner", "admin"].includes(group.role);
+              const canSetOwnDefault = ["owner", "editor"].includes(group.role);
               return (
                 <details
                   key={group.group_id}
@@ -453,16 +476,42 @@ export function HistorySidebar<T>({
                     }
                   }}
                 >
-                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 pr-32 text-sm font-semibold hover:bg-muted [&::-webkit-details-marker]:hidden">
+                  <summary className={`flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold hover:bg-muted [&::-webkit-details-marker]:hidden ${canManageGroup ? "pr-40" : canSetOwnDefault ? "pr-12" : ""}`}>
                     <Folder className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                     <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                    {group.is_fixed ? (
+                      <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-primary" aria-label={t("Fixed workspace")} />
+                    ) : group.is_default ? (
+                      <Star className="h-3.5 w-3.5 shrink-0 fill-primary text-primary" aria-label={t("Default workspace")} />
+                    ) : null}
                     <Badge tone="neutral">{group.item_ids.length}</Badge>
                     <span className="text-[11px] font-normal text-muted-foreground">
                       {t(group.role === "owner" ? "Owner" : group.role === "editor" ? "Editor" : group.role === "admin" ? "Admin" : "Viewer")}
                     </span>
                   </summary>
-                  {canManageGroup ? (
+                  {canSetOwnDefault || canManageGroup ? (
                     <div className="absolute right-1 top-1 flex items-center">
+                      {canSetOwnDefault ? (
+                        <button
+                          type="button"
+                          className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-surface hover:text-primary disabled:cursor-not-allowed disabled:opacity-50"
+                          aria-label={t(group.is_fixed ? "Fixed workspace managed by an admin" : group.is_default ? "Clear default workspace" : "Set as default workspace")}
+                          title={t(group.is_fixed ? "Fixed workspace managed by an admin" : group.is_default ? "Clear default workspace" : "Set as default workspace")}
+                          disabled={group.is_fixed || preferenceMutation.isPending}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            preferenceMutation.mutate({ groupId: group.is_default ? null : group.group_id });
+                          }}
+                        >
+                          {group.is_fixed ? (
+                            <LockKeyhole className="h-4 w-4 text-primary" aria-hidden="true" />
+                          ) : (
+                            <Star className={`h-4 w-4 ${group.is_default ? "fill-primary text-primary" : ""}`} aria-hidden="true" />
+                          )}
+                        </button>
+                      ) : null}
+                      {canManageGroup ? (
+                        <>
                       <button
                         type="button"
                         className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-surface hover:text-foreground"
@@ -507,6 +556,8 @@ export function HistorySidebar<T>({
                       >
                         <Trash2 className="h-4 w-4" aria-hidden="true" />
                       </button>
+                        </>
+                      ) : null}
                     </div>
                   ) : null}
                   {managingGroupId === group.group_id && canManageGroup ? (
@@ -554,6 +605,46 @@ export function HistorySidebar<T>({
                           <div key={member.member_email} className="flex min-w-0 items-center gap-2 text-xs">
                             <span className="min-w-0 flex-1 truncate">{member.member_email}</span>
                             <span className="text-muted-foreground">{t(member.role === "owner" ? "Owner" : member.role === "editor" ? "Editor" : "Viewer")}</span>
+                            {group.role === "admin" && member.role !== "viewer" ? (
+                              <>
+                                <button
+                                  type="button"
+                                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-primary disabled:opacity-50"
+                                  aria-label={t(member.is_fixed ? "Fixed workspace managed by an admin" : member.is_default ? "Clear account default workspace" : "Set account default workspace")}
+                                  title={t(member.is_fixed ? "Fixed workspace managed by an admin" : member.is_default ? "Clear account default workspace" : "Set account default workspace")}
+                                  disabled={member.is_fixed || preferenceMutation.isPending}
+                                  onClick={() => preferenceMutation.mutate({ groupId: member.is_default ? null : group.group_id, accountEmail: member.member_email })}
+                                >
+                                  <Star className={`h-3.5 w-3.5 ${member.is_default ? "fill-primary text-primary" : ""}`} aria-hidden="true" />
+                                </button>
+                                <button
+                                  type="button"
+                                  className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-primary disabled:opacity-50"
+                                  aria-label={t(member.is_fixed ? "Release fixed workspace" : "Fix account to this workspace")}
+                                  title={t(member.is_fixed ? "Release fixed workspace" : "Fix account to this workspace")}
+                                  disabled={preferenceMutation.isPending}
+                                  onClick={() => preferenceMutation.mutate({ groupId: group.group_id, accountEmail: member.member_email, fixed: !member.is_fixed })}
+                                >
+                                  <LockKeyhole className={`h-3.5 w-3.5 ${member.is_fixed ? "text-primary" : ""}`} aria-hidden="true" />
+                                </button>
+                              </>
+                            ) : null}
+                            {member.role !== "owner" ? (
+                              <button
+                                type="button"
+                                className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-primary disabled:opacity-50"
+                                aria-label={t("Transfer workspace ownership")}
+                                title={t("Transfer workspace ownership")}
+                                disabled={transferOwnerMutation.isPending}
+                                onClick={() => {
+                                  if (window.confirm(t("Transfer this workspace and keep the current owner as an editor?"))) {
+                                    transferOwnerMutation.mutate({ groupId: group.group_id, email: member.member_email });
+                                  }
+                                }}
+                              >
+                                <Crown className="h-3.5 w-3.5" aria-hidden="true" />
+                              </button>
+                            ) : null}
                             {member.role !== "owner" ? (
                               <button
                                 type="button"

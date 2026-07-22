@@ -99,7 +99,11 @@ export type HistoryGroup = {
     members: Array<{
         member_email: string;
         role: "owner" | "editor" | "viewer";
+        is_default: boolean;
+        is_fixed: boolean;
     }>;
+    is_default: boolean;
+    is_fixed: boolean;
     created_at: string;
     updated_at: string;
 };
@@ -920,6 +924,44 @@ export function removeHistoryGroupMember(
         `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberEmail)}`,
         { method: "DELETE" },
     );
+}
+
+export function transferHistoryGroupOwner(
+    scope: HistoryGroupScope,
+    groupId: string,
+    ownerEmail: string,
+) {
+    return apiFetch<{ group: HistoryGroup }>(
+        `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}/owner`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ owner_email: ownerEmail }),
+        },
+    );
+}
+
+export function setHistoryGroupPreference(
+    scope: HistoryGroupScope,
+    groupId: string | null,
+    options?: { accountEmail?: string; fixed?: boolean },
+) {
+    return apiFetch<{
+        preference: {
+            scope: HistoryGroupScope;
+            user_email: string;
+            group_id: string;
+            fixed: boolean;
+        } | null;
+    }>(`/history-groups/${encodeURIComponent(scope)}/preference`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            group_id: groupId,
+            account_email: options?.accountEmail,
+            fixed: options?.fixed === true,
+        }),
+    });
 }
 
 export function deleteHistoryGroup(scope: HistoryGroupScope, groupId: string) {

@@ -276,6 +276,9 @@ def test_history_group_v2_database_upgrades_in_place(tmp_path: Path) -> None:
             row["name"] for row in conn.execute("PRAGMA index_list(history_group_items)")
         }
         assert "idx_history_group_items_scope_item" in indexes
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'history_group_preferences'"
+        ).fetchone()
 
 
 def test_runtime_store_schema_version_never_downgrades(tmp_path: Path) -> None:
@@ -419,6 +422,126 @@ def test_history_group_roles_and_delete_release_items_not_jobs(
         assert conn.execute(
             "SELECT COUNT(*) FROM history_group_members WHERE group_id = ?", (group_id,)
         ).fetchone()[0] == 0
+
+
+def test_history_group_owner_transfer_keeps_previous_owner_as_editor(
+    tmp_path: Path,
+) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    group = store.assign_history_group(
+        "route_audit", "alice@example.com", "Operations", ["job1"]
+    )
+    store.set_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        group["group_id"],
+        "bob@example.com",
+        "editor",
+    )
+
+    transferred = store.transfer_history_group_owner(
+        "route_audit",
+        "alice@example.com",
+        group["group_id"],
+        "bob@example.com",
+    )
+
+    assert transferred is not None
+    assert transferred["owner_email"] == "bob@example.com"
+    assert transferred["role"] == "editor"
+    assert {
+        (member["member_email"], member["role"])
+        for member in transferred["members"]
+    } == {
+        ("alice@example.com", "editor"),
+        ("bob@example.com", "owner"),
+    }
+    bob_group = store.list_history_groups("route_audit", "bob@example.com")[0]
+    assert bob_group["role"] == "owner"
+    assert bob_group["item_ids"] == ["job1"]
+    with pytest.raises(PermissionError):
+        store.transfer_history_group_owner(
+            "route_audit",
+            "alice@example.com",
+            group["group_id"],
+            "carol@example.com",
+        )
+
+
+def test_history_group_default_and_admin_fixed_assignment(
+    tmp_path: Path,
+) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    group = store.assign_history_group(
+        "route_audit", "alice@example.com", "Operations", ["job1"]
+    )
+    group_id = group["group_id"]
+
+    preference = store.set_history_group_preference(
+        "route_audit", "alice@example.com", group_id
+    )
+    assert preference == {
+        "scope": "route_audit",
+        "user_email": "alice@example.com",
+        "group_id": group_id,
+        "fixed": False,
+    }
+    store.upsert_job(job_record("job2", "alice@example.com"))
+    alice_group = store.list_history_groups("route_audit", "alice@example.com")[0]
+    assert alice_group["is_default"] is True
+    assert alice_group["is_fixed"] is False
+    assert alice_group["item_ids"] == ["job1", "job2"]
+
+    store.set_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        group_id,
+        "bob@example.com",
+        "editor",
+    )
+    store.upsert_job(job_record("job3", "bob@example.com"))
+    with pytest.raises(PermissionError):
+        store.set_history_group_preference(
+            "route_audit",
+            "alice@example.com",
+            group_id,
+            account_email="bob@example.com",
+            fixed=True,
+        )
+
+    fixed = store.set_history_group_preference(
+        "route_audit",
+        "admin@example.com",
+        group_id,
+        account_email="bob@example.com",
+        fixed=True,
+        include_all=True,
+    )
+    assert fixed is not None and fixed["fixed"] is True
+    store.upsert_job(job_record("job4", "bob@example.com"))
+    admin_group = store.list_history_groups(
+        "route_audit", "admin@example.com", include_all=True
+    )[0]
+    bob = next(
+        member for member in admin_group["members"]
+        if member["member_email"] == "bob@example.com"
+    )
+    assert bob["is_default"] is True
+    assert bob["is_fixed"] is True
+    assert set(admin_group["item_ids"]) == {"job1", "job2", "job3", "job4"}
+    with pytest.raises(PermissionError):
+        store.move_history_group_items(
+            "route_audit", "bob@example.com", None, ["job3"]
+        )
+    assert store.move_history_group_items(
+        "route_audit",
+        "admin@example.com",
+        None,
+        ["job3"],
+        include_all=True,
+    ) is None
 
 
 def test_side_tool_workspace_member_can_list_private_run(tmp_path: Path) -> None:

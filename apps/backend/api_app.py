@@ -669,6 +669,69 @@ def remove_history_group_member(
 
 
 @_api_route(
+    "POST",
+    "/history-groups/{scope}/{group_id}/owner",
+    dependencies=[Depends(require_authorized_request)],
+)
+def transfer_history_group_owner(
+    scope: str,
+    group_id: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    try:
+        group = backend_service._runtime_sqlite_store().transfer_history_group_owner(
+            scope,
+            context.email,
+            str(group_id or "").strip(),
+            _history_group_member(_payload_dict(payload).get("owner_email")),
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if not group:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "PUT",
+    "/history-groups/{scope}/preference",
+    dependencies=[Depends(require_authorized_request)],
+)
+def set_history_group_preference(
+    scope: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    body = _payload_dict(payload)
+    group_id = str(body.get("group_id") or "").strip() or None
+    account_email = _history_group_member(body.get("account_email") or context.email)
+    try:
+        preference = backend_service._runtime_sqlite_store().set_history_group_preference(
+            scope,
+            context.email,
+            group_id,
+            account_email=account_email,
+            fixed=bool(body.get("fixed")),
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if group_id and not preference:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"preference": preference})
+
+
+@_api_route(
     "DELETE",
     "/history-groups/{scope}/{group_id}",
     dependencies=[Depends(require_authorized_request)],

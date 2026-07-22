@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from tempfile import TemporaryDirectory
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 import api_app  # noqa: E402
 import backend_service  # noqa: E402
 import job_queue  # noqa: E402
+from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 
 class FakeJobStore:
@@ -233,6 +235,122 @@ class FastApiThinShellTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 403)
         self.assertIn("only available to admins", response.json()["error"])
+
+    def test_workspace_members_can_read_but_not_mutate_private_jobs(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = SqliteRuntimeStore(Path(temp_dir) / "runtime.sqlite")
+            store.upsert_job(
+                {
+                    "job_id": "job1",
+                    "owner_email": "owner@example.com",
+                    "shared_with_all": False,
+                    "status": "succeeded",
+                    "metadata": {"job_name": "Private"},
+                }
+            )
+            group = store.assign_history_group(
+                "route_audit", "owner@example.com", "Operations", ["job1"]
+            )
+            store.set_history_group_member(
+                "route_audit",
+                "owner@example.com",
+                group["group_id"],
+                "viewer@example.com",
+                "viewer",
+            )
+
+            with patched_backend(
+                SERVICE_TOKEN="secret",
+                ADMIN_EMAILS={"admin@example.com"},
+                JOB_STORE=store,
+                _runtime_sqlite_store=lambda: store,
+            ):
+                list_response = self.client.get(
+                    "/api/jobs", headers=auth_headers("viewer@example.com")
+                )
+                detail_response = self.client.get(
+                    "/api/jobs/job1", headers=auth_headers("viewer@example.com")
+                )
+                delete_response = self.client.delete(
+                    "/api/jobs/job1", headers=auth_headers("viewer@example.com")
+                )
+                groups_response = self.client.get(
+                    "/api/history-groups/route_audit",
+                    headers=auth_headers("viewer@example.com"),
+                )
+
+            self.assertEqual(list_response.status_code, 200)
+            self.assertEqual(
+                [job["job_id"] for job in list_response.json()["jobs"]], ["job1"]
+            )
+            self.assertEqual(detail_response.status_code, 200)
+            self.assertEqual(delete_response.status_code, 403)
+            self.assertEqual(groups_response.status_code, 200)
+            self.assertEqual(groups_response.json()["groups"][0]["role"], "viewer")
+            self.assertIsNotNone(store.get_job("job1"))
+
+    def test_workspace_api_manages_members_moves_and_safe_delete(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            store = SqliteRuntimeStore(Path(temp_dir) / "runtime.sqlite")
+            for job_id in ("job1", "job2"):
+                store.upsert_job(
+                    {
+                        "job_id": job_id,
+                        "owner_email": "owner@example.com",
+                        "shared_with_all": False,
+                        "status": "succeeded",
+                        "metadata": {"job_name": job_id},
+                    }
+                )
+            group = store.assign_history_group(
+                "route_audit", "owner@example.com", "Operations", ["job1"]
+            )
+            source_group = store.assign_history_group(
+                "route_audit", "owner@example.com", "Source", ["job2"]
+            )
+            store.set_history_group_member(
+                "route_audit",
+                "owner@example.com",
+                source_group["group_id"],
+                "editor@example.com",
+                "editor",
+            )
+
+            with patched_backend(
+                SERVICE_TOKEN="secret",
+                ADMIN_EMAILS={"admin@example.com"},
+                JOB_STORE=store,
+                _runtime_sqlite_store=lambda: store,
+            ):
+                member_response = self.client.put(
+                    f"/api/history-groups/route_audit/{group['group_id']}/members/editor%40example.com",
+                    headers=auth_headers("owner@example.com"),
+                    json={"role": "editor"},
+                )
+                move_response = self.client.post(
+                    "/api/history-groups/route_audit/items",
+                    headers=auth_headers("editor@example.com"),
+                    json={"group_id": group["group_id"], "item_ids": ["job2"]},
+                )
+                delete_response = self.client.delete(
+                    f"/api/history-groups/route_audit/{group['group_id']}",
+                    headers=auth_headers("owner@example.com"),
+                )
+
+            self.assertEqual(member_response.status_code, 200)
+            self.assertEqual(move_response.status_code, 200)
+            self.assertEqual(
+                set(move_response.json()["group"]["item_ids"]), {"job1", "job2"}
+            )
+            self.assertEqual(delete_response.status_code, 200)
+            self.assertIsNotNone(store.get_job("job1"))
+            self.assertIsNotNone(store.get_job("job2"))
+            remaining = store.list_history_groups(
+                "route_audit", "owner@example.com"
+            )
+            self.assertEqual(len(remaining), 1)
+            self.assertEqual(remaining[0]["name"], "Source")
+            self.assertEqual(remaining[0]["item_ids"], [])
 
     def test_osrm_manager_status_uses_existing_payload_builder(self) -> None:
         class StubOsrmManager:
@@ -470,6 +588,143 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertTrue(get_response.json()["hydrated"])
         self.assertEqual(delete_response.status_code, 403)
         self.assertEqual(fleet_store.deleted, [])
+
+    def test_shared_job_is_readable_but_non_owner_cannot_mutate(self) -> None:
+        job_store = FakeJobStore()
+        rerendered: list[str] = []
+        job_store.records["shared-job"] = {
+            "job_id": "shared-job",
+            "owner_email": "owner@example.com",
+            "shared_with_all": True,
+            "status": "scheduled",
+        }
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=job_store,
+            _cancel_job=lambda job_id: job_store.get_job(job_id),
+            _resolve_job_map_artifact=lambda record, artifact_key: (
+                None,
+                "Artifact file is missing.",
+            ),
+            _rerender_job_map_artifacts=lambda job_id, record: (
+                rerendered.append(job_id) or record
+            ),
+        ):
+            get_response = self.client.get(
+                "/api/jobs/shared-job", headers=auth_headers("viewer@example.com")
+            )
+            mutation_responses = [
+                self.client.delete(
+                    "/api/jobs/shared-job", headers=auth_headers("viewer@example.com")
+                ),
+                self.client.post(
+                    "/api/jobs/shared-job/cancel",
+                    headers=auth_headers("viewer@example.com"),
+                ),
+                self.client.post(
+                    "/api/jobs/shared-job/release",
+                    headers=auth_headers("viewer@example.com"),
+                ),
+                self.client.post(
+                    "/api/jobs/shared-job/ai-audit",
+                    headers=auth_headers("viewer@example.com"),
+                    json={},
+                ),
+                self.client.get(
+                    "/api/jobs/shared-job/artifacts/map?refresh=1",
+                    headers=auth_headers("viewer@example.com"),
+                ),
+                self.client.get(
+                    "/api/jobs/shared-job/artifacts/map",
+                    headers=auth_headers("viewer@example.com"),
+                ),
+            ]
+            admin_delete_response = self.client.delete(
+                "/api/jobs/shared-job", headers=auth_headers("admin@example.com")
+            )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertTrue(
+            all(response.status_code == 403 for response in mutation_responses)
+        )
+        self.assertEqual(admin_delete_response.status_code, 200)
+        self.assertEqual(job_store.deleted, ["shared-job"])
+        self.assertEqual(rerendered, [])
+
+    def test_shared_distance_history_is_readable_but_non_owner_cannot_delete(self) -> None:
+        route_store = FakeHistoryStore(
+            {
+                "shared-distance": {
+                    "run_id": "shared-distance",
+                    "owner_email": "owner@example.com",
+                    "shared_with_all": True,
+                    "summary": {"tool_mode": "route_cost"},
+                    "route_cost_result": {"ok": True},
+                }
+            }
+        )
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            ROUTE_COST_HISTORY_STORE=route_store,
+            REFERENCE_DISTANCE_HISTORY_STORE=FakeHistoryStore(),
+            DISTANCE_CHECKER_HISTORY_STORE=FakeHistoryStore(),
+        ):
+            get_response = self.client.get(
+                "/api/distance-checker/route-cost-history/shared-distance",
+                headers=auth_headers("viewer@example.com"),
+            )
+            viewer_delete_response = self.client.delete(
+                "/api/distance-checker/route-cost-history/shared-distance",
+                headers=auth_headers("viewer@example.com"),
+            )
+            admin_delete_response = self.client.delete(
+                "/api/distance-checker/route-cost-history/shared-distance",
+                headers=auth_headers("admin@example.com"),
+            )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(viewer_delete_response.status_code, 403)
+        self.assertEqual(admin_delete_response.status_code, 200)
+        self.assertEqual(route_store.deleted, ["shared-distance"])
+
+    def test_shared_route_insert_history_is_readable_but_non_owner_cannot_delete(self) -> None:
+        route_insert_store = FakeHistoryStore(
+            {
+                "shared-insert": {
+                    "run_id": "shared-insert",
+                    "owner_email": "owner@example.com",
+                    "shared_with_all": True,
+                    "route_insert_result": {"summary": {}},
+                }
+            }
+        )
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            ROUTE_INSERT_ADVISOR_HISTORY_STORE=route_insert_store,
+        ):
+            get_response = self.client.get(
+                "/api/route-insert-advisor/history/shared-insert",
+                headers=auth_headers("viewer@example.com"),
+            )
+            viewer_delete_response = self.client.delete(
+                "/api/route-insert-advisor/history/shared-insert",
+                headers=auth_headers("viewer@example.com"),
+            )
+            admin_delete_response = self.client.delete(
+                "/api/route-insert-advisor/history/shared-insert",
+                headers=auth_headers("admin@example.com"),
+            )
+
+        self.assertEqual(get_response.status_code, 200)
+        self.assertEqual(viewer_delete_response.status_code, 403)
+        self.assertEqual(admin_delete_response.status_code, 200)
+        self.assertEqual(route_insert_store.deleted, ["shared-insert"])
 
     def test_job_map_export_and_artifact_routes_use_existing_builders(self) -> None:
         job_store = FakeJobStore()

@@ -146,6 +146,17 @@ def current_user_context(request: Request) -> UserContext:
     )
 
 
+def _workspace_item_role(
+    scope: str, item_id: str, context: UserContext
+) -> str | None:
+    return backend_service._runtime_sqlite_store().history_item_role(
+        scope,
+        item_id,
+        context.email,
+        include_all=context.is_admin,
+    )
+
+
 def require_admin_context(
     _authorized: None = Depends(require_authorized_request),
     context: UserContext = Depends(current_user_context),
@@ -165,11 +176,30 @@ def _job_for_context(job_id: str, context: UserContext) -> dict[str, Any]:
         raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
     if not backend_service._can_access_job(
         job_record, context.email, include_all=context.is_admin
-    ):
+    ) and not _workspace_item_role("route_audit", normalized_job_id, context):
         raise BackendHttpError(
             403, {"error": f"Job is not available for user: {context.email}"}
         )
     return job_record
+
+
+def _require_record_mutation_access(
+    record: dict[str, Any],
+    context: UserContext,
+    *,
+    shared_admin_only: bool = False,
+) -> dict[str, Any]:
+    if context.is_admin:
+        return record
+    is_owner = backend_service._normalize_email(
+        record.get("owner_email")
+    ) == backend_service._normalize_email(context.email)
+    if is_owner and not (shared_admin_only and bool(record.get("shared_with_all"))):
+        return record
+    raise BackendHttpError(
+        403,
+        {"error": "This history item can only be modified by its owner or an admin."},
+    )
 
 
 def _distance_history_not_found_error(tool_mode: str, run_id: str) -> str:
@@ -203,9 +233,18 @@ def _distance_history_for_context(
             404,
             {"error": _distance_history_not_found_error(tool_mode, normalized_run_id)},
         )
+    workspace_scopes = {
+        "reference": ("distance_reference",),
+        "route_cost": ("distance_route_cost",),
+        "": ("distance_reference", "distance_route_cost"),
+    }.get(tool_mode, ())
+    has_workspace_access = any(
+        _workspace_item_role(scope, normalized_run_id, context)
+        for scope in workspace_scopes
+    )
     if not backend_service._can_access_job(
         record, context.email, include_all=context.is_admin
-    ):
+    ) and not has_workspace_access:
         raise BackendHttpError(
             403,
             {
@@ -228,7 +267,7 @@ def _fleet_history_for_context(
         )
     if not backend_service._can_access_job(
         record, context.email, include_all=context.is_admin
-    ):
+    ) and not _workspace_item_role("fleet_planner", normalized_run_id, context):
         raise BackendHttpError(
             403,
             {
@@ -252,9 +291,11 @@ def _route_insert_history_for_context(
                 "error": f"Route Insert Advisor history run not found: {normalized_run_id}"
             },
         )
-    if not context.is_admin and backend_service._normalize_email(
-        record.get("owner_email")
-    ) != backend_service._normalize_email(context.email):
+    if not backend_service._can_access_job(
+        record, context.email, include_all=context.is_admin
+    ) and not _workspace_item_role(
+        "route_insert_advisor", normalized_run_id, context
+    ):
         raise BackendHttpError(
             403,
             {
@@ -338,6 +379,13 @@ def _history_group_item_ids(value: Any) -> list[str]:
     if len(item_ids) > 200 or any(len(item_id) > 128 for item_id in item_ids):
         raise BackendHttpError(400, {"error": "Invalid history group selection."})
     return item_ids
+
+
+def _history_group_member(value: Any) -> str:
+    email = backend_service._normalize_email(value)
+    if not email or "@" not in email or len(email) > 254:
+        raise BackendHttpError(400, {"error": "A valid member email is required."})
+    return email
 
 
 def _api_route(method: str, path: str, **kwargs: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -433,7 +481,7 @@ def list_history_groups(
 ) -> JSONResponse:
     visible_ids = _history_item_ids_for_scope(scope, context)
     groups = backend_service._runtime_sqlite_store().list_history_groups(
-        scope, context.email
+        scope, context.email, include_all=context.is_admin
     )
     return _json_response(
         200,
@@ -477,8 +525,10 @@ def assign_history_group(
         )
     try:
         group = backend_service._runtime_sqlite_store().assign_history_group(
-            scope, context.email, name, item_ids
+            scope, context.email, name, item_ids, include_all=context.is_admin
         )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
     except ValueError as exc:
         raise BackendHttpError(400, {"error": str(exc)}) from exc
     return _json_response(200, {"group": group})
@@ -503,12 +553,145 @@ def rename_history_group(
             context.email,
             str(group_id or "").strip(),
             _history_group_name(_payload_dict(payload).get("name")),
+            include_all=context.is_admin,
         )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
     except ValueError as exc:
         raise BackendHttpError(400, {"error": str(exc)}) from exc
     if not group:
         raise BackendHttpError(404, {"error": "History group not found."})
     return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "POST",
+    "/history-groups/{scope}/items",
+    dependencies=[Depends(require_authorized_request)],
+)
+def move_history_group_items(
+    scope: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    body = _payload_dict(payload)
+    item_ids = _history_group_item_ids(body.get("item_ids"))
+    unavailable = sorted(set(item_ids) - _history_item_ids_for_scope(scope, context))
+    if unavailable:
+        raise BackendHttpError(
+            400,
+            {
+                "error": "Some selected history items are no longer available.",
+                "item_ids": unavailable,
+            },
+        )
+    group_id = str(body.get("group_id") or "").strip() or None
+    try:
+        group = backend_service._runtime_sqlite_store().move_history_group_items(
+            scope,
+            context.email,
+            group_id,
+            item_ids,
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if group_id and not group:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "PUT",
+    "/history-groups/{scope}/{group_id}/members/{member_email}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def set_history_group_member(
+    scope: str,
+    group_id: str,
+    member_email: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    role = str(_payload_dict(payload).get("role") or "").strip().lower()
+    try:
+        group = backend_service._runtime_sqlite_store().set_history_group_member(
+            scope,
+            context.email,
+            str(group_id or "").strip(),
+            _history_group_member(member_email),
+            role,
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if not group:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "DELETE",
+    "/history-groups/{scope}/{group_id}/members/{member_email}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def remove_history_group_member(
+    scope: str,
+    group_id: str,
+    member_email: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    try:
+        group = backend_service._runtime_sqlite_store().remove_history_group_member(
+            scope,
+            context.email,
+            str(group_id or "").strip(),
+            _history_group_member(member_email),
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(400, {"error": str(exc)}) from exc
+    if not group:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"group": group})
+
+
+@_api_route(
+    "DELETE",
+    "/history-groups/{scope}/{group_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_history_group(
+    scope: str,
+    group_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    try:
+        deleted = backend_service._runtime_sqlite_store().delete_history_group(
+            scope,
+            context.email,
+            str(group_id or "").strip(),
+            include_all=context.is_admin,
+        )
+    except PermissionError as exc:
+        raise BackendHttpError(403, {"error": str(exc)}) from exc
+    if not deleted:
+        raise BackendHttpError(404, {"error": "History group not found."})
+    return _json_response(200, {"deleted": True})
 
 
 @_api_route("GET", "/osrm-manager/status")
@@ -604,7 +787,8 @@ def get_reference_distance_history(
 def delete_reference_distance_history(
     run_id: str, context: UserContext = Depends(current_user_context)
 ) -> JSONResponse:
-    _record, store = _distance_history_for_context(run_id, "reference", context)
+    record, store = _distance_history_for_context(run_id, "reference", context)
+    _require_record_mutation_access(record, context)
     store.delete(str(run_id or "").strip())
     return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
 
@@ -647,7 +831,8 @@ def get_route_cost_history(
 def delete_route_cost_history(
     run_id: str, context: UserContext = Depends(current_user_context)
 ) -> JSONResponse:
-    _record, store = _distance_history_for_context(run_id, "route_cost", context)
+    record, store = _distance_history_for_context(run_id, "route_cost", context)
+    _require_record_mutation_access(record, context)
     store.delete(str(run_id or "").strip())
     return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
 
@@ -690,7 +875,8 @@ def get_distance_history(
 def delete_distance_history(
     run_id: str, context: UserContext = Depends(current_user_context)
 ) -> JSONResponse:
-    _record, store = _distance_history_for_context(run_id, "", context)
+    record, store = _distance_history_for_context(run_id, "", context)
+    _require_record_mutation_access(record, context)
     store.delete(str(run_id or "").strip())
     return _json_response(200, {"deleted": True, "run_id": str(run_id or "").strip()})
 
@@ -734,11 +920,7 @@ def delete_fleet_planner_history(
     run_id: str, context: UserContext = Depends(current_user_context)
 ) -> JSONResponse:
     record = _fleet_history_for_context(run_id, context)
-    if bool(record.get("shared_with_all")) and not context.is_admin:
-        raise BackendHttpError(
-            403,
-            {"error": "Shared Fleet Planner seed runs can only be deleted by an admin."},
-        )
+    _require_record_mutation_access(record, context, shared_admin_only=True)
     normalized_run_id = str(run_id or "").strip()
     backend_service.FLEET_PLANNER_HISTORY_STORE.delete(normalized_run_id)
     return _json_response(200, {"deleted": True, "run_id": normalized_run_id})
@@ -781,7 +963,8 @@ def get_route_insert_history(
 def delete_route_insert_history(
     run_id: str, context: UserContext = Depends(current_user_context)
 ) -> JSONResponse:
-    _route_insert_history_for_context(run_id, context)
+    record = _route_insert_history_for_context(run_id, context)
+    _require_record_mutation_access(record, context)
     normalized_run_id = str(run_id or "").strip()
     backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE.delete(normalized_run_id)
     return _json_response(200, {"deleted": True, "run_id": normalized_run_id})
@@ -889,11 +1072,13 @@ def get_job_artifact(
     job_record = _job_for_context(job_id, context)
     query_params = _query_dict(request)
     if query_params.get("refresh") in {"1", "true", "yes"}:
+        _require_record_mutation_access(job_record, context)
         job_record = backend_service._rerender_job_map_artifacts(job_id, job_record)
     artifact_path, artifact_error = backend_service._resolve_job_map_artifact(
         job_record, str(artifact_key or "").strip()
     )
     if artifact_error and "file is missing" in artifact_error:
+        _require_record_mutation_access(job_record, context)
         job_record = backend_service._rerender_job_map_artifacts(job_id, job_record)
         artifact_path, artifact_error = backend_service._resolve_job_map_artifact(
             job_record, str(artifact_key or "").strip()
@@ -948,7 +1133,7 @@ def delete_job(
     _authorized: None = Depends(require_authorized_request),
 ) -> JSONResponse:
     job_record = _job_for_context(job_id, context)
-    _ = job_record
+    _require_record_mutation_access(job_record, context)
     normalized_job_id = str(job_id or "").strip()
     backend_service._cancel_job(normalized_job_id)
     backend_service.JOB_STORE.delete_job(normalized_job_id)
@@ -2590,7 +2775,9 @@ def cancel_job(
     _authorized: None = Depends(require_authorized_request),
 ) -> JSONResponse:
     normalized_job_id = str(job_id or "").strip()
-    _job_for_context(normalized_job_id, context)
+    _require_record_mutation_access(
+        _job_for_context(normalized_job_id, context), context
+    )
     updated = backend_service._cancel_job(normalized_job_id)
     if not updated:
         raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
@@ -2605,6 +2792,7 @@ def release_scheduled_job(
 ) -> JSONResponse:
     normalized_job_id = str(job_id or "").strip()
     job_record = _job_for_context(normalized_job_id, context)
+    _require_record_mutation_access(job_record, context)
     if str(job_record.get("status", "")).strip().lower() != "scheduled":
         raise BackendHttpError(
             409,
@@ -2625,6 +2813,7 @@ def generate_job_ai_audit(
 ) -> JSONResponse:
     normalized_job_id = str(job_id or "").strip()
     job_record = _job_for_context(normalized_job_id, context)
+    _require_record_mutation_access(job_record, context)
     payload_dict = _payload_dict(payload)
     requested_key, requested_language = backend_service._normalize_ai_audit_language(
         str(payload_dict.get("language") or "").strip() or None

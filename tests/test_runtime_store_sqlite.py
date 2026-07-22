@@ -5,11 +5,14 @@ from pathlib import Path
 import sqlite3
 import sys
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 from runtime_store_sqlite import (  # noqa: E402
     RuntimeJsonPaths,
+    SCHEMA_VERSION,
     SqliteRuntimeStore,
     migrate_json_runtime_to_sqlite,
     verify_json_sqlite_parity,
@@ -162,7 +165,7 @@ def test_sqlite_side_tool_store_filters_and_deletes(tmp_path: Path) -> None:
     assert store.get_side_tool_run("fleet_planner", "run1") is None
 
 
-def test_history_groups_move_rename_and_cleanup_with_history_items(
+def test_history_groups_move_rename_and_preserve_empty_workspaces(
     tmp_path: Path,
 ) -> None:
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
@@ -188,11 +191,16 @@ def test_history_groups_move_rename_and_cleanup_with_history_items(
     assert renamed["name"] == "June archive"
 
     assert store.delete_job("job1") is True
-    assert [group["group_id"] for group in store.list_history_groups(
-        "route_audit", "alice@example.com"
-    )] == [second["group_id"]]
+    groups = store.list_history_groups("route_audit", "alice@example.com")
+    assert {group["name"]: group["item_ids"] for group in groups} == {
+        "June archive": [],
+        "Follow up": ["job2"],
+    }
     assert store.delete_job("job2") is True
-    assert store.list_history_groups("route_audit", "alice@example.com") == []
+    assert all(
+        not group["item_ids"]
+        for group in store.list_history_groups("route_audit", "alice@example.com")
+    )
 
     store.upsert_side_tool_run(
         "fleet_planner", side_tool_record("run1", "alice@example.com")
@@ -201,7 +209,240 @@ def test_history_groups_move_rename_and_cleanup_with_history_items(
         "fleet_planner", "alice@example.com", "Fleet", ["run1"]
     )
     assert store.delete_side_tool_run("fleet_planner", "run1") is True
-    assert store.list_history_groups("fleet_planner", "alice@example.com") == []
+    fleet_groups = store.list_history_groups("fleet_planner", "alice@example.com")
+    assert len(fleet_groups) == 1
+    assert fleet_groups[0]["item_ids"] == []
+
+
+def test_history_group_v2_database_upgrades_in_place(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "runtime.sqlite"
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE schema_migrations (
+                name TEXT PRIMARY KEY,
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE history_groups (
+                group_id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE history_group_items (
+                scope TEXT NOT NULL,
+                owner_email TEXT NOT NULL,
+                item_id TEXT NOT NULL,
+                group_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(scope, owner_email, item_id),
+                FOREIGN KEY(group_id) REFERENCES history_groups(group_id) ON DELETE CASCADE
+            );
+            INSERT INTO schema_migrations VALUES(
+                'runtime_store', 2, '2026-07-20T00:00:00+00:00'
+            );
+            INSERT INTO history_groups VALUES(
+                'legacy-group', 'route_audit', 'alice@example.com', 'Legacy',
+                '2026-07-20T00:00:00+00:00', '2026-07-20T00:00:00+00:00'
+            );
+            INSERT INTO history_group_items VALUES(
+                'route_audit', 'alice@example.com', 'job1', 'legacy-group',
+                '2026-07-20T00:00:00+00:00'
+            );
+            """
+        )
+
+    store = SqliteRuntimeStore(sqlite_path)
+    groups = store.list_history_groups("route_audit", "alice@example.com")
+    assert groups[0]["group_id"] == "legacy-group"
+    assert groups[0]["item_ids"] == ["job1"]
+    assert groups[0]["role"] == "owner"
+
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT version FROM schema_migrations WHERE name = 'runtime_store'"
+        ).fetchone()[0] == SCHEMA_VERSION
+        member = conn.execute(
+            """
+            SELECT member_email, role FROM history_group_members
+            WHERE group_id = 'legacy-group'
+            """
+        ).fetchone()
+        assert tuple(member) == ("alice@example.com", "owner")
+        indexes = {
+            row["name"] for row in conn.execute("PRAGMA index_list(history_group_items)")
+        }
+        assert "idx_history_group_items_scope_item" in indexes
+
+
+def test_runtime_store_schema_version_never_downgrades(tmp_path: Path) -> None:
+    sqlite_path = tmp_path / "runtime.sqlite"
+    future_version = SCHEMA_VERSION + 1
+    with sqlite3.connect(sqlite_path) as conn:
+        conn.executescript(
+            f"""
+            CREATE TABLE schema_migrations (
+                name TEXT PRIMARY KEY,
+                version INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            INSERT INTO schema_migrations VALUES(
+                'runtime_store', {future_version}, '2026-07-22T00:00:00+00:00'
+            );
+            """
+        )
+
+    store = SqliteRuntimeStore(sqlite_path)
+    store.initialize()
+
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT version FROM schema_migrations WHERE name = 'runtime_store'"
+        ).fetchone()[0] == future_version
+
+
+def test_history_group_roles_and_delete_release_items_not_jobs(
+    tmp_path: Path,
+) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    group = store.assign_history_group(
+        "route_audit", "alice@example.com", "Operations", ["job1"]
+    )
+    group_id = group["group_id"]
+    store.set_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        group_id,
+        "editor@example.com",
+        "editor",
+    )
+    store.set_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        group_id,
+        "viewer@example.com",
+        "viewer",
+    )
+
+    assert store.list_history_groups(
+        "route_audit", "alice@example.com"
+    )[0]["role"] == "owner"
+    assert store.list_history_groups(
+        "route_audit", "editor@example.com"
+    )[0]["role"] == "editor"
+    assert store.list_history_groups(
+        "route_audit", "viewer@example.com"
+    )[0]["role"] == "viewer"
+    assert store.list_history_groups(
+        "route_audit", "admin@example.com", include_all=True
+    )[0]["role"] == "admin"
+    members = store.list_history_groups(
+        "route_audit", "alice@example.com"
+    )[0]["members"]
+    assert {(member["member_email"], member["role"]) for member in members} == {
+        ("alice@example.com", "owner"),
+        ("editor@example.com", "editor"),
+        ("viewer@example.com", "viewer"),
+    }
+    assert [
+        item["job_id"]
+        for item in store.list_jobs(user_email="viewer@example.com")
+    ] == ["job1"]
+    assert store.history_item_role(
+        "route_audit", "job1", "editor@example.com"
+    ) == "editor"
+
+    with pytest.raises(PermissionError):
+        store.delete_history_group(
+            "route_audit", "editor@example.com", group_id
+        )
+    with pytest.raises(PermissionError):
+        store.rename_history_group(
+            "route_audit", "viewer@example.com", group_id, "Nope"
+        )
+    with pytest.raises(PermissionError):
+        store.move_history_group_items(
+            "route_audit", "viewer@example.com", None, ["job1"]
+        )
+    with pytest.raises(PermissionError):
+        store.assign_history_group(
+            "route_audit", "bob@example.com", "Bob", ["job1"]
+        )
+
+    store.upsert_job(job_record("job2", "alice@example.com"))
+    second = store.assign_history_group(
+        "route_audit", "alice@example.com", "Second", ["job2"]
+    )
+    store.set_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        second["group_id"],
+        "editor@example.com",
+        "editor",
+    )
+    moved = store.move_history_group_items(
+        "route_audit", "editor@example.com", second["group_id"], ["job1"]
+    )
+    assert moved is not None
+    assert set(moved["item_ids"]) == {"job1", "job2"}
+    assert store.move_history_group_items(
+        "route_audit", "editor@example.com", None, ["job1"]
+    ) is None
+    assert store.history_item_role(
+        "route_audit", "job1", "editor@example.com"
+    ) is None
+
+    updated = store.remove_history_group_member(
+        "route_audit",
+        "alice@example.com",
+        second["group_id"],
+        "editor@example.com",
+    )
+    assert updated is not None
+    assert all(
+        member["member_email"] != "editor@example.com"
+        for member in updated["members"]
+    )
+
+    assert store.delete_history_group(
+        "route_audit", "admin@example.com", group_id, include_all=True
+    ) is True
+    assert store.get_job("job1") is not None
+    with store.connect() as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM history_group_items WHERE group_id = ?", (group_id,)
+        ).fetchone()[0] == 0
+        assert conn.execute(
+            "SELECT COUNT(*) FROM history_group_members WHERE group_id = ?", (group_id,)
+        ).fetchone()[0] == 0
+
+
+def test_side_tool_workspace_member_can_list_private_run(tmp_path: Path) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_side_tool_run(
+        "fleet_planner", side_tool_record("run1", "alice@example.com")
+    )
+    group = store.assign_history_group(
+        "fleet_planner", "alice@example.com", "Fleet", ["run1"]
+    )
+    store.set_history_group_member(
+        "fleet_planner",
+        "alice@example.com",
+        group["group_id"],
+        "viewer@example.com",
+        "viewer",
+    )
+
+    assert [
+        item["run_id"]
+        for item in store.list_side_tool_runs(
+            "fleet_planner", user_email="viewer@example.com"
+        )
+    ] == ["run1"]
 
 
 def test_json_to_sqlite_migration_and_parity(tmp_path: Path) -> None:

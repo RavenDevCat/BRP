@@ -92,8 +92,14 @@ export type HistoryGroupScope =
 
 export type HistoryGroup = {
     group_id: string;
+    owner_email: string;
     name: string;
     item_ids: string[];
+    role: "owner" | "editor" | "viewer" | "admin";
+    members: Array<{
+        member_email: string;
+        role: "owner" | "editor" | "viewer";
+    }>;
     created_at: string;
     updated_at: string;
 };
@@ -871,6 +877,55 @@ export function renameHistoryGroup(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name }),
         },
+    );
+}
+
+export function moveHistoryGroupItems(
+    scope: HistoryGroupScope,
+    groupId: string | null,
+    itemIds: string[],
+) {
+    return apiFetch<{ group: HistoryGroup | null }>(
+        `/history-groups/${encodeURIComponent(scope)}/items`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ group_id: groupId, item_ids: itemIds }),
+        },
+    );
+}
+
+export function setHistoryGroupMember(
+    scope: HistoryGroupScope,
+    groupId: string,
+    memberEmail: string,
+    role: "editor" | "viewer",
+) {
+    return apiFetch<{ group: HistoryGroup }>(
+        `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberEmail)}`,
+        {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ role }),
+        },
+    );
+}
+
+export function removeHistoryGroupMember(
+    scope: HistoryGroupScope,
+    groupId: string,
+    memberEmail: string,
+) {
+    return apiFetch<{ group: HistoryGroup }>(
+        `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}/members/${encodeURIComponent(memberEmail)}`,
+        { method: "DELETE" },
+    );
+}
+
+export function deleteHistoryGroup(scope: HistoryGroupScope, groupId: string) {
+    return apiFetch<{ deleted: boolean }>(
+        `/history-groups/${encodeURIComponent(scope)}/${encodeURIComponent(groupId)}`,
+        { method: "DELETE" },
     );
 }
 

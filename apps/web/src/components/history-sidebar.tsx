@@ -463,7 +463,7 @@ export function HistorySidebar<T>({
               return (
                 <details
                   key={group.group_id}
-                  className="relative overflow-hidden rounded-md border border-border bg-muted/30"
+                  className="group relative overflow-hidden rounded-md border border-border bg-muted/30"
                   onDragOver={(event) => {
                     if (canEditGroup) event.preventDefault();
                   }}
@@ -476,9 +476,11 @@ export function HistorySidebar<T>({
                     }
                   }}
                 >
-                  <summary className={`flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold hover:bg-muted [&::-webkit-details-marker]:hidden ${canManageGroup ? "pr-40" : canSetOwnDefault ? "pr-12" : ""}`}>
+                  <summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-semibold hover:bg-muted [&::-webkit-details-marker]:hidden">
                     <Folder className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                    <span className="min-w-0 flex-1 truncate">{group.name}</span>
+                    <span className="min-w-0 flex-1 truncate" title={group.name}>
+                      {group.name}
+                    </span>
                     {group.is_fixed ? (
                       <LockKeyhole className="h-3.5 w-3.5 shrink-0 text-primary" aria-label={t("Fixed workspace")} />
                     ) : group.is_default ? (
@@ -490,7 +492,7 @@ export function HistorySidebar<T>({
                     </span>
                   </summary>
                   {canSetOwnDefault || canManageGroup ? (
-                    <div className="absolute right-1 top-1 flex items-center">
+                    <div className="hidden items-center justify-end border-t border-border bg-surface/70 px-2 py-1 group-open:flex">
                       {canSetOwnDefault ? (
                         <button
                           type="button"

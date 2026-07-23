@@ -1757,10 +1757,15 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     ]
 
     express_fleet: list[dict[str, Any]] = []
-    regular_fleet = trim_fleet_for_demand(points, full_fleet)
     global_time_lower_bounds = dict(NODE_TIME_LOWER_BOUNDS or {})
     global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
     global_time_soft_upper_bounds = dict(NODE_TIME_SOFT_UPPER_BOUNDS or {})
+    # The outer vehicle ladder already caps full_fleet. Hard per-stop bounds may
+    # need every vehicle in that cap, so demand trimming must not shrink it again.
+    if global_time_lower_bounds or global_time_upper_bounds:
+        regular_fleet = full_fleet
+    else:
+        regular_fleet = trim_fleet_for_demand(points, full_fleet)
     if (
         remote_nodes
         and RESERVED_EXPRESS_BUSES > 0

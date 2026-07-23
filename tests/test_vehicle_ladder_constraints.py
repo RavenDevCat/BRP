@@ -48,6 +48,53 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
         self.assertEqual(captured["capacity"], 60)
 
+    def test_hard_time_bounds_preserve_the_outer_vehicle_cap(self) -> None:
+        fleet = [
+            {"name": "bus", "capacity": 10, "vehicle_id": index}
+            for index in range(10)
+        ]
+        captured: dict[str, int] = {}
+        points = [
+            {"address": "school", "passenger_count": 0},
+            {"address": "stop-a", "passenger_count": 1},
+            {"address": "stop-b", "passenger_count": 1},
+        ]
+        matrix = [
+            [0, 60, 60],
+            [60, 0, 60],
+            [60, 60, 0],
+        ]
+
+        def fake_solve_routes_for_fleet(
+            _points,
+            _time_matrix,
+            _distance_matrix,
+            active_fleet,
+            *_bounds,
+        ):
+            captured["fleet_size"] = len(active_fleet)
+            return []
+
+        with (
+            mock.patch.object(legacy_planner, "build_vehicle_fleet", return_value=fleet),
+            mock.patch.object(
+                legacy_planner,
+                "compute_depot_distances",
+                return_value={1: 0.0, 2: 0.0},
+            ),
+            mock.patch.object(
+                legacy_planner,
+                "solve_routes_for_fleet",
+                side_effect=fake_solve_routes_for_fleet,
+            ),
+            mock.patch.object(legacy_planner, "NODE_TIME_LOWER_BOUNDS", {1: 0, 2: 0}),
+            mock.patch.object(legacy_planner, "NODE_TIME_UPPER_BOUNDS", {1: 600, 2: 600}),
+            mock.patch.object(legacy_planner, "NODE_TIME_SOFT_UPPER_BOUNDS", {}),
+        ):
+            legacy_planner.solve_routes(points, matrix, matrix)
+
+        self.assertEqual(captured["fleet_size"], 10)
+
     def test_vehicle_ladder_reports_proven_infeasibility_before_solving(self) -> None:
         class FakePlanner:
             _BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(route_stop_limit=10)

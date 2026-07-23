@@ -322,9 +322,6 @@ class PlannerConfig:
     max_route_duration_minutes: int = 60
     time_impact_limit_minutes: int = int(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
     stop_service_minutes: int = 1
-    subway_search_radius_m: int = 1500
-    max_subway_walk_distance_m: int = 800
-    nearby_cluster_radius_m: int = 500
     comfort_load_factor: float = 1.0
     traffic_profile_name: str = "Off-Peak"
     service_direction: str = "From School"
@@ -347,8 +344,6 @@ class PlannerConfig:
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
-    include_subway_aggregation_scenario: bool = True
-    include_nearby_aggregation_scenario: bool = True
 
 
 @dataclass(frozen=True)
@@ -2272,13 +2267,11 @@ def get_demo_dataframe() -> pd.DataFrame:
     )
 
 
-def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[str, Any]]) -> dict[str, str]:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[str, Any]]) -> None:
     traffic_profile_name = normalize_traffic_profile_name(config.traffic_profile_name)
 
     planner.INPUT_STOPS = deepcopy(input_records)
     planner._BRP_ACTIVE_CONFIG = config
-    planner.ADDRESSES = [record["address"] for record in input_records]
     planner.BUS_TYPE_CONFIGS = _build_bus_type_configs(config)
     (
         planner.VEHICLE_FIXED_COST,
@@ -2292,9 +2285,6 @@ def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[
     planner.ANNOTATION_ROUTE_DURATION_SECONDS = config.max_route_duration_minutes * 60
     planner.MAX_STOPS_PER_ROUTE = _effective_route_stop_limit(config)
     planner.STOP_SERVICE_SECONDS = config.stop_service_minutes * 60
-    planner.SUBWAY_SEARCH_RADIUS_M = config.subway_search_radius_m
-    planner.MAX_SUBWAY_WALK_DISTANCE_M = config.max_subway_walk_distance_m
-    planner.NEARBY_CLUSTER_RADIUS_M = config.nearby_cluster_radius_m
     planner.COMFORT_LOAD_FACTOR = min(1.0, max(0.1, float(config.comfort_load_factor)))
     planner.TRAFFIC_PROFILE_NAME = traffic_profile_name
     planner.TRAFFIC_PROFILE_CONTEXT = "Direct final-route provider validation"
@@ -2304,18 +2294,6 @@ def _apply_config(planner: Any, config: PlannerConfig, input_records: list[dict[
     planner.OPERATING_COST_PER_KM = config.operating_cost_per_km
     if config.revenue_rules is not None:
         planner.REVENUE_RULES = config.revenue_rules
-
-    path_map = build_output_path_map(config)
-    planner.OUTPUT_HTML = path_map["original"]
-    planner.SUBWAY_OUTPUT_HTML = path_map["subway"]
-    planner.NEARBY_OUTPUT_HTML = path_map["nearby"]
-
-    return {
-        "original_html": path_map["original"],
-        "subway_html": path_map["subway"],
-        "nearby_html": path_map["nearby"],
-    }
-
 
 def build_planner_cache_key(input_records: list[dict[str, Any]], config: PlannerConfig) -> str:
     payload = {
@@ -2343,9 +2321,6 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
             "express_skip_inner_km": float(config.express_skip_inner_km),
             "max_route_duration_minutes": int(config.max_route_duration_minutes),
             "stop_service_minutes": int(config.stop_service_minutes),
-            "subway_search_radius_m": int(config.subway_search_radius_m),
-            "max_subway_walk_distance_m": int(config.max_subway_walk_distance_m),
-            "nearby_cluster_radius_m": int(config.nearby_cluster_radius_m),
             "comfort_load_factor": float(config.comfort_load_factor),
             "traffic_profile_name": normalize_traffic_profile_name(config.traffic_profile_name),
             "service_direction": normalize_service_direction(config.service_direction),
@@ -2356,113 +2331,20 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
-def summarize_logs(log_text: str, uploaded_address_count: int) -> dict[str, Any]:
-    original_bus_matches = re.findall(r"=== Route Plan ===(.*?)(?:Rendering route map for Original stops|\Z)", log_text, re.S)
-    subway_bus_matches = re.findall(r"=== Route Plan ===(.*?)(?:Rendering route map for Subway-aggregated stops|\Z)", log_text, re.S)
-    nearby_bus_matches = re.findall(r"=== Route Plan ===(.*?)(?:Rendering route map for Nearby-address aggregated stops|\Z)", log_text, re.S)
-
-    original_section = original_bus_matches[0] if original_bus_matches else ""
-    subway_section = subway_bus_matches[-1] if subway_bus_matches else ""
-    nearby_section = nearby_bus_matches[-1] if nearby_bus_matches else ""
-
-    original_vehicle_count = len(re.findall(r"\nBus \d+ \|", original_section))
-    subway_vehicle_count = len(re.findall(r"\nBus \d+ \|", subway_section))
-    nearby_vehicle_count = len(re.findall(r"\nBus \d+ \|", nearby_section))
-
-    valid_stop_match = re.search(r"Valid stops:\s*(\d+)\s*/\s*(\d+)", log_text)
-    subway_reduce_match = re.search(r"Subway aggregation reduced stops from (\d+) to (\d+)", log_text)
-    nearby_reduce_match = re.search(r"Nearby-address aggregation reduced stops from (\d+) to (\d+)", log_text)
-
-    original_valid_stops = int(valid_stop_match.group(1)) if valid_stop_match else uploaded_address_count
-    original_uploaded_stops = int(valid_stop_match.group(2)) if valid_stop_match else uploaded_address_count
-    subway_before = int(subway_reduce_match.group(1)) + 1 if subway_reduce_match else original_valid_stops
-    subway_after = int(subway_reduce_match.group(2)) + 1 if subway_reduce_match else original_valid_stops
-    nearby_before = int(nearby_reduce_match.group(1)) + 1 if nearby_reduce_match else original_valid_stops
-    nearby_after = int(nearby_reduce_match.group(2)) + 1 if nearby_reduce_match else original_valid_stops
-
-    original_non_depot = max(0, original_valid_stops - 1)
-    subway_non_depot = max(0, subway_after - 1)
-    nearby_non_depot = max(0, nearby_after - 1)
-
-    stop_reduction = original_non_depot - subway_non_depot
-    stop_reduction_pct = (stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-    nearby_stop_reduction = original_non_depot - nearby_non_depot
-    nearby_stop_reduction_pct = (nearby_stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-
-    vehicle_reduction = original_vehicle_count - subway_vehicle_count
-    vehicle_reduction_pct = (vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-    nearby_vehicle_reduction = original_vehicle_count - nearby_vehicle_count
-    nearby_vehicle_reduction_pct = (nearby_vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-
-    return {
-        "uploaded_address_count": uploaded_address_count,
-        "original_uploaded_stops": original_uploaded_stops,
-        "original_valid_stops": original_valid_stops,
-        "subway_valid_stops": subway_after,
-        "nearby_valid_stops": nearby_after,
-        "original_vehicle_count": original_vehicle_count,
-        "subway_vehicle_count": subway_vehicle_count,
-        "nearby_vehicle_count": nearby_vehicle_count,
-        "stop_reduction": stop_reduction,
-        "stop_reduction_pct": stop_reduction_pct,
-        "nearby_stop_reduction": nearby_stop_reduction,
-        "nearby_stop_reduction_pct": nearby_stop_reduction_pct,
-        "vehicle_reduction": vehicle_reduction,
-        "vehicle_reduction_pct": vehicle_reduction_pct,
-        "nearby_vehicle_reduction": nearby_vehicle_reduction,
-        "nearby_vehicle_reduction_pct": nearby_vehicle_reduction_pct,
-        "subway_before_stops": subway_before,
-        "nearby_before_stops": nearby_before,
-    }
-
-
 def summarize_structured_results(results: dict[str, Any], uploaded_address_count: int) -> dict[str, Any]:
     original = results.get("original", {})
     if not original or original.get("enabled") is False:
         original = results.get("time_constrained", {}) or original
-    subway = results.get("subway", {})
-    nearby = results.get("nearby", {})
     currency_code = str(results.get("currency_code", "USD"))
     input_address_review = dict(results.get("input_address_review") or {})
     input_address_review_summary = dict(input_address_review.get("summary") or {})
 
     original_valid_stops = int(original.get("stop_count", uploaded_address_count))
-    subway_valid_stops = int(subway.get("stop_count", original_valid_stops))
-    nearby_valid_stops = int(nearby.get("stop_count", original_valid_stops))
-
     original_vehicle_count = int(original.get("bus_count", 0))
-    subway_vehicle_count = int(subway.get("bus_count", 0))
-    nearby_vehicle_count = int(nearby.get("bus_count", 0))
     original_bus_mix = dict(original.get("bus_mix", {}))
-    subway_bus_mix = dict(subway.get("bus_mix", {}))
-    nearby_bus_mix = dict(nearby.get("bus_mix", {}))
     original_total_operating_cost = float(original.get("total_operating_cost", 0.0))
-    subway_total_operating_cost = float(subway.get("total_operating_cost", 0.0))
-    nearby_total_operating_cost = float(nearby.get("total_operating_cost", 0.0))
     original_total_chargeable_revenue = float(original.get("total_chargeable_revenue", 0.0))
-    subway_total_chargeable_revenue = float(subway.get("total_chargeable_revenue", 0.0))
-    nearby_total_chargeable_revenue = float(nearby.get("total_chargeable_revenue", 0.0))
     original_total_profit_loss = float(original.get("total_profit_loss", 0.0))
-    subway_total_profit_loss = float(subway.get("total_profit_loss", 0.0))
-    nearby_total_profit_loss = float(nearby.get("total_profit_loss", 0.0))
-
-    original_non_depot = max(0, original_valid_stops)
-    subway_non_depot = max(0, subway_valid_stops)
-    nearby_non_depot = max(0, nearby_valid_stops)
-
-    stop_reduction = original_non_depot - subway_non_depot
-    stop_reduction_pct = (stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-    nearby_stop_reduction = original_non_depot - nearby_non_depot
-    nearby_stop_reduction_pct = (nearby_stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-
-    vehicle_reduction = original_vehicle_count - subway_vehicle_count
-    vehicle_reduction_pct = (vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-    nearby_vehicle_reduction = original_vehicle_count - nearby_vehicle_count
-    nearby_vehicle_reduction_pct = (nearby_vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-    subway_cost_savings = original_total_operating_cost - subway_total_operating_cost
-    nearby_cost_savings = original_total_operating_cost - nearby_total_operating_cost
-    subway_profit_improvement = subway_total_profit_loss - original_total_profit_loss
-    nearby_profit_improvement = nearby_total_profit_loss - original_total_profit_loss
 
     return {
         "uploaded_address_count": uploaded_address_count,
@@ -2472,37 +2354,11 @@ def summarize_structured_results(results: dict[str, Any], uploaded_address_count
         ),
         "original_uploaded_stops": uploaded_address_count,
         "original_valid_stops": original_valid_stops,
-        "subway_valid_stops": subway_valid_stops,
-        "nearby_valid_stops": nearby_valid_stops,
         "original_vehicle_count": original_vehicle_count,
-        "subway_vehicle_count": subway_vehicle_count,
-        "nearby_vehicle_count": nearby_vehicle_count,
         "original_bus_mix": original_bus_mix,
-        "subway_bus_mix": subway_bus_mix,
-        "nearby_bus_mix": nearby_bus_mix,
         "original_total_operating_cost": original_total_operating_cost,
-        "subway_total_operating_cost": subway_total_operating_cost,
-        "nearby_total_operating_cost": nearby_total_operating_cost,
         "original_total_chargeable_revenue": original_total_chargeable_revenue,
-        "subway_total_chargeable_revenue": subway_total_chargeable_revenue,
-        "nearby_total_chargeable_revenue": nearby_total_chargeable_revenue,
         "original_total_profit_loss": original_total_profit_loss,
-        "subway_total_profit_loss": subway_total_profit_loss,
-        "nearby_total_profit_loss": nearby_total_profit_loss,
-        "stop_reduction": stop_reduction,
-        "stop_reduction_pct": stop_reduction_pct,
-        "nearby_stop_reduction": nearby_stop_reduction,
-        "nearby_stop_reduction_pct": nearby_stop_reduction_pct,
-        "vehicle_reduction": vehicle_reduction,
-        "vehicle_reduction_pct": vehicle_reduction_pct,
-        "nearby_vehicle_reduction": nearby_vehicle_reduction,
-        "nearby_vehicle_reduction_pct": nearby_vehicle_reduction_pct,
-        "subway_cost_savings": subway_cost_savings,
-        "nearby_cost_savings": nearby_cost_savings,
-        "subway_profit_improvement": subway_profit_improvement,
-        "nearby_profit_improvement": nearby_profit_improvement,
-        "subway_before_stops": original_valid_stops,
-        "nearby_before_stops": original_valid_stops,
     }
 
 
@@ -2630,80 +2486,6 @@ def rerender_html_from_structured_results(results: dict[str, Any], config: Plann
                 outlying_private_access_rows=list(scenario.get("outlying_private_access_rows") or []),
             )
     return hydrated
-
-
-def extract_excluded_stops(log_text: str, original_addresses: list[str]) -> list[dict[str, str]]:
-    bucket_reasons = {
-        "invalid_geocode_or_input": "Could not be geocoded or was not accepted as a valid input stop.",
-    }
-
-    excluded_rows: list[dict[str, str]] = []
-    seen_addresses: set[str] = set()
-    current_bucket = None
-
-    for raw_line in log_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        if "The following addresses were not accepted as valid stops" in line:
-            current_bucket = "invalid_geocode_or_input"
-            continue
-        if line.startswith("[") and not line.startswith("[WARN]"):
-            current_bucket = None
-            continue
-
-        if not current_bucket:
-            continue
-
-        if line.startswith("- ") or line.startswith("  - "):
-            normalized = line[2:].strip() if line.startswith("- ") else line[4:].strip()
-            matched_address = next(
-                (address for address in original_addresses if normalized.startswith(address)),
-                None,
-            )
-            if matched_address and matched_address not in seen_addresses:
-                excluded_rows.append(
-                    {
-                        "address": matched_address,
-                        "reason": bucket_reasons[current_bucket],
-                    }
-                )
-                seen_addresses.add(matched_address)
-
-    return excluded_rows
-
-
-def extract_geocode_warnings(log_text: str, original_addresses: list[str]) -> list[dict[str, str]]:
-    warnings: list[dict[str, str]] = []
-    seen_addresses: set[str] = set()
-
-    for raw_line in log_text.splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-
-        matched_address = next(
-            (address for address in original_addresses if address in line),
-            None,
-        )
-        if not matched_address or matched_address in seen_addresses:
-            continue
-
-        if "geocode failed" in line or "geocode crashed" in line:
-            warnings.append(
-                {
-                    "address": matched_address,
-                    "warning": "This address could not be resolved to coordinates by the map API.",
-                    "suggestion": (
-                        "Use a more complete postal-style address, including district, road name, "
-                        "building number, and city. Avoid abbreviations, landmarks only, or informal descriptions."
-                    ),
-                }
-            )
-            seen_addresses.add(matched_address)
-
-    return warnings
 
 
 def _point_coordinate(point: dict[str, Any]) -> tuple[float, float] | None:
@@ -3765,139 +3547,6 @@ def calibrate_scheduled_current_plan_traffic(
         "measured_route_count": measured_route_count,
         "max_verified_total_duration_minutes": max_verified_total_s / 60.0,
         "solver_adjustment": "none",
-    }
-
-
-def compare_current_plan_to_like_for_like_baseline(
-    current_plan_assessment: dict[str, Any] | None,
-    like_for_like_baseline: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    return compare_current_plan_to_assessment_baseline(
-        current_plan_assessment,
-        like_for_like_baseline,
-        baseline_name="like-for-like baseline",
-        optimization_phrase="route-order optimization alone",
-    )
-
-
-def compare_current_plan_to_assessment_baseline(
-    current_plan_assessment: dict[str, Any] | None,
-    baseline_assessment: dict[str, Any] | None,
-    *,
-    baseline_name: str,
-    optimization_phrase: str,
-    constrained_package_summaries: list[dict[str, Any]] | None = None,
-) -> dict[str, Any] | None:
-    if not current_plan_assessment or not baseline_assessment:
-        return None
-
-    current_route_count = int(current_plan_assessment.get("route_count", 0))
-    current_avg_route_distance_m = float(current_plan_assessment.get("avg_route_distance_m", 0.0))
-    current_avg_route_duration_s = float(current_plan_assessment.get("avg_route_duration_s", 0.0))
-    current_avg_load_factor = float(current_plan_assessment.get("avg_load_factor", 0.0))
-
-    baseline_route_count = int(baseline_assessment.get("route_count", 0))
-    baseline_avg_route_distance_m = float(baseline_assessment.get("avg_route_distance_m", 0.0))
-    baseline_avg_route_duration_s = float(baseline_assessment.get("avg_route_duration_s", 0.0))
-    baseline_avg_load_factor = float(baseline_assessment.get("avg_load_factor", 0.0))
-    baseline_bus_mix = dict(baseline_assessment.get("bus_mix", {}))
-
-    route_gap = current_route_count - baseline_route_count
-    avg_distance_gap_m = current_avg_route_distance_m - baseline_avg_route_distance_m
-    avg_duration_gap_s = current_avg_route_duration_s - baseline_avg_route_duration_s
-    avg_distance_gap_pct = (
-        avg_distance_gap_m / baseline_avg_route_distance_m * 100.0
-    ) if baseline_avg_route_distance_m else 0.0
-    avg_duration_gap_pct = (
-        avg_duration_gap_s / baseline_avg_route_duration_s * 100.0
-    ) if baseline_avg_route_duration_s else 0.0
-
-    recommendations: list[str] = []
-    if abs(route_gap) > 0:
-        recommendations.append(
-            f"The current plan route count differs from the {baseline_name} by {route_gap:+d}."
-        )
-    if avg_distance_gap_pct > 5:
-        recommendations.append(
-            f"Compared with the {baseline_name}, {optimization_phrase} can reduce average route distance by about {avg_distance_gap_pct:.1f}%."
-        )
-    if avg_duration_gap_pct > 5:
-        recommendations.append(
-            f"Compared with the {baseline_name}, {optimization_phrase} can reduce average route time by about {avg_duration_gap_pct:.1f}%."
-        )
-    if abs(current_avg_load_factor - baseline_avg_load_factor) < 1e-9:
-        recommendations.append(
-            f"Load factor remains unchanged in the {baseline_name}, which confirms that this comparison isolates network design quality rather than vehicle capacity."
-        )
-
-    constrained_package_summaries = list(constrained_package_summaries or [])
-    if constrained_package_summaries:
-        removable_now = [
-            item for item in constrained_package_summaries
-            if bool(item.get("route_eliminated"))
-        ]
-        removal_paths = [
-            item for item in constrained_package_summaries
-            if not bool(item.get("route_eliminated")) and bool(item.get("route_removal_candidate"))
-        ]
-        consolidation_paths = [
-            item for item in constrained_package_summaries
-            if not bool(item.get("route_eliminated"))
-            and not bool(item.get("route_removal_candidate"))
-            and bool(item.get("route_consolidation_candidate"))
-        ]
-        if removable_now:
-            recommendations.append(
-                f"The optimized improvement plan includes {len(removable_now)} package(s) that fully empty a route, creating immediate route-removal candidates."
-            )
-        elif removal_paths:
-            recommendations.append(
-                f"The optimized improvement plan includes {len(removal_paths)} package(s) that leave a route with very limited residual demand, creating a strong removal path."
-            )
-        elif consolidation_paths:
-            recommendations.append(
-                f"The optimized improvement plan includes {len(consolidation_paths)} package(s) that move a route materially closer to consolidation."
-            )
-
-        top_package = constrained_package_summaries[0]
-        top_package_summary = str(top_package.get("package_summary", "")).strip()
-        if top_package_summary:
-            recommendations.append(top_package_summary)
-        projected_to_duration_min = float(top_package.get("projected_to_route_duration_s", 0.0) or 0.0) / 60.0
-        projected_to_load_pct = float(top_package.get("projected_to_route_load_factor", 0.0) or 0.0) * 100.0
-        target_minutes = float(baseline_assessment.get("target_route_duration_minutes", 60.0) or 60.0)
-        if projected_to_duration_min <= target_minutes and projected_to_load_pct <= 85.0:
-            recommendations.append(
-                f"The leading constrained package is a practical merge candidate because the receiving route still lands near {projected_to_duration_min:.1f} minutes and {projected_to_load_pct:.1f}% load."
-            )
-        elif projected_to_duration_min <= target_minutes * 1.1 and projected_to_load_pct <= 92.0:
-            recommendations.append(
-                f"The leading constrained package is feasible but tight because the receiving route rises to about {projected_to_duration_min:.1f} minutes and {projected_to_load_pct:.1f}% load."
-            )
-        else:
-            recommendations.append(
-                f"The leading constrained package is not yet a clean merge because the receiving route would be pushed to about {projected_to_duration_min:.1f} minutes and {projected_to_load_pct:.1f}% load."
-            )
-
-    return {
-        "baseline_name": baseline_name,
-        "current_route_count": current_route_count,
-        "baseline_route_count": baseline_route_count,
-        "route_gap": route_gap,
-        "current_avg_route_distance_m": current_avg_route_distance_m,
-        "baseline_avg_route_distance_m": baseline_avg_route_distance_m,
-        "avg_distance_gap_m": avg_distance_gap_m,
-        "avg_distance_gap_pct": avg_distance_gap_pct,
-        "current_avg_route_duration_s": current_avg_route_duration_s,
-        "baseline_avg_route_duration_s": baseline_avg_route_duration_s,
-        "target_route_duration_minutes": float(baseline_assessment.get("target_route_duration_minutes", 0.0) or 0.0),
-        "avg_duration_gap_s": avg_duration_gap_s,
-        "avg_duration_gap_pct": avg_duration_gap_pct,
-        "current_avg_load_factor": current_avg_load_factor,
-        "baseline_avg_load_factor": baseline_avg_load_factor,
-        "current_bus_mix": dict(current_plan_assessment.get("bus_mix", {})),
-        "baseline_bus_mix": baseline_bus_mix,
-        "recommendations": recommendations,
     }
 
 
@@ -5523,377 +5172,6 @@ def analyze_route_reallocation_opportunities(
     }
 
 
-def _private_drive_route_between_points(
-    planner: Any,
-    from_point: dict[str, Any],
-    to_point: dict[str, Any],
-) -> tuple[float, float, list[tuple[float, float]]]:
-    from_lat, from_lng = planner.point_osrm_lat_lng(from_point)
-    to_lat, to_lng = planner.point_osrm_lat_lng(to_point)
-    previous_osrm_base_url = planner.OSRM_BASE_URL
-    planner.OSRM_BASE_URL = planner.resolve_osrm_base_url([from_point, to_point])
-    try:
-        coordinates = f"{from_lng:.6f},{from_lat:.6f};{to_lng:.6f},{to_lat:.6f}"
-        payload = planner.osrm_request_json("route", coordinates, {"overview": "full", "geometries": "geojson"})
-        route = dict((payload.get("routes") or [{}])[0])
-        duration_s = float(route.get("duration", 0.0) or 0.0)
-        distance_m = float(route.get("distance", 0.0) or 0.0)
-        geometry = [
-            (float(lat), float(lng))
-            for lng, lat in list(((route.get("geometry") or {}).get("coordinates") or []))
-        ]
-        if duration_s > 0 and distance_m > 0:
-            if geometry:
-                geometry[0] = (float(from_point.get("plot_lat", from_point.get("lat", 0.0)) or 0.0), float(from_point.get("plot_lng", from_point.get("lng", 0.0)) or 0.0))
-                geometry[-1] = (float(to_point.get("plot_lat", to_point.get("lat", 0.0)) or 0.0), float(to_point.get("plot_lng", to_point.get("lng", 0.0)) or 0.0))
-            return duration_s, distance_m, geometry
-    except Exception:
-        pass
-    finally:
-        planner.OSRM_BASE_URL = previous_osrm_base_url
-
-    fallback_distance_km = planner.haversine_distance_km(
-        float(from_point.get("lat", 0.0) or 0.0),
-        float(from_point.get("lng", 0.0) or 0.0),
-        float(to_point.get("lat", 0.0) or 0.0),
-        float(to_point.get("lng", 0.0) or 0.0),
-    )
-    fallback_geometry = [
-        (
-            float(from_point.get("plot_lat", from_point.get("lat", 0.0)) or 0.0),
-            float(from_point.get("plot_lng", from_point.get("lng", 0.0)) or 0.0),
-        ),
-        (
-            float(to_point.get("plot_lat", to_point.get("lat", 0.0)) or 0.0),
-            float(to_point.get("plot_lng", to_point.get("lng", 0.0)) or 0.0),
-        ),
-    ]
-    return fallback_distance_km * 150.0, fallback_distance_km * 1000.0, fallback_geometry
-
-
-def analyze_nearby_private_access(
-    planner: Any,
-    original_points: list[dict[str, Any]],
-    nearby_points: list[dict[str, Any]],
-    nearby_result: dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    if not original_points or not nearby_points or not nearby_result:
-        return None
-
-    original_point_lookup = {
-        str(point.get("address", "")).strip(): dict(point)
-        for point in original_points
-        if str(point.get("address", "")).strip()
-    }
-    nearby_route_by_node: dict[int, str] = {}
-    for route in list(nearby_result.get("routes") or []):
-        route_id = f"Bus {int(route.get('vehicle_id', 0) or 0)}"
-        for node_id in list(route.get("nodes") or []):
-            nearby_route_by_node[int(node_id)] = route_id
-
-    rows: list[dict[str, Any]] = []
-    clusters: list[dict[str, Any]] = []
-    for nearby_point in nearby_points[1:]:
-        if str(nearby_point.get("aggregated_type", "")).strip() != "nearby":
-            continue
-        original_members = [
-            str(member).strip()
-            for member in list(nearby_point.get("original_members") or [])
-            if str(member).strip()
-        ]
-        if len(original_members) <= 1:
-            continue
-        pickup_address = str(nearby_point.get("address", "")).strip()
-        pickup_route_id = str(nearby_route_by_node.get(int(nearby_point.get("node_id", -1)), "")).strip()
-        pickup_passenger_count = int(nearby_point.get("passenger_count", 0) or 0)
-        cluster_members: list[dict[str, Any]] = []
-        for member_address in original_members:
-            if member_address == pickup_address:
-                continue
-            member_point = original_point_lookup.get(member_address)
-            if not member_point:
-                continue
-            private_drive_time_s, private_drive_distance_m, private_drive_geometry = _private_drive_route_between_points(
-                planner,
-                member_point,
-                nearby_point,
-            )
-            rows.append(
-                {
-                    "address": member_address,
-                    "passenger_count": int(member_point.get("passenger_count", 0) or 0),
-                    "plot_lat": float(member_point.get("plot_lat", member_point.get("lat", 0.0)) or 0.0),
-                    "plot_lng": float(member_point.get("plot_lng", member_point.get("lng", 0.0)) or 0.0),
-                    "pickup_address": pickup_address,
-                    "pickup_route_id": pickup_route_id,
-                    "pickup_passenger_count": pickup_passenger_count,
-                    "pickup_plot_lat": float(nearby_point.get("plot_lat", nearby_point.get("lat", 0.0)) or 0.0),
-                    "pickup_plot_lng": float(nearby_point.get("plot_lng", nearby_point.get("lng", 0.0)) or 0.0),
-                    "private_drive_time_s": private_drive_time_s,
-                    "private_drive_distance_m": private_drive_distance_m,
-                    "private_drive_geometry": private_drive_geometry,
-                    "private_access_type": "clustered_rider",
-                    "reason": (
-                        f"This rider would likely self-drive or be dropped off at the nearby aggregated pickup "
-                        f"`{pickup_address}` instead of receiving direct door-to-door service."
-                    ),
-                }
-            )
-            cluster_members.append(
-                {
-                    "address": member_address,
-                    "passenger_count": int(member_point.get("passenger_count", 0) or 0),
-                    "plot_lat": float(member_point.get("plot_lat", member_point.get("lat", 0.0)) or 0.0),
-                    "plot_lng": float(member_point.get("plot_lng", member_point.get("lng", 0.0)) or 0.0),
-                    "private_drive_time_s": private_drive_time_s,
-                    "private_drive_distance_m": private_drive_distance_m,
-                    "private_drive_geometry": private_drive_geometry,
-                }
-            )
-
-        if cluster_members:
-            cluster_members.sort(
-                key=lambda item: (
-                    -float(item.get("private_drive_time_s", 0.0) or 0.0),
-                    -int(item.get("passenger_count", 0) or 0),
-                    str(item.get("address", "")).strip().lower(),
-                ),
-            )
-            cluster_drive_times = [float(item.get("private_drive_time_s", 0.0) or 0.0) for item in cluster_members]
-            cluster_drive_distances = [float(item.get("private_drive_distance_m", 0.0) or 0.0) for item in cluster_members]
-            clusters.append(
-                {
-                    "pickup_address": pickup_address,
-                    "pickup_route_id": pickup_route_id,
-                    "pickup_passenger_count": pickup_passenger_count,
-                    "clustered_rider_count": len(cluster_members),
-                    "clustered_passenger_count": sum(int(item.get("passenger_count", 0) or 0) for item in cluster_members),
-                    "avg_private_drive_time_s": sum(cluster_drive_times) / len(cluster_drive_times),
-                    "max_private_drive_time_s": max(cluster_drive_times),
-                    "avg_private_drive_distance_m": sum(cluster_drive_distances) / len(cluster_drive_distances),
-                    "max_private_drive_distance_m": max(cluster_drive_distances),
-                    "members": cluster_members,
-                }
-            )
-
-    if not rows:
-        return None
-
-    rows.sort(
-        key=lambda item: (
-            -float(item.get("private_drive_time_s", 0.0) or 0.0),
-            -int(item.get("passenger_count", 0) or 0),
-            str(item.get("address", "")).strip().lower(),
-        ),
-    )
-    private_drive_times = [float(item.get("private_drive_time_s", 0.0) or 0.0) for item in rows]
-    private_drive_distances = [float(item.get("private_drive_distance_m", 0.0) or 0.0) for item in rows]
-    top_outlier = rows[0]
-    return {
-        "summary": {
-            "candidate_stop_count": len(rows),
-            "cluster_center_count": len(clusters),
-            "avg_private_drive_time_s": sum(private_drive_times) / len(private_drive_times),
-            "max_private_drive_time_s": max(private_drive_times),
-            "avg_private_drive_distance_m": sum(private_drive_distances) / len(private_drive_distances),
-            "max_private_drive_distance_m": max(private_drive_distances),
-            "furthest_stop_address": str(top_outlier.get("address", "")).strip(),
-            "furthest_pickup_address": str(top_outlier.get("pickup_address", "")).strip(),
-            "furthest_pickup_route_id": str(top_outlier.get("pickup_route_id", "")).strip(),
-        },
-        "rows": rows,
-        "clusters": clusters,
-    }
-
-
-def build_further_most_stop_scenario(
-    planner: Any,
-    points: list[dict[str, Any]],
-    source_result: dict[str, Any] | None,
-    service_direction: str = "From School",
-) -> tuple[dict[str, Any], dict[str, Any] | None]:
-    if not points or not source_result or not bool(source_result.get("enabled", True)):
-        return deepcopy(source_result or {}), None
-
-    scenario = deepcopy(source_result)
-    scenario_points = scenario.get("points")
-    if isinstance(scenario_points, list) and scenario_points:
-        points = scenario_points
-    routes = [dict(route) for route in list(scenario.get("routes") or [])]
-    if not routes:
-        scenario["outlying_private_access_rows"] = []
-        scenario["private_drive_stop_count"] = 0
-        return scenario, None
-
-    normalized_direction = normalize_service_direction(service_direction)
-    is_to_school = normalized_direction == "To School"
-
-    private_drive_rows: list[dict[str, Any]] = []
-    truncated_routes: list[dict[str, Any]] = []
-    for route in routes:
-        route_nodes = list(route.get("nodes") or [])
-        leg_details = list(route.get("leg_details") or [])
-        route_id = f"Bus {int(route.get('vehicle_id', 0) or 0)}"
-        if not route_nodes:
-            truncated_routes.append(route)
-            continue
-
-        if is_to_school:
-            # To School: depot is at the end. Calculate limit from depot backward.
-            cumulative_from_depot = 0.0
-            limit_idx = len(route_nodes) - 1  # depot index
-            for i in range(len(leg_details) - 1, -1, -1):
-                cumulative_from_depot += float(leg_details[i].get("duration_s", 0.0) or 0.0)
-                if cumulative_from_depot <= planner.ANNOTATION_ROUTE_DURATION_SECONDS:
-                    limit_idx = i
-                else:
-                    break
-            if limit_idx <= 0:
-                # First pickup is already within xx min from depot; nothing to convert.
-                truncated_routes.append(route)
-                continue
-            limit_stop_node = int(route_nodes[limit_idx])
-            limit_point = points[limit_stop_node]
-            private_drive_stops: list[dict[str, Any]] = []
-            for pre_limit_node in route_nodes[:limit_idx]:
-                stop_node = int(pre_limit_node)
-                stop_point = points[stop_node]
-                private_drive_time_s, private_drive_distance_m, private_drive_geometry = _private_drive_route_between_points(
-                    planner,
-                    stop_point,
-                    limit_point,
-                )
-                private_drive_item = {
-                    "address": str(stop_point.get("address", "")).strip(),
-                    "passenger_count": int(stop_point.get("passenger_count", 0) or 0),
-                    "plot_lat": float(stop_point.get("plot_lat", stop_point.get("lat", 0.0)) or 0.0),
-                    "plot_lng": float(stop_point.get("plot_lng", stop_point.get("lng", 0.0)) or 0.0),
-                    "pickup_address": str(limit_point.get("address", "")).strip(),
-                    "pickup_route_id": route_id,
-                    "pickup_passenger_count": int(limit_point.get("passenger_count", 0) or 0),
-                    "pickup_plot_lat": float(limit_point.get("plot_lat", limit_point.get("lat", 0.0)) or 0.0),
-                    "pickup_plot_lng": float(limit_point.get("plot_lng", limit_point.get("lng", 0.0)) or 0.0),
-                    "private_drive_time_s": private_drive_time_s,
-                    "private_drive_distance_m": private_drive_distance_m,
-                    "private_drive_geometry": private_drive_geometry,
-                    "private_access_type": "private_drive_stop",
-                    "reason": (
-                        f"This stop sits beyond the {planner.ANNOTATION_ROUTE_DURATION_SECONDS // 60}-minute mark from school and is modeled "
-                        f"as a private-drive stop connecting to `{limit_point.get('address', '')}`."
-                    ),
-                }
-                private_drive_rows.append(private_drive_item)
-                private_drive_stops.append(private_drive_item)
-
-            truncated_route = dict(route)
-            truncated_route["nodes"] = route_nodes[limit_idx:]
-            truncated_leg_details = leg_details[limit_idx:]
-            truncated_route["leg_details"] = truncated_leg_details
-            truncated_route["time_s"] = sum(float(item.get("duration_s", 0.0) or 0.0) for item in truncated_leg_details)
-            truncated_route["distance_m"] = sum(float(item.get("distance_m", 0.0) or 0.0) for item in truncated_leg_details)
-            truncated_route["private_drive_stops"] = private_drive_stops
-            # Recalculate limit metadata for the truncated route (from depot backward on the truncated legs)
-            recalc_cumulative = 0.0
-            recalc_limit_idx = len(truncated_route["nodes"]) - 1
-            for i in range(len(truncated_leg_details) - 1, -1, -1):
-                recalc_cumulative += float(truncated_leg_details[i].get("duration_s", 0.0) or 0.0)
-                if recalc_cumulative <= planner.ANNOTATION_ROUTE_DURATION_SECONDS:
-                    recalc_limit_idx = i
-                else:
-                    break
-            truncated_route["limit_stop_order"] = recalc_limit_idx
-            truncated_route["limit_stop_node"] = int(truncated_route["nodes"][recalc_limit_idx])
-            truncated_route["limit_stop_elapsed_s"] = recalc_cumulative
-            truncated_routes.append(truncated_route)
-        else:
-            # From School: use existing forward logic (limit from start/depot)
-            limit_stop_order = route.get("limit_stop_order")
-            limit_stop_node = route.get("limit_stop_node")
-            if limit_stop_order is None or limit_stop_node is None:
-                truncated_routes.append(route)
-                continue
-
-            limit_stop_order = int(limit_stop_order)
-            limit_stop_node = int(limit_stop_node)
-            if limit_stop_order >= len(route_nodes) - 1:
-                truncated_routes.append(route)
-                continue
-
-            limit_point = points[limit_stop_node]
-            private_drive_stops: list[dict[str, Any]] = []
-            for post_limit_node in route_nodes[limit_stop_order + 1:]:
-                stop_node = int(post_limit_node)
-                stop_point = points[stop_node]
-                private_drive_time_s, private_drive_distance_m, private_drive_geometry = _private_drive_route_between_points(
-                    planner,
-                    stop_point,
-                    limit_point,
-                )
-                private_drive_item = {
-                    "address": str(stop_point.get("address", "")).strip(),
-                    "passenger_count": int(stop_point.get("passenger_count", 0) or 0),
-                    "plot_lat": float(stop_point.get("plot_lat", stop_point.get("lat", 0.0)) or 0.0),
-                    "plot_lng": float(stop_point.get("plot_lng", stop_point.get("lng", 0.0)) or 0.0),
-                    "pickup_address": str(limit_point.get("address", "")).strip(),
-                    "pickup_route_id": route_id,
-                    "pickup_passenger_count": int(limit_point.get("passenger_count", 0) or 0),
-                    "pickup_plot_lat": float(limit_point.get("plot_lat", limit_point.get("lat", 0.0)) or 0.0),
-                    "pickup_plot_lng": float(limit_point.get("plot_lng", limit_point.get("lng", 0.0)) or 0.0),
-                    "private_drive_time_s": private_drive_time_s,
-                    "private_drive_distance_m": private_drive_distance_m,
-                    "private_drive_geometry": private_drive_geometry,
-                    "private_access_type": "private_drive_stop",
-                    "reason": (
-                        f"This stop sits beyond the {planner.ANNOTATION_ROUTE_DURATION_SECONDS // 60}-minute mark and is modeled "
-                        f"as a private-drive stop connecting to `{limit_point.get('address', '')}`."
-                    ),
-                }
-                private_drive_rows.append(private_drive_item)
-                private_drive_stops.append(private_drive_item)
-
-            truncated_route = dict(route)
-            truncated_route["nodes"] = route_nodes[: limit_stop_order + 1]
-            truncated_leg_details = list(route.get("leg_details") or [])[:limit_stop_order]
-            truncated_route["leg_details"] = truncated_leg_details
-            truncated_route["time_s"] = sum(float(item.get("duration_s", 0.0) or 0.0) for item in truncated_leg_details)
-            truncated_route["distance_m"] = sum(float(item.get("distance_m", 0.0) or 0.0) for item in truncated_leg_details)
-            truncated_route["private_drive_stops"] = private_drive_stops
-            truncated_routes.append(truncated_route)
-
-    scenario["routes"] = truncated_routes
-    scenario["outlying_private_access_rows"] = private_drive_rows
-    scenario["private_drive_stop_count"] = len(private_drive_rows)
-    service_point_count = len([point for point in points if not bool(point.get("is_depot"))])
-    scenario["stop_count"] = int(scenario.get("service_stop_count", scenario.get("stop_count", service_point_count)) or 0)
-    scenario["service_stop_count"] = int(scenario.get("service_stop_count", scenario["stop_count"]) or 0)
-    scenario["map_point_count"] = len(points)
-    if private_drive_rows:
-        scenario["avg_route_distance_m"] = (
-            sum(float(route.get("distance_m", 0.0) or 0.0) for route in truncated_routes) / len(truncated_routes)
-            if truncated_routes else 0.0
-        )
-        scenario["avg_route_duration_s"] = (
-            sum(float(route.get("time_s", 0.0) or 0.0) for route in truncated_routes) / len(truncated_routes)
-            if truncated_routes else 0.0
-        )
-    summary = None
-    if private_drive_rows:
-        drive_times = [float(item.get("private_drive_time_s", 0.0) or 0.0) for item in private_drive_rows]
-        drive_distances = [float(item.get("private_drive_distance_m", 0.0) or 0.0) for item in private_drive_rows]
-        top_item = max(private_drive_rows, key=lambda item: float(item.get("private_drive_time_s", 0.0) or 0.0))
-        summary = {
-            "private_drive_stop_count": len(private_drive_rows),
-            "avg_private_drive_time_s": sum(drive_times) / len(drive_times),
-            "max_private_drive_time_s": max(drive_times),
-            "avg_private_drive_distance_m": sum(drive_distances) / len(drive_distances),
-            "max_private_drive_distance_m": max(drive_distances),
-            "furthest_stop_address": str(top_item.get("address", "")).strip(),
-            "furthest_pickup_address": str(top_item.get("pickup_address", "")).strip(),
-            "furthest_pickup_route_id": str(top_item.get("pickup_route_id", "")).strip(),
-        }
-    return scenario, summary
-
-
 def prepare_client_payload(
     input_records: list[dict[str, Any]] | list[str],
     config: PlannerConfig | None = None,
@@ -5917,16 +5195,6 @@ def prepare_client_payload(
         original_points = [dict(point) for point in points]
         for idx, point in enumerate(original_points):
             point["node_id"] = idx
-        subway_points = (
-            planner.build_subway_aggregated_points(original_points)
-            if config.include_subway_aggregation_scenario
-            else []
-        )
-        nearby_points = (
-            planner.build_nearby_aggregated_points(original_points)
-            if config.include_nearby_aggregation_scenario
-            else []
-        )
     log_stream.flush()
 
     return {
@@ -5934,8 +5202,6 @@ def prepare_client_payload(
             "input_records": normalized_records,
             "currency_code": str(planner.CURRENT_CURRENCY_CODE),
             "original_points": original_points,
-            "subway_points": subway_points,
-            "nearby_points": nearby_points,
         },
         "logs": log_stream.getvalue(),
         "geocode_warnings": geocode_warnings,
@@ -5957,7 +5223,6 @@ def _compute_scenario_without_render(
     time_constraint_metadata: dict[str, Any] | None = None,
     final_time_impact_validator: Any | None = None,
     traffic_replan_attempt_limit: int | None = None,
-    enable_vehicle_search: bool = True,
 ) -> dict[str, Any]:
     if len(points) <= 1:
         routes: list[dict[str, Any]] = []
@@ -6398,63 +5663,6 @@ def _compute_scenario_without_render(
         planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_max_route_duration_seconds
         result = solve_with_current_settings(traffic_replan_attempt_limit)
 
-        vehicle_search_attempts: list[dict[str, Any]] = []
-        if enable_vehicle_search and forced_vehicle_count_int is None and _scenario_feasibility_passed(result):
-            min_vehicle_count = _minimum_solver_vehicle_count(planner, points)
-            selected_bus_count = int(result.get("bus_count", 0) or 0)
-            target_bus_count = selected_bus_count - 1
-            search_count = 0
-            while (
-                FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS > 0
-                and target_bus_count >= min_vehicle_count
-                and search_count < FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS
-            ):
-                search_count += 1
-                planner.BUS_TYPE_CONFIGS = _cap_bus_type_configs_for_vehicle_count(
-                    planner,
-                    original_scenario_bus_type_configs,
-                    target_bus_count,
-                )
-                planner.MAX_ROUTE_DURATION_SECONDS = previous_max_route_duration_seconds
-                planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_max_route_duration_seconds
-                attempt: dict[str, Any] = {
-                    "attempt": search_count,
-                    "target_bus_count": target_bus_count,
-                }
-                try:
-                    candidate = solve_with_current_settings(FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_REPLAN_ATTEMPTS)
-                    gate = dict(candidate.get("traffic_gate") or {})
-                    feasibility_report = dict(candidate.get("feasibility_report") or {})
-                    candidate_bus_count = int(candidate.get("bus_count", 0) or 0)
-                    attempt.update(
-                        {
-                            "status": str(feasibility_report.get("status") or gate.get("status") or "unknown"),
-                            "feasibility_status": str(feasibility_report.get("status") or ""),
-                            "failure_reasons": list(feasibility_report.get("failure_reasons") or []),
-                            "bus_count": candidate_bus_count,
-                            "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
-                            "max_estimated_arrival_delay_minutes": float(
-                                gate.get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
-                            ),
-                        }
-                    )
-                    vehicle_search_attempts.append(attempt)
-                    if _scenario_feasibility_passed(candidate):
-                        result = candidate
-                        selected_bus_count = candidate_bus_count
-                        target_bus_count = selected_bus_count - 1
-                        continue
-                    break
-                except Exception as exc:
-                    attempt.update({"status": "error", "error": str(exc)})
-                    vehicle_search_attempts.append(attempt)
-                    break
-        if vehicle_search_attempts:
-            result["traffic_vehicle_search_attempts"] = vehicle_search_attempts
-            traffic_gate = dict(result.get("traffic_gate") or {})
-            traffic_gate["vehicle_search_enabled"] = True
-            traffic_gate["vehicle_search_attempts"] = vehicle_search_attempts
-            result["traffic_gate"] = traffic_gate
         if scenario_constraint_metadata:
             result["time_constraint"] = scenario_constraint_metadata
         return result
@@ -6708,7 +5916,6 @@ def _solve_vehicle_ladder_scenario(
                 node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
                 time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                 final_time_impact_validator=final_time_impact_validator,
-                enable_vehicle_search=False,
             )
         except Exception as exc:
             attempts.append(
@@ -7454,7 +6661,6 @@ def build_exception_preserving_scenario(
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         final_time_impact_validator=final_time_impact_validator,
-                        enable_vehicle_search=False,
                     )
                     optimized_points = list(optimized.get("points") or subset_points)
                     optimized_routes = [
@@ -8087,8 +7293,6 @@ def run_backend_planner_with_prepared_data(
     traffic_profile_context = "Unscaled OSRM candidate search with direct final-route provider validation"
 
     original_points = deepcopy(prepared_payload.get("original_points") or [])
-    subway_points = deepcopy(prepared_payload.get("subway_points") or [])
-    nearby_points = deepcopy(prepared_payload.get("nearby_points") or [])
     current_plan = deepcopy(prepared_payload.get("current_plan") or {})
 
     log_stream = _StreamingLogCapture(callback=progress_callback)
@@ -8341,15 +7545,6 @@ def run_backend_planner_with_prepared_data(
             solve_distance=assessment_distance,
         )
         current_plan_comparison = compare_current_plan_to_baseline(current_plan_assessment, time_constrained_result)
-        nearby_private_access_analysis = analyze_nearby_private_access(
-            planner,
-            original_points,
-            nearby_points,
-            nearby_result,
-        )
-        nearby_result["outlying_private_access_rows"] = list(
-            (nearby_private_access_analysis or {}).get("rows") or []
-        )
         service_direction = normalize_service_direction(config.service_direction)
     log_stream.flush()
 
@@ -8383,7 +7578,6 @@ def run_backend_planner_with_prepared_data(
         "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
-        "nearby_private_access_analysis": nearby_private_access_analysis,
         "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_profile_context": traffic_profile_context,
@@ -8405,7 +7599,6 @@ def run_backend_planner_with_prepared_data(
         "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,
         "route_reallocation_analysis": route_reallocation_analysis,
-        "nearby_private_access_analysis": nearby_private_access_analysis,
         "input_address_review": input_address_review,
         "traffic_profile_name": traffic_profile_name,
         "traffic_profile_context": traffic_profile_context,
@@ -8470,47 +7663,3 @@ def friendly_error_message(exc: Exception) -> str:
         return "The Excel file could not be read. Please make sure the file is not corrupted and that the worksheet format is valid."
 
     return message
-
-
-def run_legacy_planner_with_addresses(
-    input_records: list[dict[str, Any]] | list[str],
-    config: PlannerConfig | None = None,
-    progress_callback: Any | None = None,
-) -> dict[str, Any]:
-    normalized_records = _normalize_input_records(input_records)
-    if not normalized_records:
-        raise ValueError("Address list is empty.")
-
-    config = config or PlannerConfig()
-    planner = load_legacy_planner()
-    output_paths = _apply_config(planner, config, normalized_records)
-    original_addresses = [record["address"] for record in normalized_records]
-
-    log_stream = _StreamingLogCapture(callback=progress_callback)
-    started_at = time.perf_counter()
-    with redirect_stdout(log_stream), redirect_stderr(log_stream):
-        run_results = planner.main()
-    log_stream.flush()
-    elapsed_seconds = time.perf_counter() - started_at
-
-    logs = log_stream.getvalue()
-    structured_results = run_results or getattr(planner, "LAST_RUN_RESULTS", {})
-    service_normalized_record_count = len([item for item in normalized_records if int(item.get("passenger_count", 0) or 0) > 0])
-    if structured_results:
-        summary = summarize_structured_results(structured_results, service_normalized_record_count)
-    else:
-        summary = summarize_logs(logs, service_normalized_record_count)
-
-    result = {
-        "original_html": output_paths["original_html"],
-        "subway_html": output_paths["subway_html"],
-        "nearby_html": output_paths["nearby_html"],
-        "logs": logs,
-        "summary": summary,
-        "excluded_stops": extract_excluded_stops(logs, original_addresses),
-        "geocode_warnings": extract_geocode_warnings(logs, original_addresses),
-        "elapsed_seconds": elapsed_seconds,
-        "structured_results": structured_results,
-        "cache_hit": False,
-    }
-    return result

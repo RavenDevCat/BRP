@@ -789,9 +789,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
                 )
             ],
         },
-        "private_access": {
-            "nearby": dict(result.get("nearby_private_access_analysis") or {}).get("summary"),
-        },
         "decision_review": {
             "time_impact": _compact_time_impact(
                 dict(time_constrained.get("time_impact") or {})

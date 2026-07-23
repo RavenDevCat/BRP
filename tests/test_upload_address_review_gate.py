@@ -103,7 +103,6 @@ class UploadAddressReviewGateTests(unittest.TestCase):
         )
         patches = {
             "_read_current_plan_upload": lambda _payload: (client_core, "routes.xlsx", self.current_plan()),
-            "_find_subway_aggregation_block_reason": lambda *_args, **_kwargs: "",
             "_build_client_planner_config": lambda *_args, **_kwargs: object(),
         }
         with mock.patch.multiple(backend_service, **patches):
@@ -141,7 +140,6 @@ class UploadAddressReviewGateTests(unittest.TestCase):
         }
         patches = {
             "_read_current_plan_upload": lambda _payload: (client_core, "routes.xlsx", self.current_plan()),
-            "_find_subway_aggregation_block_reason": lambda *_args, **_kwargs: "",
             "_build_client_planner_config": lambda *_args, **_kwargs: object(),
             "_auto_current_plan_route_budget_details": lambda *_args, **_kwargs: None,
             "_current_plan_preview_map": lambda *_args, **_kwargs: (map_payload, None),

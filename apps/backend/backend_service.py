@@ -1543,25 +1543,6 @@ def _read_current_plan_upload(
     return client_core, source_label, current_plan
 
 
-def _find_subway_aggregation_block_reason(
-    client_core: Any, records: list[dict[str, Any]]
-) -> str | None:
-    is_likely_english_korean_address = getattr(
-        client_core.runtime, "is_likely_english_korean_address", None
-    )
-    if not is_likely_english_korean_address:
-        return None
-    for item in records:
-        country = str(item.get("country", "")).strip()
-        address = str(item.get("address", "")).strip()
-        if is_likely_english_korean_address(country, address):
-            return (
-                "Subway aggregation is unavailable for South Korea rows that use English-only addresses, "
-                "because those stops require Google geocoding."
-            )
-    return None
-
-
 def _suggest_planner_config_from_current_plan(
     current_plan: dict[str, Any],
     config_payload: dict[str, Any],
@@ -1641,10 +1622,6 @@ def _suggest_planner_config_from_current_plan(
         else:
             suggested["time_window_start"] = raw_window[0]
             suggested["time_window_end"] = raw_window[1]
-    if "include_subway_aggregation_scenario" not in config_payload:
-        suggested["include_subway_aggregation_scenario"] = False
-    if "include_nearby_aggregation_scenario" not in config_payload:
-        suggested["include_nearby_aggregation_scenario"] = False
     return suggested
 
 
@@ -1896,12 +1873,9 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     input_records = [
         dict(item) for item in list(current_plan.get("input_records") or [])
     ]
-    block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
     suggested_config = _suggest_planner_config_from_current_plan(
         current_plan, config_payload
     )
-    if block_reason:
-        suggested_config["include_subway_aggregation_scenario"] = False
     auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
     address_review: dict[str, Any]
     current_plan_map: dict[str, Any] | None = None
@@ -1948,7 +1922,6 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "summary": dict(current_plan.get("summary") or {}),
         "fleet": list(current_plan.get("fleet") or []),
         "input_record_count": _service_input_record_count(input_records),
-        "subway_aggregation_block_reason": block_reason,
         "auto_route_budget": auto_route_budget,
         "address_review": address_review,
         "current_plan_map": current_plan_map,
@@ -2198,9 +2171,6 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
     input_records = [
         dict(item) for item in list(current_plan.get("input_records") or [])
     ]
-    block_reason = _find_subway_aggregation_block_reason(client_core, input_records)
-    if block_reason:
-        config_payload["include_subway_aggregation_scenario"] = False
     client_config = _build_client_planner_config(client_core, config_payload)
     client_prep = client_core.prepare_client_payload(
         input_records,
@@ -2283,7 +2253,6 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         "selected_sheet": "current_plan_assignments",
         "summary": dict(current_plan.get("summary") or {}),
         "client_prep": metadata["client_prep"],
-        "subway_aggregation_block_reason": block_reason,
         "address_review": address_review,
     }
 

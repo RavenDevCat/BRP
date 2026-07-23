@@ -399,9 +399,6 @@ export type PlannerConfigPayload = {
     max_route_duration_minutes: number;
     time_impact_limit_minutes: number;
     stop_service_minutes: number;
-    subway_search_radius_m: number;
-    max_subway_walk_distance_m: number;
-    nearby_cluster_radius_m: number;
     comfort_load_factor: number;
     traffic_profile_name: string;
     service_direction: string;
@@ -411,8 +408,6 @@ export type PlannerConfigPayload = {
     time_window_end: string;
     route_stop_limit: number | null;
     minimum_vehicle_reduction: number;
-    include_subway_aggregation_scenario: boolean;
-    include_nearby_aggregation_scenario: boolean;
     operating_cost_per_km: number;
     revenue_rules: Array<{
         min_km: number;
@@ -428,7 +423,6 @@ export type WorkbookPreview = {
     summary: Record<string, unknown>;
     fleet: Array<Record<string, unknown>>;
     input_record_count: number;
-    subway_aggregation_block_reason?: string | null;
     auto_route_budget?: {
         status?: string;
         source?: string;
@@ -496,7 +490,6 @@ export type WorkbookSubmitResponse = {
         elapsed_seconds: number;
         logs: string;
     };
-    subway_aggregation_block_reason?: string | null;
 };
 
 export type DistanceWorkbookPreview = {

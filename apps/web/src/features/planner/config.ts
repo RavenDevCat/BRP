@@ -16,9 +16,6 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   max_route_duration_minutes: 60,
   time_impact_limit_minutes: 15,
   stop_service_minutes: 1,
-  subway_search_radius_m: 1500,
-  max_subway_walk_distance_m: 800,
-  nearby_cluster_radius_m: 500,
   comfort_load_factor: 1.0,
   traffic_profile_name: "Off-Peak",
   service_direction: "From School",
@@ -28,8 +25,6 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   time_window_end: "08:00",
   route_stop_limit: null,
   minimum_vehicle_reduction: 2,
-  include_subway_aggregation_scenario: false,
-  include_nearby_aggregation_scenario: false,
   operating_cost_per_km: 0,
   revenue_rules: [{ min_km: 0, max_km: null, fee_per_person: 0 }],
 };

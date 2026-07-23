@@ -23,7 +23,6 @@ from quota_store_sqlite import SqliteQuotaStore
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
-SUBWAY_CACHE_PATH = CACHE_DIR / "subway_search_cache.json"
 GOOGLE_GEOCODE_USAGE_PATH = CACHE_DIR / "google_geocode_usage.json"
 GOOGLE_GEOCODE_USAGE_PROVIDER = "google_geocode"
 GOOGLE_GEOCODE_USAGE_COUNTER = "geocode"
@@ -36,7 +35,6 @@ GOOGLE_GEOCODE_API_KEY = os.environ.get("GOOGLE_GEOCODE_API_KEY", "").strip()
 AMAP_GEOCODE_MAX_QPS = 2.8
 AMAP_PLACES_MAX_QPS = 2.8
 KAKAO_GEOCODE_MAX_QPS = 2.8
-KAKAO_PLACES_MAX_QPS = 2.8
 GOOGLE_GEOCODE_MAX_QPS = 2.8
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
 GOOGLE_GEOCODE_BASE_URL = os.environ.get(
@@ -52,10 +50,7 @@ GOOGLE_GEOCODE_RELAY_TIMEOUT_SECONDS = float(os.environ.get("BRP_GOOGLE_GEOCODE_
 REQUEST_TIMEOUT = 20
 KAKAO_REQUEST_MAX_RETRIES = 3
 
-SUBWAY_SEARCH_RADIUS_M = 1500
-MAX_SUBWAY_WALK_DISTANCE_M = 800
 ANNOTATION_ROUTE_DURATION_SECONDS = 60 * 60
-NEARBY_CLUSTER_RADIUS_M = 500
 GEOCODE_SCHOOL_DISTANCE_REVIEW_KM = float(os.environ.get("BRP_GEOCODE_SCHOOL_DISTANCE_REVIEW_KM", "55") or 0)
 
 
@@ -70,7 +65,6 @@ class RateLimiter:
 AMAP_GEOCODE_LIMITER = RateLimiter("amap-geocode", AMAP_GEOCODE_MAX_QPS)
 AMAP_PLACES_LIMITER = RateLimiter("amap-places", AMAP_PLACES_MAX_QPS)
 KAKAO_GEOCODE_LIMITER = RateLimiter("kakao-geocode", KAKAO_GEOCODE_MAX_QPS)
-KAKAO_PLACES_LIMITER = RateLimiter("kakao-places", KAKAO_PLACES_MAX_QPS)
 GOOGLE_GEOCODE_LIMITER = RateLimiter("google-geocode", GOOGLE_GEOCODE_MAX_QPS)
 
 
@@ -107,7 +101,6 @@ def _coerce_google_geocode_usage_value(payload: dict[str, Any], month_key: str) 
 
 
 GEOCODE_CACHE = load_json_cache(GEOCODE_CACHE_PATH)
-SUBWAY_CACHE = load_json_cache(SUBWAY_CACHE_PATH)
 GOOGLE_GEOCODE_USAGE = _load_google_geocode_usage_payload()
 
 
@@ -1399,194 +1392,6 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         suffix = "\n\nGeocode failures:\n" + "\n".join(details) if details else ""
         raise RuntimeError(f"No valid stops were accepted as valid input stops.{suffix}")
     return points, warnings
-
-
-def subway_cache_key(point: dict[str, Any], radius_m: int, walk_distance_m: int) -> str:
-    return f"{point['lat']:.6f},{point['lng']:.6f}|{radius_m}|{walk_distance_m}"
-
-
-def find_nearby_subway_station(
-    point: dict[str, Any],
-    radius_m: int = SUBWAY_SEARCH_RADIUS_M,
-    walk_distance_m: int = MAX_SUBWAY_WALK_DISTANCE_M,
-) -> dict[str, Any] | None:
-    cache_key = subway_cache_key(point, radius_m, walk_distance_m)
-    if cache_key in SUBWAY_CACHE:
-        return SUBWAY_CACHE[cache_key]
-    try:
-        if is_korea_country(str(point.get("country", ""))):
-            payload = kakao_request_json(
-                "/v2/local/search/category.json",
-                {
-                    "category_group_code": "SW8",
-                    "x": str(point["lng"]),
-                    "y": str(point["lat"]),
-                    "radius": radius_m,
-                    "sort": "distance",
-                    "page": 1,
-                    "size": 15,
-                },
-                KAKAO_PLACES_LIMITER,
-            )
-            for poi in payload.get("documents") or []:
-                distance = int(float(poi.get("distance", 0) or 0))
-                if distance > walk_distance_m:
-                    continue
-                lng = float(poi["x"])
-                lat = float(poi["y"])
-                result = {
-                    "provider": "kakao",
-                    "name": poi.get("place_name") or "Nearby Subway Station",
-                    "station_id": poi.get("id") or poi.get("place_name") or f"{lat:.6f},{lng:.6f}",
-                    "lat": lat,
-                    "lng": lng,
-                    "plot_lat": lat,
-                    "plot_lng": lng,
-                    "walking_distance_m": distance,
-                }
-                SUBWAY_CACHE[cache_key] = result
-                save_json_cache(SUBWAY_CACHE_PATH, SUBWAY_CACHE)
-                return result
-        else:
-            payload = amap_request_json(
-                "/v3/place/around",
-                {
-                    "location": f"{point['lng']},{point['lat']}",
-                    "keywords": "地铁站",
-                    "radius": radius_m,
-                    "sortrule": "distance",
-                    "offset": 10,
-                    "page": 1,
-                },
-                AMAP_PLACES_LIMITER,
-            )
-            for poi in payload.get("pois") or []:
-                distance = int(float(poi.get("distance", 0) or 0))
-                if distance > walk_distance_m:
-                    continue
-                lng_str, lat_str = str(poi["location"]).split(",")
-                lat = float(lat_str)
-                lng = float(lng_str)
-                plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-                result = {
-                    "provider": "amap",
-                    "name": poi.get("name") or "Nearby Subway Station",
-                    "station_id": poi.get("id") or poi.get("name") or f"{lat:.6f},{lng:.6f}",
-                    "lat": lat,
-                    "lng": lng,
-                    "plot_lat": plot_lat,
-                    "plot_lng": plot_lng,
-                    "walking_distance_m": distance,
-                }
-                SUBWAY_CACHE[cache_key] = result
-                save_json_cache(SUBWAY_CACHE_PATH, SUBWAY_CACHE)
-                return result
-    except Exception as exc:
-        log(f"[WARN] subway search failed: {point['address']} -> {exc}")
-
-    SUBWAY_CACHE[cache_key] = None
-    save_json_cache(SUBWAY_CACHE_PATH, SUBWAY_CACHE)
-    return None
-
-
-def build_subway_aggregated_points(
-    points: list[dict[str, Any]],
-    radius_m: int = SUBWAY_SEARCH_RADIUS_M,
-    walk_distance_m: int = MAX_SUBWAY_WALK_DISTANCE_M,
-) -> list[dict[str, Any]]:
-    if not points:
-        return []
-    depot = dict(points[0])
-    depot["node_id"] = 0
-    aggregated: list[dict[str, Any]] = [depot]
-    groups: dict[str, dict[str, Any]] = {}
-    for point in points[1:]:
-        station = find_nearby_subway_station(point, radius_m=radius_m, walk_distance_m=walk_distance_m)
-        if station is None:
-            standalone = dict(point)
-            standalone["node_id"] = len(aggregated)
-            aggregated.append(standalone)
-            continue
-        key = str(station["station_id"])
-        if key not in groups:
-            groups[key] = {
-                "provider": station.get("provider", point.get("provider", "map")),
-                "address": station["name"],
-                "display_address": station["name"],
-                "country": point.get("country", ""),
-                "city": point.get("city", ""),
-                "lat": station["lat"],
-                "lng": station["lng"],
-                "plot_lat": station["plot_lat"],
-                "plot_lng": station["plot_lng"],
-                "passenger_count": 0,
-                "original_members": [],
-                "is_depot": False,
-                "aggregated_type": "subway",
-                "covered_stop_count": 0,
-            }
-        group = groups[key]
-        group["passenger_count"] += int(point.get("passenger_count", 1))
-        group["original_members"].extend(point.get("original_members", [point["address"]]))
-        group["covered_stop_count"] += 1
-
-    for key in sorted(groups):
-        group = groups[key]
-        group["node_id"] = len(aggregated)
-        aggregated.append(group)
-    log(f"[INFO] Subway aggregation reduced stops from {max(0, len(points) - 1)} to {max(0, len(aggregated) - 1)}.")
-    return aggregated
-
-
-def build_nearby_aggregated_points(
-    points: list[dict[str, Any]],
-    cluster_radius_m: int = NEARBY_CLUSTER_RADIUS_M,
-) -> list[dict[str, Any]]:
-    if not points:
-        return []
-    depot = dict(points[0])
-    depot["node_id"] = 0
-    aggregated: list[dict[str, Any]] = [depot]
-    remaining = points[1:]
-    used = [False] * len(remaining)
-    radius_km = cluster_radius_m / 1000.0
-    for i, point in enumerate(remaining):
-        if used[i]:
-            continue
-        cluster = [point]
-        used[i] = True
-        for j in range(i + 1, len(remaining)):
-            if used[j]:
-                continue
-            candidate = remaining[j]
-            distance_km = haversine_distance_km(point["lat"], point["lng"], candidate["lat"], candidate["lng"])
-            if distance_km <= radius_km:
-                cluster.append(candidate)
-                used[j] = True
-        if len(cluster) == 1:
-            standalone = dict(cluster[0])
-            standalone["node_id"] = len(aggregated)
-            aggregated.append(standalone)
-            continue
-        avg_lat = sum(item["lat"] for item in cluster) / len(cluster)
-        avg_lng = sum(item["lng"] for item in cluster) / len(cluster)
-        representative = min(
-            cluster,
-            key=lambda item: haversine_distance_km(avg_lat, avg_lng, item["lat"], item["lng"]),
-        )
-        merged = dict(representative)
-        merged["node_id"] = len(aggregated)
-        merged["passenger_count"] = sum(int(item.get("passenger_count", 1)) for item in cluster)
-        merged["original_members"] = [
-            member
-            for item in cluster
-            for member in item.get("original_members", [item["address"]])
-        ]
-        merged["covered_stop_count"] = len(cluster)
-        merged["aggregated_type"] = "nearby"
-        aggregated.append(merged)
-    log(f"[INFO] Nearby-address aggregation reduced stops from {max(0, len(points) - 1)} to {max(0, len(aggregated) - 1)}.")
-    return aggregated
 
 
 def seconds_to_human(seconds: int | None) -> str:

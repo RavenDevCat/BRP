@@ -226,7 +226,6 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         original_minimum = planner_core._minimum_vehicle_count_for_hard_constraints
         try:
             def fake_compute(*args, **kwargs):
-                self.assertFalse(kwargs["enable_vehicle_search"])
                 target = int(kwargs["reduced_vehicle_limit"])
                 self.assertNotIn("forced_vehicle_count", kwargs)
                 calls.append(target)
@@ -266,7 +265,6 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         original_minimum = planner_core._minimum_vehicle_count_for_hard_constraints
         try:
             def fake_compute(*args, **kwargs):
-                self.assertFalse(kwargs["enable_vehicle_search"])
                 target = int(kwargs["reduced_vehicle_limit"])
                 self.assertNotIn("forced_vehicle_count", kwargs)
                 calls.append(target)

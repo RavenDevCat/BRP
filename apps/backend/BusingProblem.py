@@ -23,7 +23,6 @@ from json_cache_store import load_json_object, save_json_object
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
-SUBWAY_CACHE_PATH = CACHE_DIR / "subway_search_cache.json"
 
 AMAP_KEY = os.environ.get("AMAP_API_KEY", "").strip()
 GOOGLE_KEY = (
@@ -101,7 +100,6 @@ OSRM_RAW_COORD_FALLBACK_MIN_BACKTRACK_KM = float(os.environ.get("OSRM_RAW_COORD_
 OSRM_SNAP_CONNECTOR_MIN_METERS = float(os.environ.get("OSRM_SNAP_CONNECTOR_MIN_METERS", "25") or 25)
 
 INPUT_STOPS: list[dict[str, Any]] = []
-ADDRESSES: list[str] = []
 BUS_TYPE_CONFIGS = [
     {"name": "Large Bus", "capacity": 42, "max_count": 20},
     {"name": "Mid Bus", "capacity": 35, "max_count": 15},
@@ -123,9 +121,6 @@ SOLVER_TIME_LIMIT_SECONDS = max(
     1,
     int(os.environ.get("BRP_SOLVER_TIME_LIMIT_SECONDS", "10") or 10),
 )
-SUBWAY_SEARCH_RADIUS_M = 1500
-MAX_SUBWAY_WALK_DISTANCE_M = 800
-NEARBY_CLUSTER_RADIUS_M = 500
 TRAFFIC_PROFILE_NAME = "Off-Peak"
 TRAFFIC_PROFILE_CONTEXT = "Direct final-route provider validation"
 SERVICE_DIRECTION = "From School"
@@ -137,12 +132,7 @@ REVENUE_RULES = [
     {"min_km": 10.0, "max_km": 20.0, "fee_per_person": 0.0},
     {"min_km": 20.0, "max_km": None, "fee_per_person": 0.0},
 ]
-OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes.html")
-SUBWAY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_subway_aggregated.html")
-NEARBY_OUTPUT_HTML = str(BASE_DIR / "outputs" / "school_bus_routes_nearby_aggregated.html")
-
 CURRENT_CURRENCY_CODE = "USD"
-LAST_RUN_RESULTS: dict[str, Any] = {}
 NODE_TIME_LOWER_BOUNDS: dict[int, int] = {}
 NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
 NODE_TIME_SOFT_UPPER_BOUNDS: dict[int, int] = {}
@@ -214,7 +204,6 @@ def save_json_cache(path: Path, payload: dict[str, Any]) -> None:
 
 
 GEOCODE_CACHE = load_json_cache(GEOCODE_CACHE_PATH)
-SUBWAY_CACHE = load_json_cache(SUBWAY_CACHE_PATH)
 _LOG_STDOUT_AVAILABLE = True
 
 
@@ -1059,148 +1048,6 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
     return points, warnings
 
 
-def subway_cache_key(point: dict[str, Any]) -> str:
-    return f"{point['lat']:.6f},{point['lng']:.6f}|{SUBWAY_SEARCH_RADIUS_M}|{MAX_SUBWAY_WALK_DISTANCE_M}"
-
-
-def find_nearby_subway_station(point: dict[str, Any]) -> dict[str, Any] | None:
-    cache_key = subway_cache_key(point)
-    if cache_key in SUBWAY_CACHE:
-        return SUBWAY_CACHE[cache_key]
-    try:
-        payload = amap_request_json(
-            "/v3/place/around",
-            {
-                "location": f"{point['lng']},{point['lat']}",
-                "keywords": "地铁站",
-                "radius": SUBWAY_SEARCH_RADIUS_M,
-                "sortrule": "distance",
-                "offset": 10,
-                "page": 1,
-            },
-            AMAP_PLACES_LIMITER,
-        )
-        for poi in payload.get("pois") or []:
-            distance = int(float(poi.get("distance", 0) or 0))
-            if distance > MAX_SUBWAY_WALK_DISTANCE_M:
-                continue
-            lng_str, lat_str = str(poi["location"]).split(",")
-            lat = float(lat_str)
-            lng = float(lng_str)
-            plot_lat, plot_lng = gcj02_to_wgs84(lat, lng)
-            result = {
-                "name": poi.get("name") or "Nearby Subway Station",
-                "station_id": poi.get("id") or poi.get("name") or f"{lat:.6f},{lng:.6f}",
-                "lat": lat,
-                "lng": lng,
-                "plot_lat": plot_lat,
-                "plot_lng": plot_lng,
-                "walking_distance_m": distance,
-            }
-            SUBWAY_CACHE[cache_key] = result
-            save_json_cache(SUBWAY_CACHE_PATH, SUBWAY_CACHE)
-            return result
-    except Exception as exc:
-        log(f"[WARN] subway search failed: {point['address']} -> {exc}")
-
-    SUBWAY_CACHE[cache_key] = None
-    save_json_cache(SUBWAY_CACHE_PATH, SUBWAY_CACHE)
-    return None
-
-
-def build_subway_aggregated_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not points:
-        return []
-    depot = dict(points[0])
-    depot["node_id"] = 0
-    aggregated: list[dict[str, Any]] = [depot]
-    groups: dict[str, dict[str, Any]] = {}
-    for point in points[1:]:
-        station = find_nearby_subway_station(point)
-        if station is None:
-            standalone = dict(point)
-            standalone["node_id"] = len(aggregated)
-            aggregated.append(standalone)
-            continue
-        key = str(station["station_id"])
-        if key not in groups:
-            groups[key] = {
-                "provider": "amap",
-                "address": station["name"],
-                "display_address": station["name"],
-                "country": point.get("country", ""),
-                "city": point.get("city", ""),
-                "lat": station["lat"],
-                "lng": station["lng"],
-                "plot_lat": station["plot_lat"],
-                "plot_lng": station["plot_lng"],
-                "passenger_count": 0,
-                "original_members": [],
-                "is_depot": False,
-                "aggregated_type": "subway",
-                "covered_stop_count": 0,
-            }
-        group = groups[key]
-        group["passenger_count"] += int(point.get("passenger_count", 1))
-        group["original_members"].extend(point.get("original_members", [point["address"]]))
-        group["covered_stop_count"] += 1
-
-    for key in sorted(groups):
-        group = groups[key]
-        group["node_id"] = len(aggregated)
-        aggregated.append(group)
-    log(f"[INFO] Subway aggregation reduced stops from {max(0, len(points) - 1)} to {max(0, len(aggregated) - 1)}.")
-    return aggregated
-
-
-def build_nearby_aggregated_points(points: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not points:
-        return []
-    depot = dict(points[0])
-    depot["node_id"] = 0
-    aggregated: list[dict[str, Any]] = [depot]
-    remaining = points[1:]
-    used = [False] * len(remaining)
-    radius_km = NEARBY_CLUSTER_RADIUS_M / 1000.0
-    for i, point in enumerate(remaining):
-        if used[i]:
-            continue
-        cluster = [point]
-        used[i] = True
-        for j in range(i + 1, len(remaining)):
-            if used[j]:
-                continue
-            candidate = remaining[j]
-            distance_km = haversine_distance_km(point["lat"], point["lng"], candidate["lat"], candidate["lng"])
-            if distance_km <= radius_km:
-                cluster.append(candidate)
-                used[j] = True
-        if len(cluster) == 1:
-            standalone = dict(cluster[0])
-            standalone["node_id"] = len(aggregated)
-            aggregated.append(standalone)
-            continue
-        avg_lat = sum(item["lat"] for item in cluster) / len(cluster)
-        avg_lng = sum(item["lng"] for item in cluster) / len(cluster)
-        representative = min(
-            cluster,
-            key=lambda item: haversine_distance_km(avg_lat, avg_lng, item["lat"], item["lng"]),
-        )
-        merged = dict(representative)
-        merged["node_id"] = len(aggregated)
-        merged["passenger_count"] = sum(int(item.get("passenger_count", 1)) for item in cluster)
-        merged["original_members"] = [
-            member
-            for item in cluster
-            for member in item.get("original_members", [item["address"]])
-        ]
-        merged["covered_stop_count"] = len(cluster)
-        merged["aggregated_type"] = "nearby"
-        aggregated.append(merged)
-    log(f"[INFO] Nearby-address aggregation reduced stops from {max(0, len(points) - 1)} to {max(0, len(aggregated) - 1)}.")
-    return aggregated
-
-
 def seed_edge_metrics(points: list[dict[str, Any]]) -> tuple[list[list[int]], list[list[int]]]:
     n = len(points)
     time_matrix = [[0] * n for _ in range(n)]
@@ -1341,40 +1188,6 @@ def split_oversized_demand_points(points: list[dict[str, Any]], max_batch_size: 
             expanded.append(cloned)
     return expanded
 
-def trim_fleet_for_demand(points: list[dict[str, Any]], fleet: list[dict[str, Any]], extra_buffer: int = 2) -> list[dict[str, Any]]:
-    if not points or not fleet:
-        return []
-
-    total_demand = sum(int(point.get("passenger_count", 0)) for point in points[1:])
-    largest_stop_demand = max((int(point.get("passenger_count", 0)) for point in points[1:]), default=0)
-    if total_demand <= 0:
-        return fleet[:1]
-
-    sorted_fleet = sort_regular_preference(fleet)
-    stop_based_count = math.ceil(max(0, len(points) - 1) / route_stop_limit())
-    min_vehicle_count = max(
-        _minimum_vehicle_count_for_demand(total_demand, sorted_fleet),
-        stop_based_count,
-    )
-    operational_buffer = max(extra_buffer, int(math.ceil(stop_based_count * 0.75)))
-    target_vehicle_count = min(
-        len(sorted_fleet),
-        max(
-            1,
-            min_vehicle_count + operational_buffer,
-            int(MIN_SOLVER_VEHICLE_COUNT or 0),
-        ),
-    )
-
-    trimmed = sorted_fleet[:target_vehicle_count]
-    if largest_stop_demand > 0 and all(solver_capacity_for_vehicle(item) < largest_stop_demand for item in trimmed):
-        for candidate in sorted_fleet[target_vehicle_count:]:
-            trimmed.append(candidate)
-            if solver_capacity_for_vehicle(candidate) >= largest_stop_demand:
-                break
-    return trimmed
-
-
 def build_trivial_routes(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
@@ -1448,7 +1261,6 @@ def compute_depot_distances(points: list[dict[str, Any]]) -> dict[int, float]:
         idx: haversine_distance_km(depot["lat"], depot["lng"], point["lat"], point["lng"])
         for idx, point in enumerate(points)
     }
-
 
 def subset_matrix(matrix: list[list[int]], nodes: list[int]) -> list[list[int]]:
     return [[matrix[i][j] for j in nodes] for i in nodes]
@@ -1760,12 +1572,8 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     global_time_lower_bounds = dict(NODE_TIME_LOWER_BOUNDS or {})
     global_time_upper_bounds = dict(NODE_TIME_UPPER_BOUNDS or {})
     global_time_soft_upper_bounds = dict(NODE_TIME_SOFT_UPPER_BOUNDS or {})
-    # The outer vehicle ladder already caps full_fleet. Hard per-stop bounds may
-    # need every vehicle in that cap, so demand trimming must not shrink it again.
-    if global_time_lower_bounds or global_time_upper_bounds:
-        regular_fleet = full_fleet
-    else:
-        regular_fleet = trim_fleet_for_demand(points, full_fleet)
+    # The outer vehicle ladder is the only vehicle-count authority.
+    regular_fleet = full_fleet
     if (
         remote_nodes
         and RESERVED_EXPRESS_BUSES > 0
@@ -1789,7 +1597,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
             >= points_total_demand(points)
         ):
             express_fleet = candidate_express_fleet
-            regular_fleet = trim_fleet_for_demand(points, candidate_regular_fleet)
+            regular_fleet = candidate_regular_fleet
 
     combined_routes: list[dict[str, Any]] = []
 
@@ -1823,7 +1631,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
         except Exception as exc:
             log(f"[WARN] Express-route pool fallback to regular pool: {exc}")
             regular_nodes = list(range(1, len(points)))
-            regular_fleet = trim_fleet_for_demand(points, full_fleet)
+            regular_fleet = full_fleet
     else:
         regular_nodes = list(range(1, len(points)))
 
@@ -2723,102 +2531,3 @@ def build_scenario_result(points: list[dict[str, Any]], routes: list[dict[str, A
         "total_chargeable_revenue": 0.0,
         "total_profit_loss": 0.0,
     }
-
-
-def build_scenario(points: list[dict[str, Any]], output_html: str, scenario_label: str) -> dict[str, Any]:
-    if len(points) <= 1:
-        routes: list[dict[str, Any]] = []
-        render_map(points, routes, output_html)
-        return build_scenario_result(points, routes, output_html)
-    full_fleet = build_vehicle_fleet()
-    if full_fleet:
-        max_physical_capacity = max(solver_capacity_for_vehicle(item) for item in full_fleet)
-        points = split_oversized_demand_points(points, max_physical_capacity)
-    log(f"[INFO] Building {scenario_label} scenario with {len(points)} total points.")
-    global OSRM_BASE_URL
-    scenario_osrm_base_url = resolve_osrm_base_url(points)
-    previous_osrm_base_url = OSRM_BASE_URL
-    OSRM_BASE_URL = scenario_osrm_base_url
-    log(f"[INFO] Using OSRM backend {scenario_osrm_base_url} for {scenario_label} scenario.")
-    try:
-        log(f"[INFO] Building full OSRM matrix for {scenario_label} scenario.")
-        solve_time, solve_distance = build_osrm_full_matrix(points)
-    except Exception as exc:
-        log(f"[WARN] OSRM full matrix failed for {scenario_label}; falling back to seed matrix: {exc}")
-        solve_time, solve_distance = seed_edge_metrics(points)
-    try:
-        final_routes = solve_routes(points, solve_time, solve_distance)
-        enrich_routes_with_actual_driving(points, final_routes)
-        annotate_and_price_routes(points, final_routes)
-        render_map(points, final_routes, output_html)
-        return build_scenario_result(points, final_routes, output_html)
-    finally:
-        OSRM_BASE_URL = previous_osrm_base_url
-
-
-def normalized_input_stops() -> list[dict[str, Any]]:
-    if INPUT_STOPS:
-        return [
-            {
-                "country": str(item.get("country", "")).strip(),
-                "city": str(item.get("city", "")).strip(),
-                "address": str(item["address"]).strip(),
-                "passenger_count": int(item.get("passenger_count", 0 if index == 0 else 1)),
-            }
-            for index, item in enumerate(INPUT_STOPS)
-            if str(item.get("address", "")).strip()
-        ]
-    if ADDRESSES:
-        return [
-            {
-                "country": "",
-                "city": "",
-                "address": str(address).strip(),
-                "passenger_count": 0 if index == 0 else 1,
-            }
-            for index, address in enumerate(ADDRESSES)
-            if str(address).strip()
-        ]
-    raise RuntimeError("No input addresses were supplied.")
-
-
-def main() -> dict[str, Any]:
-    global CURRENT_CURRENCY_CODE, LAST_RUN_RESULTS
-
-    input_records = normalized_input_stops()
-    CURRENT_CURRENCY_CODE = determine_currency_code(input_records)
-    log(f"Geocoding addresses with configured providers, then routing against OSRM at {OSRM_BASE_URL} ...")
-    points, geocode_warnings = geocode_records(input_records)
-    if geocode_warnings:
-        log("[WARN] The following addresses were not accepted as valid stops:")
-        for item in geocode_warnings:
-            log(f"  - {item['address']}")
-    log(f"Valid stops: {len(points)} / {len(input_records)}")
-    log("Building OSRM road-network matrices first, then solving with OR-Tools, then fetching final OSRM route geometry for the chosen legs ...")
-
-    original_points = [dict(point) for point in points]
-    for idx, point in enumerate(original_points):
-        point["node_id"] = idx
-    subway_points = build_subway_aggregated_points(original_points)
-    nearby_points = build_nearby_aggregated_points(original_points)
-
-    original_result = build_scenario(original_points, OUTPUT_HTML, "Original stops")
-    subway_result = build_scenario(subway_points, SUBWAY_OUTPUT_HTML, "Subway aggregated")
-    nearby_result = build_scenario(nearby_points, NEARBY_OUTPUT_HTML, "Nearby-address aggregated")
-
-    service_original_points = [point for point in original_points if not bool(point.get("is_depot"))]
-    LAST_RUN_RESULTS = {
-        "original": original_result,
-        "subway": subway_result,
-        "nearby": nearby_result,
-        "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
-        "input_point_count": len(input_records),
-        "valid_stop_count": len(service_original_points),
-        "valid_point_count": len(original_points),
-        "currency_code": CURRENT_CURRENCY_CODE,
-    }
-    return LAST_RUN_RESULTS
-
-
-if __name__ == "__main__":
-    main()

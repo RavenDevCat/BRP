@@ -81,7 +81,6 @@ export function NewJobPage() {
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
-    _subwayAggregationBlocked = false,
     overrides = configOverridesRef.current,
   ) {
     const safeOverrides = { ...overrides };
@@ -89,8 +88,6 @@ export function NewJobPage() {
     const merged = {
       ...baseConfig,
       ...safeOverrides,
-      include_subway_aggregation_scenario: false,
-      include_nearby_aggregation_scenario: false,
     };
     if (!Object.prototype.hasOwnProperty.call(safeOverrides, "route_stop_limit") && merged.route_stop_limit == null) {
       merged.route_stop_limit = DEFAULT_PLANNER_CONFIG.route_stop_limit;
@@ -115,8 +112,8 @@ export function NewJobPage() {
     configOverridesRef.current = nextOverrides;
     setConfig(
       preview
-        ? buildConfigWithOverrides(preview.suggested_config, Boolean(preview.subway_aggregation_block_reason), nextOverrides)
-        : buildConfigWithOverrides(defaultConfig, false, nextOverrides),
+        ? buildConfigWithOverrides(preview.suggested_config, nextOverrides)
+        : buildConfigWithOverrides(defaultConfig, nextOverrides),
     );
   }
 
@@ -154,10 +151,7 @@ export function NewJobPage() {
   }
 
   function configFromPreview(payload: WorkbookPreview) {
-    return buildConfigWithOverrides(
-      payload.suggested_config,
-      Boolean(payload.subway_aggregation_block_reason),
-    );
+    return buildConfigWithOverrides(payload.suggested_config);
   }
 
   const previewMutation = useMutation({

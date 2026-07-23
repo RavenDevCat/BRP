@@ -67,9 +67,6 @@ class PlannerConfig:
     express_skip_inner_km: float = 8.0
     max_route_duration_minutes: int = 60
     stop_service_minutes: int = 1
-    subway_search_radius_m: int = 1500
-    max_subway_walk_distance_m: int = 800
-    nearby_cluster_radius_m: int = 500
     comfort_load_factor: float = 1.0
     traffic_profile_name: str = "Off-Peak"
     service_direction: str = "From School"
@@ -84,8 +81,6 @@ class PlannerConfig:
     further_most_output_name: str = "school_bus_routes_further_most.html"
     further_most_nearby_output_name: str = "school_bus_routes_further_most_nearby.html"
     output_directory_name: str | None = None
-    include_subway_aggregation_scenario: bool = True
-    include_nearby_aggregation_scenario: bool = True
 
 
 def ensure_cache_dir() -> None:
@@ -589,72 +584,6 @@ def read_current_plan_from_excel(excel_path: str | Path, service_direction: str 
     }
 
 
-def summarize_structured_results(results: dict[str, Any], uploaded_address_count: int) -> dict[str, Any]:
-    original = results.get("original", {})
-    subway = results.get("subway", {})
-    nearby = results.get("nearby", {})
-
-    original_valid_stops = int(original.get("stop_count", uploaded_address_count))
-    subway_valid_stops = int(subway.get("stop_count", original_valid_stops))
-    nearby_valid_stops = int(nearby.get("stop_count", original_valid_stops))
-
-    original_vehicle_count = int(original.get("bus_count", 0))
-    subway_vehicle_count = int(subway.get("bus_count", 0))
-    nearby_vehicle_count = int(nearby.get("bus_count", 0))
-
-    original_non_depot = max(0, original_valid_stops)
-    subway_non_depot = max(0, subway_valid_stops)
-    nearby_non_depot = max(0, nearby_valid_stops)
-
-    stop_reduction = original_non_depot - subway_non_depot
-    stop_reduction_pct = (stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-    nearby_stop_reduction = original_non_depot - nearby_non_depot
-    nearby_stop_reduction_pct = (nearby_stop_reduction / original_non_depot * 100.0) if original_non_depot else 0.0
-
-    vehicle_reduction = original_vehicle_count - subway_vehicle_count
-    vehicle_reduction_pct = (vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-    nearby_vehicle_reduction = original_vehicle_count - nearby_vehicle_count
-    nearby_vehicle_reduction_pct = (nearby_vehicle_reduction / original_vehicle_count * 100.0) if original_vehicle_count else 0.0
-
-    return {
-        "uploaded_address_count": uploaded_address_count,
-        "currency_code": str(results.get("currency_code", "USD")),
-        "original_uploaded_stops": uploaded_address_count,
-        "original_valid_stops": original_valid_stops,
-        "subway_valid_stops": subway_valid_stops,
-        "nearby_valid_stops": nearby_valid_stops,
-        "original_vehicle_count": original_vehicle_count,
-        "subway_vehicle_count": subway_vehicle_count,
-        "nearby_vehicle_count": nearby_vehicle_count,
-        "original_bus_mix": dict(original.get("bus_mix", {})),
-        "subway_bus_mix": dict(subway.get("bus_mix", {})),
-        "nearby_bus_mix": dict(nearby.get("bus_mix", {})),
-        "original_total_operating_cost": float(original.get("total_operating_cost", 0.0)),
-        "subway_total_operating_cost": float(subway.get("total_operating_cost", 0.0)),
-        "nearby_total_operating_cost": float(nearby.get("total_operating_cost", 0.0)),
-        "original_total_chargeable_revenue": float(original.get("total_chargeable_revenue", 0.0)),
-        "subway_total_chargeable_revenue": float(subway.get("total_chargeable_revenue", 0.0)),
-        "nearby_total_chargeable_revenue": float(nearby.get("total_chargeable_revenue", 0.0)),
-        "original_total_profit_loss": float(original.get("total_profit_loss", 0.0)),
-        "subway_total_profit_loss": float(subway.get("total_profit_loss", 0.0)),
-        "nearby_total_profit_loss": float(nearby.get("total_profit_loss", 0.0)),
-        "stop_reduction": stop_reduction,
-        "stop_reduction_pct": stop_reduction_pct,
-        "nearby_stop_reduction": nearby_stop_reduction,
-        "nearby_stop_reduction_pct": nearby_stop_reduction_pct,
-        "vehicle_reduction": vehicle_reduction,
-        "vehicle_reduction_pct": vehicle_reduction_pct,
-        "nearby_vehicle_reduction": nearby_vehicle_reduction,
-        "nearby_vehicle_reduction_pct": nearby_vehicle_reduction_pct,
-        "subway_cost_savings": 0.0,
-        "nearby_cost_savings": 0.0,
-        "subway_profit_improvement": 0.0,
-        "nearby_profit_improvement": 0.0,
-        "subway_before_stops": original_valid_stops,
-        "nearby_before_stops": original_valid_stops,
-    }
-
-
 def summarize_current_plan_assessment(current_plan_assessment: dict[str, Any] | None) -> dict[str, Any]:
     if not current_plan_assessment:
         return {}
@@ -773,22 +702,11 @@ def prepare_client_payload(
     for idx, point in enumerate(original_points):
         point["node_id"] = idx
 
-    subway_points = runtime.build_subway_aggregated_points(
-        original_points,
-        radius_m=config.subway_search_radius_m,
-        walk_distance_m=config.max_subway_walk_distance_m,
-    ) if config.include_subway_aggregation_scenario else []
-    nearby_points = runtime.build_nearby_aggregated_points(
-        original_points,
-        cluster_radius_m=config.nearby_cluster_radius_m,
-    ) if config.include_nearby_aggregation_scenario else []
     return {
         "prepared_payload": {
             "input_records": normalized_records,
             "currency_code": currency_code,
             "original_points": original_points,
-            "subway_points": subway_points,
-            "nearby_points": nearby_points,
             "current_plan": deepcopy(current_plan_data) if current_plan_data else None,
         },
         "logs": "",

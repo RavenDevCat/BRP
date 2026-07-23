@@ -295,7 +295,7 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
     ]
     result = planner_core._compute_scenario_without_render(planner, points, "pm-smoke")
 
-    assert result["bus_count"] == 13
+    assert result["bus_count"] == 14
     assert result["traffic_gate"]["status"] == "passed"
     assert result["traffic_gate"]["gate_type"] == "route_duration"
     assert result["traffic_gate"]["traffic_policy"]["status"] == "ready"
@@ -305,8 +305,7 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
     assert result["traffic_replan_attempts"][0]["action"] == "tighten_route_target"
     assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 0
     assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] < 60
-    assert result["traffic_vehicle_search_attempts"][0]["target_bus_count"] == 13
-    assert result["traffic_vehicle_search_attempts"][0]["status"] == "passed"
+    assert "traffic_vehicle_search_attempts" not in result
 
 
 def test_am_arrival_gate_stops_after_tighter_target_is_infeasible(monkeypatch):
@@ -475,7 +474,6 @@ def test_am_arrival_gate_recovers_after_combined_replan_is_infeasible(monkeypatc
         planner,
         points,
         "combined-replan-smoke",
-        enable_vehicle_search=False,
     )
 
     assert planner.solve_count == 4

@@ -1,8 +1,8 @@
 # BRP Client Helpers And Legacy UI
 
 This package contains the legacy Streamlit client and shared Python helper code
-used by the backend for workbook parsing, geocoding, cache reuse, aggregation,
-and output rendering.
+used by the backend for workbook parsing, geocoding, cache reuse, and output
+rendering.
 
 New product UI work should normally happen in `apps/web`. Changes here are still
 important when they affect shared Python behavior or the operator/legacy
@@ -13,7 +13,7 @@ Streamlit workflow.
 - `app.py`: legacy Streamlit/operator UI
 - `client_core.py`: legacy client workflow and backend API calls
 - `client_runtime.py`: workbook preprocessing, geocoding, usage counters,
-  cache handling, subway/nearby aggregation helpers, and map rendering
+  cache handling, and map rendering
 - `api_rate_limit.py`: cross-process provider request limiter for client-side
   helper calls
 - `cache/`: ignored runtime cache directory with selected committed seed files

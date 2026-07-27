@@ -14,6 +14,13 @@ def test_time_impact_limit_payload_normalizes_user_input():
     assert payload["time_impact_limit_minutes"] == 20
 
 
+def test_blank_minimum_vehicle_reduction_means_no_required_saving():
+    for value in (None, "", 0):
+        payload = backend_service._planner_config_payload({"minimum_vehicle_reduction": value})
+
+        assert payload["minimum_vehicle_reduction"] == 0
+
+
 def test_time_impact_summary_uses_user_limit():
     stops = [
         {
@@ -160,6 +167,18 @@ def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
     assert result["bus_count"] == 3
     assert result["vehicle_saving_target"]["status"] == "passed"
     assert result["vehicle_ladder_search"]["attempts"][0]["all_constraints_passed"] is True
+
+    seen_targets.clear()
+    result = planner_core._solve_vehicle_ladder_scenario(
+        object(),
+        [{"is_depot": True}, {"passenger_count": 1}],
+        "zero-minimum test",
+        current_route_count=5,
+        minimum_vehicle_reduction=0,
+    )
+
+    assert seen_targets == [5, 4, 3, 2, 1]
+    assert result["bus_count"] == 3
 
 
 def test_vehicle_ladder_never_relaxes_the_hard_vehicle_saving_target(monkeypatch):

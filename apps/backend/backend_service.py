@@ -409,7 +409,7 @@ def _parse_route_stop_limit_payload(value: Any) -> int | None:
 
 def _parse_minimum_vehicle_reduction_payload(value: Any) -> int:
     if value is None or value == "":
-        return 2
+        return 0
     try:
         reduction = int(value)
     except (TypeError, ValueError) as exc:

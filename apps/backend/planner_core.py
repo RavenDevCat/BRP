@@ -6452,7 +6452,7 @@ def _build_route_preserving_protected_scenario(
     current_routes = [deepcopy(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_route_count = len(current_routes)
     saving_count = max(0, int(config.minimum_vehicle_reduction or 0))
-    if saving_count <= 0 or saving_count > 3:
+    if saving_count > 3:
         return None
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
     frozen_route_ids = {str(item) for item in list(current_summary.get("failed_route_ids") or [])}

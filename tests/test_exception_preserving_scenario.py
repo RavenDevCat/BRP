@@ -638,7 +638,7 @@ def test_protected_skip_reason_names_unfrozen_remainder_limit(monkeypatch):
     assert result["constraint_search_outcome"]["status"] == "provably_infeasible"
 
 
-def test_protected_prefers_route_preserving_reallocation(monkeypatch):
+def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch):
     class RoutePreservingPlanner(FakePlanner):
         OSRM_BASE_URL = "original"
 
@@ -727,7 +727,7 @@ def test_protected_prefers_route_preserving_reallocation(monkeypatch):
         current,
         planner_core.PlannerConfig(
             service_direction="To School",
-            minimum_vehicle_reduction=1,
+            minimum_vehicle_reduction=0,
             route_stop_limit=10,
             mid_bus_max_count=0,
             small_bus_max_count=0,
@@ -748,9 +748,13 @@ def test_protected_prefers_route_preserving_reallocation(monkeypatch):
         for node in route["nodes"]
         if node != 0
     )
-    assert result["bus_count"] == 3
+    assert result["bus_count"] == 4
     assert service_nodes == [1, 2, 3, 4]
     assert result["exception_preserving"]["strategy"] == "route_preserving_reallocation"
+    assert [
+        attempt["remaining_vehicle_limit"]
+        for attempt in result["exception_preserving"]["attempts"]
+    ] == [3, 2, 1]
     assert next(route for route in result["routes"] if route["route_id"] == "R0")["nodes"] == [1, 0]
     assert result["feasibility_report"]["status"] == "passed"
     assert result["traffic_gate"]["status"] == "passed"

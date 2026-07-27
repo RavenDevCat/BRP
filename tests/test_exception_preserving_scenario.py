@@ -132,10 +132,19 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
     }
     captured = {}
 
-    def fake_compute(_planner, subset_points, *_args, bus_type_configs=None, reduced_vehicle_limit=None, **_kwargs):
+    def fake_compute(
+        _planner,
+        subset_points,
+        *_args,
+        bus_type_configs=None,
+        reduced_vehicle_limit=None,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
         captured["subset_points"] = subset_points
         captured["bus_type_configs"] = bus_type_configs
         captured["reduced_vehicle_limit"] = reduced_vehicle_limit
+        captured["forced_vehicle_count"] = forced_vehicle_count
         return {
             "points": subset_points,
             "routes": [
@@ -183,7 +192,13 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
 
     assert result["exception_preserving"]["accepted"] is True
     assert result["exception_preserving"]["frozen_route_ids"] == ["R12"]
+    assert result["traffic_gate"]["status"] == "passed"
+    assert result["traffic_gate"]["failed_route_count"] == 0
+    assert result["traffic_gate"]["evaluation_scope"] == "optimized_remainder"
+    assert result["traffic_gate"]["excluded_route_ids"] == ["R12"]
+    assert result["traffic_gate"]["all_routes_status"] == "failed"
     assert captured["reduced_vehicle_limit"] == 1
+    assert captured["forced_vehicle_count"] == 1
     assert captured["bus_type_configs"][0]["max_count"] == 1
     assert [point["address"] for point in captured["subset_points"]] == ["school", "remaining a", "remaining b"]
     assert result["routes"][0]["route_id"] == "R12"
@@ -437,10 +452,18 @@ def test_protected_plan_does_not_relax_vehicle_saving_limit(monkeypatch):
             "max_time_window_overrun_minutes": 12,
         },
     }
-    captured = {"limits": []}
+    captured = {"limits": [], "forced_counts": []}
 
-    def fake_compute(_planner, subset_points, *_args, reduced_vehicle_limit=None, **_kwargs):
+    def fake_compute(
+        _planner,
+        subset_points,
+        *_args,
+        reduced_vehicle_limit=None,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
         captured["limits"].append(reduced_vehicle_limit)
+        captured["forced_counts"].append(forced_vehicle_count)
         captured["subset_addresses"] = [point["address"] for point in subset_points]
         if reduced_vehicle_limit == 1:
             raise RuntimeError("no one-vehicle EP15 remainder")
@@ -484,12 +507,13 @@ def test_protected_plan_does_not_relax_vehicle_saving_limit(monkeypatch):
     )
 
     assert captured["limits"] == [1]
+    assert captured["forced_counts"] == [1]
     assert captured["subset_addresses"] == ["school", "remaining a", "remaining b"]
     assert result["enabled"] is False
     assert result["exception_preserving"]["accepted"] is False
 
 
-def test_exception_preserving_acceptance_requires_minimum_vehicle_saving(monkeypatch):
+def test_exception_preserving_rejects_remainder_vehicle_count_mismatch(monkeypatch):
     points = [
         {"node_id": 0, "address": "school", "is_depot": True},
         {"node_id": 1, "address": "frozen failed stop"},
@@ -517,7 +541,8 @@ def test_exception_preserving_acceptance_requires_minimum_vehicle_saving(monkeyp
         },
     }
 
-    def fake_compute(_planner, subset_points, *_args, **_kwargs):
+    def fake_compute(_planner, subset_points, *_args, forced_vehicle_count=None, **_kwargs):
+        assert forced_vehicle_count == 1
         return {
             "points": subset_points,
             "routes": [
@@ -551,9 +576,12 @@ def test_exception_preserving_acceptance_requires_minimum_vehicle_saving(monkeyp
         standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
     )
 
-    assert result["bus_count"] == 3
+    assert result["enabled"] is False
     assert result["exception_preserving"]["accepted"] is False
-    assert result["vehicle_saving_target"]["status"] == "failed"
+    mismatch = result["exception_preserving"]["attempts"][0]
+    assert mismatch["target_vehicle_count"] == 2
+    assert mismatch["actual_vehicle_count"] == 3
+    assert "expected 1 vehicle(s), but returned 2" in mismatch["error"]
 
 
 def test_protected_skip_reason_names_unfrozen_remainder_limit(monkeypatch):
@@ -725,6 +753,9 @@ def test_protected_prefers_route_preserving_reallocation(monkeypatch):
     assert result["exception_preserving"]["strategy"] == "route_preserving_reallocation"
     assert next(route for route in result["routes"] if route["route_id"] == "R0")["nodes"] == [1, 0]
     assert result["feasibility_report"]["status"] == "passed"
+    assert result["traffic_gate"]["status"] == "passed"
+    assert result["traffic_gate"]["failed_route_count"] == 0
+    assert result["traffic_gate"]["excluded_route_ids"] == ["R0"]
 
 
 def test_protected_continues_below_minimum_saving(monkeypatch):
@@ -804,9 +835,18 @@ def test_protected_continues_below_minimum_saving(monkeypatch):
         },
     }
     attempted_limits = []
+    attempted_forced_counts = []
 
-    def fake_compute(_planner, subset_points, *_args, reduced_vehicle_limit=None, **_kwargs):
+    def fake_compute(
+        _planner,
+        subset_points,
+        *_args,
+        reduced_vehicle_limit=None,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
         attempted_limits.append(reduced_vehicle_limit)
+        attempted_forced_counts.append(forced_vehicle_count)
         return {
             "points": subset_points,
             "routes": [
@@ -898,6 +938,7 @@ def test_protected_continues_below_minimum_saving(monkeypatch):
     )
 
     assert attempted_limits == [1]
+    assert attempted_forced_counts == [1]
     assert result["bus_count"] == 2
     assert result["vehicle_saving_target"]["saved_route_count"] == 2
     assert result["constraint_search_outcome"]["selected_vehicle_count"] == 2

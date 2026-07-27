@@ -1573,6 +1573,16 @@ def _repair_failed_routes_with_spare_vehicles(
     if not spare_vehicles:
         return result
 
+    scenario_osrm_base_url = planner.resolve_osrm_base_url(points)
+
+    def enrich_final_routes(candidate_routes: list[dict[str, Any]]) -> None:
+        previous_osrm_base_url = planner.OSRM_BASE_URL
+        planner.OSRM_BASE_URL = scenario_osrm_base_url
+        try:
+            planner.enrich_routes_with_actual_driving(points, candidate_routes)
+        finally:
+            planner.OSRM_BASE_URL = previous_osrm_base_url
+
     is_to_school = normalize_service_direction(config.service_direction) == "To School"
     working_time = transpose_matrix(solve_time) if is_to_school else solve_time
     lower_bounds = dict(
@@ -1692,7 +1702,7 @@ def _repair_failed_routes_with_spare_vehicles(
                     if not within_time_ranges(split_routes):
                         continue
                     try:
-                        planner.enrich_routes_with_actual_driving(points, split_routes)
+                        enrich_final_routes(split_routes)
                         planner.annotate_and_price_routes(points, split_routes)
                         split_result = planner.build_scenario_result(points, split_routes, "")
                         split_gate = attach_final_route_traffic_gate(
@@ -1736,6 +1746,7 @@ def _repair_failed_routes_with_spare_vehicles(
         routes[failed_index : failed_index + 1] = split_routes
         for index, route in enumerate(routes, start=1):
             route["vehicle_id"] = index
+        enrich_final_routes(routes)
         planner.annotate_and_price_routes(points, routes)
         rebuilt = planner.build_scenario_result(points, routes, "")
         repaired_result = deepcopy(result)
@@ -1920,6 +1931,34 @@ def _next_final_route_replan_limit_seconds(
     if next_limit_seconds >= float(current_limit_seconds) - 1:
         return None
     return next_limit_seconds
+
+
+def _scenario_route_signature(result: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
+    return tuple(
+        sorted(tuple(str(node) for node in route.get("nodes") or []) for route in result.get("routes") or [])
+    )
+
+
+def _failed_route_modeled_duration_seconds(
+    result: dict[str, Any],
+    gate: dict[str, Any],
+) -> float | None:
+    failed_route_ids = {str(route_id) for route_id in gate.get("failed_route_ids") or []}
+    durations: list[float] = []
+    for route_index, route in enumerate(result.get("routes") or [], start=1):
+        route_id = str(route.get("route_id") or route.get("id") or f"Bus {route_index}")
+        if route_id not in failed_route_ids:
+            continue
+        duration_s = float(route.get("raw_osrm_time_s", 0.0) or 0.0) + float(
+            route.get("stop_service_time_s", 0.0) or 0.0
+        )
+        if duration_s <= 0:
+            duration_s = sum(float(leg.get("duration_s", 0.0) or 0.0) for leg in route.get("leg_details") or [])
+        if duration_s <= 0:
+            duration_s = float(route.get("time_s", 0.0) or 0.0)
+        if duration_s > 0:
+            durations.append(duration_s)
+    return max(durations) if durations else None
 
 
 def load_legacy_planner():
@@ -5361,6 +5400,7 @@ def _compute_scenario_without_render(
 
         def solve_with_current_settings(max_replans: int | None = None) -> dict[str, Any]:
             traffic_replan_attempts: list[dict[str, Any]] = []
+            seen_route_signatures: set[tuple[tuple[str, ...], ...]] = set()
             best_failed_candidate: dict[str, Any] | None = None
             result: dict[str, Any] = {}
             replan_attempt_index = 0
@@ -5528,6 +5568,9 @@ def _compute_scenario_without_render(
                         max_vehicle_count,
                     )
                     gate = dict(result.get("traffic_gate") or {})
+                route_signature = _scenario_route_signature(result)
+                repeated_route_signature = route_signature in seen_route_signatures
+                seen_route_signatures.add(route_signature)
                 final_time_impact_gate = (
                     final_time_impact_validator(result, points)
                     if callable(final_time_impact_validator)
@@ -5570,6 +5613,33 @@ def _compute_scenario_without_render(
                     )
                 if replan_attempt_index >= replan_limit:
                     break
+                if (
+                    forced_vehicle_count_int is not None
+                    and repeated_route_signature
+                    and str(dict(gate or {}).get("status") or "") == "failed"
+                ):
+                    traffic_replan_attempts.append(
+                        {
+                            "attempt": replan_attempt_index + 1,
+                            "action": "stop_duplicate_route_signature",
+                            "exact_vehicle_count": forced_vehicle_count_int,
+                            "bus_count": int(result.get("bus_count", 0) or 0),
+                            "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                            "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
+                            "max_estimated_arrival_delay_minutes": float(
+                                dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                            ),
+                            "api_calls": int(dict(gate or {}).get("api_calls", 0) or 0),
+                            "cache_hits": int(dict(gate or {}).get("cache_hits", 0) or 0),
+                            "stop_reason": "duplicate_route_signature",
+                        }
+                    )
+                    gate["replan_stop_reason"] = "duplicate_route_signature"
+                    result["traffic_gate"] = gate
+                    planner.log(
+                        f"[WARN] {scenario_label} {gate_name} replan returned the same route signature; stopping."
+                    )
+                    break
                 min_limit_s, max_step_minutes = _route_duration_replan_bounds(gate)
                 next_limit_s = _next_final_route_replan_limit_seconds(
                     route_limit_before_s,
@@ -5577,6 +5647,23 @@ def _compute_scenario_without_render(
                     minimum_limit_seconds=min_limit_s,
                     max_step_minutes=max_step_minutes,
                 )
+                failed_route_duration_s = _failed_route_modeled_duration_seconds(result, gate)
+                route_change_blocked = False
+                if (
+                    forced_vehicle_count_int is not None
+                    and next_limit_s is not None
+                    and failed_route_duration_s is not None
+                ):
+                    route_change_limit_s = failed_route_duration_s - 1.0
+                    minimum_route_limit_s = max(
+                        FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES * 60.0,
+                        float(min_limit_s or 0.0),
+                    )
+                    if route_change_limit_s < route_limit_before_s - 1.0:
+                        if route_change_limit_s < minimum_route_limit_s:
+                            route_change_blocked = True
+                        else:
+                            next_limit_s = min(next_limit_s, route_change_limit_s)
                 next_min_vehicle_count = _next_active_vehicle_count_from_feasibility(
                     feasibility_report,
                     current_min_vehicle_count,
@@ -5584,6 +5671,29 @@ def _compute_scenario_without_render(
                 gate_type = str(dict(gate or {}).get("gate_type") or "")
                 prefer_route_target_search = gate_type in {"arrival_window", "route_duration"} and next_limit_s is not None
                 search_action = "tighten_route_target" if next_limit_s is not None else "none"
+                if route_change_blocked:
+                    traffic_replan_attempts.append(
+                        {
+                            "attempt": replan_attempt_index + 1,
+                            "action": "stop_route_target_floor",
+                            "exact_vehicle_count": forced_vehicle_count_int,
+                            "bus_count": int(result.get("bus_count", 0) or 0),
+                            "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
+                            "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
+                            "max_estimated_arrival_delay_minutes": float(
+                                dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                            ),
+                            "failed_route_modeled_duration_minutes": failed_route_duration_s / 60.0,
+                            "stop_reason": "minimum_route_target_prevents_candidate_change",
+                        }
+                    )
+                    gate["replan_stop_reason"] = "minimum_route_target_prevents_candidate_change"
+                    result["traffic_gate"] = gate
+                    planner.log(
+                        f"[WARN] {scenario_label} {gate_name} cannot invalidate the failed route without "
+                        "crossing the configured minimum route target; stopping."
+                    )
+                    break
                 if prefer_route_target_search:
                     if traffic_replan_attempts and next_min_vehicle_count > current_min_vehicle_count:
                         search_action = "tighten_route_target_and_increase_active_vehicles"
@@ -5608,6 +5718,7 @@ def _compute_scenario_without_render(
                     {
                         "attempt": replan_attempt_index + 1,
                         "action": search_action,
+                        "exact_vehicle_count": forced_vehicle_count_int,
                         "feasibility_status": str(feasibility_report.get("status") or ""),
                         "failure_reasons": list(feasibility_report.get("failure_reasons") or []),
                         "gate_type": dict(gate or {}).get("gate_type"),
@@ -5624,6 +5735,9 @@ def _compute_scenario_without_render(
                         "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
                         "max_estimated_arrival_delay_minutes": float(
                             dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
+                        ),
+                        "failed_route_modeled_duration_minutes": (
+                            failed_route_duration_s / 60.0 if failed_route_duration_s is not None else None
                         ),
                         "time_impact_over_limit_stop_count": int(
                             dict(final_time_impact_gate or {}).get("over_limit_stop_count", 0) or 0
@@ -5765,9 +5879,11 @@ def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -
     time_impact_gate = dict(result.get("final_time_impact_gate") or {})
     report = dict(result.get("feasibility_report") or {})
     saving_target = dict(result.get("vehicle_saving_target") or {})
+    actual_vehicle_count = _scenario_bus_count(result)
     return {
         "target_vehicle_count": max(0, int(target_vehicle_count or 0)),
-        "route_count": _scenario_bus_count(result),
+        "actual_vehicle_count": actual_vehicle_count,
+        "route_count": actual_vehicle_count,
         "status": str(report.get("status") or gate.get("status") or "unknown"),
         "failure_reasons": list(report.get("failure_reasons") or []),
         "failed_route_count": int(gate.get("failed_route_count", 0) or 0),
@@ -5911,6 +6027,7 @@ def _solve_vehicle_ladder_scenario(
                 scenario_label,
                 bus_type_configs=active_bus_type_configs,
                 reduced_vehicle_limit=target_vehicle_count,
+                forced_vehicle_count=target_vehicle_count,
                 node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                 node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                 node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
@@ -5924,6 +6041,23 @@ def _solve_vehicle_ladder_scenario(
                     "phase": "target_or_better",
                     "status": "error",
                     "error": str(exc),
+                }
+            )
+            continue
+
+        actual_vehicle_count = _scenario_bus_count(candidate)
+        if actual_vehicle_count != target_vehicle_count:
+            attempts.append(
+                {
+                    "target_vehicle_count": target_vehicle_count,
+                    "actual_vehicle_count": actual_vehicle_count,
+                    "route_count": actual_vehicle_count,
+                    "phase": "target_or_better",
+                    "status": "error",
+                    "error": (
+                        f"Exact vehicle-count solve expected {target_vehicle_count} vehicle(s), "
+                        f"but returned {actual_vehicle_count}."
+                    ),
                 }
             )
             continue
@@ -6051,6 +6185,56 @@ def _scenario_exception_summary(
         "max_overrun_minutes": max_overrun_minutes,
         "failed_routes": failed_routes,
     }
+
+
+def _scope_protected_traffic_gate(
+    scenario: dict[str, Any],
+    frozen_route_ids: set[str],
+) -> dict[str, Any]:
+    gate = deepcopy(dict(scenario.get("traffic_gate") or {}))
+    if not gate:
+        return gate
+    frozen_route_ids = {str(item) for item in frozen_route_ids}
+    all_failed_route_ids = [str(item) for item in list(gate.get("failed_route_ids") or [])]
+    failed_route_ids = [item for item in all_failed_route_ids if item not in frozen_route_ids]
+    failed_route_id_set = set(failed_route_ids)
+    matched_overruns = [
+        _route_time_window_overrun_minutes(dict(route or {}))
+        for route_index, route in enumerate(list(scenario.get("routes") or []), start=1)
+        if _route_display_id(dict(route or {}), route_index) in failed_route_id_set
+    ]
+    max_overrun_minutes = max(
+        matched_overruns,
+        default=_traffic_gate_overrun_minutes(gate) if failed_route_ids else 0.0,
+    )
+    all_routes_status = str(gate.get("status") or "").strip().lower()
+    gate.update(
+        {
+            "evaluation_scope": "optimized_remainder",
+            "excluded_route_count": len(frozen_route_ids),
+            "excluded_route_ids": sorted(frozen_route_ids),
+            "all_routes_status": all_routes_status,
+            "all_routes_failed_route_count": int(gate.get("failed_route_count", 0) or 0),
+            "all_routes_failed_route_ids": all_failed_route_ids,
+            "all_routes_max_time_window_overrun_minutes": _traffic_gate_overrun_minutes(gate),
+            "failed_route_count": len(failed_route_ids),
+            "failed_route_ids": failed_route_ids,
+            "max_estimated_arrival_delay_minutes": max_overrun_minutes,
+            "max_time_window_overrun_minutes": max_overrun_minutes,
+            "max_route_duration_overrun_minutes": (
+                max_overrun_minutes if str(gate.get("gate_type") or "") == "route_duration" else 0.0
+            ),
+        }
+    )
+    if failed_route_ids:
+        gate["status"] = "failed"
+    elif int(gate.get("unavailable_route_count", 0) or 0):
+        gate["status"] = "unavailable"
+    elif all_routes_status == "failed":
+        gate["status"] = "passed"
+    scenario["traffic_gate"] = gate
+    scenario["traffic_feasible"] = gate["status"] in {"passed", "not_applicable", "disabled"}
+    return gate
 
 
 def _build_exception_subset_points(
@@ -6465,6 +6649,7 @@ def _build_route_preserving_protected_scenario(
                 scenario_label,
             )
             final_time_impact_validator(candidate, original_points)
+            gate = _scope_protected_traffic_gate(candidate, frozen_route_ids)
             candidate["feasibility_report"] = build_route_feasibility_report(
                 candidate,
                 gate,
@@ -6657,11 +6842,33 @@ def build_exception_preserving_scenario(
                         f"Protected remainder ({frozen_count} frozen)",
                         bus_type_configs=remaining_bus_type_configs,
                         reduced_vehicle_limit=remaining_limit_candidate,
+                        forced_vehicle_count=remaining_limit_candidate,
                         node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         final_time_impact_validator=final_time_impact_validator,
                     )
+                    optimized_vehicle_count = _scenario_bus_count(optimized)
+                    if optimized_vehicle_count != remaining_limit_candidate:
+                        attempts.append(
+                            {
+                                "frozen_route_count": frozen_count,
+                                "remaining_stop_count": remaining_service_count,
+                                "remaining_vehicle_limit": remaining_limit_candidate,
+                                "remaining_actual_vehicle_count": optimized_vehicle_count,
+                                "target_vehicle_count": frozen_count + remaining_limit_candidate,
+                                "actual_vehicle_count": frozen_count + optimized_vehicle_count,
+                                "accepted": False,
+                                "vehicle_limit_relaxed": False,
+                                "status": "error",
+                                "error": (
+                                    "Exact Protected remainder solve expected "
+                                    f"{remaining_limit_candidate} vehicle(s), but returned "
+                                    f"{optimized_vehicle_count}."
+                                ),
+                            }
+                        )
+                        continue
                     optimized_points = list(optimized.get("points") or subset_points)
                     optimized_routes = [
                         _remap_exception_route_nodes(route, optimized_points, f"Opt Bus {index}")
@@ -6670,6 +6877,7 @@ def build_exception_preserving_scenario(
                 else:
                     optimized = {}
                     optimized_routes = []
+                    optimized_vehicle_count = 0
                 candidate_frozen_routes = [deepcopy(route) for route in frozen_routes]
                 for route in candidate_frozen_routes:
                     route["exception_role"] = "frozen_current"
@@ -6695,11 +6903,12 @@ def build_exception_preserving_scenario(
                 if callable(final_time_impact_validator):
                     final_time_impact_validator(candidate, original_points)
                 candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
+                expected_candidate_route_count = frozen_count + remaining_limit_candidate
                 frozen_route_ids = {
                     _route_display_id(route, index)
                     for index, route in enumerate(candidate_frozen_routes, start=1)
                 }
-                if solve_time is not None and candidate_route_count < target_vehicle_count:
+                if solve_time is not None and candidate_route_count < expected_candidate_route_count:
                     candidate = _repair_failed_routes_with_spare_vehicles(
                         planner,
                         candidate,
@@ -6708,7 +6917,7 @@ def build_exception_preserving_scenario(
                         config,
                         input_records,
                         scenario_label,
-                        target_vehicle_count,
+                        expected_candidate_route_count,
                         ignored_failed_route_ids=frozen_route_ids,
                         node_time_lower_bounds=(
                             node_time_lower_bounds_builder(original_points)
@@ -6724,20 +6933,32 @@ def build_exception_preserving_scenario(
                     )
                     combined_routes = list(candidate.get("routes") or [])
                     candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
+                if candidate_route_count != expected_candidate_route_count:
+                    attempts.append(
+                        {
+                            "frozen_route_count": frozen_count,
+                            "remaining_stop_count": remaining_service_count,
+                            "remaining_vehicle_limit": remaining_limit_candidate,
+                            "remaining_actual_vehicle_count": optimized_vehicle_count,
+                            "target_vehicle_count": expected_candidate_route_count,
+                            "actual_vehicle_count": candidate_route_count,
+                            "accepted": False,
+                            "vehicle_limit_relaxed": False,
+                            "status": "error",
+                            "error": (
+                                f"Exact Protected solve expected {expected_candidate_route_count} "
+                                f"total vehicle(s), but returned {candidate_route_count}."
+                            ),
+                        }
+                    )
+                    continue
                 candidate_summary = _scenario_exception_summary(candidate, config=config)
                 candidate_remainder_summary = _scenario_exception_summary(
                     candidate,
                     include_frozen_current=False,
                     config=config,
                 )
-                remainder_gate = deepcopy(dict(candidate.get("traffic_gate") or {}))
-                remainder_gate["failed_route_count"] = int(candidate_remainder_summary["failed_route_count"])
-                remainder_gate["failed_route_ids"] = list(candidate_remainder_summary["failed_route_ids"])
-                remainder_gate["max_time_window_overrun_minutes"] = float(
-                    candidate_remainder_summary["max_overrun_minutes"]
-                )
-                if remainder_gate["failed_route_count"] == 0 and remainder_gate.get("status") == "failed":
-                    remainder_gate["status"] = "passed"
+                remainder_gate = _scope_protected_traffic_gate(candidate, frozen_route_ids)
                 attempt = {
                     "frozen_route_count": frozen_count,
                     "frozen_route_ids": [
@@ -6746,6 +6967,9 @@ def build_exception_preserving_scenario(
                     ],
                     "remaining_stop_count": remaining_service_count,
                     "remaining_vehicle_limit": remaining_limit_candidate,
+                    "remaining_actual_vehicle_count": optimized_vehicle_count,
+                    "target_vehicle_count": expected_candidate_route_count,
+                    "actual_vehicle_count": candidate_route_count,
                     "route_count": candidate_route_count,
                     "candidate_failure_summary": candidate_summary,
                     "candidate_remainder_failure_summary": candidate_remainder_summary,
@@ -6836,6 +7060,7 @@ def build_exception_preserving_scenario(
                         "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
                         "remaining_stop_count": remaining_service_count,
                         "remaining_vehicle_limit": remaining_limit_candidate,
+                        "target_vehicle_count": frozen_count + remaining_limit_candidate,
                         "accepted": False,
                         "vehicle_limit_relaxed": False,
                         "error": str(exc),

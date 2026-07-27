@@ -121,7 +121,16 @@ def test_from_school_route_limit_respects_custom_time_window():
 def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
     seen_targets: list[int] = []
 
-    def fake_compute(_planner, _points, _label, *, reduced_vehicle_limit=None, **_kwargs):
+    def fake_compute(
+        _planner,
+        _points,
+        _label,
+        *,
+        reduced_vehicle_limit=None,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
+        assert forced_vehicle_count == reduced_vehicle_limit
         seen_targets.append(int(reduced_vehicle_limit or 0))
         if reduced_vehicle_limit == 3:
             return {
@@ -156,7 +165,16 @@ def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
 def test_vehicle_ladder_never_relaxes_the_hard_vehicle_saving_target(monkeypatch):
     seen_targets: list[int] = []
 
-    def fake_compute(_planner, _points, _label, *, reduced_vehicle_limit=None, **_kwargs):
+    def fake_compute(
+        _planner,
+        _points,
+        _label,
+        *,
+        reduced_vehicle_limit=None,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
+        assert forced_vehicle_count == reduced_vehicle_limit
         target = int(reduced_vehicle_limit or 0)
         seen_targets.append(target)
         if target == 4:

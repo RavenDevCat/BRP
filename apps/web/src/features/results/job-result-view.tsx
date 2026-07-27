@@ -4122,6 +4122,9 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
   const gate = asRecord(scenario.traffic_gate);
   const status = stringValue(gate.status);
   const exceptionAttempts = asRecordArray(asRecord(scenario.exception_preserving).attempts);
+  const ladder = asRecord(gate.vehicle_ladder_search || scenario.vehicle_ladder_search);
+  const ladderAttempts = asRecordArray(ladder.attempts);
+  const searchOutcome = asRecord(scenario.constraint_search_outcome);
   if (!status || status === "not_applicable") {
     if (exceptionAttempts.length) {
       const acceptedAttempt = exceptionAttempts.find((attempt) => Boolean(attempt.accepted));
@@ -4155,6 +4158,56 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
         steps,
       };
     }
+    if (ladderAttempts.length || Object.keys(searchOutcome).length) {
+      const outcomeStatus = stringValue(searchOutcome.status);
+      const allowedMaximum = Number(searchOutcome.allowed_max_vehicle_count || 0);
+      const theoreticalMinimum = Number(searchOutcome.theoretical_min_vehicle_count || 0);
+      if (outcomeStatus === "provably_infeasible") {
+        return {
+          label,
+          status: t("Hard bounds"),
+          passed: false,
+          neutral: false,
+          summary: template(
+            t("The hard lower bound requires at least {minimum} route(s), above the allowed maximum of {maximum}."),
+            { minimum: formatNumber(theoreticalMinimum), maximum: formatNumber(allowedMaximum) },
+          ),
+          steps: [],
+        };
+      }
+      const targets = ladderAttempts.map((attempt) => Number(attempt.target_vehicle_count || 0)).filter((value) => value > 0);
+      const steps = ladderAttempts.map((attempt, index) => {
+        const target = Number(attempt.target_vehicle_count || 0);
+        const attemptStatus = stringValue(attempt.status);
+        if (attemptStatus === "error") {
+          return template(t("Exact route-count attempt {index}: local solver did not find an exact {routes}-route candidate within this attempt."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(target),
+          });
+        }
+        return template(t("Exact route-count attempt {index}: {routes} route(s) reached the final check but failed; {failed} route(s), max {delay} min over."), {
+          index: formatNumber(index + 1),
+          routes: formatNumber(target),
+          failed: formatNumber(Number(attempt.failed_route_count || 0)),
+          delay: formatNumber(Math.round(Number(attempt.max_overrun_minutes || 0))),
+        });
+      });
+      return {
+        label,
+        status: t("Search exhausted"),
+        passed: false,
+        neutral: false,
+        summary: template(
+          t("{count} exact route-count attempt(s) from {maximum} to {minimum}; no feasible candidate was found within the configured search budget. This does not prove that no solution exists."),
+          {
+            count: formatNumber(ladderAttempts.length),
+            maximum: formatNumber(targets.length ? Math.max(...targets) : allowedMaximum),
+            minimum: formatNumber(targets.length ? Math.min(...targets) : theoreticalMinimum),
+          },
+        ),
+        steps,
+      };
+    }
     return {
       label,
       status: t(status === "not_applicable" ? "Not applicable" : "No record"),
@@ -4166,8 +4219,6 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
   }
   const attempts = asRecordArray(gate.replan_attempts);
   const vehicleAttempts = asRecordArray(gate.vehicle_search_attempts);
-  const ladder = asRecord(gate.vehicle_ladder_search);
-  const ladderAttempts = asRecordArray(ladder.attempts);
   const savingTarget = asRecord(gate.vehicle_saving_target);
   const savingStatus = stringValue(savingTarget.status);
   const checkName = t(trafficGateCheckName(gate));
@@ -4258,6 +4309,12 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
           })
     );
   });
+  const stopReason = stringValue(gate.replan_stop_reason);
+  if (stopReason === "duplicate_route_signature") {
+    steps.push(t("Search stopped because the solver returned the same route layout again."));
+  } else if (stopReason === "minimum_route_target_prevents_candidate_change") {
+    steps.push(t("Search stopped because the configured minimum route target prevented another structural change."));
+  }
   steps.push(
     status === "passed" && savingStatus !== "failed"
       ? template(t("Final check passed: all checked routes passed the final {check}."), { check: checkName })
@@ -4293,7 +4350,7 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
             })
         : template(t("{rounds} solve round(s), {searches} vehicle-search attempt(s); {failed} {failure}, max {delay} min over."), {
             rounds: formatNumber(Math.max(1, attempts.length + 1)),
-            searches: formatNumber(vehicleAttempts.length + exceptionAttempts.length),
+            searches: formatNumber(vehicleAttempts.length + exceptionAttempts.length + ladderAttempts.length),
             failed: formatNumber(finalFailed),
             failure: failureText,
             delay: formatNumber(Math.round(finalDelay)),

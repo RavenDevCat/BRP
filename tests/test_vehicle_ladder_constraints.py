@@ -227,7 +227,7 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         try:
             def fake_compute(*args, **kwargs):
                 target = int(kwargs["reduced_vehicle_limit"])
-                self.assertNotIn("forced_vehicle_count", kwargs)
+                self.assertEqual(kwargs["forced_vehicle_count"], target)
                 calls.append(target)
                 passed = target >= 19
                 return {
@@ -266,7 +266,7 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         try:
             def fake_compute(*args, **kwargs):
                 target = int(kwargs["reduced_vehicle_limit"])
-                self.assertNotIn("forced_vehicle_count", kwargs)
+                self.assertEqual(kwargs["forced_vehicle_count"], target)
                 calls.append(target)
                 if target == 20:
                     return {
@@ -299,6 +299,42 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         self.assertEqual(result["bus_count"], 19)
         self.assertEqual(result["feasibility_report"]["status"], "passed")
         self.assertEqual(result["constraint_search_outcome"]["status"], "passed")
+
+    def test_vehicle_ladder_rejects_actual_count_mismatch(self) -> None:
+        calls: list[int] = []
+        original_compute = planner_core._compute_scenario_without_render
+        original_minimum = planner_core._minimum_vehicle_count_for_hard_constraints
+        try:
+            def fake_compute(*args, **kwargs):
+                target = int(kwargs["forced_vehicle_count"])
+                calls.append(target)
+                actual = 15 if target == 20 else target
+                return {
+                    "bus_count": actual,
+                    "routes": [{} for _ in range(actual)],
+                    "traffic_gate": {"status": "passed"},
+                    "feasibility_report": {"status": "passed", "failure_reasons": []},
+                }
+
+            planner_core._compute_scenario_without_render = fake_compute
+            planner_core._minimum_vehicle_count_for_hard_constraints = lambda *_args: 19
+            result = planner_core._solve_vehicle_ladder_scenario(
+                object(),
+                [{"is_depot": True}, {"is_depot": False}],
+                "test",
+                current_route_count=22,
+                minimum_vehicle_reduction=2,
+            )
+        finally:
+            planner_core._compute_scenario_without_render = original_compute
+            planner_core._minimum_vehicle_count_for_hard_constraints = original_minimum
+
+        self.assertEqual(calls, [20, 19])
+        self.assertEqual(result["bus_count"], 19)
+        mismatch = result["vehicle_ladder_search"]["attempts"][0]
+        self.assertEqual(mismatch["status"], "error")
+        self.assertEqual(mismatch["target_vehicle_count"], 20)
+        self.assertEqual(mismatch["actual_vehicle_count"], 15)
 
 
 if __name__ == "__main__":

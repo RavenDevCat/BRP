@@ -8,6 +8,7 @@ planner_core = importlib.import_module("planner_core")
 
 
 class FakePlanner:
+    OSRM_BASE_URL = "http://previous-osrm"
     BUS_TYPE_CONFIGS = [
         {"name": "mid", "capacity": 20, "max_count": 1},
         {"name": "small", "capacity": 10, "max_count": 1},
@@ -18,6 +19,10 @@ class FakePlanner:
 
     def __init__(self):
         self.logs = []
+        self.enrich_calls = []
+
+    def resolve_osrm_base_url(self, _points):
+        return "http://scenario-osrm"
 
     def build_vehicle_fleet(self):
         return [
@@ -29,6 +34,9 @@ class FakePlanner:
         return int(vehicle.get("comfort_capacity") or vehicle.get("capacity") or 0)
 
     def enrich_routes_with_actual_driving(self, _points, routes):
+        self.enrich_calls.append(
+            (self.OSRM_BASE_URL, [tuple(route["nodes"]) for route in routes])
+        )
         for route in routes:
             route["time_s"] = 100
             route["distance_m"] = 1000
@@ -108,8 +116,9 @@ def test_failed_route_is_split_with_spare_vehicle_and_rechecked(monkeypatch):
         "time_constraint": {"strict_satisfied": True},
     }
 
+    planner = FakePlanner()
     repaired = planner_core._repair_failed_routes_with_spare_vehicles(
-        FakePlanner(),
+        planner,
         result,
         points,
         [[0, 1, 1, 1, 1] for _ in points],
@@ -125,6 +134,11 @@ def test_failed_route_is_split_with_spare_vehicle_and_rechecked(monkeypatch):
     assert {route["bus_type_name"] for route in repaired["routes"]} == {"mid", "small"}
     assert repaired["traffic_split_repair"]["accepted"] is True
     assert repaired["traffic_split_repair"]["final_failed_route_count"] == 0
+    assert planner.OSRM_BASE_URL == "http://previous-osrm"
+    assert all(base_url == "http://scenario-osrm" for base_url, _routes in planner.enrich_calls)
+    assert planner.enrich_calls[-1][1] == [
+        tuple(route["nodes"]) for route in repaired["routes"]
+    ]
 
 
 def test_split_repair_does_not_exceed_vehicle_limit(monkeypatch):

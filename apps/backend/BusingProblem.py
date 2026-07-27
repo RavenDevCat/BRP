@@ -20,6 +20,10 @@ from api_rate_limit import CrossProcessRateLimiter
 from json_cache_store import load_json_object, save_json_object
 
 
+class NoFeasibleRouteError(RuntimeError):
+    """Expected solver outcome when the active hard constraints have no route."""
+
+
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
 GEOCODE_CACHE_PATH = CACHE_DIR / "geocode_cache.json"
@@ -1201,7 +1205,7 @@ def build_trivial_routes(
     enforce_minimum_active_route_load(demand)
     chosen_vehicle = next((item for item in sort_regular_preference(fleet) if solver_capacity_for_vehicle(item) >= demand), None)
     if chosen_vehicle is None:
-        raise RuntimeError("No feasible vehicle is large enough for the requested stop demand.")
+        raise NoFeasibleRouteError("No feasible vehicle is large enough for the requested stop demand.")
 
     route = {
             "vehicle_id": 1,
@@ -1289,7 +1293,7 @@ def fleet_total_capacity(fleet: list[dict[str, Any]]) -> int:
 
 def enforce_minimum_active_route_load(route_load: int) -> None:
     if 0 < int(route_load or 0) < MIN_ACTIVE_ROUTE_PASSENGERS:
-        raise RuntimeError("No feasible routing solution under the no single-rider bus constraint.")
+        raise NoFeasibleRouteError("No feasible routing solution under the no single-rider bus constraint.")
 
 
 def subset_node_time_upper_bounds(
@@ -1327,7 +1331,7 @@ def validate_trivial_time_bounds(
         lower_bound = int((lower_bounds or {}).get(node, 0) or 0)
         upper_bound = int((bounds or {}).get(node, 10**9) or 10**9)
         if elapsed_s < lower_bound or elapsed_s > upper_bound:
-            raise RuntimeError(
+            raise NoFeasibleRouteError(
                 "No feasible route satisfies the configured time-impact acceptance limit. "
                 f"Stop `{points[node].get('address', f'node {node}')}` requires "
                 f"{elapsed_s / 60.0:.1f} minutes against an allowed range of "
@@ -1347,7 +1351,7 @@ def solve_routes_for_fleet(
     if not points:
         return []
     if not fleet:
-        return []
+        raise NoFeasibleRouteError("No vehicles are available for the requested service stops.")
 
     working_time_matrix = transpose_matrix(time_matrix) if is_to_school_direction() else time_matrix
     working_distance_matrix = transpose_matrix(distance_matrix) if is_to_school_direction() else distance_matrix
@@ -1355,14 +1359,14 @@ def solve_routes_for_fleet(
     largest_capacity = max(solver_capacity_for_vehicle(item) for item in fleet)
     oversized = [point["address"] for point in points[1:] if int(point.get("passenger_count", 1)) > largest_capacity]
     if oversized:
-        raise RuntimeError(
+        raise NoFeasibleRouteError(
             "One or more stops exceed the largest physical vehicle capacity. "
             f"Oversized stops above the largest vehicle capacity: {', '.join(oversized[:10])}"
         )
 
     total_demand = points_total_demand(points)
     if total_demand > fleet_total_capacity(fleet):
-        raise RuntimeError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
+        raise NoFeasibleRouteError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
     vehicle_count = len(fleet)
     manager = pywrapcp.RoutingIndexManager(len(points), vehicle_count, [0] * vehicle_count, [0] * vehicle_count)
@@ -1481,7 +1485,7 @@ def solve_routes_for_fleet(
     search.time_limit.seconds = SOLVER_TIME_LIMIT_SECONDS
     solution = routing.SolveWithParameters(search)
     if solution is None:
-        raise RuntimeError(
+        raise NoFeasibleRouteError(
             "OR-Tools could not find a feasible routing solution. "
             f"Current constraints include the configured Large / Mid / Small bus capacities. "
             f"Last attempted feasible vehicle count: {vehicle_count}. Configured fleet maximum: {vehicle_count} vehicles. "
@@ -1544,7 +1548,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
         return []
     full_fleet = build_vehicle_fleet()
     if not full_fleet:
-        raise RuntimeError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
+        raise NoFeasibleRouteError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
     route_budget_time_matrix = solver_route_budget_time_matrix(time_matrix)
 

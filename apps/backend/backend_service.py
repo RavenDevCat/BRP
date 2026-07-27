@@ -41,6 +41,7 @@ try:
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
         _build_assessment_metric_matrices,
+        _build_time_acceptance_constraint_builder,
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
@@ -70,6 +71,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
         _build_assessment_metric_matrices,
+        _build_time_acceptance_constraint_builder,
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
@@ -196,6 +198,13 @@ MAP_TILE_FALLBACK_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
 )
 GOOGLE_GEOCODE_MONTHLY_LIMIT = 10_000
+
+
+class WorkbookReadinessError(ValueError):
+    def __init__(self, readiness: dict[str, Any]):
+        self.readiness = dict(readiness)
+        self.status_code = 422 if readiness.get("status") == "invalid" else 503
+        super().__init__(str(readiness.get("message") or "Workbook is not ready to run."))
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
@@ -1817,6 +1826,61 @@ def _address_review_block_message(address_review: dict[str, Any]) -> str:
     return ""
 
 
+def _workbook_solver_readiness(
+    *,
+    address_review: dict[str, Any],
+    acknowledged: bool = False,
+    auto_route_budget: dict[str, Any] | None = None,
+    current_plan_error: str | None = None,
+    preparation_error: str | None = None,
+) -> dict[str, str]:
+    if preparation_error:
+        return {
+            "status": "retryable_error",
+            "reason": "workbook_preparation_failed",
+            "message": f"Workbook preparation failed: {preparation_error}",
+        }
+    if int(address_review.get("blocking_count") or 0) > 0:
+        return {
+            "status": "invalid",
+            "reason": "address_review_blocked",
+            "message": _address_review_block_message(address_review),
+        }
+    if bool(address_review.get("requires_acknowledgement")) and not acknowledged:
+        return {
+            "status": "invalid",
+            "reason": "address_review_acknowledgement_required",
+            "message": _address_review_block_message(address_review),
+        }
+    if auto_route_budget is not None and auto_route_budget.get("status") != "ready":
+        reason = str(auto_route_budget.get("reason") or "route_budget_unavailable")
+        status = (
+            "invalid"
+            if reason in {"no_input_records", "no_measurable_current_routes", "missing_route_nodes"}
+            else "retryable_error"
+        )
+        return {
+            "status": status,
+            "reason": reason,
+            "message": f"Current-plan route budget is unavailable: {reason}",
+        }
+    if current_plan_error:
+        invalid_messages = (
+            "No geocoded points",
+            "No current plan assessment",
+            "No current-plan timing matrix",
+            "No service stops",
+            "No matched current-plan stops",
+        )
+        status = "invalid" if current_plan_error.startswith(invalid_messages) else "retryable_error"
+        return {
+            "status": status,
+            "reason": "current_plan_timing_unavailable",
+            "message": f"Current-plan timing is unavailable: {current_plan_error}",
+        }
+    return {"status": "ready", "reason": "ready", "message": "Workbook is ready to run."}
+
+
 def _current_plan_preview_map(
     current_plan: dict[str, Any],
     prepared_payload: dict[str, Any],
@@ -1840,6 +1904,17 @@ def _current_plan_preview_map(
             solve_time=assessment_time,
             solve_distance=assessment_distance,
         )
+        _lower_builder, upper_builder, time_constraint = _build_time_acceptance_constraint_builder(
+            current_plan_assessment,
+            points,
+            assessment_time,
+            str(getattr(config, "service_direction", "") or ""),
+            float(getattr(config, "time_impact_limit_minutes", TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)),
+        )
+        if not callable(upper_builder):
+            raise ValueError(
+                str(time_constraint.get("skipped_reason") or "Current-plan time constraints are unavailable.")
+            )
         scenario = build_current_plan_map_scenario(
             planner,
             current_plan_assessment,
@@ -1880,6 +1955,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     address_review: dict[str, Any]
     current_plan_map: dict[str, Any] | None = None
     current_plan_map_error: str | None = None
+    preparation_error: str | None = None
     try:
         client_config = _build_client_planner_config(client_core, suggested_config)
         client_prep = client_core.prepare_client_payload(
@@ -1904,8 +1980,9 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
             suggested_config,
         )
     except Exception as exc:
+        preparation_error = str(exc) or exc.__class__.__name__
         auto_route_budget = {"status": "unavailable", "reason": exc.__class__.__name__}
-        current_plan_map_error = str(exc) or exc.__class__.__name__
+        current_plan_map_error = preparation_error
         address_review = _build_address_review(
             client_core,
             input_records,
@@ -1915,6 +1992,13 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
     auto_route_budget_minutes = auto_route_budget.get("minutes")
     if auto_route_budget_minutes is not None:
         suggested_config["max_route_duration_minutes"] = int(auto_route_budget_minutes)
+    readiness = _workbook_solver_readiness(
+        address_review=address_review,
+        acknowledged=bool(payload.get("address_review_acknowledged")),
+        auto_route_budget=auto_route_budget,
+        current_plan_error=current_plan_map_error,
+        preparation_error=preparation_error,
+    )
     return {
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
@@ -1926,6 +2010,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         "address_review": address_review,
         "current_plan_map": current_plan_map,
         "current_plan_map_error": current_plan_map_error,
+        "readiness": readiness,
         "suggested_config": suggested_config,
     }
 
@@ -2172,21 +2257,30 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         dict(item) for item in list(current_plan.get("input_records") or [])
     ]
     client_config = _build_client_planner_config(client_core, config_payload)
-    client_prep = client_core.prepare_client_payload(
-        input_records,
-        current_plan_data=current_plan,
-        config=client_config,
-    )
+    try:
+        client_prep = client_core.prepare_client_payload(
+            input_records,
+            current_plan_data=current_plan,
+            config=client_config,
+        )
+    except Exception as exc:
+        readiness = _workbook_solver_readiness(
+            address_review={},
+            preparation_error=str(exc) or exc.__class__.__name__,
+        )
+        raise WorkbookReadinessError(readiness) from exc
     address_review = _build_address_review(
         client_core,
         input_records,
         dict(client_prep["prepared_payload"]),
         [dict(item) for item in list(client_prep.get("geocode_warnings") or [])],
     )
-    if int(address_review.get("blocking_count") or 0) > 0:
-        raise ValueError(_address_review_block_message(address_review))
-    if bool(address_review.get("requires_acknowledgement")) and not bool(payload.get("address_review_acknowledged")):
-        raise ValueError(_address_review_block_message(address_review))
+    readiness = _workbook_solver_readiness(
+        address_review=address_review,
+        acknowledged=bool(payload.get("address_review_acknowledged")),
+    )
+    if readiness["status"] != "ready":
+        raise WorkbookReadinessError(readiness)
     auto_route_budget: dict[str, Any] = {"status": "unavailable", "reason": "not_calculated"}
     auto_route_budget_minutes: int | None = None
     try:
@@ -2196,10 +2290,23 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         ) or {"status": "unavailable", "reason": "no_measurable_current_routes"}
         if auto_route_budget.get("minutes") is not None:
             auto_route_budget_minutes = int(auto_route_budget["minutes"])
-    except Exception:
-        auto_route_budget = {"status": "unavailable", "reason": "calculation_failed"}
+    except Exception as exc:
+        auto_route_budget = {"status": "unavailable", "reason": exc.__class__.__name__}
     if auto_route_budget_minutes is not None:
         config_payload["max_route_duration_minutes"] = auto_route_budget_minutes
+    _current_plan_map, current_plan_error = _current_plan_preview_map(
+        current_plan,
+        dict(client_prep["prepared_payload"]),
+        config_payload,
+    )
+    readiness = _workbook_solver_readiness(
+        address_review=address_review,
+        acknowledged=bool(payload.get("address_review_acknowledged")),
+        auto_route_budget=auto_route_budget,
+        current_plan_error=current_plan_error,
+    )
+    if readiness["status"] != "ready":
+        raise WorkbookReadinessError(readiness)
     job_custom_name = str(payload.get("job_custom_name") or "").strip()
     job_default_name = _build_job_display_name(source_label)
     job_name = _build_job_display_name(source_label, job_custom_name)
@@ -2232,6 +2339,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
             "auto_route_budget": auto_route_budget,
             "auto_route_budget_minutes": auto_route_budget_minutes,
             "address_review": address_review,
+            "readiness": readiness,
         },
     }
     summary = JOB_STORE.create_job(
@@ -2254,6 +2362,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         "summary": dict(current_plan.get("summary") or {}),
         "client_prep": metadata["client_prep"],
         "address_review": address_review,
+        "readiness": readiness,
     }
 
 

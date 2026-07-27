@@ -2,12 +2,17 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
 planner_core = importlib.import_module("planner_core")
+legacy_planner = importlib.import_module("BusingProblem")
 
 
 class FakePlanner:
+    NoFeasibleRouteError = legacy_planner.NoFeasibleRouteError
+
     def __init__(self):
         self.logged = []
 
@@ -466,7 +471,7 @@ def test_protected_plan_does_not_relax_vehicle_saving_limit(monkeypatch):
         captured["forced_counts"].append(forced_vehicle_count)
         captured["subset_addresses"] = [point["address"] for point in subset_points]
         if reduced_vehicle_limit == 1:
-            raise RuntimeError("no one-vehicle EP15 remainder")
+            raise legacy_planner.NoFeasibleRouteError("no one-vehicle EP15 remainder")
         return {
             "points": subset_points,
             "routes": [{"route_id": "Bus 1", "nodes": [1, 2, 0], "final_route_traffic_gate": {"status": "passed"}}],
@@ -565,26 +570,20 @@ def test_exception_preserving_rejects_remainder_vehicle_count_mismatch(monkeypat
     monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
     monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
 
-    result = planner_core.build_exception_preserving_scenario(
-        FakePlanner(),
-        points,
-        current,
-        planner_core.PlannerConfig(minimum_vehicle_reduction=2),
-        [{"address": "Shanghai", "passenger_count": 1}],
-        [{"name": "30-fbus", "capacity": 30, "max_count": 4}],
-        2,
-        standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
-    )
-
-    assert result["enabled"] is False
-    assert result["exception_preserving"]["accepted"] is False
-    mismatch = result["exception_preserving"]["attempts"][0]
-    assert mismatch["target_vehicle_count"] == 2
-    assert mismatch["actual_vehicle_count"] == 3
-    assert "expected 1 vehicle(s), but returned 2" in mismatch["error"]
+    with pytest.raises(RuntimeError, match="expected 1 vehicle.*returned 2"):
+        planner_core.build_exception_preserving_scenario(
+            FakePlanner(),
+            points,
+            current,
+            planner_core.PlannerConfig(minimum_vehicle_reduction=2),
+            [{"address": "Shanghai", "passenger_count": 1}],
+            [{"name": "30-fbus", "capacity": 30, "max_count": 4}],
+            2,
+            standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+        )
 
 
-def test_protected_skip_reason_names_unfrozen_remainder_limit(monkeypatch):
+def test_protected_infeasible_result_names_unfrozen_remainder_limit(monkeypatch):
     points = [
         {"node_id": 0, "address": "school", "is_depot": True},
         {"node_id": 1, "address": "frozen failed stop"},
@@ -613,7 +612,7 @@ def test_protected_skip_reason_names_unfrozen_remainder_limit(monkeypatch):
     }
 
     def fake_compute(*_args, **_kwargs):
-        raise RuntimeError("remainder infeasible")
+        raise legacy_planner.NoFeasibleRouteError("remainder infeasible")
 
     monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
 
@@ -633,9 +632,27 @@ def test_protected_skip_reason_names_unfrozen_remainder_limit(monkeypatch):
     )
 
     assert result["enabled"] is False
-    assert "unfrozen remainder" in result["skipped_reason"]
-    assert "1" in result["skipped_reason"]
-    assert result["constraint_search_outcome"]["status"] == "provably_infeasible"
+    assert result["scenario_status"] == "infeasible"
+    assert "unfrozen remainder" in result["infeasible_reason"]
+    assert result["exception_preserving"]["attempts"]
+    assert result["constraint_search_outcome"]["status"] == "infeasible"
+
+    def technical_failure(*_args, **_kwargs):
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", technical_failure)
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        planner_core.build_exception_preserving_scenario(
+            FakePlanner(),
+            points,
+            current,
+            planner_core.PlannerConfig(),
+            [],
+            [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
+            2,
+            standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+            node_time_upper_bounds_builder=lambda solver_points: {1: 900},
+        )
 
 
 def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch):
@@ -718,7 +735,9 @@ def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch
     monkeypatch.setattr(
         planner_core,
         "_compute_scenario_without_render",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fallback should not run")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            legacy_planner.NoFeasibleRouteError("one-vehicle remainder is infeasible")
+        ),
     )
 
     result = planner_core.build_exception_preserving_scenario(

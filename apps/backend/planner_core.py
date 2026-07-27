@@ -5816,6 +5816,24 @@ def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = N
     return result
 
 
+def _build_infeasible_scenario_result(
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    # Transitional read compatibility until Round 2 moves every consumer to scenario_status.
+    result = _build_skipped_scenario_result(reason, extra)
+    result["scenario_status"] = "infeasible"
+    result["infeasible_reason"] = reason
+    return result
+
+
+def _no_feasible_route_error_type(planner: Any) -> Any:
+    error_type = getattr(planner, "NoFeasibleRouteError", None)
+    if isinstance(error_type, type) and issubclass(error_type, Exception):
+        return error_type
+    return ()
+
+
 def _scenario_bus_count(result: dict[str, Any] | None) -> int:
     result = dict(result or {})
     return int(result.get("bus_count") or len(list(result.get("routes") or [])) or 0)
@@ -5992,34 +6010,19 @@ def _solve_vehicle_ladder_scenario(
         active_bus_type_configs,
         getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
     )
-    if minimum_target_vehicle_count > required_target_vehicle_count:
-        reason = (
-            f"{scenario_label} requires at least {minimum_target_vehicle_count} vehicle(s) for the "
-            f"capacity and stop limits, above the allowed {required_target_vehicle_count} after the "
-            "minimum vehicle saving is applied."
-        )
-        result = _build_skipped_scenario_result(reason)
-        result = _apply_vehicle_saving_target(result, current_route_count, minimum_vehicle_reduction)
-        result["constraint_search_outcome"] = {
-            "status": "provably_infeasible",
-            "reason": "minimum_vehicle_lower_bound_exceeds_allowed_maximum",
-            "allowed_max_vehicle_count": required_target_vehicle_count,
-            "theoretical_min_vehicle_count": minimum_target_vehicle_count,
-            "attempted_vehicle_caps": [],
-            "feasible_candidate_count": 0,
-        }
-        return _attach_vehicle_ladder_metadata(
-            result,
-            [],
-            current_route_count=current_route_count,
-            minimum_vehicle_reduction=minimum_vehicle_reduction,
-            selected_target_vehicle_count=None,
-        )
+    preflight_infeasible = minimum_target_vehicle_count > required_target_vehicle_count
+    target_vehicle_counts = (
+        [required_target_vehicle_count]
+        if preflight_infeasible
+        else list(range(required_target_vehicle_count, minimum_target_vehicle_count - 1, -1))
+    )
     attempts: list[dict[str, Any]] = []
     best_target_result: dict[str, Any] | None = None
     best_failed_result: dict[str, Any] | None = None
     selected_target_vehicle_count: int | None = None
-    for target_vehicle_count in range(required_target_vehicle_count, minimum_target_vehicle_count - 1, -1):
+    selected_failed_target_vehicle_count: int | None = None
+    no_feasible_route_error = _no_feasible_route_error_type(planner)
+    for target_vehicle_count in target_vehicle_counts:
         try:
             candidate = _compute_scenario_without_render(
                 planner,
@@ -6034,33 +6037,23 @@ def _solve_vehicle_ladder_scenario(
                 time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                 final_time_impact_validator=final_time_impact_validator,
             )
-        except Exception as exc:
+        except no_feasible_route_error as exc:
             attempts.append(
                 {
                     "target_vehicle_count": target_vehicle_count,
                     "phase": "target_or_better",
-                    "status": "error",
-                    "error": str(exc),
+                    "status": "infeasible",
+                    "reason": str(exc),
                 }
             )
             continue
 
         actual_vehicle_count = _scenario_bus_count(candidate)
         if actual_vehicle_count != target_vehicle_count:
-            attempts.append(
-                {
-                    "target_vehicle_count": target_vehicle_count,
-                    "actual_vehicle_count": actual_vehicle_count,
-                    "route_count": actual_vehicle_count,
-                    "phase": "target_or_better",
-                    "status": "error",
-                    "error": (
-                        f"Exact vehicle-count solve expected {target_vehicle_count} vehicle(s), "
-                        f"but returned {actual_vehicle_count}."
-                    ),
-                }
+            raise RuntimeError(
+                f"Exact vehicle-count solve expected {target_vehicle_count} vehicle(s), "
+                f"but returned {actual_vehicle_count}."
             )
-            continue
 
         hard_passed = _scenario_feasibility_passed(candidate)
         candidate = _apply_vehicle_saving_target(candidate, current_route_count, minimum_vehicle_reduction)
@@ -6079,19 +6072,35 @@ def _solve_vehicle_ladder_scenario(
             continue
         if best_failed_result is None or _failed_scenario_rank(candidate) < _failed_scenario_rank(best_failed_result):
             best_failed_result = candidate
+            selected_failed_target_vehicle_count = target_vehicle_count
 
     result = best_target_result or best_failed_result
     if result is None:
-        result = _build_skipped_scenario_result(
+        result = _build_infeasible_scenario_result(
             f"{scenario_label} could not produce a candidate between the hard vehicle limits "
             f"{minimum_target_vehicle_count} and {required_target_vehicle_count}."
         )
         result = _apply_vehicle_saving_target(result, current_route_count, minimum_vehicle_reduction)
+    else:
+        result["scenario_status"] = "passed" if best_target_result is not None else "rejected"
+        if best_target_result is None:
+            selected_target_vehicle_count = selected_failed_target_vehicle_count
+    scenario_status = str(result.get("scenario_status") or "infeasible")
     search_outcome = {
-        "status": "passed" if best_target_result is not None else "exhausted_without_feasible_candidate",
+        "status": scenario_status,
+        "reason": (
+            "minimum_vehicle_lower_bound_exceeds_allowed_maximum"
+            if preflight_infeasible and scenario_status == "infeasible"
+            else "search_exhausted"
+            if scenario_status == "infeasible"
+            else "candidate_failed_hard_gates"
+            if scenario_status == "rejected"
+            else "all_hard_gates_passed"
+        ),
         "allowed_max_vehicle_count": required_target_vehicle_count,
         "theoretical_min_vehicle_count": minimum_target_vehicle_count,
         "attempted_vehicle_caps": [int(item["target_vehicle_count"]) for item in attempts],
+        "candidate_count": sum(1 for item in attempts if item.get("actual_vehicle_count") is not None),
         "feasible_candidate_count": sum(1 for item in attempts if item.get("all_constraints_passed")),
     }
     result["constraint_search_outcome"] = search_outcome
@@ -6721,7 +6730,7 @@ def build_exception_preserving_scenario(
 ) -> dict[str, Any]:
     del standard_scenarios, reduced_vehicle_limit
     if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
-        return _build_skipped_scenario_result("Current plan timing was not available for exception preservation.")
+        raise RuntimeError("Current plan timing was not available for exception preservation.")
 
     route_preserving: dict[str, Any] | None = None
     if (
@@ -6760,6 +6769,7 @@ def build_exception_preserving_scenario(
     best_failed_candidate: dict[str, Any] | None = None
     remaining_min_vehicle_count = 0
     preflight_infeasible = False
+    no_feasible_route_error = _no_feasible_route_error_type(planner)
 
     # Freeze the full current-plan violation set; partial freezes can hide an
     # existing violation inside the optimized remainder.
@@ -6816,22 +6826,7 @@ def build_exception_preserving_scenario(
                 ]
         if remaining_service_count and not remaining_limits and best_accepted_candidate is None:
             preflight_infeasible = True
-            attempts.append(
-                {
-                    "frozen_route_count": frozen_count,
-                    "frozen_route_ids": [
-                        _route_display_id(route, index)
-                        for index, route in enumerate(frozen_routes, start=1)
-                    ],
-                    "remaining_stop_count": remaining_service_count,
-                    "remaining_vehicle_limit": remaining_max_vehicle_count,
-                    "accepted": False,
-                    "error": (
-                        "Hard minimum vehicle requirement for the unfrozen remainder "
-                        f"is {remaining_min_vehicle_count}, above the allowed {remaining_max_vehicle_count}."
-                    ),
-                }
-            )
+            remaining_limits = [remaining_max_vehicle_count]
 
         for remaining_limit_candidate in remaining_limits:
             try:
@@ -6850,25 +6845,11 @@ def build_exception_preserving_scenario(
                     )
                     optimized_vehicle_count = _scenario_bus_count(optimized)
                     if optimized_vehicle_count != remaining_limit_candidate:
-                        attempts.append(
-                            {
-                                "frozen_route_count": frozen_count,
-                                "remaining_stop_count": remaining_service_count,
-                                "remaining_vehicle_limit": remaining_limit_candidate,
-                                "remaining_actual_vehicle_count": optimized_vehicle_count,
-                                "target_vehicle_count": frozen_count + remaining_limit_candidate,
-                                "actual_vehicle_count": frozen_count + optimized_vehicle_count,
-                                "accepted": False,
-                                "vehicle_limit_relaxed": False,
-                                "status": "error",
-                                "error": (
-                                    "Exact Protected remainder solve expected "
-                                    f"{remaining_limit_candidate} vehicle(s), but returned "
-                                    f"{optimized_vehicle_count}."
-                                ),
-                            }
+                        raise RuntimeError(
+                            "Exact Protected remainder solve expected "
+                            f"{remaining_limit_candidate} vehicle(s), but returned "
+                            f"{optimized_vehicle_count}."
                         )
-                        continue
                     optimized_points = list(optimized.get("points") or subset_points)
                     optimized_routes = [
                         _remap_exception_route_nodes(route, optimized_points, f"Opt Bus {index}")
@@ -6934,24 +6915,10 @@ def build_exception_preserving_scenario(
                     combined_routes = list(candidate.get("routes") or [])
                     candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
                 if candidate_route_count != expected_candidate_route_count:
-                    attempts.append(
-                        {
-                            "frozen_route_count": frozen_count,
-                            "remaining_stop_count": remaining_service_count,
-                            "remaining_vehicle_limit": remaining_limit_candidate,
-                            "remaining_actual_vehicle_count": optimized_vehicle_count,
-                            "target_vehicle_count": expected_candidate_route_count,
-                            "actual_vehicle_count": candidate_route_count,
-                            "accepted": False,
-                            "vehicle_limit_relaxed": False,
-                            "status": "error",
-                            "error": (
-                                f"Exact Protected solve expected {expected_candidate_route_count} "
-                                f"total vehicle(s), but returned {candidate_route_count}."
-                            ),
-                        }
+                    raise RuntimeError(
+                        f"Exact Protected solve expected {expected_candidate_route_count} "
+                        f"total vehicle(s), but returned {candidate_route_count}."
                     )
-                    continue
                 candidate_summary = _scenario_exception_summary(candidate, config=config)
                 candidate_remainder_summary = _scenario_exception_summary(
                     candidate,
@@ -7053,7 +7020,7 @@ def build_exception_preserving_scenario(
                     dict(best_failed_candidate.get("final_time_impact_gate") or {}),
                 ):
                     best_failed_candidate = candidate
-            except Exception as exc:
+            except no_feasible_route_error as exc:
                 attempts.append(
                     {
                         "frozen_route_count": frozen_count,
@@ -7063,12 +7030,13 @@ def build_exception_preserving_scenario(
                         "target_vehicle_count": frozen_count + remaining_limit_candidate,
                         "accepted": False,
                         "vehicle_limit_relaxed": False,
-                        "error": str(exc),
+                        "status": "infeasible",
+                        "reason": str(exc),
                     }
                 )
                 planner.log(
-                    f"[WARN] Protected attempt with {frozen_count} frozen route(s) "
-                    f"and remaining vehicle limit {remaining_limit_candidate} failed: {exc}"
+                    f"[INFO] Protected attempt with {frozen_count} frozen route(s) "
+                    f"and remaining vehicle limit {remaining_limit_candidate} was infeasible: {exc}"
                 )
                 continue
 
@@ -7083,8 +7051,10 @@ def build_exception_preserving_scenario(
             "attempts": attempts,
         }
         best_candidate["exception_feasible"] = accepted
+        best_candidate["scenario_status"] = "passed" if accepted else "rejected"
         best_candidate["constraint_search_outcome"] = {
-            "status": "passed" if accepted else "exhausted_without_feasible_candidate",
+            "status": "passed" if accepted else "rejected",
+            "reason": "all_hard_gates_passed" if accepted else "candidate_failed_hard_gates",
             "frozen_route_count": len(failed_routes),
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
@@ -7098,7 +7068,7 @@ def build_exception_preserving_scenario(
         }
         _attach_optimized_route_display_ids(best_candidate)
         return best_candidate
-    error_attempts = [dict(attempt) for attempt in attempts if attempt.get("error")]
+    error_attempts = [dict(attempt) for attempt in attempts if attempt.get("reason")]
     tried_limits = [
         str(attempt.get("remaining_vehicle_limit"))
         for attempt in error_attempts
@@ -7109,11 +7079,11 @@ def build_exception_preserving_scenario(
         skip_reason = (
             "Exception-preserving optimization could not solve the unfrozen remainder"
             + (f" after trying remaining vehicle limit(s): {', '.join(tried_limits)}." if tried_limits else ".")
-            + f" Last error: {error_attempts[-1].get('error')}"
+            + f" Last solver result: {error_attempts[-1].get('reason')}"
         )
     skipped_extra: dict[str, Any] = {
         "constraint_search_outcome": {
-            "status": "provably_infeasible" if preflight_infeasible else "exhausted_without_feasible_candidate",
+            "status": "infeasible",
             "reason": (
                 "minimum_vehicle_lower_bound_exceeds_allowed_maximum"
                 if preflight_infeasible
@@ -7143,7 +7113,7 @@ def build_exception_preserving_scenario(
             "mode": "hard",
             "best_effort": False,
         }
-    return _build_skipped_scenario_result(skip_reason, skipped_extra)
+    return _build_infeasible_scenario_result(skip_reason, skipped_extra)
 
 
 def _normalize_time_constraint_text(value: Any) -> str:
@@ -7666,100 +7636,66 @@ def run_backend_planner_with_prepared_data(
             config,
             time_impact_limit_minutes,
         )
-        if time_constraint_builder is not None:
-            try:
-                hard_time_constraint_metadata = deepcopy(time_constraint_metadata)
-                time_constrained_result = _solve_vehicle_ladder_scenario(
-                    planner,
-                    original_points,
-                    time_constrained_solver_label,
-                    current_route_count=current_plan_route_count_for_reduction,
-                    minimum_vehicle_reduction=minimum_vehicle_reduction,
-                    bus_type_configs=solver_bus_type_configs,
-                    node_time_lower_bounds_builder=time_constraint_lower_builder,
-                    node_time_upper_bounds_builder=time_constraint_builder,
-                    time_constraint_metadata=hard_time_constraint_metadata,
-                    final_time_impact_validator=final_time_impact_validator,
+        if time_constraint_builder is None:
+            raise RuntimeError(
+                str(
+                    time_constraint_metadata.get("skipped_reason")
+                    or "Time-impact constraints were not available."
                 )
-                time_constrained_result["baseline_name"] = "time_constrained_optimization"
-                time_constrained_result["display_name"] = time_constrained_display_label
-                time_constrained_result["scenario_label"] = time_constrained_display_label
-                time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
-                time_constrained_result["time_constraint"] = {
-                    **hard_time_constraint_metadata,
-                    **dict(time_constrained_result.get("time_constraint") or {}),
-                    "enabled": True,
-                    "bounded_solver_stop_count": int(
-                        dict(time_constrained_result.get("time_constraint") or {}).get(
-                            "bounded_solver_stop_count",
-                            hard_time_constraint_metadata.get("bounded_solver_stop_count", 0),
-                        )
-                        or 0
-                    ),
-                }
-            except Exception as exc:
-                planner.log(f"[WARN] {time_constrained_solver_label} skipped: {exc}")
-                time_constrained_result = _build_skipped_scenario_result(
-                    f"{time_constrained_solver_label} was infeasible: {exc}",
-                    {
-                        "baseline_name": "time_constrained_optimization",
-                        "display_name": time_constrained_display_label,
-                        "scenario_label": time_constrained_display_label,
-                        "time_impact_limit_minutes": time_impact_limit_minutes,
-                        "time_constraint": {
-                            **time_constraint_metadata,
-                            "enabled": False,
-                            "strict_error": str(exc),
-                        }
-                    },
-                )
-        else:
-            time_constrained_result = _build_skipped_scenario_result(
-                str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
-                {
-                    "baseline_name": "time_constrained_optimization",
-                    "display_name": time_constrained_display_label,
-                    "scenario_label": time_constrained_display_label,
-                    "time_impact_limit_minutes": time_impact_limit_minutes,
-                    "time_constraint": time_constraint_metadata,
-                },
             )
+        hard_time_constraint_metadata = deepcopy(time_constraint_metadata)
+        time_constrained_result = _solve_vehicle_ladder_scenario(
+            planner,
+            original_points,
+            time_constrained_solver_label,
+            current_route_count=current_plan_route_count_for_reduction,
+            minimum_vehicle_reduction=minimum_vehicle_reduction,
+            bus_type_configs=solver_bus_type_configs,
+            node_time_lower_bounds_builder=time_constraint_lower_builder,
+            node_time_upper_bounds_builder=time_constraint_builder,
+            time_constraint_metadata=hard_time_constraint_metadata,
+            final_time_impact_validator=final_time_impact_validator,
+        )
+        time_constrained_result["baseline_name"] = "time_constrained_optimization"
+        time_constrained_result["display_name"] = time_constrained_display_label
+        time_constrained_result["scenario_label"] = time_constrained_display_label
+        time_constrained_result["time_impact_limit_minutes"] = time_impact_limit_minutes
+        time_constrained_result["time_constraint"] = {
+            **hard_time_constraint_metadata,
+            **dict(time_constrained_result.get("time_constraint") or {}),
+            "enabled": True,
+            "bounded_solver_stop_count": int(
+                dict(time_constrained_result.get("time_constraint") or {}).get(
+                    "bounded_solver_stop_count",
+                    hard_time_constraint_metadata.get("bounded_solver_stop_count", 0),
+                )
+                or 0
+            ),
+        }
         original_result = free_optimization_baseline
-        if time_constraint_builder is not None:
-            protected_time_constraint_metadata = {
-                **deepcopy(time_constraint_metadata),
-                "source": "exception_preserving_remainder",
-                "display_name": "Protected Plan",
-            }
-            exception_preserving_result = build_exception_preserving_scenario(
-                planner,
-                original_points,
-                current_plan_scenario,
-                config,
-                input_records,
-                solver_bus_type_configs,
-                None,
-                standard_scenarios=[time_constrained_result],
-                node_time_lower_bounds_builder=time_constraint_lower_builder,
-                node_time_upper_bounds_builder=time_constraint_builder,
-                time_constraint_metadata=protected_time_constraint_metadata,
-                final_time_impact_validator=final_time_impact_validator,
-                solve_time=assessment_time,
-            )
-            exception_preserving_result["display_name"] = "Protected Plan"
-            exception_preserving_result["scenario_label"] = "Protected Plan"
-            exception_preserving_result["time_impact_limit_minutes"] = time_impact_limit_minutes
-        else:
-            exception_preserving_result = _build_skipped_scenario_result(
-                str(time_constraint_metadata.get("skipped_reason") or "Time-impact constraints were not available."),
-                {
-                    "baseline_name": "exception_preserving_optimization",
-                    "display_name": "Protected Plan",
-                    "scenario_label": "Protected Plan",
-                    "time_impact_limit_minutes": time_impact_limit_minutes,
-                    "time_constraint": time_constraint_metadata,
-                },
-            )
+        protected_time_constraint_metadata = {
+            **deepcopy(time_constraint_metadata),
+            "source": "exception_preserving_remainder",
+            "display_name": "Protected Plan",
+        }
+        exception_preserving_result = build_exception_preserving_scenario(
+            planner,
+            original_points,
+            current_plan_scenario,
+            config,
+            input_records,
+            solver_bus_type_configs,
+            None,
+            standard_scenarios=[time_constrained_result],
+            node_time_lower_bounds_builder=time_constraint_lower_builder,
+            node_time_upper_bounds_builder=time_constraint_builder,
+            time_constraint_metadata=protected_time_constraint_metadata,
+            final_time_impact_validator=final_time_impact_validator,
+            solve_time=assessment_time,
+        )
+        exception_preserving_result["display_name"] = "Protected Plan"
+        exception_preserving_result["scenario_label"] = "Protected Plan"
+        exception_preserving_result["time_impact_limit_minutes"] = time_impact_limit_minutes
         route_reallocation_analysis = analyze_route_reallocation_opportunities(
             planner,
             current_plan,

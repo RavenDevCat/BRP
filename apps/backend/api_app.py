@@ -2789,12 +2789,16 @@ def workbook_submit(
     payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
-    return _json_response(
-        202,
-        backend_service._handle_workbook_submit(
+    try:
+        response = backend_service._handle_workbook_submit(
             _payload_dict(payload), user_email=context.email
-        ),
-    )
+        )
+    except backend_service.WorkbookReadinessError as exc:
+        raise BackendHttpError(
+            exc.status_code,
+            {"error": str(exc), "readiness": exc.readiness},
+        ) from exc
+    return _json_response(202, response)
 
 
 @_api_route(

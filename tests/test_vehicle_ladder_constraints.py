@@ -95,28 +95,36 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
         self.assertEqual(captured["fleet_size"], 10)
 
-    def test_vehicle_ladder_reports_proven_infeasibility_before_solving(self) -> None:
+    def test_vehicle_ladder_confirms_lower_bound_with_an_exact_solve(self) -> None:
         class FakePlanner:
             _BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(route_stop_limit=10)
+            NoFeasibleRouteError = legacy_planner.NoFeasibleRouteError
 
         points = [{"is_depot": True, "passenger_count": 0}] + [
             {"passenger_count": 1} for _ in range(21)
         ]
 
-        result = planner_core._solve_vehicle_ladder_scenario(
-            FakePlanner(),
-            points,
-            "Strict Plan",
-            current_route_count=5,
-            minimum_vehicle_reduction=4,
-            bus_type_configs=[{"name": "bus", "capacity": 30, "max_count": 5}],
-        )
+        with mock.patch.object(
+            planner_core,
+            "_compute_scenario_without_render",
+            side_effect=legacy_planner.NoFeasibleRouteError("no exact one-vehicle solution"),
+        ) as compute:
+            result = planner_core._solve_vehicle_ladder_scenario(
+                FakePlanner(),
+                points,
+                "Strict Plan",
+                current_route_count=5,
+                minimum_vehicle_reduction=4,
+                bus_type_configs=[{"name": "bus", "capacity": 30, "max_count": 5}],
+            )
 
         self.assertFalse(result["enabled"])
-        self.assertEqual(result["constraint_search_outcome"]["status"], "provably_infeasible")
+        self.assertEqual(result["scenario_status"], "infeasible")
+        self.assertEqual(result["constraint_search_outcome"]["status"], "infeasible")
         self.assertEqual(result["constraint_search_outcome"]["allowed_max_vehicle_count"], 1)
         self.assertEqual(result["constraint_search_outcome"]["theoretical_min_vehicle_count"], 3)
-        self.assertEqual(result["vehicle_ladder_search"]["attempts"], [])
+        self.assertEqual(result["vehicle_ladder_search"]["attempts"][0]["status"], "infeasible")
+        self.assertEqual(compute.call_args.kwargs["forced_vehicle_count"], 1)
 
     def test_feasibility_report_covers_all_five_user_hard_constraints(self) -> None:
         scenario = {
@@ -318,23 +326,41 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
             planner_core._compute_scenario_without_render = fake_compute
             planner_core._minimum_vehicle_count_for_hard_constraints = lambda *_args: 19
-            result = planner_core._solve_vehicle_ladder_scenario(
+            with self.assertRaisesRegex(RuntimeError, "expected 20 vehicle"):
+                planner_core._solve_vehicle_ladder_scenario(
+                    object(),
+                    [{"is_depot": True}, {"is_depot": False}],
+                    "test",
+                    current_route_count=22,
+                    minimum_vehicle_reduction=2,
+                )
+        finally:
+            planner_core._compute_scenario_without_render = original_compute
+            planner_core._minimum_vehicle_count_for_hard_constraints = original_minimum
+
+        self.assertEqual(calls, [20])
+
+    def test_vehicle_ladder_does_not_hide_technical_failures(self) -> None:
+        with (
+            mock.patch.object(
+                planner_core,
+                "_compute_scenario_without_render",
+                side_effect=RuntimeError("provider unavailable"),
+            ),
+            mock.patch.object(
+                planner_core,
+                "_minimum_vehicle_count_for_hard_constraints",
+                return_value=20,
+            ),
+            self.assertRaisesRegex(RuntimeError, "provider unavailable"),
+        ):
+            planner_core._solve_vehicle_ladder_scenario(
                 object(),
                 [{"is_depot": True}, {"is_depot": False}],
                 "test",
                 current_route_count=22,
                 minimum_vehicle_reduction=2,
             )
-        finally:
-            planner_core._compute_scenario_without_render = original_compute
-            planner_core._minimum_vehicle_count_for_hard_constraints = original_minimum
-
-        self.assertEqual(calls, [20, 19])
-        self.assertEqual(result["bus_count"], 19)
-        mismatch = result["vehicle_ladder_search"]["attempts"][0]
-        self.assertEqual(mismatch["status"], "error")
-        self.assertEqual(mismatch["target_vehicle_count"], 20)
-        self.assertEqual(mismatch["actual_vehicle_count"], 15)
 
 
 if __name__ == "__main__":

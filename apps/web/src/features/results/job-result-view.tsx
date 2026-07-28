@@ -184,8 +184,8 @@ function SummaryPanel({
   const currentPlanRow = scenarios.find((scenario) => scenario.key === "current_plan");
   const timeConstrainedRow = scenarios.find((scenario) => scenario.key === "time_constrained");
   const exceptionPreservingRow = scenarios.find((scenario) => scenario.key === "exception_preserving");
-  const timeConstrained = timeConstrainedRow?.enabled ? timeConstrainedRow : undefined;
-  const exceptionPreserving = exceptionPreservingRow?.enabled ? exceptionPreservingRow : undefined;
+  const timeConstrained = timeConstrainedRow && scenarioIsInspectable(timeConstrainedRow) ? timeConstrainedRow : undefined;
+  const exceptionPreserving = exceptionPreservingRow && scenarioIsInspectable(exceptionPreservingRow) ? exceptionPreservingRow : undefined;
   const recommended = pickRecommendedScenario(scenarios);
   const reviewCount = diagnostics.inputAddressWarnings.length + diagnostics.geocodeWarnings.length + diagnostics.excludedStops.length;
   const solveProcessRows = buildSolveProcessRows(result, t);
@@ -218,29 +218,23 @@ function SummaryPanel({
         />
         <MetricCard
           label={timeConstrained?.name || "Strict Plan"}
-          value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t("Skipped")}
-          tone={timeConstrained ? scenarioTrafficTone(timeConstrained, "info") : "warning"}
+          value={timeConstrained ? formatNumber(timeConstrained.routeCount) : t(scenarioStatusLabel(timeConstrainedRow?.status))}
+          tone={timeConstrained ? scenarioTrafficTone(timeConstrained, scenarioStatusTone(timeConstrained.status)) : scenarioStatusTone(timeConstrainedRow?.status)}
           detail={
             timeConstrained
               ? scenarioCardDetail(timeConstrained, timeConstrained.detail)
-              : scenarioSkippedDetail(
-                  timeConstrainedRow,
-                  "Adjust the time-impact limit, time window, stop limit, minimum saving, or fleet settings, then rerun.",
-                )
+              : scenarioUnavailableDetail(timeConstrainedRow?.status)
           }
           supporting={timeConstrained ? <ScenarioDecisionMetricsLine scenario={timeConstrained} /> : null}
         />
         <MetricCard
           label="Protected Plan"
-          value={exceptionPreserving ? formatNumber(exceptionPreserving.routeCount) : t("Skipped")}
-          tone={exceptionPreserving ? scenarioTrafficTone(exceptionPreserving, "success") : "warning"}
+          value={exceptionPreserving ? formatNumber(exceptionPreserving.routeCount) : t(scenarioStatusLabel(exceptionPreservingRow?.status))}
+          tone={exceptionPreserving ? scenarioTrafficTone(exceptionPreserving, scenarioStatusTone(exceptionPreserving.status)) : scenarioStatusTone(exceptionPreservingRow?.status)}
           detail={
             exceptionPreserving
               ? scenarioCardDetail(exceptionPreserving, "Keeps current noncompliant routes protected, then solves the remaining stops under every hard input constraint.")
-              : scenarioSkippedDetail(
-                  exceptionPreservingRow,
-                  "Review current-plan failed routes or relax the optimization settings, then rerun.",
-                )
+              : scenarioUnavailableDetail(exceptionPreservingRow?.status)
           }
           supporting={exceptionPreserving ? <ScenarioDecisionMetricsLine scenario={exceptionPreserving} /> : null}
         />
@@ -538,7 +532,7 @@ function AiAuditPanel({
       <Bot className="h-4 w-4" />
     );
   const generateReport = () => auditMutation.mutate({ force: false });
-  const scenarioRows = scenarios.filter((scenario) => scenario.enabled);
+  const scenarioRows = scenarios.filter(scenarioIsInspectable);
   const routeSummaries = asRecordArray(currentPlan.route_summaries);
   const priorityActions = asRecordArray(reallocationSummary.priority_recommendations).slice(0, 5);
   const downloadHtml = reportMarkdown
@@ -767,11 +761,11 @@ function BaselinePanel({
                   <div className="text-sm font-semibold">{t(scenario.name)}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{t(scenario.detail)}</div>
                 </div>
-                <Badge tone={scenario.enabled ? scenarioTrafficTone(scenario, "success") : "neutral"}>
-                  {scenario.enabled ? t(scenarioTrafficStatusLabel(scenario) || "ready") : t("skipped")}
+                <Badge tone={scenarioStatusTone(scenario.status)}>
+                  {t(scenarioStatusLabel(scenario.status))}
                 </Badge>
               </div>
-              {scenario.enabled ? (
+              {scenarioIsInspectable(scenario) ? (
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <ReadoutItem label="Routes" value={formatNumber(scenario.routeCount)} />
                   <ReadoutItem label="Service stops" value={formatNumber(scenario.stopCount)} />
@@ -784,7 +778,7 @@ function BaselinePanel({
                   </div>
                 </div>
               ) : (
-                <div className="text-sm text-muted-foreground">{scenario.skippedReason || t("Scenario was not enabled for this run.")}</div>
+                <div className="text-sm text-muted-foreground">{t(scenarioUnavailableDetail(scenario.status))}</div>
               )}
             </CardContent>
           </Card>
@@ -793,7 +787,7 @@ function BaselinePanel({
 
       <div className="grid gap-4 xl:grid-cols-2">
         {scenarios
-          .filter((scenario) => scenario.enabled && scenario.routes.length > 0)
+          .filter((scenario) => scenarioIsInspectable(scenario) && scenario.routes.length > 0)
           .map((scenario) => (
             <Card key={`${scenario.name}-routes`} className="min-w-0">
               <CardHeader>
@@ -2646,12 +2640,13 @@ function getAiAuditLanguageKey(language: unknown): "en" | "ko" | "zh" {
   return "en";
 }
 
+type ScenarioStatus = "passed" | "rejected" | "infeasible" | "legacy_unavailable";
+
 type ScenarioRow = {
   key: string;
   name: string;
   detail: string;
-  enabled: boolean;
-  skippedReason: string;
+  status: ScenarioStatus;
   trafficGate: Record<string, unknown>;
   timeConstraint: Record<string, unknown>;
   feasibilityReport: Record<string, unknown>;
@@ -2871,7 +2866,7 @@ function buildArrivalReverseCheck(
   scenario: Record<string, unknown>,
   currentContext: CurrentRouteContext,
 ): ArrivalReverseCheck | null {
-  if (!Object.keys(scenario).length || scenario.enabled === false) {
+  if (!Object.keys(scenario).length || !scenarioIsInspectableStatus(scenarioStatusFromPayload(scenario))) {
     return null;
   }
   const explicit = asRecord(scenario.arrival_reverse_check);
@@ -3012,8 +3007,7 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     key,
     name,
     detail,
-    enabled: Object.keys(assessment).length > 0,
-    skippedReason: "",
+    status: Object.keys(assessment).length > 0 ? "passed" : "legacy_unavailable",
     trafficGate: {},
     timeConstraint: {},
     feasibilityReport: {},
@@ -3038,8 +3032,7 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     key,
     name,
     detail,
-    enabled: Object.keys(scenario).length > 0 && scenario.enabled !== false,
-    skippedReason: stringValue(scenario.skipped_reason),
+    status: scenarioStatusFromPayload(scenario),
     trafficGate: asRecord(scenario.traffic_gate),
     timeConstraint: asRecord(scenario.time_constraint),
     feasibilityReport: asRecord(scenario.feasibility_report),
@@ -3275,9 +3268,38 @@ function scenarioCardDetail(
   return status ? `${status}. ${detail}` : detail;
 }
 
-function scenarioSkippedDetail(scenario: Pick<ScenarioRow, "skippedReason"> | undefined, adjustmentHint: string): string {
-  const reason = scenario?.skippedReason.trim();
-  return `Skipped: ${reason || "Scenario was not enabled for this run."} ${adjustmentHint}`;
+function scenarioStatusFromPayload(scenario: Record<string, unknown>): ScenarioStatus {
+  const status = stringValue(scenario.scenario_status) as ScenarioStatus;
+  return ["passed", "rejected", "infeasible", "legacy_unavailable"].includes(status)
+    ? status
+    : "legacy_unavailable";
+}
+
+function scenarioIsInspectableStatus(status: ScenarioStatus): boolean {
+  return status === "passed" || status === "rejected";
+}
+
+function scenarioIsInspectable(scenario: Pick<ScenarioRow, "status">): boolean {
+  return scenarioIsInspectableStatus(scenario.status);
+}
+
+function scenarioStatusLabel(status: ScenarioStatus | undefined): string {
+  if (status === "passed") return "Passed";
+  if (status === "rejected") return "Rejected";
+  if (status === "infeasible") return "Infeasible";
+  return "Legacy unavailable";
+}
+
+function scenarioStatusTone(status: ScenarioStatus | undefined): "neutral" | "success" | "warning" | "info" {
+  if (status === "passed") return "success";
+  if (status === "rejected" || status === "infeasible") return "warning";
+  return "neutral";
+}
+
+function scenarioUnavailableDetail(status: ScenarioStatus | undefined): string {
+  return status === "infeasible"
+    ? "The solver completed its exact route-count search without finding a route candidate."
+    : "This historical run did not store a comparable scenario result.";
 }
 
 function scenarioTrafficTone(
@@ -3312,32 +3334,6 @@ function scenarioTrafficTone(
   return fallback;
 }
 
-function scenarioIsAdoptionReady(scenario: ScenarioRow): boolean {
-  const feasibilityStatus = stringValue(scenario.feasibilityReport.status);
-  if (feasibilityStatus && feasibilityStatus !== "passed") {
-    return false;
-  }
-  const status = stringValue(scenario.trafficGate.status);
-  const savingStatus = stringValue(asRecord(scenario.trafficGate.vehicle_saving_target).status);
-  const constraint = scenario.timeConstraint;
-  const strictSatisfied = constraint.strict_satisfied;
-  const bounded = Number(constraint.bounded_solver_stop_count || 0);
-  const expected = Number(constraint.expected_solver_stop_count || scenario.stopCount || 0);
-  const finalTimeImpactStatus = stringValue(scenario.finalTimeImpactGate.status);
-  const finalTimeImpactRequired = scenarioRequiresFinalTimeImpact(scenario);
-  const timeImpactPassed = finalTimeImpactRequired || finalTimeImpactStatus
-    ? finalTimeImpactStatus === "passed"
-    : typeof strictSatisfied === "boolean"
-      ? strictSatisfied
-      : constraint.enabled === true
-        && stringValue(constraint.mode) === "hard"
-        && expected > 0
-        && bounded >= expected;
-  const providerPassed = status === "passed";
-  const protectedPassed = scenario.key === "exception_preserving" && scenario.exceptionAccepted;
-  return (providerPassed || protectedPassed) && savingStatus !== "failed" && timeImpactPassed;
-}
-
 function scenarioAffectedRidersLabel(
   scenario: Pick<ScenarioRow, "key" | "decisionMetrics">,
   t: (key: string, fallback?: string) => string,
@@ -3362,7 +3358,7 @@ function scenarioWorstMissLabel(
 function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario | undefined {
   const optimized = ["time_constrained", "exception_preserving"];
   const adoptionReady = scenarios
-    .filter((scenario) => optimized.includes(scenario.key) && scenario.enabled && scenarioIsAdoptionReady(scenario))
+    .filter((scenario) => optimized.includes(scenario.key) && scenario.status === "passed")
     .sort((left, right) => {
       const routeDifference = Number(left.routeCount || Number.MAX_SAFE_INTEGER)
         - Number(right.routeCount || Number.MAX_SAFE_INTEGER);
@@ -3373,12 +3369,12 @@ function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario 
     return { ...adoptionReady, adoptionReady: true, recommendationType: "adoption_ready" };
   }
 
-  const comparable = optimized
-    .map((key) => scenarios.find((scenario) => scenario.key === key && scenario.enabled))
-    .filter((scenario): scenario is ScenarioRow => Boolean(scenario));
-  if (comparable.length !== optimized.length || comparable.some((scenario) => !scenario.decisionMetrics.evidenceComplete)) {
-    return undefined;
-  }
+  const comparable = scenarios.filter(
+    (scenario) => optimized.includes(scenario.key)
+      && scenario.status === "rejected"
+      && scenario.decisionMetrics.evidenceComplete,
+  );
+  if (!comparable.length) return undefined;
   const reviewReference = comparable.sort((left, right) => {
     const leftMetrics = left.decisionMetrics;
     const rightMetrics = right.decisionMetrics;
@@ -3748,7 +3744,7 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
       const scenario = scenarioForMapSurface(result, key);
       const path = stringValue(scenario.output_html);
       const hasRenderableMap = Boolean(
-        scenario.enabled !== false &&
+        scenarioIsInspectableStatus(scenarioStatusFromPayload(scenario)) &&
         path &&
         asRecordArray(scenario.points).length > 0 &&
         asRecordArray(scenario.routes).length > 0,
@@ -4119,6 +4115,17 @@ function buildSolveProcessRows(result: Record<string, unknown>, t: (key: string,
 }
 
 function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, t: (key: string, fallback?: string) => string) {
+  const scenarioStatus = scenarioStatusFromPayload(scenario);
+  if (scenarioStatus === "legacy_unavailable") {
+    return {
+      label,
+      status: t("Legacy unavailable"),
+      passed: false,
+      neutral: true,
+      summary: t("This historical run did not store a comparable scenario result."),
+      steps: [],
+    };
+  }
   const gate = asRecord(scenario.traffic_gate);
   const status = stringValue(gate.status);
   const exceptionAttempts = asRecordArray(asRecord(scenario.exception_preserving).attempts);
@@ -4148,8 +4155,8 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
       });
       return {
         label,
-        status: acceptedAttempt ? t("Passed") : t("Failed"),
-        passed: Boolean(acceptedAttempt),
+        status: t(scenarioStatusLabel(scenarioStatus)),
+        passed: scenarioStatus === "passed",
         neutral: false,
         summary: template(
           t(acceptedAttempt ? "{count} EP ladder attempt(s); accepted a candidate." : "{count} EP ladder attempt(s); no accepted candidate."),
@@ -4165,7 +4172,7 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
       if (outcomeStatus === "provably_infeasible") {
         return {
           label,
-          status: t("Hard bounds"),
+          status: t("Infeasible"),
           passed: false,
           neutral: false,
           summary: template(
@@ -4194,7 +4201,7 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
       });
       return {
         label,
-        status: t("Search exhausted"),
+        status: t(scenarioStatusLabel(scenarioStatus)),
         passed: false,
         neutral: false,
         summary: template(
@@ -4210,10 +4217,10 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
     }
     return {
       label,
-      status: t(status === "not_applicable" ? "Not applicable" : "No record"),
-      passed: true,
-      neutral: true,
-      summary: t(status === "not_applicable" ? "This scenario did not require AM arrival-gate replanning." : "This job was created before solve-process tracking, or no optimization scenario was recorded."),
+      status: t(scenarioStatusLabel(scenarioStatus)),
+      passed: scenarioStatus === "passed",
+      neutral: false,
+      summary: t(status === "not_applicable" ? "This scenario did not require AM arrival-gate replanning." : "No detailed solve rounds were recorded for this scenario."),
       steps: [t("No replan rounds were recorded.")],
     };
   }
@@ -4329,10 +4336,10 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
           delay: formatNumber(Math.round(finalDelay)),
         })
   );
-  const effectivePassed = status === "passed" && savingStatus !== "failed";
+  const effectivePassed = scenarioStatus === "passed";
   return {
     label,
-    status: effectivePassed ? t("Passed") : savingStatus === "failed" ? t("Failed") : t(toTitle(status.replace(/_/g, " "))),
+    status: t(scenarioStatusLabel(scenarioStatus)),
     passed: effectivePassed,
     neutral: false,
     summary:

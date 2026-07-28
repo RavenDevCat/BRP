@@ -25,6 +25,17 @@ def test_route_audit_inline_and_fullscreen_maps_keep_map_and_workbook_download_c
     assert maps_panel.count("<FileSpreadsheet") >= 2
 
 
+def test_route_audit_frontend_uses_scenario_status_contract() -> None:
+    source = _source("apps/web/src/features/results/job-result-view.tsx")
+
+    assert "scenario_status" in source
+    assert 'scenario.status === "passed"' in source
+    assert 'scenario.status === "rejected"' in source
+    assert "scenario.enabled" not in source
+    assert "skippedReason" not in source
+    assert 't("Skipped")' not in source
+
+
 def test_fleet_planner_inline_and_fullscreen_maps_keep_map_and_workbook_download_controls() -> None:
     source = _source("apps/web/src/features/fleet/fleet-planner-page.tsx")
     maps_panel = _section(source, "function ToolMapsPanel({", "function VehicleConfigModal")

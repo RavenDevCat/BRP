@@ -12,6 +12,36 @@ import ai_audit  # noqa: E402
 import backend_service  # noqa: E402
 
 
+def test_legacy_scenario_status_adapter_is_read_only() -> None:
+    source = {
+        "result": {
+            "time_constrained_optimization": {
+                "enabled": False,
+                "skipped_reason": "legacy stop",
+            },
+            "exception_preserving_optimization": {
+                "enabled": True,
+                "route_count": 1,
+                "routes": [{"route_id": "R1"}],
+                "traffic_gate": {"status": "failed"},
+            },
+            "structured_results": {
+                "current_plan": {
+                    "route_count": 1,
+                    "routes": [{"route_id": "R1"}],
+                }
+            },
+        }
+    }
+
+    adapted = backend_service._adapt_legacy_scenario_statuses_for_read(source)
+
+    assert "scenario_status" not in source["result"]["structured_results"]["current_plan"]
+    assert adapted["result"]["time_constrained_optimization"]["scenario_status"] == "legacy_unavailable"
+    assert adapted["result"]["exception_preserving_optimization"]["scenario_status"] == "rejected"
+    assert adapted["result"]["structured_results"]["current_plan"]["scenario_status"] == "passed"
+
+
 def test_ai_audit_payload_includes_operational_review_without_full_addresses() -> None:
     payload = ai_audit.build_ai_audit_payload(
         {
@@ -50,6 +80,7 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
                     ],
                 },
                 "time_constrained_optimization": {
+                    "scenario_status": "rejected",
                     "route_count": 2,
                     "traffic_gate": {
                         "status": "failed",
@@ -142,7 +173,7 @@ def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> No
     scenarios = [
         {
             "key": "time_constrained",
-            "enabled": True,
+            "status": "passed",
             "route_count": 18,
             "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
             "time_constraint": {"strict_satisfied": True},
@@ -150,7 +181,7 @@ def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> No
         },
         {
             "key": "exception_preserving",
-            "enabled": True,
+            "status": "passed",
             "route_count": 16,
             "traffic_gate": {"status": "failed", "vehicle_saving_target": {"status": "passed"}},
             "exception_accepted": True,
@@ -167,7 +198,7 @@ def test_recommended_scenario_uses_fully_passing_plan_with_fewest_routes() -> No
 
 def test_recommended_scenario_uses_provider_time_when_route_counts_tie() -> None:
     shared = {
-        "enabled": True,
+        "status": "passed",
         "route_count": 16,
         "traffic_gate": {"status": "passed", "vehicle_saving_target": {"status": "passed"}},
         "time_constraint": {"strict_satisfied": True},
@@ -244,7 +275,7 @@ def test_recommended_scenario_uses_least_harm_reference_when_both_fail() -> None
     scenarios = [
         {
             "key": "time_constrained",
-            "enabled": True,
+            "status": "rejected",
             "route_count": 16,
             "provider_total_duration_s": 7000,
             "traffic_gate": {"status": "failed"},
@@ -257,7 +288,7 @@ def test_recommended_scenario_uses_least_harm_reference_when_both_fail() -> None
         },
         {
             "key": "exception_preserving",
-            "enabled": True,
+            "status": "rejected",
             "route_count": 18,
             "provider_total_duration_s": 7600,
             "traffic_gate": {"status": "failed"},
@@ -276,23 +307,25 @@ def test_recommended_scenario_uses_least_harm_reference_when_both_fail() -> None
     assert recommended["adoption_ready"] is False
 
 
-def test_recommended_scenario_does_not_guess_when_failed_evidence_is_incomplete() -> None:
+def test_recommended_scenario_uses_the_rejected_candidate_with_complete_evidence() -> None:
     scenarios = [
         {
             "key": "time_constrained",
-            "enabled": True,
+            "status": "rejected",
             "traffic_gate": {"status": "failed"},
             "decision_metrics": {"evidence_complete": False},
         },
         {
             "key": "exception_preserving",
-            "enabled": True,
+            "status": "rejected",
             "traffic_gate": {"status": "failed"},
             "decision_metrics": {"evidence_complete": True},
         },
     ]
 
-    assert ai_audit._recommended_scenario(scenarios) is None
+    recommended = ai_audit._recommended_scenario(scenarios)
+    assert recommended["key"] == "exception_preserving"
+    assert recommended["recommendation_type"] == "review_reference"
 
 
 def test_legacy_hard_time_impact_without_final_gate_is_not_passing() -> None:
@@ -316,14 +349,14 @@ def test_scenario_summaries_explain_strict_and_protected_roles() -> None:
     strict = ai_audit._scenario_summary(
         "time_constrained",
         {},
-        {"enabled": True, "route_count": 18},
+        {"scenario_status": "passed", "route_count": 18},
         {},
     )
     protected = ai_audit._scenario_summary(
         "exception_preserving",
         {},
         {
-            "enabled": True,
+            "scenario_status": "passed",
             "route_count": 19,
             "exception_preserving": {
                 "accepted": True,
@@ -337,7 +370,7 @@ def test_scenario_summaries_explain_strict_and_protected_roles() -> None:
         "exception_preserving",
         {},
         {
-            "enabled": True,
+            "scenario_status": "rejected",
             "constraint_search_outcome": {"frozen_route_count": 1},
             "exception_preserving": {
                 "accepted": False,
@@ -348,6 +381,9 @@ def test_scenario_summaries_explain_strict_and_protected_roles() -> None:
     )
 
     assert strict["solver_role"] == "all_routes_under_configured_hard_constraints"
+    assert strict["status"] == "passed"
+    assert "enabled" not in strict
+    assert "skipped_reason" not in strict
     assert strict["frozen_route_count"] == 0
     assert protected["solver_role"] == "freeze_existing_noncompliant_routes_and_optimize_the_remainder"
     assert protected["frozen_route_count"] == 2

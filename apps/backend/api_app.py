@@ -180,7 +180,7 @@ def _job_for_context(job_id: str, context: UserContext) -> dict[str, Any]:
         raise BackendHttpError(
             403, {"error": f"Job is not available for user: {context.email}"}
         )
-    return job_record
+    return backend_service._adapt_legacy_scenario_statuses_for_read(job_record)
 
 
 def _require_record_mutation_access(

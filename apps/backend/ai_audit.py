@@ -254,7 +254,9 @@ def _scenario_summary(
     scenario: dict[str, Any],
     planner_config: dict[str, Any],
 ) -> dict[str, Any]:
-    enabled = bool(scenario) and scenario.get("enabled") is not False
+    scenario_status = str(
+        scenario.get("scenario_status") or "legacy_unavailable"
+    ).strip().lower()
     decision_metrics = _scenario_decision_metrics(scenario)
     time_constraint = dict(scenario.get("time_constraint") or {})
     protected = dict(scenario.get("exception_preserving") or {})
@@ -285,8 +287,7 @@ def _scenario_summary(
             "time_constrained": "all_routes_under_configured_hard_constraints",
             "exception_preserving": "freeze_existing_noncompliant_routes_and_optimize_the_remainder",
         }.get(key),
-        "enabled": enabled,
-        "skipped_reason": scenario.get("skipped_reason"),
+        "status": scenario_status,
         "frozen_route_count": frozen_route_count,
         "frozen_route_ids": _take(frozen_route_ids, 12),
         "route_count": scenario.get("route_count") or scenario.get("bus_count"),
@@ -516,20 +517,12 @@ def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
 def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | None:
     order = ["time_constrained", "exception_preserving"]
     order_index = {key: index for index, key in enumerate(order)}
-    ready: list[dict[str, Any]] = []
-    for item in scenarios:
-        key = str(item.get("key") or "")
-        if key not in order_index or not item.get("enabled"):
-            continue
-        gate = dict(item.get("traffic_gate") or {})
-        saving = dict(gate.get("vehicle_saving_target") or {})
-        provider_passed = gate.get("status") == "passed"
-        protected_passed = key == "exception_preserving" and bool(item.get("exception_accepted"))
-        if (not provider_passed and not protected_passed) or saving.get("status") == "failed":
-            continue
-        if not _scenario_time_impact_passed(item):
-            continue
-        ready.append(item)
+    ready = [
+        item
+        for item in scenarios
+        if str(item.get("key") or "") in order_index
+        and item.get("status") == "passed"
+    ]
     recommended = min(
         ready,
         key=lambda item: (
@@ -550,12 +543,11 @@ def _recommended_scenario(scenarios: list[dict[str, Any]]) -> dict[str, Any] | N
     comparable = [
         item
         for item in scenarios
-        if str(item.get("key") or "") in order_index and item.get("enabled")
+        if str(item.get("key") or "") in order_index
+        and item.get("status") == "rejected"
+        and bool(dict(item.get("decision_metrics") or {}).get("evidence_complete"))
     ]
-    if len(comparable) != len(order) or any(
-        not bool(dict(item.get("decision_metrics") or {}).get("evidence_complete"))
-        for item in comparable
-    ):
+    if not comparable:
         return None
     reference = min(
         comparable,

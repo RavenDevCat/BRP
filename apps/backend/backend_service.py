@@ -2746,8 +2746,102 @@ def _ai_audit_report_map(record: dict[str, Any] | None) -> dict[str, dict[str, A
     return reports_by_language
 
 
+_SCENARIO_STATUSES = {"passed", "rejected", "infeasible", "legacy_unavailable"}
+_SCENARIO_RESULT_KEYS = (
+    "current_plan_scenario",
+    "free_optimization_baseline",
+    "time_constrained_optimization",
+    "exception_preserving_optimization",
+    "subway",
+    "nearby",
+)
+_STRUCTURED_SCENARIO_KEYS = (
+    "current_plan",
+    "original",
+    "time_constrained",
+    "exception_preserving",
+    "subway",
+    "nearby",
+)
+
+
+def _legacy_scenario_status_for_read(scenario: dict[str, Any]) -> str:
+    explicit = str(scenario.get("scenario_status") or "").strip().lower()
+    if explicit in _SCENARIO_STATUSES:
+        return explicit
+    if not scenario or scenario.get("enabled") is False or str(
+        scenario.get("skipped_reason") or ""
+    ).strip():
+        return "legacy_unavailable"
+
+    routes = list(scenario.get("routes") or [])
+    has_candidate = bool(routes) or safe_int(
+        scenario.get("route_count") or scenario.get("bus_count"), 0
+    ) > 0
+    search_status = str(
+        dict(scenario.get("constraint_search_outcome") or {}).get("status") or ""
+    ).strip().lower()
+    if not has_candidate:
+        return (
+            "infeasible"
+            if search_status in {"infeasible", "provably_infeasible"}
+            else "legacy_unavailable"
+        )
+
+    traffic_gate = dict(scenario.get("traffic_gate") or {})
+    feasibility = dict(scenario.get("feasibility_report") or {})
+    time_impact_gate = dict(scenario.get("final_time_impact_gate") or {})
+    time_constraint = dict(scenario.get("time_constraint") or {})
+    hard_constraints = dict(feasibility.get("hard_constraints") or {})
+    statuses = {
+        str(traffic_gate.get("status") or "").strip().lower(),
+        str(dict(traffic_gate.get("vehicle_saving_target") or {}).get("status") or "").strip().lower(),
+        str(feasibility.get("status") or "").strip().lower(),
+        str(time_impact_gate.get("status") or "").strip().lower(),
+        *{
+            str(dict(value or {}).get("status") or "").strip().lower()
+            for value in hard_constraints.values()
+            if isinstance(value, dict)
+        },
+    }
+    protected = dict(scenario.get("exception_preserving") or {})
+    if (
+        statuses.intersection({"failed", "rejected", "unavailable"})
+        or time_constraint.get("strict_satisfied") is False
+        or ("accepted" in protected and protected.get("accepted") is False)
+    ):
+        return "rejected"
+    return "passed"
+
+
+def _adapt_legacy_scenario_statuses_for_read(
+    job_record: dict[str, Any],
+) -> dict[str, Any]:
+    adapted = dict(job_record)
+    result = dict(adapted.get("result") or {})
+    if not result:
+        return adapted
+
+    for key in _SCENARIO_RESULT_KEYS:
+        scenario = dict(result.get(key) or {})
+        if scenario:
+            scenario["scenario_status"] = _legacy_scenario_status_for_read(scenario)
+            result[key] = scenario
+
+    structured = dict(result.get("structured_results") or {})
+    for key in _STRUCTURED_SCENARIO_KEYS:
+        scenario = dict(structured.get(key) or {})
+        if scenario:
+            scenario["scenario_status"] = _legacy_scenario_status_for_read(scenario)
+            structured[key] = scenario
+    if structured:
+        result["structured_results"] = structured
+    adapted["result"] = result
+    return adapted
+
+
 def _ai_audit_record_with_decision_context(job_record: dict[str, Any]) -> dict[str, Any]:
-    enriched = deepcopy(job_record)
+    enriched = _adapt_legacy_scenario_statuses_for_read(job_record)
     result = dict(enriched.get("result") or {})
     if not result:
         return enriched

@@ -55,17 +55,14 @@ def test_time_impact_scenario_label_falls_back_to_config_limit():
     )
 
 
-def test_time_constrained_replaces_paused_free_baseline_in_summary():
+def test_time_constrained_is_summary_baseline():
     summary = planner_core.summarize_structured_results(
         {
-            "original": planner_core._build_skipped_scenario_result("free paused"),
             "time_constrained": {
                 "stop_count": 12,
                 "bus_count": 4,
                 "bus_mix": {"30-fbus": 4},
             },
-            "subway": {},
-            "nearby": {},
         },
         uploaded_address_count=12,
     )

@@ -12,7 +12,7 @@ import operations_review  # noqa: E402
 
 def _scenario(route_label: str, *, excess: float, affected: int, worst: float) -> dict:
     return {
-        "enabled": True,
+        "scenario_status": "rejected",
         "route_count": 1,
         "points": [
             {"node_id": 0, "is_depot": True, "address": "School", "lat": 31.0, "lng": 121.0},

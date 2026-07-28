@@ -474,8 +474,6 @@ const ko: Translations = {
     "Target Duration": "목표 소요 시간",
     "Custom Job Name": "사용자 지정 작업명",
     "May audit before parent review": "학부모 검토 전 5월 감사",
-    "Subway baseline": "지하철 기준선",
-    "Nearby baseline": "근거리 기준선",
     "Limits planned load to 85% of vehicle capacity so routes are less crowded and timing is more balanced; may require more buses.":
         "계획 탑승률을 차량 정원의 85%로 제한해 혼잡도를 낮추고 시간 배분이 더 균형 잡힌 노선을 만들 수 있습니다. 더 많은 버스가 필요할 수 있습니다.",
     "Adds a comparison scenario that groups eligible stops near subway stations before optimizing.":
@@ -485,12 +483,6 @@ const ko: Translations = {
     "Route timing": "노선 시간 설정",
     "Optional stop dwell time used by route calculations.": "노선 계산에 사용할 선택적 정류장 정차 시간입니다.",
     "Stop Dwell Minutes": "정류장 정차 시간(분)",
-    "Advanced aggregation settings": "고급 집계 설정",
-    "Optional search and clustering radii; only used when Subway or Nearby baselines are enabled.":
-        "선택적 검색 및 클러스터링 반경입니다. 지하철 또는 근거리 기준선을 켰을 때만 사용됩니다.",
-    "Subway Search Radius (m)": "지하철 검색 반경(m)",
-    "Max Subway Walk Distance (m)": "최대 지하철 도보 거리(m)",
-    "Nearby Cluster Radius (m)": "근거리 클러스터 반경(m)",
     "Validate workbook": "워크북 검증",
     "Run audit": "감사 실행",
     "Workbook will be validated before the audit starts.": "감사 시작 전에 워크북을 먼저 검증합니다.",
@@ -588,7 +580,6 @@ const ko: Translations = {
     "Free optimization": "자유 최적화",
     "15-min constrained": "15분 제약",
     "Data review": "데이터 검토",
-    Skipped: "건너뜀",
     Clear: "정상",
     "item(s)": "건",
     "Detailed action signals": "상세 조치 신호",
@@ -644,8 +635,6 @@ const ko: Translations = {
     "Compare the imported supplier plan against free optimization and the 15-minute time-impact constrained plan.":
         "가져온 공급업체 계획을 자유 최적화 및 15분 시간 영향 제약 계획과 비교합니다.",
     ready: "준비됨",
-    skipped: "건너뜀",
-    "Scenario was not enabled for this run.": "이 실행에서는 해당 시나리오가 활성화되지 않았습니다.",
     "route table": "노선 표",
     "Current plan vs free optimization": "현행 계획 vs 자유 최적화",
     "Current plan comparison": "현행 계획 비교",

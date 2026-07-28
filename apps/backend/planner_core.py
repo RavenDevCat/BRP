@@ -1981,10 +1981,7 @@ def build_output_path_map(config: PlannerConfig) -> dict[str, str]:
     output_dir = build_request_output_directory(config)
     output_dir.mkdir(parents=True, exist_ok=True)
     return {
-        "original": str(output_dir / config.original_output_name),
         "current_plan": str(output_dir / config.current_plan_output_name),
-        "subway": str(output_dir / config.subway_output_name),
-        "nearby": str(output_dir / config.nearby_output_name),
         "time_constrained": str(output_dir / config.time_constrained_output_name),
         "exception_preserving": str(output_dir / config.exception_preserving_output_name),
     }
@@ -2371,9 +2368,7 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
 
 
 def summarize_structured_results(results: dict[str, Any], uploaded_address_count: int) -> dict[str, Any]:
-    original = results.get("original", {})
-    if not original or original.get("enabled") is False:
-        original = results.get("time_constrained", {}) or original
+    original = results.get("time_constrained", {})
     currency_code = str(results.get("currency_code", "USD"))
     input_address_review = dict(results.get("input_address_review") or {})
     input_address_review_summary = dict(input_address_review.get("summary") or {})
@@ -3456,7 +3451,7 @@ def build_current_plan_map_scenario(
     prepared_original_points: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if not current_plan_assessment:
-        return _build_skipped_scenario_result("No current plan assessment was available for map rendering.")
+        raise RuntimeError("No current plan assessment was available for map rendering.")
 
     points = [dict(point) for point in list(prepared_original_points or [])]
     route_summaries = list(current_plan_assessment.get("route_summaries") or [])
@@ -3505,7 +3500,6 @@ def build_current_plan_map_scenario(
         "service_stop_count": int(current_plan_assessment.get("service_stop_count", current_plan_assessment.get("stop_count", 0)) or 0),
         "map_point_count": len(points),
         "bus_mix": dict(current_plan_assessment.get("bus_mix", {})),
-        "enabled": True,
         "avg_route_distance_m": float(current_plan_assessment.get("avg_route_distance_m", 0.0) or 0.0),
         "avg_route_duration_s": float(current_plan_assessment.get("avg_route_duration_s", 0.0) or 0.0),
     }
@@ -3519,11 +3513,7 @@ def attach_current_plan_traffic_gate(
     config: PlannerConfig,
     input_records: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
-    if (
-        not current_plan_scenario
-        or current_plan_scenario.get("enabled") is False
-        or not current_plan_scenario.get("routes")
-    ):
+    if not current_plan_scenario or not current_plan_scenario.get("routes"):
         return None
     return attach_final_route_traffic_gate(
         planner,
@@ -5795,35 +5785,25 @@ def _compute_scenario_without_render(
             planner._BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS = previous_gate_route_duration_seconds
 
 
-def _build_skipped_scenario_result(reason: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
-    result = {
-        **dict(extra or {}),
-    }
+def _build_infeasible_scenario_result(
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = dict(extra or {})
     result.update(
         {
-            "points": None,
-            "routes": None,
+            "points": [],
+            "routes": [],
             "output_html": "",
             "bus_count": 0,
             "stop_count": 0,
             "service_stop_count": 0,
             "map_point_count": 0,
             "bus_mix": {},
-            "enabled": False,
-            "skipped_reason": reason,
+            "scenario_status": "infeasible",
+            "infeasible_reason": reason,
         }
     )
-    return result
-
-
-def _build_infeasible_scenario_result(
-    reason: str,
-    extra: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    # Transitional read compatibility until Round 2 moves every consumer to scenario_status.
-    result = _build_skipped_scenario_result(reason, extra)
-    result["scenario_status"] = "infeasible"
-    result["infeasible_reason"] = reason
     return result
 
 
@@ -5849,12 +5829,11 @@ def _apply_vehicle_saving_target(
     route_count = _scenario_bus_count(result)
     current_route_count = max(0, int(current_route_count or 0))
     minimum_vehicle_reduction = max(0, int(minimum_vehicle_reduction or 0))
-    result_enabled = result.get("enabled") is not False
     has_routes = route_count > 0
-    saved_route_count = max(0, current_route_count - route_count) if result_enabled and has_routes else 0
+    saved_route_count = max(0, current_route_count - route_count) if has_routes else 0
     status = (
         "not_applicable"
-        if not result_enabled or not has_routes
+        if not has_routes
         else "passed" if saved_route_count >= minimum_vehicle_reduction else "failed"
     )
     payload = {
@@ -6697,6 +6676,7 @@ def _build_route_preserving_protected_scenario(
             }
             candidate["exception_feasible"] = accepted
             if accepted:
+                candidate["scenario_status"] = "passed"
                 candidate["constraint_search_outcome"] = {
                     "status": "passed",
                     "strategy": "route_preserving_reallocation",
@@ -6729,7 +6709,7 @@ def build_exception_preserving_scenario(
     scenario_label: str = "Exception preserving optimization",
 ) -> dict[str, Any]:
     del standard_scenarios, reduced_vehicle_limit
-    if not current_plan_scenario or current_plan_scenario.get("enabled") is False:
+    if not current_plan_scenario or not current_plan_scenario.get("routes"):
         raise RuntimeError("Current plan timing was not available for exception preservation.")
 
     route_preserving: dict[str, Any] | None = None
@@ -7390,13 +7370,13 @@ def _build_time_acceptance_constraint_builder(
         "bounded_solver_stop_count": 0,
     }
     if not current_plan_assessment:
-        metadata["skipped_reason"] = "No current plan assessment was available."
+        metadata["unavailable_reason"] = "No current plan assessment was available."
         return None, None, metadata
     if not assessment_time:
-        metadata["skipped_reason"] = "No current-plan timing matrix was available."
+        metadata["unavailable_reason"] = "No current-plan timing matrix was available."
         return None, None, metadata
     if len(original_points) <= 1:
-        metadata["skipped_reason"] = "No service stops were available for time-impact constraints."
+        metadata["unavailable_reason"] = "No service stops were available for time-impact constraints."
         return None, None, metadata
 
     working_time = (
@@ -7431,7 +7411,7 @@ def _build_time_acceptance_constraint_builder(
                 upper_bound_by_key[key] = upper_bound_s if existing is None else min(existing, upper_bound_s)
 
     if not upper_bound_by_key:
-        metadata["skipped_reason"] = "No matched current-plan stops could be converted into time constraints."
+        metadata["unavailable_reason"] = "No matched current-plan stops could be converted into time constraints."
         return None, None, metadata
 
     metadata["enabled"] = True
@@ -7561,21 +7541,6 @@ def run_backend_planner_with_prepared_data(
             elif refresh_status != "not_applicable":
                 reason = str(scheduled_run_traffic_refresh.get("reason") or "traffic_refresh_unavailable")
                 raise RuntimeError(f"Scheduled fresh traffic validation failed: {reason}")
-        planner.log("[BACKEND] Free optimization baseline solve paused; X-minute constrained is the primary baseline.")
-        free_optimization_baseline = _build_skipped_scenario_result(
-            "Free optimization baseline solve is retired; use Strict Plan or Protected Plan.",
-            {
-                "baseline_name": "free_optimization_baseline",
-                "display_name": "Free Optimization Baseline",
-                "scenario_label": "Free Optimization Baseline",
-            },
-        )
-        subway_result = _build_skipped_scenario_result(
-            "Subway aggregation is retired from the two-plan solver."
-        )
-        nearby_result = _build_skipped_scenario_result(
-            "Nearby aggregation is retired from the two-plan solver."
-        )
         if current_plan_scenario is None:
             if current_plan:
                 assessment_time, assessment_distance = _build_assessment_metric_matrices(planner, original_points)
@@ -7639,7 +7604,7 @@ def run_backend_planner_with_prepared_data(
         if time_constraint_builder is None:
             raise RuntimeError(
                 str(
-                    time_constraint_metadata.get("skipped_reason")
+                    time_constraint_metadata.get("unavailable_reason")
                     or "Time-impact constraints were not available."
                 )
             )
@@ -7672,7 +7637,6 @@ def run_backend_planner_with_prepared_data(
                 or 0
             ),
         }
-        original_result = free_optimization_baseline
         protected_time_constraint_metadata = {
             **deepcopy(time_constraint_metadata),
             "source": "exception_preserving_remainder",
@@ -7720,10 +7684,7 @@ def run_backend_planner_with_prepared_data(
     )
 
     structured_results = {
-        "original": original_result,
         "current_plan": current_plan_scenario,
-        "subway": subway_result,
-        "nearby": nearby_result,
         "time_constrained": time_constrained_result,
         "exception_preserving": exception_preserving_result,
         "input_address_count": len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0]),
@@ -7734,7 +7695,6 @@ def run_backend_planner_with_prepared_data(
         "job_id": config.output_directory_name,
         "current_plan_assessment": current_plan_assessment,
         "current_plan_scenario": current_plan_scenario,
-        "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,
@@ -7755,7 +7715,6 @@ def run_backend_planner_with_prepared_data(
         "elapsed_seconds": time.perf_counter() - started_at,
         "current_plan_assessment": current_plan_assessment,
         "current_plan_scenario": current_plan_scenario,
-        "free_optimization_baseline": free_optimization_baseline,
         "time_constrained_optimization": time_constrained_result,
         "exception_preserving_optimization": exception_preserving_result,
         "current_plan_comparison": current_plan_comparison,

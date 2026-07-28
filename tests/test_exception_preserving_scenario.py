@@ -251,7 +251,8 @@ def test_exception_preserving_runs_independently_without_current_failures(monkey
         standard_scenarios=[{"traffic_gate": {"status": "passed"}}],
     )
 
-    assert result.get("enabled") is not False
+    assert "enabled" not in result
+    assert result["scenario_status"] == "passed"
     assert result["traffic_gate"]["status"] == "passed"
     assert result["exception_preserving"]["frozen_route_count"] == 0
 
@@ -514,7 +515,8 @@ def test_protected_plan_does_not_relax_vehicle_saving_limit(monkeypatch):
     assert captured["limits"] == [1]
     assert captured["forced_counts"] == [1]
     assert captured["subset_addresses"] == ["school", "remaining a", "remaining b"]
-    assert result["enabled"] is False
+    assert "enabled" not in result
+    assert result["scenario_status"] == "infeasible"
     assert result["exception_preserving"]["accepted"] is False
 
 
@@ -631,7 +633,7 @@ def test_protected_infeasible_result_names_unfrozen_remainder_limit(monkeypatch)
         scenario_label="Protected Plan",
     )
 
-    assert result["enabled"] is False
+    assert "enabled" not in result
     assert result["scenario_status"] == "infeasible"
     assert "unfrozen remainder" in result["infeasible_reason"]
     assert result["exception_preserving"]["attempts"]

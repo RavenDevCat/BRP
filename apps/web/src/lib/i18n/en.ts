@@ -404,8 +404,6 @@ const en: Translations = {
     "AM arrival": "AM arrival",
     "PM departure": "PM departure",
     "Stop dwell": "Stop dwell",
-    "Subway baseline": "Subway baseline",
-    "Nearby baseline": "Nearby baseline",
     "Fleet limits": "Fleet limits",
 
     // Dashboard / Jobs pages
@@ -964,7 +962,6 @@ const en: Translations = {
     "Scenario": "Scenario",
     "Scenario evidence": "Scenario evidence",
     "Scenario Evidence": "Scenario Evidence",
-    "Scenario was not enabled for this run.": "Scenario was not enabled for this run.",
     "School / Start": "School / Start",
     "Search stop or route": "Search stop or route",
     "seats": "seats",
@@ -983,8 +980,6 @@ const en: Translations = {
     "shown": "shown",
     "Side tools": "Side tools",
     "Signal": "Signal",
-    "skipped": "skipped",
-    "Skipped": "Skipped",
     "Some resolved addresses need human review before running audit.": "Some resolved addresses need human review before running audit.",
     "Some workbook addresses could not be resolved. Clear bad cache entries or correct the workbook before running audit.": "Some workbook addresses could not be resolved. Clear bad cache entries or correct the workbook before running audit.",
     "Stop": "Stop",

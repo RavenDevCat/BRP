@@ -1086,12 +1086,7 @@ def get_job_export(
 ) -> Response:
     job_record = _job_for_context(job_id, context)
     normalized_export_key = str(export_key or "").strip().lower()
-    if normalized_export_key == "free-optimization-template":
-        workbook_bytes, export_error = (
-            backend_service._build_free_baseline_template_export(job_record)
-        )
-        filename = f"free_optimization_baseline_{job_id}.xlsx"
-    elif normalized_export_key.startswith("scenario-template-"):
+    if normalized_export_key.startswith("scenario-template-"):
         scenario_key = normalized_export_key[len("scenario-template-") :]
         workbook_bytes, export_error = backend_service._build_scenario_template_export(
             job_record, scenario_key

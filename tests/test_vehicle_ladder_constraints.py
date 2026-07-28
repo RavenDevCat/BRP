@@ -118,7 +118,7 @@ class VehicleLadderConstraintTests(unittest.TestCase):
                 bus_type_configs=[{"name": "bus", "capacity": 30, "max_count": 5}],
             )
 
-        self.assertFalse(result["enabled"])
+        self.assertNotIn("enabled", result)
         self.assertEqual(result["scenario_status"], "infeasible")
         self.assertEqual(result["constraint_search_outcome"]["status"], "infeasible")
         self.assertEqual(result["constraint_search_outcome"]["allowed_max_vehicle_count"], 1)
@@ -214,7 +214,6 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
     def test_saving_target_is_not_applicable_without_routes(self) -> None:
         result = {
-            "enabled": False,
             "bus_count": 0,
             "traffic_gate": {},
         }

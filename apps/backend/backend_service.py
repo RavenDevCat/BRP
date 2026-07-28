@@ -1913,7 +1913,7 @@ def _current_plan_preview_map(
         )
         if not callable(upper_builder):
             raise ValueError(
-                str(time_constraint.get("skipped_reason") or "Current-plan time constraints are unavailable.")
+                str(time_constraint.get("unavailable_reason") or "Current-plan time constraints are unavailable.")
             )
         scenario = build_current_plan_map_scenario(
             planner,
@@ -2852,7 +2852,12 @@ def _ai_audit_record_with_decision_context(job_record: dict[str, Any]) -> dict[s
     )
     for scenario_key, result_key in scenarios:
         scenario = dict(result.get(result_key) or structured.get(scenario_key) or {})
-        if not scenario or scenario.get("enabled") is False:
+        if (
+            not scenario
+            or str(scenario.get("scenario_status") or "").strip().lower()
+            in {"infeasible", "legacy_unavailable"}
+            or not scenario.get("routes")
+        ):
             continue
         existing_summary = (
             dict(scenario.get("time_impact") or {})
@@ -5219,12 +5224,6 @@ def _build_scenario_template_export(
         ), None
     except Exception as exc:
         return None, str(exc)
-
-
-def _build_free_baseline_template_export(
-    job_record: dict[str, Any],
-) -> tuple[bytes | None, str | None]:
-    return _build_scenario_template_export(job_record, "original")
 
 
 def _excel_safe_value(value: Any) -> Any:

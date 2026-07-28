@@ -662,7 +662,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     current_plan_scenario = dict(structured.get("current_plan") or result.get("current_plan_scenario") or {})
     if not current_plan_scenario and current_plan:
         current_plan_scenario = {
-            "enabled": True,
             "route_count": current_plan.get("route_count"),
             "service_stop_count": _assessment_service_stop_count(current_plan),
             "avg_route_distance_m": current_plan.get("avg_route_distance_m"),

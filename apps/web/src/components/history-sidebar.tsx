@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Crown, Folder, FolderInput, FolderPlus, GitCompareArrows, History, Loader2, LockKeyhole, Pencil, RefreshCw, Star, Trash2, UserPlus, Users, X } from "lucide-react";
+import { ArrowRight, Crown, Folder, FolderInput, FolderPlus, GitCompareArrows, History, ListChecks, Loader2, LockKeyhole, Pencil, RefreshCw, Star, Trash2, UserPlus, Users, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -361,12 +361,13 @@ export function HistorySidebar<T>({
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
-                className={buttonClassName("ghost")}
+                className={buttonClassName(selecting ? "primary" : "secondary", "min-w-24")}
                 onClick={() => {
                   setSelecting(!selecting);
                   setSelectedIds(new Set());
                 }}
               >
+                {selecting ? <X className="h-4 w-4" aria-hidden="true" /> : <ListChecks className="h-4 w-4" aria-hidden="true" />}
                 {t(selecting ? "Cancel" : "Select")}
               </button>
               {selecting ? (

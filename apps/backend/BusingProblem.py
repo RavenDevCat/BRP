@@ -142,6 +142,8 @@ NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
 NODE_TIME_SOFT_UPPER_BOUNDS: dict[int, int] = {}
 MIN_SOLVER_VEHICLE_COUNT = 0
 _BRP_RUNTIME_PROFILE: dict[str, float | int] = {}
+_BRP_OSRM_MATRIX_CACHE: dict[Any, Any] | None = None
+_BRP_OSRM_LEG_CACHE: dict[Any, Any] | None = None
 
 HUGE_TIME_SECONDS = 6 * 3600
 HUGE_DISTANCE_METERS = 300_000
@@ -1730,10 +1732,16 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
     if not points:
         return [], []
 
-    coordinates = []
-    for point in points:
-        point_lat, point_lng = point_osrm_lat_lng(point)
-        coordinates.append(f"{point_lng},{point_lat}")
+    coordinate_pairs = tuple(point_osrm_lat_lng(point) for point in points)
+    cache_key = (str(OSRM_BASE_URL), int(STOP_SERVICE_SECONDS), coordinate_pairs)
+    cache = globals().get("_BRP_OSRM_MATRIX_CACHE")
+    if isinstance(cache, dict) and cache_key in cache:
+        _record_runtime_metric("osrm_matrix_cache_hits")
+        cached_time, cached_distance = cache[cache_key]
+        return [list(row) for row in cached_time], [list(row) for row in cached_distance]
+
+    _record_runtime_metric("osrm_matrix_cache_misses")
+    coordinates = [f"{point_lng},{point_lat}" for point_lat, point_lng in coordinate_pairs]
 
     request_started_at = time.perf_counter()
     _record_runtime_metric("osrm_matrix_calls")
@@ -1769,6 +1777,11 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
             distance_matrix[i][j] = int(round(float(distance_m_raw)))
             duration_s = int(round(float(duration_s_raw)))
             time_matrix[i][j] = duration_s + (STOP_SERVICE_SECONDS if j != 0 else 0)
+    if isinstance(cache, dict):
+        cache[cache_key] = (
+            tuple(tuple(row) for row in time_matrix),
+            tuple(tuple(row) for row in distance_matrix),
+        )
     return time_matrix, distance_matrix
 
 
@@ -1954,7 +1967,32 @@ def osrm_driving_direction_with_metadata(
     started_at = time.perf_counter()
     _record_runtime_metric("osrm_leg_calls")
     try:
-        return _osrm_driving_direction_with_metadata_impl(origin, destination)
+        cache_key = (
+            str(OSRM_BASE_URL),
+            point_osrm_lat_lng(origin, prefer_plot=True),
+            point_osrm_lat_lng(origin, prefer_plot=False),
+            point_osrm_lat_lng(destination, prefer_plot=True),
+            point_osrm_lat_lng(destination, prefer_plot=False),
+            OSRM_RAW_COORD_FALLBACK_MAX_DIRECT_KM,
+            OSRM_RAW_COORD_FALLBACK_MIN_ROUTE_RATIO,
+            OSRM_RAW_COORD_FALLBACK_MIN_EXTRA_KM,
+            OSRM_RAW_COORD_FALLBACK_MIN_SAVINGS_RATIO,
+            OSRM_RAW_COORD_FALLBACK_MIN_SHAPE_EXTRA_KM,
+            OSRM_RAW_COORD_FALLBACK_MIN_BACKTRACK_KM,
+        )
+        cache = globals().get("_BRP_OSRM_LEG_CACHE")
+        if isinstance(cache, dict) and cache_key in cache:
+            _record_runtime_metric("osrm_leg_cache_hits")
+            distance_m, duration_s, geometry, metadata = cache[cache_key]
+            return distance_m, duration_s, list(geometry), dict(metadata)
+
+        _record_runtime_metric("osrm_leg_cache_misses")
+        distance_m, duration_s, geometry, metadata = _osrm_driving_direction_with_metadata_impl(
+            origin, destination
+        )
+        if isinstance(cache, dict):
+            cache[cache_key] = (distance_m, duration_s, tuple(geometry), dict(metadata))
+        return distance_m, duration_s, list(geometry), dict(metadata)
     finally:
         _record_runtime_metric("osrm_leg_seconds", time.perf_counter() - started_at)
 

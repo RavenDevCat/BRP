@@ -7498,6 +7498,8 @@ def run_backend_planner_with_prepared_data(
     planner = load_legacy_planner()
     _apply_config(planner, config, input_records)
     planner._BRP_RUNTIME_PROFILE = {}
+    planner._BRP_OSRM_MATRIX_CACHE = {}
+    planner._BRP_OSRM_LEG_CACHE = {}
     planner.CURRENT_CURRENCY_CODE = str(prepared_payload.get("currency_code") or planner.determine_currency_code(input_records))
     traffic_profile_name = normalize_traffic_profile_name(config.traffic_profile_name)
     traffic_profile_context = "Unscaled OSRM candidate search with direct final-route provider validation"

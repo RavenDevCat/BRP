@@ -6009,7 +6009,6 @@ def _solve_vehicle_ladder_scenario(
                 scenario_label,
                 bus_type_configs=active_bus_type_configs,
                 reduced_vehicle_limit=target_vehicle_count,
-                forced_vehicle_count=target_vehicle_count,
                 node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                 node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                 node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
@@ -6028,9 +6027,9 @@ def _solve_vehicle_ladder_scenario(
             continue
 
         actual_vehicle_count = _scenario_bus_count(candidate)
-        if actual_vehicle_count != target_vehicle_count:
+        if actual_vehicle_count > target_vehicle_count:
             raise RuntimeError(
-                f"Exact vehicle-count solve expected {target_vehicle_count} vehicle(s), "
+                f"Vehicle-cap solve allowed at most {target_vehicle_count} vehicle(s), "
                 f"but returned {actual_vehicle_count}."
             )
 
@@ -6047,11 +6046,11 @@ def _solve_vehicle_ladder_scenario(
         if all_constraints_passed:
             if best_target_result is None or _scenario_candidate_rank(candidate) < _scenario_candidate_rank(best_target_result):
                 best_target_result = candidate
-                selected_target_vehicle_count = target_vehicle_count
+                selected_target_vehicle_count = actual_vehicle_count
             continue
         if best_failed_result is None or _failed_scenario_rank(candidate) < _failed_scenario_rank(best_failed_result):
             best_failed_result = candidate
-            selected_failed_target_vehicle_count = target_vehicle_count
+            selected_failed_target_vehicle_count = actual_vehicle_count
 
     result = best_target_result or best_failed_result
     if result is None:
@@ -6817,16 +6816,15 @@ def build_exception_preserving_scenario(
                         f"Protected remainder ({frozen_count} frozen)",
                         bus_type_configs=remaining_bus_type_configs,
                         reduced_vehicle_limit=remaining_limit_candidate,
-                        forced_vehicle_count=remaining_limit_candidate,
                         node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         final_time_impact_validator=final_time_impact_validator,
                     )
                     optimized_vehicle_count = _scenario_bus_count(optimized)
-                    if optimized_vehicle_count != remaining_limit_candidate:
+                    if optimized_vehicle_count > remaining_limit_candidate:
                         raise RuntimeError(
-                            "Exact Protected remainder solve expected "
+                            "Protected remainder solve allowed at most "
                             f"{remaining_limit_candidate} vehicle(s), but returned "
                             f"{optimized_vehicle_count}."
                         )
@@ -6864,12 +6862,12 @@ def build_exception_preserving_scenario(
                 if callable(final_time_impact_validator):
                     final_time_impact_validator(candidate, original_points)
                 candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
-                expected_candidate_route_count = frozen_count + remaining_limit_candidate
+                max_candidate_route_count = frozen_count + remaining_limit_candidate
                 frozen_route_ids = {
                     _route_display_id(route, index)
                     for index, route in enumerate(candidate_frozen_routes, start=1)
                 }
-                if solve_time is not None and candidate_route_count < expected_candidate_route_count:
+                if solve_time is not None and candidate_route_count < max_candidate_route_count:
                     candidate = _repair_failed_routes_with_spare_vehicles(
                         planner,
                         candidate,
@@ -6878,7 +6876,7 @@ def build_exception_preserving_scenario(
                         config,
                         input_records,
                         scenario_label,
-                        expected_candidate_route_count,
+                        max_candidate_route_count,
                         ignored_failed_route_ids=frozen_route_ids,
                         node_time_lower_bounds=(
                             node_time_lower_bounds_builder(original_points)
@@ -6894,9 +6892,9 @@ def build_exception_preserving_scenario(
                     )
                     combined_routes = list(candidate.get("routes") or [])
                     candidate_route_count = int(candidate.get("bus_count") or len(combined_routes) or 0)
-                if candidate_route_count != expected_candidate_route_count:
+                if candidate_route_count > max_candidate_route_count:
                     raise RuntimeError(
-                        f"Exact Protected solve expected {expected_candidate_route_count} "
+                        f"Protected solve allowed at most {max_candidate_route_count} "
                         f"total vehicle(s), but returned {candidate_route_count}."
                     )
                 candidate_summary = _scenario_exception_summary(candidate, config=config)
@@ -6915,7 +6913,7 @@ def build_exception_preserving_scenario(
                     "remaining_stop_count": remaining_service_count,
                     "remaining_vehicle_limit": remaining_limit_candidate,
                     "remaining_actual_vehicle_count": optimized_vehicle_count,
-                    "target_vehicle_count": expected_candidate_route_count,
+                    "target_vehicle_count": max_candidate_route_count,
                     "actual_vehicle_count": candidate_route_count,
                     "route_count": candidate_route_count,
                     "candidate_failure_summary": candidate_summary,
@@ -6927,7 +6925,7 @@ def build_exception_preserving_scenario(
                     candidate,
                     remainder_gate,
                     config,
-                    current_min_active_vehicle_count=remaining_limit_candidate,
+                    current_min_active_vehicle_count=optimized_vehicle_count,
                     max_vehicle_count=target_vehicle_count,
                     ignored_route_ids=frozen_route_ids,
                 )

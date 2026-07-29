@@ -134,7 +134,7 @@ def test_vehicle_ladder_starts_at_required_saving_target(monkeypatch):
         forced_vehicle_count=None,
         **_kwargs,
     ):
-        assert forced_vehicle_count == reduced_vehicle_limit
+        assert forced_vehicle_count is None
         seen_targets.append(int(reduced_vehicle_limit or 0))
         if reduced_vehicle_limit == 3:
             return {
@@ -190,7 +190,7 @@ def test_vehicle_ladder_never_relaxes_the_hard_vehicle_saving_target(monkeypatch
         forced_vehicle_count=None,
         **_kwargs,
     ):
-        assert forced_vehicle_count == reduced_vehicle_limit
+        assert forced_vehicle_count is None
         target = int(reduced_vehicle_limit or 0)
         seen_targets.append(target)
         if target == 4:

@@ -932,7 +932,7 @@ def resolve_final_route_traffic_policy(
     )
 
 
-def attach_final_route_traffic_gate(
+def _attach_final_route_traffic_gate_impl(
     planner: Any,
     scenario: dict[str, Any],
     points: list[dict[str, Any]],
@@ -1225,6 +1225,42 @@ def attach_final_route_traffic_gate(
     scenario["traffic_gate"] = gate
     scenario["traffic_feasible"] = gate["status"] in {"passed", "not_applicable", "disabled"}
     return gate
+
+
+def attach_final_route_traffic_gate(
+    planner: Any,
+    scenario: dict[str, Any],
+    points: list[dict[str, Any]],
+    config: PlannerConfig,
+    input_records: list[dict[str, Any]],
+    scenario_label: str,
+) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    profile = getattr(planner, "_BRP_RUNTIME_PROFILE", None)
+    if isinstance(profile, dict):
+        profile["traffic_gate_calls"] = int(profile.get("traffic_gate_calls", 0)) + 1
+    try:
+        gate = _attach_final_route_traffic_gate_impl(
+            planner,
+            scenario,
+            points,
+            config,
+            input_records,
+            scenario_label,
+        )
+        if isinstance(profile, dict):
+            profile["traffic_api_calls"] = int(profile.get("traffic_api_calls", 0)) + int(
+                gate.get("api_calls", 0) or 0
+            )
+            profile["traffic_cache_hits"] = int(profile.get("traffic_cache_hits", 0)) + int(
+                gate.get("cache_hits", 0) or 0
+            )
+        return gate
+    finally:
+        if isinstance(profile, dict):
+            profile["traffic_gate_seconds"] = float(profile.get("traffic_gate_seconds", 0.0)) + (
+                time.perf_counter() - started_at
+            )
 
 
 def _traffic_gate_passed(gate: dict[str, Any] | None) -> bool:
@@ -7461,6 +7497,7 @@ def run_backend_planner_with_prepared_data(
 
     planner = load_legacy_planner()
     _apply_config(planner, config, input_records)
+    planner._BRP_RUNTIME_PROFILE = {}
     planner.CURRENT_CURRENCY_CODE = str(prepared_payload.get("currency_code") or planner.determine_currency_code(input_records))
     traffic_profile_name = normalize_traffic_profile_name(config.traffic_profile_name)
     traffic_profile_context = "Unscaled OSRM candidate search with direct final-route provider validation"
@@ -7703,6 +7740,10 @@ def run_backend_planner_with_prepared_data(
         "scheduled_run_traffic_refresh": scheduled_run_traffic_refresh,
         "service_direction": normalize_service_direction(config.service_direction),
         "planner_config": asdict(config),
+        "runtime_profile": {
+            **deepcopy(getattr(planner, "_BRP_RUNTIME_PROFILE", {}) or {}),
+            "total_seconds": time.perf_counter() - started_at,
+        },
     }
     structured_results = attach_output_paths_to_structured_results(structured_results, config)
     service_input_record_count = len([item for item in input_records if int(item.get("passenger_count", 0) or 0) > 0])

@@ -141,6 +141,7 @@ NODE_TIME_LOWER_BOUNDS: dict[int, int] = {}
 NODE_TIME_UPPER_BOUNDS: dict[int, int] = {}
 NODE_TIME_SOFT_UPPER_BOUNDS: dict[int, int] = {}
 MIN_SOLVER_VEHICLE_COUNT = 0
+_BRP_RUNTIME_PROFILE: dict[str, float | int] = {}
 
 HUGE_TIME_SECONDS = 6 * 3600
 HUGE_DISTANCE_METERS = 300_000
@@ -153,6 +154,12 @@ MIN_LOAD_PENALTY = {"Large Bus": 140, "Mid Bus": 100, "Small Bus": 40}
 NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND = int(
     os.environ.get("BRP_NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND", "240") or 240
 )
+
+
+def _record_runtime_metric(name: str, value: float | int = 1) -> None:
+    profile = globals().get("_BRP_RUNTIME_PROFILE")
+    if isinstance(profile, dict):
+        profile[name] = profile.get(name, 0) + value
 
 
 class RateLimiter:
@@ -1339,7 +1346,7 @@ def validate_trivial_time_bounds(
             )
 
 
-def solve_routes_for_fleet(
+def _solve_routes_for_fleet_impl(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
     distance_matrix: list[list[int]],
@@ -1543,6 +1550,31 @@ def solve_routes_for_fleet(
     return routes
 
 
+def solve_routes_for_fleet(
+    points: list[dict[str, Any]],
+    time_matrix: list[list[int]],
+    distance_matrix: list[list[int]],
+    fleet: list[dict[str, Any]],
+    node_time_upper_bounds: dict[int, int] | None = None,
+    node_time_soft_upper_bounds: dict[int, int] | None = None,
+    node_time_lower_bounds: dict[int, int] | None = None,
+) -> list[dict[str, Any]]:
+    started_at = time.perf_counter()
+    _record_runtime_metric("solver_calls")
+    try:
+        return _solve_routes_for_fleet_impl(
+            points,
+            time_matrix,
+            distance_matrix,
+            fleet,
+            node_time_upper_bounds,
+            node_time_soft_upper_bounds,
+            node_time_lower_bounds,
+        )
+    finally:
+        _record_runtime_metric("solver_seconds", time.perf_counter() - started_at)
+
+
 def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], distance_matrix: list[list[int]]) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -1703,13 +1735,18 @@ def build_osrm_full_matrix(points: list[dict[str, Any]]) -> tuple[list[list[int]
         point_lat, point_lng = point_osrm_lat_lng(point)
         coordinates.append(f"{point_lng},{point_lat}")
 
-    payload = osrm_request_json(
-        "table",
-        ";".join(coordinates),
-        {
-            "annotations": "distance,duration",
-        },
-    )
+    request_started_at = time.perf_counter()
+    _record_runtime_metric("osrm_matrix_calls")
+    try:
+        payload = osrm_request_json(
+            "table",
+            ";".join(coordinates),
+            {
+                "annotations": "distance,duration",
+            },
+        )
+    finally:
+        _record_runtime_metric("osrm_matrix_seconds", time.perf_counter() - request_started_at)
     durations = payload.get("durations") or []
     distances = payload.get("distances") or []
     if len(durations) != len(points) or len(distances) != len(points):
@@ -1871,7 +1908,7 @@ def _should_try_raw_coordinate_route(
     return point_has_distinct_raw_coordinate(origin) or point_has_distinct_raw_coordinate(destination)
 
 
-def osrm_driving_direction_with_metadata(
+def _osrm_driving_direction_with_metadata_impl(
     origin: dict[str, Any],
     destination: dict[str, Any],
 ) -> tuple[int, int, list[tuple[float, float]], dict[str, Any]]:
@@ -1908,6 +1945,18 @@ def osrm_driving_direction_with_metadata(
     metadata["raw_coordinate_distance_m"] = raw_distance_m
     metadata["raw_coordinate_duration_s"] = raw_duration_s
     return distance_m, duration_s, geometry, metadata
+
+
+def osrm_driving_direction_with_metadata(
+    origin: dict[str, Any],
+    destination: dict[str, Any],
+) -> tuple[int, int, list[tuple[float, float]], dict[str, Any]]:
+    started_at = time.perf_counter()
+    _record_runtime_metric("osrm_leg_calls")
+    try:
+        return _osrm_driving_direction_with_metadata_impl(origin, destination)
+    finally:
+        _record_runtime_metric("osrm_leg_seconds", time.perf_counter() - started_at)
 
 
 def osrm_driving_direction(origin: dict[str, Any], destination: dict[str, Any]) -> tuple[int, int, list[tuple[float, float]]]:
@@ -2007,7 +2056,7 @@ def _snap_connectors_for_leg(
     return connectors
 
 
-def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list[dict[str, Any]]) -> None:
+def _enrich_routes_with_actual_driving_impl(points: list[dict[str, Any]], routes: list[dict[str, Any]]) -> None:
     for route in routes:
         leg_details: list[dict[str, Any]] = []
         actual_time_s = 0
@@ -2058,6 +2107,15 @@ def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list
         route["distance_m"] = actual_distance_m
         route["raw_osrm_time_s"] = raw_osrm_time_s
         route["stop_service_time_s"] = stop_service_time_s
+
+
+def enrich_routes_with_actual_driving(points: list[dict[str, Any]], routes: list[dict[str, Any]]) -> None:
+    started_at = time.perf_counter()
+    _record_runtime_metric("osrm_enrichment_calls")
+    try:
+        _enrich_routes_with_actual_driving_impl(points, routes)
+    finally:
+        _record_runtime_metric("osrm_enrichment_seconds", time.perf_counter() - started_at)
 
 
 def annotate_and_price_routes(

@@ -6045,6 +6045,7 @@ def _solve_vehicle_ladder_scenario(
                 scenario_label,
                 bus_type_configs=active_bus_type_configs,
                 reduced_vehicle_limit=target_vehicle_count,
+                forced_vehicle_count=target_vehicle_count,
                 node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                 node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                 node_time_soft_upper_bounds_builder=node_time_soft_upper_bounds_builder,
@@ -6055,7 +6056,7 @@ def _solve_vehicle_ladder_scenario(
             attempts.append(
                 {
                     "target_vehicle_count": target_vehicle_count,
-                    "phase": "target_or_better",
+                    "phase": "exact_target",
                     "status": "infeasible",
                     "reason": str(exc),
                 }
@@ -6063,9 +6064,9 @@ def _solve_vehicle_ladder_scenario(
             continue
 
         actual_vehicle_count = _scenario_bus_count(candidate)
-        if actual_vehicle_count > target_vehicle_count:
+        if actual_vehicle_count != target_vehicle_count:
             raise RuntimeError(
-                f"Vehicle-cap solve allowed at most {target_vehicle_count} vehicle(s), "
+                f"Vehicle-ladder solve required exactly {target_vehicle_count} vehicle(s), "
                 f"but returned {actual_vehicle_count}."
             )
 
@@ -6073,7 +6074,7 @@ def _solve_vehicle_ladder_scenario(
         candidate = _apply_vehicle_saving_target(candidate, current_route_count, minimum_vehicle_reduction)
         all_constraints_passed = _scenario_feasibility_passed(candidate)
         attempt = _vehicle_ladder_attempt(candidate, target_vehicle_count)
-        attempt["phase"] = "target_or_better"
+        attempt["phase"] = "exact_target"
         attempt["hard_constraints_passed"] = hard_passed
         attempt["all_constraints_passed"] = all_constraints_passed
         attempt["required_target_vehicle_count"] = required_target_vehicle_count
@@ -6852,15 +6853,16 @@ def build_exception_preserving_scenario(
                         f"Protected remainder ({frozen_count} frozen)",
                         bus_type_configs=remaining_bus_type_configs,
                         reduced_vehicle_limit=remaining_limit_candidate,
+                        forced_vehicle_count=remaining_limit_candidate,
                         node_time_lower_bounds_builder=node_time_lower_bounds_builder,
                         node_time_upper_bounds_builder=node_time_upper_bounds_builder,
                         time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
                         final_time_impact_validator=final_time_impact_validator,
                     )
                     optimized_vehicle_count = _scenario_bus_count(optimized)
-                    if optimized_vehicle_count > remaining_limit_candidate:
+                    if optimized_vehicle_count != remaining_limit_candidate:
                         raise RuntimeError(
-                            "Protected remainder solve allowed at most "
+                            "Protected remainder solve required exactly "
                             f"{remaining_limit_candidate} vehicle(s), but returned "
                             f"{optimized_vehicle_count}."
                         )

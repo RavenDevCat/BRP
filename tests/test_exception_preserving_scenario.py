@@ -203,7 +203,7 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
     assert result["traffic_gate"]["excluded_route_ids"] == ["R12"]
     assert result["traffic_gate"]["all_routes_status"] == "failed"
     assert captured["reduced_vehicle_limit"] == 1
-    assert captured["forced_vehicle_count"] is None
+    assert captured["forced_vehicle_count"] == 1
     assert captured["bus_type_configs"][0]["max_count"] == 1
     assert [point["address"] for point in captured["subset_points"]] == ["school", "remaining a", "remaining b"]
     assert result["routes"][0]["route_id"] == "R12"
@@ -513,7 +513,7 @@ def test_protected_plan_does_not_relax_vehicle_saving_limit(monkeypatch):
     )
 
     assert captured["limits"] == [1]
-    assert captured["forced_counts"] == [None]
+    assert captured["forced_counts"] == [1]
     assert captured["subset_addresses"] == ["school", "remaining a", "remaining b"]
     assert "enabled" not in result
     assert result["scenario_status"] == "infeasible"
@@ -549,7 +549,7 @@ def test_exception_preserving_rejects_remainder_vehicle_count_mismatch(monkeypat
     }
 
     def fake_compute(_planner, subset_points, *_args, forced_vehicle_count=None, **_kwargs):
-        assert forced_vehicle_count is None
+        assert forced_vehicle_count == 1
         return {
             "points": subset_points,
             "routes": [
@@ -572,7 +572,7 @@ def test_exception_preserving_rejects_remainder_vehicle_count_mismatch(monkeypat
     monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
     monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
 
-    with pytest.raises(RuntimeError, match="at most 1 vehicle.*returned 2"):
+    with pytest.raises(RuntimeError, match="exactly 1 vehicle.*returned 2"):
         planner_core.build_exception_preserving_scenario(
             FakePlanner(),
             points,
@@ -963,7 +963,7 @@ def test_protected_continues_below_minimum_saving(monkeypatch):
     )
 
     assert attempted_limits == [1]
-    assert attempted_forced_counts == [None]
+    assert attempted_forced_counts == [1]
     assert result["bus_count"] == 2
     assert result["vehicle_saving_target"]["saved_route_count"] == 2
     assert result["constraint_search_outcome"]["selected_vehicle_count"] == 2

@@ -1,8 +1,21 @@
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
 from typing import Any
 
+APPS_DIR = Path(__file__).resolve().parents[1]
+if str(APPS_DIR) not in sys.path:
+    sys.path.insert(0, str(APPS_DIR))
+
+from ortools_route_core import (  # noqa: E402
+    add_capacity_dimension,
+    add_route_time_dimension,
+    add_stop_count_dimension,
+    build_guided_local_search_parameters,
+    register_matrix_transit,
+)
 from demand_routing import (
     _annotate_ordered_points_with_schedule,
     _build_osrm_matrix,
@@ -278,56 +291,43 @@ def build_global_ortools_plan(
     manager = pywrapcp.RoutingIndexManager(len(extended_duration), vehicle_count, starts, ends)
     routing = pywrapcp.RoutingModel(manager)
 
-    def transit_callback(from_index: int, to_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return int(extended_duration[from_node][to_node])
-
-    transit_callback_index = routing.RegisterTransitCallback(transit_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+    transit_callback_index = register_matrix_transit(
+        routing,
+        manager,
+        extended_duration,
+    )
     for vehicle_index, vehicle in enumerate(vehicle_pool):
         routing.SetFixedCostOfVehicle(int(vehicle["fixed_cost"]), vehicle_index)
 
-    def demand_callback(from_index: int) -> int:
-        node = manager.IndexToNode(from_index)
-        if node <= 0 or node == dummy_index:
-            return 0
-        return int(demand_points[node - 1].get("student_count", 0) or 0)
-
-    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_callback_index,
-        0,
+    add_capacity_dimension(
+        routing,
+        manager,
+        [0]
+        + [int(point.get("student_count", 0) or 0) for point in demand_points]
+        + [0],
         [int(vehicle["capacity"]) for vehicle in vehicle_pool],
-        True,
-        "Capacity",
+        name="Capacity",
     )
 
-    routing.AddDimension(
+    add_route_time_dimension(
+        routing,
         transit_callback_index,
-        0,
         int(assumptions.max_route_duration_minutes * 60),
-        True,
-        "Time",
     )
 
-    def stop_callback(from_index: int, to_index: int) -> int:
-        to_node = manager.IndexToNode(to_index)
-        return 1 if 1 <= to_node < dummy_index else 0
-
-    stop_callback_index = routing.RegisterTransitCallback(stop_callback)
-    routing.AddDimension(
-        stop_callback_index,
-        0,
+    add_stop_count_dimension(
+        routing,
+        manager,
+        range(1, dummy_index),
         int(assumptions.max_stops_per_route),
-        True,
-        "Stops",
     )
 
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.seconds = 8
+    search_parameters = build_guided_local_search_parameters(
+        pywrapcp,
+        routing_enums_pb2,
+        first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+        time_limit_seconds=8,
+    )
 
     solution = routing.SolveWithParameters(search_parameters)
     if solution is None:

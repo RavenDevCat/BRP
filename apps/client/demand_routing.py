@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import io
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+APPS_DIR = Path(__file__).resolve().parents[1]
+if str(APPS_DIR) not in sys.path:
+    sys.path.insert(0, str(APPS_DIR))
+
+from ortools_route_core import (  # noqa: E402
+    build_guided_local_search_parameters,
+    register_matrix_transit,
+)
 import client_runtime as runtime
 from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details
 
@@ -194,17 +203,13 @@ def _ortools_open_route_order(duration_matrix: list[list[float]], service_direct
     manager = pywrapcp.RoutingIndexManager(extended_size, 1, [start_index], [end_index])
     routing = pywrapcp.RoutingModel(manager)
 
-    def transit_callback(from_index: int, to_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        return extended_matrix[from_node][to_node]
-
-    transit_callback_index = routing.RegisterTransitCallback(transit_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
-    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
-    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
-    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search_parameters.time_limit.seconds = 2
+    register_matrix_transit(routing, manager, extended_matrix)
+    search_parameters = build_guided_local_search_parameters(
+        pywrapcp,
+        routing_enums_pb2,
+        first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+        time_limit_seconds=2,
+    )
 
     solution = routing.SolveWithParameters(search_parameters)
     if solution is None:

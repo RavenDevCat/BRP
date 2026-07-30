@@ -5,6 +5,7 @@ import html
 import math
 import os
 import re
+import sys
 import time
 from contextlib import contextmanager
 from collections import Counter
@@ -18,6 +19,18 @@ from ortools.constraint_solver import pywrapcp, routing_enums_pb2
 
 from api_rate_limit import CrossProcessRateLimiter
 from json_cache_store import load_json_object, save_json_object
+
+APPS_DIR = Path(__file__).resolve().parents[1]
+if str(APPS_DIR) not in sys.path:
+    sys.path.insert(0, str(APPS_DIR))
+
+from ortools_route_core import (  # noqa: E402
+    add_capacity_dimension,
+    add_route_time_dimension,
+    add_stop_count_dimension,
+    build_guided_local_search_parameters,
+    register_matrix_transit,
+)
 
 
 class NoFeasibleRouteError(RuntimeError):
@@ -1381,24 +1394,18 @@ def _solve_routes_for_fleet_impl(
     manager = pywrapcp.RoutingIndexManager(len(points), vehicle_count, [0] * vehicle_count, [0] * vehicle_count)
     routing = pywrapcp.RoutingModel(manager)
 
-    def transit_callback(from_index: int, to_index: int) -> int:
-        from_node = manager.IndexToNode(from_index)
-        to_node = manager.IndexToNode(to_index)
-        if to_node == 0:
-            return 0
-        return int(working_time_matrix[from_node][to_node])
-
-    transit_index = routing.RegisterTransitCallback(transit_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(transit_index)
-    hard_route_duration_seconds = max(60, int(MAX_ROUTE_DURATION_SECONDS))
-    routing.AddDimension(
-        transit_index,
-        0,
-        hard_route_duration_seconds,
-        True,
-        "Time",
+    transit_index = register_matrix_transit(
+        routing,
+        manager,
+        working_time_matrix,
+        zero_cost_to_nodes={0},
     )
-    time_dimension = routing.GetDimensionOrDie("Time")
+    hard_route_duration_seconds = max(60, int(MAX_ROUTE_DURATION_SECONDS))
+    time_dimension = add_route_time_dimension(
+        routing,
+        transit_index,
+        hard_route_duration_seconds,
+    )
     for node, lower_bound in dict(node_time_lower_bounds or {}).items():
         try:
             node_int = int(node)
@@ -1435,32 +1442,19 @@ def _solve_routes_for_fleet_impl(
             NODE_TIME_SOFT_UPPER_BOUND_PENALTY_PER_SECOND,
         )
 
-    def demand_callback(index: int) -> int:
-        node = manager.IndexToNode(index)
-        return int(points[node].get("passenger_count", 0))
-
-    demand_index = routing.RegisterUnaryTransitCallback(demand_callback)
-    routing.AddDimensionWithVehicleCapacity(
-        demand_index,
-        0,
+    load_dimension = add_capacity_dimension(
+        routing,
+        manager,
+        [int(point.get("passenger_count", 0)) for point in points],
         [solver_capacity_for_vehicle(item) for item in fleet],
-        True,
-        "Load",
+        name="Load",
     )
-    load_dimension = routing.GetDimensionOrDie("Load")
 
-    def stop_count_callback(from_index: int, to_index: int) -> int:
-        del from_index
-        to_node = manager.IndexToNode(to_index)
-        return 0 if to_node == 0 else 1
-
-    stop_count_index = routing.RegisterTransitCallback(stop_count_callback)
-    routing.AddDimension(
-        stop_count_index,
-        0,
+    add_stop_count_dimension(
+        routing,
+        manager,
+        range(1, len(points)),
         route_stop_limit(),
-        True,
-        "Stops",
     )
 
     for vehicle_id, vehicle in enumerate(fleet):
@@ -1488,10 +1482,12 @@ def _solve_routes_for_fleet_impl(
                 >= min_active_vehicles
             )
 
-    search = pywrapcp.DefaultRoutingSearchParameters()
-    search.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION
-    search.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
-    search.time_limit.seconds = SOLVER_TIME_LIMIT_SECONDS
+    search = build_guided_local_search_parameters(
+        pywrapcp,
+        routing_enums_pb2,
+        first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
+        time_limit_seconds=SOLVER_TIME_LIMIT_SECONDS,
+    )
     solution = routing.SolveWithParameters(search)
     if solution is None:
         raise NoFeasibleRouteError(

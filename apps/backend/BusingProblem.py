@@ -1361,6 +1361,77 @@ def validate_trivial_time_bounds(
             )
 
 
+def build_minimum_vehicle_seed(
+    routes: list[dict[str, Any]],
+    target_count: int,
+    points: list[dict[str, Any]],
+    time_matrix: list[list[int]],
+    fleet: list[dict[str, Any]],
+    upper_bounds: dict[int, int] | None = None,
+    lower_bounds: dict[int, int] | None = None,
+) -> list[list[int]] | None:
+    segments = []
+    for route in routes:
+        nodes = [int(node) for node in route.get("nodes", []) if int(node) != 0]
+        if is_to_school_direction():
+            nodes.reverse()
+        if nodes:
+            segments.append(nodes)
+
+    normalized_upper = {int(node): int(value) for node, value in dict(upper_bounds or {}).items()}
+    normalized_lower = {int(node): int(value) for node, value in dict(lower_bounds or {}).items()}
+    min_load = max(1, int(MIN_ACTIVE_ROUTE_PASSENGERS or 1))
+    max_duration = max(60, int(MAX_ROUTE_DURATION_SECONDS))
+
+    def segment_metrics(nodes: list[int]) -> tuple[int, int] | None:
+        if not nodes or len(nodes) > route_stop_limit():
+            return None
+        load = sum(int(points[node].get("passenger_count", 0) or 0) for node in nodes)
+        if load < min_load:
+            return None
+        elapsed = 0
+        previous = 0
+        for node in nodes:
+            elapsed += int(time_matrix[previous][node])
+            if elapsed < normalized_lower.get(node, 0) or elapsed > normalized_upper.get(node, max_duration):
+                return None
+            previous = node
+        return load, elapsed if elapsed <= max_duration else -1
+
+    def assign(candidate_segments: list[list[int]]) -> list[list[int]] | None:
+        measured = [(segment_metrics(nodes), nodes) for nodes in candidate_segments]
+        if any(metrics is None or metrics[1] < 0 for metrics, _ in measured):
+            return None
+        measured.sort(key=lambda item: (-int(item[0][0]), -len(item[1])))
+        vehicles = sorted(
+            enumerate(fleet),
+            key=lambda item: -solver_capacity_for_vehicle(item[1]),
+        )
+        if len(measured) > len(vehicles):
+            return None
+        seed = [[] for _ in fleet]
+        for (metrics, nodes), (vehicle_id, vehicle) in zip(measured, vehicles):
+            if int(metrics[0]) > solver_capacity_for_vehicle(vehicle):
+                return None
+            seed[vehicle_id] = nodes
+        return seed
+
+    while len(segments) < target_count:
+        best: tuple[int, list[list[int]]] | None = None
+        for segment_index, nodes in enumerate(segments):
+            for cut in range(1, len(nodes)):
+                trial = [*segments[:segment_index], nodes[:cut], nodes[cut:], *segments[segment_index + 1 :]]
+                if assign(trial) is None:
+                    continue
+                total_time = sum(int(segment_metrics(item)[1]) for item in trial)
+                if best is None or total_time < best[0]:
+                    best = total_time, trial
+        if best is None:
+            return None
+        segments = best[1]
+    return assign(segments)
+
+
 def _solve_routes_for_fleet_impl(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
@@ -1369,6 +1440,9 @@ def _solve_routes_for_fleet_impl(
     node_time_upper_bounds: dict[int, int] | None = None,
     node_time_soft_upper_bounds: dict[int, int] | None = None,
     node_time_lower_bounds: dict[int, int] | None = None,
+    *,
+    minimum_active_vehicles: int | None = None,
+    first_solution_only: bool = False,
 ) -> list[dict[str, Any]]:
     if not points:
         return []
@@ -1391,6 +1465,47 @@ def _solve_routes_for_fleet_impl(
         raise NoFeasibleRouteError("No feasible fleet composition exists under the configured Large / Mid / Small bus max-count limits.")
 
     vehicle_count = len(fleet)
+    requested_min_active_vehicles = max(
+        0,
+        int(MIN_SOLVER_VEHICLE_COUNT if minimum_active_vehicles is None else minimum_active_vehicles),
+    )
+    max_active_by_stops = max(0, len(points) - 1)
+    min_route_load = max(1, int(MIN_ACTIVE_ROUTE_PASSENGERS or 1))
+    max_active_by_load = max(1, total_demand // min_route_load) if total_demand > 0 else 0
+    min_active_vehicles = min(
+        vehicle_count,
+        requested_min_active_vehicles,
+        max_active_by_stops,
+        max_active_by_load,
+    )
+    seed_routes: list[list[int]] | None = None
+    if min_active_vehicles > 0:
+        unconstrained_routes = _solve_routes_for_fleet_impl(
+            points,
+            time_matrix,
+            distance_matrix,
+            fleet,
+            node_time_upper_bounds,
+            node_time_soft_upper_bounds,
+            node_time_lower_bounds,
+            minimum_active_vehicles=0,
+            first_solution_only=True,
+        )
+        seed_routes = build_minimum_vehicle_seed(
+            unconstrained_routes,
+            min_active_vehicles,
+            points,
+            working_time_matrix,
+            fleet,
+            node_time_upper_bounds,
+            node_time_lower_bounds,
+        )
+        if seed_routes is None:
+            raise NoFeasibleRouteError(
+                f"No feasible routing solution can activate at least {min_active_vehicles} vehicles "
+                "without violating route constraints."
+            )
+
     manager = pywrapcp.RoutingIndexManager(len(points), vehicle_count, [0] * vehicle_count, [0] * vehicle_count)
     routing = pywrapcp.RoutingModel(manager)
 
@@ -1449,6 +1564,11 @@ def _solve_routes_for_fleet_impl(
         [solver_capacity_for_vehicle(item) for item in fleet],
         name="Load",
     )
+    for vehicle_id in range(vehicle_count):
+        routing.solver().Add(
+            load_dimension.CumulVar(routing.End(vehicle_id))
+            >= min_route_load * routing.ActiveVehicleVar(vehicle_id)
+        )
 
     add_stop_count_dimension(
         routing,
@@ -1463,24 +1583,13 @@ def _solve_routes_for_fleet_impl(
         penalty = MIN_LOAD_PENALTY.get(vehicle["name"], 0)
         if target > 0 and penalty > 0:
             load_dimension.SetCumulVarSoftLowerBound(routing.End(vehicle_id), target, penalty)
-    requested_min_active_vehicles = max(0, int(MIN_SOLVER_VEHICLE_COUNT or 0))
-    if requested_min_active_vehicles > 0:
-        max_active_by_stops = max(0, len(points) - 1)
-        min_route_load = max(1, int(MIN_ACTIVE_ROUTE_PASSENGERS or 1))
-        max_active_by_load = max(1, total_demand // min_route_load) if total_demand > 0 else 0
-        min_active_vehicles = min(
-            vehicle_count,
-            requested_min_active_vehicles,
-            max_active_by_stops,
-            max_active_by_load,
-        )
-        if min_active_vehicles > 0:
-            routing.solver().Add(
-                routing.solver().Sum(
-                    [routing.ActiveVehicleVar(vehicle_id) for vehicle_id in range(vehicle_count)]
-                )
-                >= min_active_vehicles
+    if min_active_vehicles > 0:
+        routing.solver().Add(
+            routing.solver().Sum(
+                [routing.ActiveVehicleVar(vehicle_id) for vehicle_id in range(vehicle_count)]
             )
+            >= min_active_vehicles
+        )
 
     search = build_guided_local_search_parameters(
         pywrapcp,
@@ -1488,7 +1597,15 @@ def _solve_routes_for_fleet_impl(
         first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
         time_limit_seconds=SOLVER_TIME_LIMIT_SECONDS,
     )
-    solution = routing.SolveWithParameters(search)
+    if first_solution_only:
+        search.solution_limit = 1
+        search.time_limit.seconds = min(3, max(1, int(SOLVER_TIME_LIMIT_SECONDS)))
+    initial_solution = routing.ReadAssignmentFromRoutes(seed_routes, True) if seed_routes is not None else None
+    solution = (
+        routing.SolveFromAssignmentWithParameters(initial_solution, search)
+        if initial_solution is not None
+        else routing.SolveWithParameters(search)
+    )
     if solution is None:
         raise NoFeasibleRouteError(
             "OR-Tools could not find a feasible routing solution. "

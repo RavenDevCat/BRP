@@ -218,6 +218,7 @@ export function RouteInsertAdvisorPage() {
         <HistorySidebar
           items={historyQuery.data || []}
           itemId={(job) => job.run_id}
+          itemName={(job) => job.title || t("Route Insert Run")}
           activeId={activeHistoryId}
           title="Route Insert History"
           emptyMessage="Saved Route Insert runs will appear here."

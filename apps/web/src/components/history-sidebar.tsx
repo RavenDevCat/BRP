@@ -11,6 +11,7 @@ import {
   moveHistoryGroupItems,
   removeHistoryGroupMember,
   renameHistoryGroup,
+  renameHistoryItem,
   setHistoryGroupPreference,
   setHistoryGroupMember,
   transferHistoryGroupOwner,
@@ -21,6 +22,7 @@ import { useT } from "@/lib/i18n/context";
 export function HistorySidebar<T>({
   items,
   itemId,
+  itemName,
   activeId,
   title,
   emptyMessage,
@@ -45,6 +47,7 @@ export function HistorySidebar<T>({
 }: {
   items: T[];
   itemId: (item: T) => string;
+  itemName: (item: T) => string;
   activeId?: string;
   title: string;
   emptyMessage: string;
@@ -98,6 +101,18 @@ export function HistorySidebar<T>({
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["history-groups", groupScope] }),
+  });
+  const renameItemMutation = useMutation({
+    mutationFn: ({ itemId: id, name }: { itemId: string; name: string }) => {
+      if (!groupScope) throw new Error("History rename is unavailable.");
+      return renameHistoryItem(groupScope, id, name);
+    },
+    onSuccess: async (payload) => {
+      onRefresh();
+      if (groupScope === "route_audit") {
+        await queryClient.invalidateQueries({ queryKey: ["jobs", payload.item_id] });
+      }
+    },
   });
   const moveGroupMutation = useMutation({
     mutationFn: ({ groupId, itemIds }: { groupId: string | null; itemIds: string[] }) => {
@@ -203,6 +218,7 @@ export function HistorySidebar<T>({
   );
   const groupError = (
     groupsQuery.error ||
+    renameItemMutation.error ||
     assignGroupMutation.error ||
     renameGroupMutation.error ||
     moveGroupMutation.error ||
@@ -259,6 +275,33 @@ export function HistorySidebar<T>({
         >
           {renderItem(item, active)}
         </button>
+        {!selecting && groupScope && deletable ? (
+          <button
+            type="button"
+            className={[
+              "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+              active
+                ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
+                : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-foreground",
+            ].join(" ")}
+            aria-label={t("Rename history item")}
+            title={t("Rename history item")}
+            disabled={renameItemMutation.isPending}
+            onClick={() => {
+              const currentName = itemName(item).trim();
+              const name = window.prompt(t("Task name"), currentName)?.trim();
+              if (name && name !== currentName) {
+                renameItemMutation.mutate({ itemId: id, name });
+              }
+            }}
+          >
+            {renameItemMutation.isPending && renameItemMutation.variables?.itemId === id ? (
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            ) : (
+              <Pencil className="h-4 w-4" aria-hidden="true" />
+            )}
+          </button>
+        ) : null}
         {!selecting && deletable ? (
           <button
             type="button"

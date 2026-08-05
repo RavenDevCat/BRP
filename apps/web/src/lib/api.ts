@@ -877,6 +877,21 @@ export function renameHistoryGroup(
     );
 }
 
+export function renameHistoryItem(
+    scope: HistoryGroupScope,
+    itemId: string,
+    name: string,
+) {
+    return apiFetch<{ item_id: string; name: string; renamed: boolean }>(
+        `/history-items/${encodeURIComponent(scope)}/${encodeURIComponent(itemId)}`,
+        {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+        },
+    );
+}
+
 export function moveHistoryGroupItems(
     scope: HistoryGroupScope,
     groupId: string | null,

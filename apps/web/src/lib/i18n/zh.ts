@@ -102,6 +102,8 @@ const zh: Translations = {
     "new stops": "个新增站点",
     scenarios: "套方案",
     "Loading history": "正在加载历史",
+    "Rename history item": "重命名历史任务",
+    "Task name": "任务名称",
     "Delete history item": "删除历史记录",
     "Delete this history item? This cannot be undone.": "删除这条历史记录？此操作无法撤销。",
     "All new students are combined into one plan and one active map.":

@@ -113,6 +113,7 @@ class FakeHistoryStore:
     def __init__(self, records: dict[str, dict[str, Any]] | None = None) -> None:
         self.records = dict(records or {})
         self.deleted: list[str] = []
+        self.renamed: list[tuple[str, str]] = []
 
     def list(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         return [
@@ -131,6 +132,14 @@ class FakeHistoryStore:
     def get(self, run_id: str) -> dict[str, Any] | None:
         record = self.records.get(run_id)
         return dict(record) if record else None
+
+    def rename(self, run_id: str, title: str) -> dict[str, Any] | None:
+        record = self.records.get(run_id)
+        if not record:
+            return None
+        record["title"] = title
+        self.renamed.append((run_id, title))
+        return dict(record)
 
     def delete(self, run_id: str) -> bool:
         self.deleted.append(run_id)
@@ -288,6 +297,68 @@ class FastApiThinShellTests(unittest.TestCase):
             self.assertEqual(groups_response.status_code, 200)
             self.assertEqual(groups_response.json()["groups"][0]["role"], "viewer")
             self.assertIsNotNone(store.get_job("job1"))
+
+    def test_history_item_rename_updates_owned_jobs_and_side_tool_runs(self) -> None:
+        job_store = FakeJobStore()
+        job_store.records = {
+            "owned": {
+                "job_id": "owned",
+                "owner_email": "owner@example.com",
+                "status": "succeeded",
+                "metadata": {"job_name": "Old audit"},
+            },
+            "shared": {
+                "job_id": "shared",
+                "owner_email": "other@example.com",
+                "shared_with_all": True,
+                "status": "succeeded",
+                "metadata": {"job_name": "Shared audit"},
+            },
+        }
+        fleet_store = FakeHistoryStore(
+            {
+                "fleet-run": {
+                    "run_id": "fleet-run",
+                    "owner_email": "owner@example.com",
+                    "title": "Old fleet run",
+                }
+            }
+        )
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=job_store,
+            FLEET_PLANNER_HISTORY_STORE=fleet_store,
+        ):
+            audit_response = self.client.patch(
+                "/api/history-items/route_audit/owned",
+                headers=auth_headers("owner@example.com"),
+                json={"name": "  New audit  "},
+            )
+            fleet_response = self.client.patch(
+                "/api/history-items/fleet_planner/fleet-run",
+                headers=auth_headers("owner@example.com"),
+                json={"name": "New fleet run"},
+            )
+            denied_response = self.client.patch(
+                "/api/history-items/route_audit/shared",
+                headers=auth_headers("viewer@example.com"),
+                json={"name": "Not allowed"},
+            )
+            empty_response = self.client.patch(
+                "/api/history-items/route_audit/owned",
+                headers=auth_headers("owner@example.com"),
+                json={"name": "   "},
+            )
+
+        self.assertEqual(audit_response.status_code, 200)
+        self.assertEqual(audit_response.json()["name"], "New audit")
+        self.assertEqual(job_store.records["owned"]["metadata"]["job_name"], "New audit")
+        self.assertEqual(fleet_response.status_code, 200)
+        self.assertEqual(fleet_store.records["fleet-run"]["title"], "New fleet run")
+        self.assertEqual(denied_response.status_code, 403)
+        self.assertEqual(empty_response.status_code, 400)
 
     def test_workspace_api_manages_members_moves_and_safe_delete(self) -> None:
         with TemporaryDirectory() as temp_dir:

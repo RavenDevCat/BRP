@@ -362,6 +362,17 @@ def _history_group_name(value: Any) -> str:
     return name
 
 
+def _history_item_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise BackendHttpError(400, {"error": "History item name is required."})
+    if len(name) > 80:
+        raise BackendHttpError(
+            400, {"error": "History item name must be 80 characters or fewer."}
+        )
+    return name
+
+
 def _history_group_item_ids(value: Any) -> list[str]:
     if not isinstance(value, list):
         raise BackendHttpError(400, {"error": "History item_ids must be a list."})
@@ -469,6 +480,54 @@ def google_geocode_usage() -> JSONResponse:
 )
 def deployment_features() -> JSONResponse:
     return _json_response(200, backend_service._deployment_features_payload())
+
+
+@_api_route(
+    "PATCH",
+    "/history-items/{scope}/{item_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def rename_history_item(
+    scope: str,
+    item_id: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    if scope not in HISTORY_GROUP_SCOPES:
+        raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    normalized_item_id = str(item_id or "").strip()
+    name = _history_item_name(_payload_dict(payload).get("name"))
+
+    if scope == "route_audit":
+        record = _job_for_context(normalized_item_id, context)
+        _require_record_mutation_access(record, context)
+        metadata = dict(record.get("metadata") or {})
+        metadata["job_name"] = name
+        updated = backend_service.JOB_STORE.update_job(
+            normalized_item_id, metadata=metadata
+        )
+    else:
+        if scope == "fleet_planner":
+            record = _fleet_history_for_context(normalized_item_id, context)
+            store = backend_service.FLEET_PLANNER_HISTORY_STORE
+            _require_record_mutation_access(record, context, shared_admin_only=True)
+        elif scope in {"distance_reference", "distance_route_cost"}:
+            mode = "route_cost" if scope == "distance_route_cost" else "reference"
+            record, store = _distance_history_for_context(
+                normalized_item_id, mode, context
+            )
+            _require_record_mutation_access(record, context)
+        else:
+            record = _route_insert_history_for_context(normalized_item_id, context)
+            store = backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE
+            _require_record_mutation_access(record, context)
+        updated = store.rename(normalized_item_id, name)
+
+    if not updated:
+        raise BackendHttpError(404, {"error": "History item not found."})
+    return _json_response(
+        200, {"item_id": normalized_item_id, "name": name, "renamed": True}
+    )
 
 
 @_api_route(

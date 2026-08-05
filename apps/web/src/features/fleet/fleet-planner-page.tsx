@@ -522,6 +522,7 @@ export function FleetPlannerPage() {
         <HistorySidebar
           items={historyQuery.data || []}
           itemId={(job) => job.run_id}
+          itemName={(job) => job.title || t("Fleet Planner Run")}
           activeId={loadedHistoryRecord?.run_id || saveHistoryMutation.data?.job.run_id}
           title="Fleet Planner History"
           emptyMessage="Saved Fleet Planner runs will appear here."

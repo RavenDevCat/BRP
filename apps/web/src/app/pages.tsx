@@ -269,6 +269,7 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                 <HistorySidebar
                     items={jobs}
                     itemId={(job) => job.job_id}
+                    itemName={getJobName}
                     activeId={resolvedJobId}
                     title="Audit History"
                     emptyMessage="Submitted audit runs will appear here after workbook validation and queue submission."

@@ -457,6 +457,7 @@ export function DistanceCheckerPage() {
         <HistorySidebar
           items={historyQuery.data || []}
           itemId={(job) => job.run_id}
+          itemName={(job) => job.title || t("Distance & Cost Run")}
           activeId={activeLoadedRunId || activeSavedRunId}
           title={activeHistoryTitle}
           emptyMessage={activeHistoryEmpty}

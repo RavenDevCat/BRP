@@ -101,6 +101,8 @@ const ko: Translations = {
     "new stops": "개 신규 정류장",
     scenarios: "개 시나리오",
     "Loading history": "기록 불러오는 중",
+    "Rename history item": "기록 이름 변경",
+    "Task name": "작업 이름",
     "Delete history item": "기록 삭제",
     "Delete this history item? This cannot be undone.": "이 기록을 삭제하시겠습니까? 이 작업은 취소할 수 없습니다.",
     "All new students are combined into one plan and one active map.":

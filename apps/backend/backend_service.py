@@ -3339,6 +3339,15 @@ class SideToolHistoryStore:
                 )
             )
 
+    def rename(self, run_id: str, title: str) -> dict[str, Any] | None:
+        with self.lock:
+            record = self._load_record_unlocked(run_id)
+            if not record:
+                return None
+            record["title"] = title
+            _save_runtime_side_tool(self.tool_key, record)
+            return self._summary_for_record(record)
+
     def delete(self, run_id: str) -> bool:
         with self.lock:
             return _delete_runtime_side_tool(self.tool_key, run_id)

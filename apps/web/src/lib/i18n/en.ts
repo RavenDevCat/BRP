@@ -107,6 +107,8 @@ const en: Translations = {
     "new stops": "new stops",
     scenarios: "scenarios",
     "Loading history": "Loading history",
+    "Rename history item": "Rename history item",
+    "Task name": "Task name",
     "Delete history item": "Delete history item",
     "Delete this history item? This cannot be undone.": "Delete this history item? This cannot be undone.",
     "All new students are combined into one plan and one active map.":

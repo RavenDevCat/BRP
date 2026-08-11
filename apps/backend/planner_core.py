@@ -6470,12 +6470,19 @@ def _build_route_preserving_protected_scenario(
     solve_time: list[list[float]],
     baseline_name: str,
     scenario_label: str,
+    target_vehicle_count: int | None = None,
 ) -> dict[str, Any] | None:
     if normalize_service_direction(config.service_direction) != "To School":
         return None
     current_routes = [deepcopy(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_route_count = len(current_routes)
-    saving_count = max(0, int(config.minimum_vehicle_reduction or 0))
+    if target_vehicle_count is None:
+        target_vehicle_count = current_route_count - max(
+            0,
+            int(config.minimum_vehicle_reduction or 0),
+        )
+    target_vehicle_count = min(current_route_count, max(0, int(target_vehicle_count)))
+    saving_count = current_route_count - target_vehicle_count
     if saving_count > 3:
         return None
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
@@ -6605,7 +6612,6 @@ def _build_route_preserving_protected_scenario(
                         "changed_route_ids": changed_route_ids,
                     }
 
-    target_vehicle_count = max(0, current_route_count - saving_count)
     previous_osrm_base_url = planner.OSRM_BASE_URL
     planner.OSRM_BASE_URL = planner.resolve_osrm_base_url(original_points)
     try:
@@ -6688,7 +6694,7 @@ def _build_route_preserving_protected_scenario(
             candidate = _apply_vehicle_saving_target(
                 candidate,
                 current_route_count,
-                saving_count,
+                max(0, int(config.minimum_vehicle_reduction or 0)),
                 frozen_route_count=len(frozen_route_ids),
             )
             accepted = _scenario_feasibility_passed(candidate)
@@ -6748,26 +6754,6 @@ def build_exception_preserving_scenario(
     if not current_plan_scenario or not current_plan_scenario.get("routes"):
         raise RuntimeError("Current plan timing was not available for exception preservation.")
 
-    route_preserving: dict[str, Any] | None = None
-    if (
-        callable(node_time_upper_bounds_builder)
-        and callable(final_time_impact_validator)
-        and solve_time is not None
-    ):
-        route_preserving = _build_route_preserving_protected_scenario(
-            planner,
-            original_points,
-            current_plan_scenario,
-            config,
-            input_records,
-            node_time_upper_bounds_builder=node_time_upper_bounds_builder,
-            time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
-            final_time_impact_validator=final_time_impact_validator,
-            solve_time=solve_time,
-            baseline_name=baseline_name,
-            scenario_label=scenario_label,
-        )
-
     current_routes = [dict(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
     failed_route_ids = set(current_summary.get("failed_route_ids") or [])
@@ -6781,7 +6767,7 @@ def build_exception_preserving_scenario(
     minimum_vehicle_reduction = max(0, int(config.minimum_vehicle_reduction or 0))
     target_vehicle_count = max(0, current_route_count - minimum_vehicle_reduction)
     attempts: list[dict[str, Any]] = []
-    best_accepted_candidate: dict[str, Any] | None = route_preserving
+    best_accepted_candidate: dict[str, Any] | None = None
     best_failed_candidate: dict[str, Any] | None = None
     remaining_min_vehicle_count = 0
     preflight_infeasible = False
@@ -6811,22 +6797,44 @@ def build_exception_preserving_scenario(
             )
         else:
             remaining_limits = [0]
-        if route_preserving is not None:
-            protected = dict(route_preserving.get("exception_preserving") or {})
-            route_preserving_frozen_count = int(protected.get("frozen_route_count", 0) or 0)
-            if route_preserving_frozen_count == frozen_count:
-                route_preserving_route_count = _scenario_bus_count(route_preserving)
-                route_preserving_remaining_limit = max(
-                    0,
-                    route_preserving_route_count - frozen_count,
+        if remaining_service_count and not remaining_limits and best_accepted_candidate is None:
+            preflight_infeasible = True
+            remaining_limits = [remaining_max_vehicle_count]
+
+        for remaining_limit_candidate in remaining_limits:
+            target_vehicle_count_candidate = frozen_count + remaining_limit_candidate
+            route_preserving: dict[str, Any] | None = None
+            if (
+                callable(node_time_upper_bounds_builder)
+                and callable(final_time_impact_validator)
+                and solve_time is not None
+            ):
+                route_preserving = _build_route_preserving_protected_scenario(
+                    planner,
+                    original_points,
+                    current_plan_scenario,
+                    config,
+                    input_records,
+                    node_time_upper_bounds_builder=node_time_upper_bounds_builder,
+                    time_constraint_metadata=deepcopy(time_constraint_metadata or {}),
+                    final_time_impact_validator=final_time_impact_validator,
+                    solve_time=solve_time,
+                    baseline_name=baseline_name,
+                    scenario_label=scenario_label,
+                    target_vehicle_count=target_vehicle_count_candidate,
                 )
+            if route_preserving is not None:
+                protected = dict(route_preserving.get("exception_preserving") or {})
+                route_preserving_route_count = _scenario_bus_count(route_preserving)
                 attempts.append(
                     {
                         "strategy": "route_preserving_reallocation",
                         "frozen_route_count": frozen_count,
                         "frozen_route_ids": list(protected.get("frozen_route_ids") or []),
                         "remaining_stop_count": remaining_service_count,
-                        "remaining_vehicle_limit": route_preserving_remaining_limit,
+                        "remaining_vehicle_limit": remaining_limit_candidate,
+                        "target_vehicle_count": target_vehicle_count_candidate,
+                        "actual_vehicle_count": route_preserving_route_count,
                         "route_count": route_preserving_route_count,
                         "accepted": True,
                         "vehicle_limit_relaxed": False,
@@ -6835,16 +6843,13 @@ def build_exception_preserving_scenario(
                         ),
                     }
                 )
-                remaining_limits = [
-                    limit
-                    for limit in remaining_limits
-                    if limit < route_preserving_remaining_limit
-                ]
-        if remaining_service_count and not remaining_limits and best_accepted_candidate is None:
-            preflight_infeasible = True
-            remaining_limits = [remaining_max_vehicle_count]
-
-        for remaining_limit_candidate in remaining_limits:
+                if (
+                    best_accepted_candidate is None
+                    or _scenario_candidate_rank(route_preserving)
+                    < _scenario_candidate_rank(best_accepted_candidate)
+                ):
+                    best_accepted_candidate = route_preserving
+                continue
             try:
                 if remaining_service_count:
                     optimized = _compute_scenario_without_render(

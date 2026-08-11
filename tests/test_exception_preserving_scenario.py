@@ -769,7 +769,7 @@ def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch
         for node in route["nodes"]
         if node != 0
     )
-    assert result["bus_count"] == 4
+    assert result["bus_count"] == 2
     assert service_nodes == [1, 2, 3, 4]
     assert result["exception_preserving"]["strategy"] == "route_preserving_reallocation"
     assert [
@@ -921,7 +921,9 @@ def test_protected_continues_below_minimum_saving(monkeypatch):
     monkeypatch.setattr(
         planner_core,
         "_build_route_preserving_protected_scenario",
-        lambda *_args, **_kwargs: route_preserving,
+        lambda *_args, target_vehicle_count=None, **_kwargs: (
+            route_preserving if target_vehicle_count == 3 else None
+        ),
     )
     monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
     monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)

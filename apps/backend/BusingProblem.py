@@ -33,8 +33,31 @@ from ortools_route_core import (  # noqa: E402
 )
 
 
-class NoFeasibleRouteError(RuntimeError):
+class SolverOutcomeError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        status_name: str = "",
+        attempts: list[dict[str, Any]] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.status_name = status_name
+        self.attempts = list(attempts or [])
+
+
+class NoFeasibleRouteError(SolverOutcomeError):
     """Expected solver outcome when the active hard constraints have no route."""
+
+
+class SolverUnresolvedError(SolverOutcomeError):
+    """The bounded search ended without proving feasibility or infeasibility."""
+
+
+class InvalidSolverModelError(SolverOutcomeError):
+    """OR-Tools rejected the routing model or search parameters."""
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -138,6 +161,17 @@ SOLVER_TIME_LIMIT_SECONDS = max(
     1,
     int(os.environ.get("BRP_SOLVER_TIME_LIMIT_SECONDS", "10") or 10),
 )
+ROUTING_STATUS_NAMES = {
+    0: "ROUTING_NOT_SOLVED",
+    1: "ROUTING_SUCCESS",
+    2: "ROUTING_PARTIAL_SUCCESS_LOCAL_OPTIMUM_NOT_REACHED",
+    3: "ROUTING_FAIL",
+    4: "ROUTING_FAIL_TIMEOUT",
+    5: "ROUTING_INVALID",
+    6: "ROUTING_INFEASIBLE",
+    7: "ROUTING_OPTIMAL",
+}
+UNRESOLVED_ROUTING_STATUS_CODES = {0, 3, 4}
 TRAFFIC_PROFILE_NAME = "Off-Peak"
 TRAFFIC_PROFILE_CONTEXT = "Direct final-route provider validation"
 SERVICE_DIRECTION = "From School"
@@ -1432,6 +1466,89 @@ def build_minimum_vehicle_seed(
     return assign(segments)
 
 
+def _routing_status(routing: Any) -> tuple[int, str]:
+    try:
+        status_code = int(routing.status())
+    except (AttributeError, TypeError, ValueError):
+        status_code = 0
+    return status_code, ROUTING_STATUS_NAMES.get(status_code, f"ROUTING_STATUS_{status_code}")
+
+
+def _search_time_limit_seconds(search: Any) -> int:
+    return max(0, int(getattr(getattr(search, "time_limit", None), "seconds", 0) or 0))
+
+
+def _solve_routing_model_with_retry(
+    routing: Any,
+    search: Any,
+    initial_solution: Any | None,
+    *,
+    first_solution_only: bool,
+    retry_unresolved: bool,
+) -> tuple[Any | None, list[dict[str, Any]]]:
+    attempts: list[dict[str, Any]] = []
+
+    def run(search_parameters: Any, seed: Any | None) -> Any | None:
+        started = time.perf_counter()
+        solution = (
+            routing.SolveFromAssignmentWithParameters(seed, search_parameters)
+            if seed is not None
+            else routing.SolveWithParameters(search_parameters)
+        )
+        status_code, status_name = _routing_status(routing)
+        attempts.append(
+            {
+                "attempt": len(attempts) + 1,
+                "status_code": status_code,
+                "status_name": status_name,
+                "time_limit_seconds": _search_time_limit_seconds(search_parameters),
+                "elapsed_seconds": round(time.perf_counter() - started, 3),
+            }
+        )
+        return solution
+
+    solution = run(search, initial_solution)
+    if solution is not None or first_solution_only or not retry_unresolved:
+        return solution, attempts
+
+    status_code = int(attempts[-1]["status_code"])
+    if status_code not in UNRESOLVED_ROUTING_STATUS_CODES:
+        return None, attempts
+
+    primary_limit = max(1, _search_time_limit_seconds(search) or int(SOLVER_TIME_LIMIT_SECONDS))
+    retry_limit = min(primary_limit * 2, primary_limit + 30)
+    retry_search = build_guided_local_search_parameters(
+        pywrapcp,
+        routing_enums_pb2,
+        first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC,
+        time_limit_seconds=retry_limit,
+    )
+    log(
+        f"[INFO] OR-Tools returned {attempts[-1]['status_name']}; "
+        f"retrying once with a {retry_limit}-second budget."
+    )
+    return run(retry_search, None), attempts
+
+
+def _raise_solver_outcome(
+    message: str,
+    routing: Any,
+    attempts: list[dict[str, Any]],
+) -> None:
+    status_code, status_name = _routing_status(routing)
+    details = {
+        "status_code": status_code,
+        "status_name": status_name,
+        "attempts": attempts,
+    }
+    message = f"{message} OR-Tools status: {status_name} ({status_code})."
+    if status_code == 6:
+        raise NoFeasibleRouteError(message, **details)
+    if status_code == 5:
+        raise InvalidSolverModelError(message, **details)
+    raise SolverUnresolvedError(message, **details)
+
+
 def _solve_routes_for_fleet_impl(
     points: list[dict[str, Any]],
     time_matrix: list[list[int]],
@@ -1472,39 +1589,38 @@ def _solve_routes_for_fleet_impl(
     max_active_by_stops = max(0, len(points) - 1)
     min_route_load = max(1, int(MIN_ACTIVE_ROUTE_PASSENGERS or 1))
     max_active_by_load = max(1, total_demand // min_route_load) if total_demand > 0 else 0
-    min_active_vehicles = min(
-        vehicle_count,
-        requested_min_active_vehicles,
-        max_active_by_stops,
-        max_active_by_load,
-    )
+    max_active_vehicles = min(vehicle_count, max_active_by_stops, max_active_by_load)
+    if requested_min_active_vehicles > max_active_vehicles:
+        raise NoFeasibleRouteError(
+            f"Cannot activate {requested_min_active_vehicles} vehicles; at most "
+            f"{max_active_vehicles} can carry the available stops and riders."
+        )
+    min_active_vehicles = requested_min_active_vehicles
     seed_routes: list[list[int]] | None = None
     if min_active_vehicles > 0:
-        unconstrained_routes = _solve_routes_for_fleet_impl(
-            points,
-            time_matrix,
-            distance_matrix,
-            fleet,
-            node_time_upper_bounds,
-            node_time_soft_upper_bounds,
-            node_time_lower_bounds,
-            minimum_active_vehicles=0,
-            first_solution_only=True,
-        )
-        seed_routes = build_minimum_vehicle_seed(
-            unconstrained_routes,
-            min_active_vehicles,
-            points,
-            working_time_matrix,
-            fleet,
-            node_time_upper_bounds,
-            node_time_lower_bounds,
-        )
-        if seed_routes is None:
-            raise NoFeasibleRouteError(
-                f"No feasible routing solution can activate at least {min_active_vehicles} vehicles "
-                "without violating route constraints."
+        try:
+            unconstrained_routes = _solve_routes_for_fleet_impl(
+                points,
+                time_matrix,
+                distance_matrix,
+                fleet,
+                node_time_upper_bounds,
+                node_time_soft_upper_bounds,
+                node_time_lower_bounds,
+                minimum_active_vehicles=0,
+                first_solution_only=True,
             )
+            seed_routes = build_minimum_vehicle_seed(
+                unconstrained_routes,
+                min_active_vehicles,
+                points,
+                working_time_matrix,
+                fleet,
+                node_time_upper_bounds,
+                node_time_lower_bounds,
+            )
+        except (NoFeasibleRouteError, SolverUnresolvedError):
+            seed_routes = None
 
     manager = pywrapcp.RoutingIndexManager(len(points), vehicle_count, [0] * vehicle_count, [0] * vehicle_count)
     routing = pywrapcp.RoutingModel(manager)
@@ -1601,18 +1717,22 @@ def _solve_routes_for_fleet_impl(
         search.solution_limit = 1
         search.time_limit.seconds = min(3, max(1, int(SOLVER_TIME_LIMIT_SECONDS)))
     initial_solution = routing.ReadAssignmentFromRoutes(seed_routes, True) if seed_routes is not None else None
-    solution = (
-        routing.SolveFromAssignmentWithParameters(initial_solution, search)
-        if initial_solution is not None
-        else routing.SolveWithParameters(search)
+    solution, solver_attempts = _solve_routing_model_with_retry(
+        routing,
+        search,
+        initial_solution,
+        first_solution_only=first_solution_only,
+        retry_unresolved=bool(min_active_vehicles and min_active_vehicles == vehicle_count),
     )
     if solution is None:
-        raise NoFeasibleRouteError(
+        _raise_solver_outcome(
             "OR-Tools could not find a feasible routing solution. "
             f"Current constraints include the configured Large / Mid / Small bus capacities. "
             f"Last attempted feasible vehicle count: {vehicle_count}. Configured fleet maximum: {vehicle_count} vehicles. "
             "Stops unreachable from depot: 0. Stops that appear to require dedicated vehicles: 0 "
-            f"out of {max(0, len(points) - 1)} non-depot stops."
+            f"out of {max(0, len(points) - 1)} non-depot stops.",
+            routing,
+            solver_attempts,
         )
 
     routes: list[dict[str, Any]] = []
@@ -1779,7 +1899,7 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
                 if node != 0
             }
             regular_nodes = [idx for idx in range(1, len(points)) if idx not in served_remote_nodes]
-        except Exception as exc:
+        except (NoFeasibleRouteError, SolverUnresolvedError) as exc:
             log(f"[WARN] Express-route pool fallback to regular pool: {exc}")
             regular_nodes = list(range(1, len(points)))
             regular_fleet = full_fleet

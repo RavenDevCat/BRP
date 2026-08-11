@@ -12,6 +12,7 @@ legacy_planner = importlib.import_module("BusingProblem")
 
 class FakePlanner:
     NoFeasibleRouteError = legacy_planner.NoFeasibleRouteError
+    SolverUnresolvedError = legacy_planner.SolverUnresolvedError
 
     def __init__(self):
         self.logged = []
@@ -655,6 +656,62 @@ def test_protected_infeasible_result_names_unfrozen_remainder_limit(monkeypatch)
             standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
             node_time_upper_bounds_builder=lambda solver_points: {1: 900},
         )
+
+
+def test_protected_unresolved_remainder_is_not_reported_as_infeasible(monkeypatch):
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "frozen failed stop"},
+        {"node_id": 2, "address": "remaining stop"},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 3,
+        "routes": [
+            {
+                "route_id": "R12",
+                "nodes": [1, 0],
+                "final_route_traffic_gate": {"status": "failed", "time_window_overrun_minutes": 12},
+            },
+            {"route_id": "R1", "nodes": [2, 0], "final_route_traffic_gate": {"status": "passed"}},
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R12"],
+            "max_time_window_overrun_minutes": 12,
+        },
+    }
+    unresolved = legacy_planner.SolverUnresolvedError(
+        "remainder timed out",
+        status_code=4,
+        status_name="ROUTING_FAIL_TIMEOUT",
+        attempts=[{"attempt": 1, "status_code": 4}],
+    )
+
+    def fake_compute(*_args, **_kwargs):
+        raise unresolved
+
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(),
+        [],
+        [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
+        2,
+        standard_scenarios=[{"traffic_gate": {"status": "failed"}}],
+        node_time_upper_bounds_builder=lambda solver_points: {1: 900},
+        time_constraint_metadata={"enabled": True, "source": "exception_preserving_remainder"},
+        baseline_name="exception_preserving_optimization",
+        scenario_label="Protected Plan",
+    )
+
+    assert result["scenario_status"] == "unresolved"
+    assert "unresolved_reason" in result
+    assert result["constraint_search_outcome"]["status"] == "unresolved"
+    assert result["constraint_search_outcome"]["search_complete"] is False
 
 
 def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch):

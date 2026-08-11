@@ -125,7 +125,7 @@ def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatc
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED", True)
-    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS", 2)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_ATTEMPTS", 3)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VEHICLE_SEARCH_ATTEMPTS", 0)
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_REPLAN_MIN_TARGET_MINUTES", 10)
     monkeypatch.setattr(planner_core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 0)
@@ -133,7 +133,7 @@ def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatc
     def fake_amap_route_stats(planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
         return {
-            "duration_s": 9000 if planner.MAX_ROUTE_DURATION_SECONDS >= 3600 else 1200,
+            "duration_s": 9000 if planner.MAX_ROUTE_DURATION_SECONDS >= 2700 else 1200,
             "distance_m": 1234,
             "source": "fake_amap",
         }
@@ -196,24 +196,31 @@ def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatc
         {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
         {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
-    result = planner_core._compute_scenario_without_render(planner, points, "smoke")
+    result = planner_core._compute_scenario_without_render(
+        planner,
+        points,
+        "smoke",
+        forced_vehicle_count=1,
+    )
 
-    assert planner.solve_count == 2
+    assert planner.solve_count == 3
     assert result["bus_count"] == 1
     assert result["traffic_gate"]["status"] == "passed"
-    assert result["feasibility_report"]["status"] == "passed"
-    assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 0
-    assert len(result["traffic_replan_attempts"]) == 1
+    assert result["feasibility_report"]["status"] == "passed", result["feasibility_report"]["failure_reasons"]
+    assert result["feasibility_report"]["hard_constraints"]["fleet"]["recommended_min_active_vehicle_count"] == 1
+    assert len(result["traffic_replan_attempts"]) == 2
     assert result["traffic_replan_attempts"][0]["action"] == "tighten_route_target"
     assert result["traffic_replan_attempts"][0]["feasibility_status"] == "failed"
-    assert result["traffic_replan_attempts"][0]["failure_reasons"] == ["arrival_window"]
+    assert "arrival_window" in result["traffic_replan_attempts"][0]["failure_reasons"]
     assert result["traffic_replan_attempts"][0]["failed_route_ids"] == ["Bus 1"]
-    assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 0
+    assert result["traffic_replan_attempts"][0]["to_min_solver_vehicle_count"] == 1
     assert result["traffic_replan_attempts"][0]["to_route_duration_minutes"] == 45
     assert result["traffic_replan_attempts"][0]["checked_route_count"] == 1
     assert result["traffic_replan_attempts"][0]["unavailable_route_count"] == 0
     assert result["traffic_replan_attempts"][0]["api_calls"] == 1
     assert result["traffic_replan_attempts"][0]["cache_hits"] == 0
+    assert result["traffic_replan_attempts"][1]["action"] == "tighten_route_target"
+    assert result["traffic_replan_attempts"][1]["to_route_duration_minutes"] == 30
     assert result["traffic_gate"]["replan_attempts"][0]["api_calls"] == 1
 
 

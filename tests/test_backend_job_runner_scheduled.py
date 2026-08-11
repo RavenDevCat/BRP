@@ -42,11 +42,17 @@ def test_scheduled_validation_requires_fresh_calls_and_available_gates() -> None
     assert backend_job_runner._scheduled_final_traffic_validation_error(
         _scheduled_result(gate_status="failed")
     ) is None
-    missing_optimization_gate = _scheduled_result(gate_status="failed")
-    missing_optimization_gate["structured_results"]["original"] = {"routes": [{}]}
+    result_with_legacy_scenario = _scheduled_result(gate_status="failed")
+    result_with_legacy_scenario["structured_results"]["original"] = {"routes": [{}]}
     assert backend_job_runner._scheduled_final_traffic_validation_error(
-        missing_optimization_gate
-    ) == "scheduled final traffic gate unavailable for original"
+        result_with_legacy_scenario
+    ) is None
+
+
+def test_worker_config_uses_legacy_zero_stop_limit_semantics() -> None:
+    config = backend_job_runner.build_planner_config({"route_stop_limit": 0})
+
+    assert config.route_stop_limit is None
 
 
 def test_scheduled_runner_preserves_result_when_fresh_validation_fails(monkeypatch) -> None:

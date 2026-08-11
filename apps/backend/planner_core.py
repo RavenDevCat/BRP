@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
 import hashlib
 import importlib.util
@@ -509,6 +509,94 @@ def infer_traffic_location(input_records: list[dict[str, Any]] | None) -> tuple[
 def normalize_traffic_profile_name(profile_name: str | None) -> str:
     normalized = str(profile_name or "").strip()
     return normalized if normalized in TRAFFIC_PROFILE_NAMES else "Off-Peak"
+
+
+def build_planner_config(config_payload: dict[str, Any] | None = None) -> PlannerConfig:
+    """Build one validated config for HTTP, worker, and history paths."""
+    defaults = PlannerConfig()
+    allowed_fields = {field.name for field in fields(PlannerConfig)}
+    payload = {
+        key: value
+        for key, value in dict(config_payload or {}).items()
+        if key in allowed_fields
+    }
+
+    direction = str(payload.get("service_direction", defaults.service_direction) or "").strip().lower()
+    direction_names = {"to school": "To School", "from school": "From School"}
+    if direction not in direction_names:
+        raise ValueError("service_direction must be To School or From School.")
+    payload["service_direction"] = direction_names[direction]
+
+    profile = str(payload.get("traffic_profile_name", defaults.traffic_profile_name) or "").strip().lower()
+    profile_names = {name.lower(): name for name in TRAFFIC_PROFILE_NAMES}
+    if profile not in profile_names:
+        raise ValueError("traffic_profile_name must be Off-Peak, AM Peak, or PM Peak.")
+    payload["traffic_profile_name"] = profile_names[profile]
+
+    def clock(field_name: str) -> tuple[str, int]:
+        raw = str(payload.get(field_name, getattr(defaults, field_name)) or "").strip()
+        parts = raw.split(":")
+        if len(parts) < 2:
+            raise ValueError(f"{field_name} must use HH:MM format.")
+        try:
+            hours, minutes = int(parts[0]), int(parts[1])
+        except ValueError as exc:
+            raise ValueError(f"{field_name} must use HH:MM format.") from exc
+        if not 0 <= hours <= 23 or not 0 <= minutes <= 59:
+            raise ValueError(f"{field_name} must use HH:MM format.")
+        payload[field_name] = f"{hours:02d}:{minutes:02d}"
+        return payload[field_name], hours * 60 + minutes
+
+    for field_name in ("to_school_arrival_time", "from_school_departure_time"):
+        clock(field_name)
+    _, window_start = clock("time_window_start")
+    _, window_end = clock("time_window_end")
+    if window_end <= window_start:
+        raise ValueError("time_window_start must be before time_window_end.")
+
+    def whole_number(field_name: str, minimum: int, maximum: int) -> int:
+        value = payload.get(field_name, getattr(defaults, field_name))
+        if value is None or value == "":
+            value = getattr(defaults, field_name)
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field_name} must be a whole number.") from exc
+        if parsed < minimum or parsed > maximum:
+            raise ValueError(f"{field_name} must be between {minimum} and {maximum}.")
+        payload[field_name] = parsed
+        return parsed
+
+    stop_limit = payload.get("route_stop_limit", defaults.route_stop_limit)
+    if stop_limit in (None, "", 0, "0"):
+        payload["route_stop_limit"] = None
+    else:
+        whole_number("route_stop_limit", 1, 200)
+    if payload.get("minimum_vehicle_reduction") in (None, ""):
+        payload["minimum_vehicle_reduction"] = 0
+    whole_number("minimum_vehicle_reduction", 0, 200)
+    whole_number("time_impact_limit_minutes", 0, 240)
+    whole_number("stop_service_minutes", 0, 60)
+    whole_number("max_route_duration_minutes", 1, 1440)
+    for field_name in ("large_bus_capacity", "mid_bus_capacity", "small_bus_capacity"):
+        whole_number(field_name, 1, 200)
+    for field_name in ("large_bus_max_count", "mid_bus_max_count", "small_bus_max_count"):
+        whole_number(field_name, 0, 200)
+    if not sum(int(payload.get(name, getattr(defaults, name))) for name in (
+        "large_bus_max_count",
+        "mid_bus_max_count",
+        "small_bus_max_count",
+    )):
+        raise ValueError("At least one vehicle must be available.")
+
+    try:
+        comfort = float(payload.get("comfort_load_factor", defaults.comfort_load_factor))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("comfort_load_factor must be a number.") from exc
+    if not math.isfinite(comfort) or not 0.1 <= comfort <= 1:
+        raise ValueError("comfort_load_factor must be between 0.1 and 1.")
+    payload["comfort_load_factor"] = comfort
+    return PlannerConfig(**payload)
 
 
 def _traffic_float(value: Any) -> float | None:
@@ -1969,12 +2057,6 @@ def _next_final_route_replan_limit_seconds(
     return next_limit_seconds
 
 
-def _scenario_route_signature(result: dict[str, Any]) -> tuple[tuple[str, ...], ...]:
-    return tuple(
-        sorted(tuple(str(node) for node in route.get("nodes") or []) for route in result.get("routes") or [])
-    )
-
-
 def _failed_route_modeled_duration_seconds(
     result: dict[str, Any],
     gate: dict[str, Any],
@@ -3180,6 +3262,13 @@ def _current_plan_route_count(current_plan: dict[str, Any] | None) -> int:
     return len(route_ids)
 
 
+def _validate_minimum_vehicle_reduction(current_route_count: int, reduction: int) -> None:
+    if current_route_count > 0 and reduction >= current_route_count:
+        raise ValueError(
+            f"minimum_vehicle_reduction must be less than the current plan route count ({current_route_count})."
+        )
+
+
 def _build_bus_capacity_lookup(config: PlannerConfig, current_plan: dict[str, Any] | None = None) -> dict[str, int]:
     lookup = {
         str(config.large_bus_name).strip() or "Large Bus": int(config.large_bus_capacity),
@@ -4184,6 +4273,10 @@ def build_constrained_improvement_current_plan(
     route_reallocation_analysis: dict[str, Any] | None,
     config: PlannerConfig,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
+    raise RuntimeError(
+        "Retired constrained-improvement solver path; use Strict Plan or Protected Plan."
+    )
+
     normalized = _normalize_current_plan(current_plan)
     if not normalized or not route_reallocation_analysis:
         return None, [], []
@@ -5410,7 +5503,8 @@ def _compute_scenario_without_render(
             planner.MIN_SOLVER_VEHICLE_COUNT = 0
         if forced_vehicle_count_int is not None and forced_vehicle_count_int > 0:
             planner.MIN_SOLVER_VEHICLE_COUNT = forced_vehicle_count_int
-            scenario_constraint_metadata["forced_vehicle_count"] = forced_vehicle_count_int
+            if scenario_constraint_metadata:
+                scenario_constraint_metadata["forced_vehicle_count"] = forced_vehicle_count_int
             planner.log(
                 f"[BACKEND] Forcing {scenario_label} to test exactly "
                 f"{forced_vehicle_count_int} active vehicle(s)."
@@ -5426,7 +5520,6 @@ def _compute_scenario_without_render(
 
         def solve_with_current_settings(max_replans: int | None = None) -> dict[str, Any]:
             traffic_replan_attempts: list[dict[str, Any]] = []
-            seen_route_signatures: set[tuple[tuple[str, ...], ...]] = set()
             best_failed_candidate: dict[str, Any] | None = None
             result: dict[str, Any] = {}
             replan_attempt_index = 0
@@ -5594,9 +5687,6 @@ def _compute_scenario_without_render(
                         max_vehicle_count,
                     )
                     gate = dict(result.get("traffic_gate") or {})
-                route_signature = _scenario_route_signature(result)
-                repeated_route_signature = route_signature in seen_route_signatures
-                seen_route_signatures.add(route_signature)
                 final_time_impact_gate = (
                     final_time_impact_validator(result, points)
                     if callable(final_time_impact_validator)
@@ -5639,33 +5729,6 @@ def _compute_scenario_without_render(
                     )
                 if replan_attempt_index >= replan_limit:
                     break
-                if (
-                    forced_vehicle_count_int is not None
-                    and repeated_route_signature
-                    and str(dict(gate or {}).get("status") or "") == "failed"
-                ):
-                    traffic_replan_attempts.append(
-                        {
-                            "attempt": replan_attempt_index + 1,
-                            "action": "stop_duplicate_route_signature",
-                            "exact_vehicle_count": forced_vehicle_count_int,
-                            "bus_count": int(result.get("bus_count", 0) or 0),
-                            "failed_route_count": int(dict(gate or {}).get("failed_route_count", 0) or 0),
-                            "failed_route_ids": list(dict(gate or {}).get("failed_route_ids") or []),
-                            "max_estimated_arrival_delay_minutes": float(
-                                dict(gate or {}).get("max_estimated_arrival_delay_minutes", 0.0) or 0.0
-                            ),
-                            "api_calls": int(dict(gate or {}).get("api_calls", 0) or 0),
-                            "cache_hits": int(dict(gate or {}).get("cache_hits", 0) or 0),
-                            "stop_reason": "duplicate_route_signature",
-                        }
-                    )
-                    gate["replan_stop_reason"] = "duplicate_route_signature"
-                    result["traffic_gate"] = gate
-                    planner.log(
-                        f"[WARN] {scenario_label} {gate_name} replan returned the same route signature; stopping."
-                    )
-                    break
                 min_limit_s, max_step_minutes = _route_duration_replan_bounds(gate)
                 next_limit_s = _next_final_route_replan_limit_seconds(
                     route_limit_before_s,
@@ -5697,7 +5760,7 @@ def _compute_scenario_without_render(
                 gate_type = str(dict(gate or {}).get("gate_type") or "")
                 prefer_route_target_search = gate_type in {"arrival_window", "route_duration"} and next_limit_s is not None
                 search_action = "tighten_route_target" if next_limit_s is not None else "none"
-                if route_change_blocked:
+                if route_change_blocked and not time_impact_bounds_tightened:
                     traffic_replan_attempts.append(
                         {
                             "attempt": replan_attempt_index + 1,
@@ -5720,6 +5783,8 @@ def _compute_scenario_without_render(
                         "crossing the configured minimum route target; stopping."
                     )
                     break
+                if route_change_blocked:
+                    next_limit_s = None
                 if prefer_route_target_search:
                     if traffic_replan_attempts and next_min_vehicle_count > current_min_vehicle_count:
                         search_action = "tighten_route_target_and_increase_active_vehicles"
@@ -5843,11 +5908,36 @@ def _build_infeasible_scenario_result(
     return result
 
 
-def _no_feasible_route_error_type(planner: Any) -> Any:
-    error_type = getattr(planner, "NoFeasibleRouteError", None)
+def _build_unresolved_scenario_result(
+    reason: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    result = _build_infeasible_scenario_result(reason, extra)
+    result["scenario_status"] = "unresolved"
+    result["unresolved_reason"] = result.pop("infeasible_reason")
+    return result
+
+
+def _planner_error_type(planner: Any, name: str) -> Any:
+    error_type = getattr(planner, name, None)
     if isinstance(error_type, type) and issubclass(error_type, Exception):
         return error_type
     return ()
+
+
+def _solver_error_metadata(exc: Exception) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    status_code = getattr(exc, "status_code", None)
+    if status_code is not None:
+        result["solver_status_code"] = int(status_code)
+    status_name = str(getattr(exc, "status_name", "") or "").strip()
+    if status_name:
+        result["solver_status_name"] = status_name
+    solver_attempts = list(getattr(exc, "attempts", []) or [])
+    if solver_attempts:
+        result["solver_attempts"] = solver_attempts
+        result["solver_attempt_count"] = len(solver_attempts)
+    return result
 
 
 def _scenario_bus_count(result: dict[str, Any] | None) -> int:
@@ -5957,12 +6047,19 @@ def _attach_vehicle_ladder_metadata(
     frozen_route_count: int = 0,
 ) -> dict[str, Any]:
     _attach_optimized_route_display_ids(result)
+    unresolved_vehicle_caps = [
+        int(item["target_vehicle_count"])
+        for item in attempts
+        if item.get("status") == "unresolved" and item.get("target_vehicle_count") is not None
+    ]
     metadata = {
         "enabled": True,
         "current_route_count": max(0, int(current_route_count or 0)),
         "minimum_vehicle_reduction": max(0, int(minimum_vehicle_reduction or 0)),
         "frozen_route_count": max(0, int(frozen_route_count or 0)),
         "selected_target_vehicle_count": selected_target_vehicle_count,
+        "search_complete": not unresolved_vehicle_caps,
+        "unresolved_vehicle_caps": unresolved_vehicle_caps,
         "attempts": attempts,
     }
     result["vehicle_ladder_search"] = metadata
@@ -6036,7 +6133,8 @@ def _solve_vehicle_ladder_scenario(
     best_failed_result: dict[str, Any] | None = None
     selected_target_vehicle_count: int | None = None
     selected_failed_target_vehicle_count: int | None = None
-    no_feasible_route_error = _no_feasible_route_error_type(planner)
+    no_feasible_route_error = _planner_error_type(planner, "NoFeasibleRouteError")
+    solver_unresolved_error = _planner_error_type(planner, "SolverUnresolvedError")
     for target_vehicle_count in target_vehicle_counts:
         try:
             candidate = _compute_scenario_without_render(
@@ -6059,6 +6157,18 @@ def _solve_vehicle_ladder_scenario(
                     "phase": "exact_target",
                     "status": "infeasible",
                     "reason": str(exc),
+                    **_solver_error_metadata(exc),
+                }
+            )
+            continue
+        except solver_unresolved_error as exc:
+            attempts.append(
+                {
+                    "target_vehicle_count": target_vehicle_count,
+                    "phase": "exact_target",
+                    "status": "unresolved",
+                    "reason": str(exc),
+                    **_solver_error_metadata(exc),
                 }
             )
             continue
@@ -6089,9 +6199,19 @@ def _solve_vehicle_ladder_scenario(
             best_failed_result = candidate
             selected_failed_target_vehicle_count = actual_vehicle_count
 
+    unresolved_vehicle_caps = [
+        int(item["target_vehicle_count"])
+        for item in attempts
+        if item.get("status") == "unresolved"
+    ]
     result = best_target_result or best_failed_result
     if result is None:
-        result = _build_infeasible_scenario_result(
+        build_empty_result = (
+            _build_unresolved_scenario_result
+            if unresolved_vehicle_caps
+            else _build_infeasible_scenario_result
+        )
+        result = build_empty_result(
             f"{scenario_label} could not produce a candidate between the hard vehicle limits "
             f"{minimum_target_vehicle_count} and {required_target_vehicle_count}."
         )
@@ -6106,6 +6226,8 @@ def _solve_vehicle_ladder_scenario(
         "reason": (
             "minimum_vehicle_lower_bound_exceeds_allowed_maximum"
             if preflight_infeasible and scenario_status == "infeasible"
+            else "solver_unresolved"
+            if scenario_status == "unresolved"
             else "search_exhausted"
             if scenario_status == "infeasible"
             else "candidate_failed_hard_gates"
@@ -6117,6 +6239,8 @@ def _solve_vehicle_ladder_scenario(
         "attempted_vehicle_caps": [int(item["target_vehicle_count"]) for item in attempts],
         "candidate_count": sum(1 for item in attempts if item.get("actual_vehicle_count") is not None),
         "feasible_candidate_count": sum(1 for item in attempts if item.get("all_constraints_passed")),
+        "search_complete": not unresolved_vehicle_caps,
+        "unresolved_vehicle_caps": unresolved_vehicle_caps,
     }
     result["constraint_search_outcome"] = search_outcome
     return _attach_vehicle_ladder_metadata(
@@ -6771,7 +6895,8 @@ def build_exception_preserving_scenario(
     best_failed_candidate: dict[str, Any] | None = None
     remaining_min_vehicle_count = 0
     preflight_infeasible = False
-    no_feasible_route_error = _no_feasible_route_error_type(planner)
+    no_feasible_route_error = _planner_error_type(planner, "NoFeasibleRouteError")
+    solver_unresolved_error = _planner_error_type(planner, "SolverUnresolvedError")
 
     # Freeze the full current-plan violation set; partial freezes can hide an
     # existing violation inside the optimized remainder.
@@ -7053,6 +7178,7 @@ def build_exception_preserving_scenario(
                         "vehicle_limit_relaxed": False,
                         "status": "infeasible",
                         "reason": str(exc),
+                        **_solver_error_metadata(exc),
                     }
                 )
                 planner.log(
@@ -7060,7 +7186,32 @@ def build_exception_preserving_scenario(
                     f"and remaining vehicle limit {remaining_limit_candidate} was infeasible: {exc}"
                 )
                 continue
+            except solver_unresolved_error as exc:
+                attempts.append(
+                    {
+                        "frozen_route_count": frozen_count,
+                        "frozen_route_ids": [_route_display_id(route, index) for index, route in enumerate(frozen_routes, start=1)],
+                        "remaining_stop_count": remaining_service_count,
+                        "remaining_vehicle_limit": remaining_limit_candidate,
+                        "target_vehicle_count": frozen_count + remaining_limit_candidate,
+                        "accepted": False,
+                        "vehicle_limit_relaxed": False,
+                        "status": "unresolved",
+                        "reason": str(exc),
+                        **_solver_error_metadata(exc),
+                    }
+                )
+                planner.log(
+                    f"[INFO] Protected attempt with {frozen_count} frozen route(s) "
+                    f"and remaining vehicle limit {remaining_limit_candidate} was unresolved: {exc}"
+                )
+                continue
 
+    unresolved_remaining_limits = [
+        int(item["remaining_vehicle_limit"])
+        for item in attempts
+        if item.get("status") == "unresolved" and item.get("remaining_vehicle_limit") is not None
+    ]
     best_candidate = best_accepted_candidate or best_failed_candidate
     if best_candidate is not None:
         accepted = best_accepted_candidate is not None
@@ -7080,6 +7231,8 @@ def build_exception_preserving_scenario(
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
             "selected_vehicle_count": _scenario_bus_count(best_candidate) if accepted else None,
+            "search_complete": not unresolved_remaining_limits,
+            "unresolved_remainder_vehicle_caps": unresolved_remaining_limits,
             "attempted_remainder_vehicle_caps": [
                 int(item["remaining_vehicle_limit"])
                 for item in attempts
@@ -7095,24 +7248,28 @@ def build_exception_preserving_scenario(
         for attempt in error_attempts
         if attempt.get("remaining_vehicle_limit") is not None
     ]
-    skip_reason = "Exception-preserving optimization could not produce a candidate."
+    infeasible_reason = "Exception-preserving optimization could not produce a candidate."
     if error_attempts:
-        skip_reason = (
+        infeasible_reason = (
             "Exception-preserving optimization could not solve the unfrozen remainder"
             + (f" after trying remaining vehicle limit(s): {', '.join(tried_limits)}." if tried_limits else ".")
             + f" Last solver result: {error_attempts[-1].get('reason')}"
         )
-    skipped_extra: dict[str, Any] = {
+    infeasible_extra: dict[str, Any] = {
         "constraint_search_outcome": {
-            "status": "infeasible",
+            "status": "unresolved" if unresolved_remaining_limits else "infeasible",
             "reason": (
                 "minimum_vehicle_lower_bound_exceeds_allowed_maximum"
                 if preflight_infeasible
+                else "solver_unresolved"
+                if unresolved_remaining_limits
                 else "search_exhausted"
             ),
             "frozen_route_count": len(failed_routes),
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
+            "search_complete": not unresolved_remaining_limits,
+            "unresolved_remainder_vehicle_caps": unresolved_remaining_limits,
             "attempted_remainder_vehicle_caps": [
                 int(item["remaining_vehicle_limit"])
                 for item in attempts
@@ -7128,13 +7285,17 @@ def build_exception_preserving_scenario(
         }
     }
     if node_time_upper_bounds_builder is not None:
-        skipped_extra["time_constraint"] = {
+        infeasible_extra["time_constraint"] = {
             **deepcopy(time_constraint_metadata or {}),
             "enabled": True,
             "mode": "hard",
             "best_effort": False,
         }
-    return _build_infeasible_scenario_result(skip_reason, skipped_extra)
+    return (
+        _build_unresolved_scenario_result(infeasible_reason, infeasible_extra)
+        if unresolved_remaining_limits
+        else _build_infeasible_scenario_result(infeasible_reason, infeasible_extra)
+    )
 
 
 def _normalize_time_constraint_text(value: Any) -> str:
@@ -7174,7 +7335,10 @@ def _scenario_time_impact_rows(
     config: PlannerConfig,
 ) -> tuple[list[dict[str, Any]], int]:
     service_direction = normalize_service_direction(config.service_direction)
-    dwell_seconds = max(0.0, float(config.stop_service_minutes or 1) * 60.0)
+    dwell_seconds = max(
+        0.0,
+        float(config.stop_service_minutes if config.stop_service_minutes is not None else 1) * 60.0,
+    )
     rows: list[dict[str, Any]] = []
     unavailable_route_count = 0
     for route_index, route in enumerate(list(scenario.get("routes") or []), start=1):
@@ -7495,7 +7659,7 @@ def run_backend_planner_with_prepared_data(
     progress_callback: Any | None = None,
     require_fresh_final_traffic: bool = False,
 ) -> dict[str, Any]:
-    config = create_request_scoped_config(config or PlannerConfig())
+    config = create_request_scoped_config(build_planner_config(asdict(config or PlannerConfig())))
     if require_fresh_final_traffic:
         setattr(config, "_fresh_final_route_traffic_required", True)
     input_records = _normalize_input_records(prepared_payload.get("input_records") or [])
@@ -7538,6 +7702,10 @@ def run_backend_planner_with_prepared_data(
         solver_bus_type_configs = _build_bus_type_configs(config)
         current_plan_route_count_for_reduction = _current_plan_route_count(current_plan)
         minimum_vehicle_reduction = max(0, int(config.minimum_vehicle_reduction or 0))
+        _validate_minimum_vehicle_reduction(
+            current_plan_route_count_for_reduction,
+            minimum_vehicle_reduction,
+        )
         assessment_time = None
         assessment_distance = None
         current_plan_assessment = None
@@ -7694,7 +7862,7 @@ def run_backend_planner_with_prepared_data(
             input_records,
             solver_bus_type_configs,
             None,
-            standard_scenarios=[time_constrained_result],
+            standard_scenarios=[],
             node_time_lower_bounds_builder=time_constraint_lower_builder,
             node_time_upper_bounds_builder=time_constraint_builder,
             time_constraint_metadata=protected_time_constraint_metadata,

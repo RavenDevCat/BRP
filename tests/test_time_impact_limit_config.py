@@ -21,6 +21,82 @@ def test_blank_minimum_vehicle_reduction_means_no_required_saving():
         assert payload["minimum_vehicle_reduction"] == 0
 
 
+def test_legacy_zero_stop_limit_still_means_unlimited():
+    payload = backend_service._planner_config_payload({"route_stop_limit": 0})
+
+    assert payload["route_stop_limit"] is None
+
+
+def test_invalid_service_direction_is_rejected():
+    try:
+        backend_service._planner_config_payload({"service_direction": "sideways"})
+    except ValueError as exc:
+        assert "service_direction" in str(exc)
+    else:
+        raise AssertionError("invalid service direction was accepted")
+
+
+def test_solver_config_rejects_values_that_would_be_silently_clamped():
+    invalid_payloads = (
+        {"traffic_profile_name": "rush-ish"},
+        {"time_window_start": "08:00", "time_window_end": "06:30"},
+        {"route_stop_limit": -1},
+        {"stop_service_minutes": -1},
+        {"comfort_load_factor": 0.05},
+        {"large_bus_max_count": 0, "mid_bus_max_count": 0, "small_bus_max_count": 0},
+    )
+
+    for payload in invalid_payloads:
+        try:
+            planner_core.build_planner_config(payload)
+        except ValueError:
+            continue
+        raise AssertionError(f"invalid solver config was accepted: {payload}")
+
+
+def test_vehicle_reduction_cannot_request_zero_remaining_routes():
+    planner_core._validate_minimum_vehicle_reduction(22, 21)
+
+    try:
+        planner_core._validate_minimum_vehicle_reduction(22, 22)
+    except ValueError as exc:
+        assert "current plan route count (22)" in str(exc)
+    else:
+        raise AssertionError("a zero-route target was accepted")
+
+
+def test_zero_dwell_remains_zero_in_final_time_impact_rows():
+    scenario = {
+        "routes": [
+            {
+                "route_id": "Bus 1",
+                "nodes": [0, 1, 2],
+                "time_s": 120,
+                "raw_osrm_time_s": 120,
+                "leg_details": [
+                    {"duration_s": 60, "raw_osrm_duration_s": 60},
+                    {"duration_s": 60, "raw_osrm_duration_s": 60},
+                ],
+                "final_route_traffic_gate": {"verified_drive_duration_s": 120},
+            }
+        ]
+    }
+    points = [
+        {"is_depot": True},
+        {"address": "A", "passenger_count": 1},
+        {"address": "B", "passenger_count": 1},
+    ]
+
+    rows, unavailable = planner_core._scenario_time_impact_rows(
+        scenario,
+        points,
+        planner_core.PlannerConfig(service_direction="From School", stop_service_minutes=0),
+    )
+
+    assert unavailable == 0
+    assert [row["offset_s"] for row in rows] == [60, 120]
+
+
 def test_time_impact_summary_uses_user_limit():
     stops = [
         {

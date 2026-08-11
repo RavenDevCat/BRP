@@ -25,6 +25,10 @@ def test_legacy_scenario_status_adapter_is_read_only() -> None:
                 "routes": [{"route_id": "R1"}],
                 "traffic_gate": {"status": "failed"},
             },
+            "nearby": {
+                "scenario_status": "unresolved",
+                "constraint_search_outcome": {"status": "unresolved"},
+            },
             "structured_results": {
                 "current_plan": {
                     "route_count": 1,
@@ -39,6 +43,7 @@ def test_legacy_scenario_status_adapter_is_read_only() -> None:
     assert "scenario_status" not in source["result"]["structured_results"]["current_plan"]
     assert adapted["result"]["time_constrained_optimization"]["scenario_status"] == "legacy_unavailable"
     assert adapted["result"]["exception_preserving_optimization"]["scenario_status"] == "rejected"
+    assert adapted["result"]["nearby"]["scenario_status"] == "unresolved"
     assert adapted["result"]["structured_results"]["current_plan"]["scenario_status"] == "passed"
 
 

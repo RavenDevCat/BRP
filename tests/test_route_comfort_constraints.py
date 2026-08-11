@@ -1,6 +1,7 @@
 import importlib
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -133,6 +134,58 @@ class RouteComfortConstraintsTests(unittest.TestCase):
         self.assertEqual(len(routes), 20)
         self.assertEqual({node for route in routes for node in route["nodes"] if node}, set(range(1, 117)))
         self.assertTrue(all(route["load"] >= 2 for route in routes))
+
+    def test_missing_seed_falls_back_to_unseeded_solver(self) -> None:
+        self._setattr("BUS_TYPE_CONFIGS", [{"name": "Large Bus", "capacity": 42, "max_count": 3}])
+        points = [_point(0)] + [_point(index, 2) for index in range(1, 5)]
+        matrix = _simple_matrix(len(points))
+
+        with patch.object(self.planner, "build_minimum_vehicle_seed", return_value=None):
+            routes = self.planner._solve_routes_for_fleet_impl(
+                points,
+                matrix,
+                matrix,
+                self.planner.build_vehicle_fleet(),
+                minimum_active_vehicles=2,
+            )
+
+        self.assertGreaterEqual(len(routes), 2)
+
+    def test_failed_seed_search_falls_back_to_unseeded_solver(self) -> None:
+        self._setattr("BUS_TYPE_CONFIGS", [{"name": "Large Bus", "capacity": 42, "max_count": 3}])
+        points = [_point(0)] + [_point(index, 2) for index in range(1, 5)]
+        matrix = _simple_matrix(len(points))
+        original_solve = self.planner._solve_routes_for_fleet_impl
+
+        def fail_seed_search(*args, **kwargs):
+            if kwargs.get("first_solution_only"):
+                raise self.planner.NoFeasibleRouteError("seed search timed out")
+            return original_solve(*args, **kwargs)
+
+        with patch.object(self.planner, "_solve_routes_for_fleet_impl", side_effect=fail_seed_search):
+            routes = self.planner._solve_routes_for_fleet_impl(
+                points,
+                matrix,
+                matrix,
+                self.planner.build_vehicle_fleet(),
+                minimum_active_vehicles=2,
+            )
+
+        self.assertGreaterEqual(len(routes), 2)
+
+    def test_impossible_exact_vehicle_count_is_reported_as_infeasible(self) -> None:
+        self._setattr("BUS_TYPE_CONFIGS", [{"name": "Large Bus", "capacity": 42, "max_count": 4}])
+        points = [_point(0), _point(1, 2), _point(2, 2)]
+        matrix = _simple_matrix(len(points))
+
+        with self.assertRaisesRegex(self.planner.NoFeasibleRouteError, "Cannot activate 3 vehicles"):
+            self.planner._solve_routes_for_fleet_impl(
+                points,
+                matrix,
+                matrix,
+                self.planner.build_vehicle_fleet(),
+                minimum_active_vehicles=3,
+            )
 
     def test_solver_rejects_single_rider_trivial_route(self) -> None:
         points = [_point(0), _point(1, 1)]

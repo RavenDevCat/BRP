@@ -47,6 +47,7 @@ try:
         assess_current_plan,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
+        build_planner_config,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -77,6 +78,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         assess_current_plan,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
+        build_planner_config,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -379,16 +381,6 @@ def _delete_runtime_side_tool(tool_key: str, run_id: str) -> bool:
         return False
 
 
-def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
-    allowed_field_names = {field.name for field in fields(PlannerConfig)}
-    filtered_payload = {
-        key: value
-        for key, value in dict(config_payload or {}).items()
-        if key in allowed_field_names
-    }
-    return PlannerConfig(**filtered_payload)
-
-
 def _parse_clock_payload(value: Any, field_name: str, default_value: str) -> tuple[str, int]:
     raw = str(value or default_value).strip()
     parts = raw.split(":")
@@ -404,68 +396,13 @@ def _parse_clock_payload(value: Any, field_name: str, default_value: str) -> tup
     return f"{hours:02d}:{minutes:02d}", hours * 60 + minutes
 
 
-def _parse_route_stop_limit_payload(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        limit = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("route_stop_limit must be a whole number.") from exc
-    if limit < 1 or limit > 200:
-        raise ValueError("route_stop_limit must be between 1 and 200.")
-    return limit
-
-
-def _parse_minimum_vehicle_reduction_payload(value: Any) -> int:
-    if value is None or value == "":
-        return 0
-    try:
-        reduction = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("minimum_vehicle_reduction must be a whole number.") from exc
-    if reduction < 0 or reduction > 200:
-        raise ValueError("minimum_vehicle_reduction must be between 0 and 200.")
-    return reduction
-
-
-def _parse_time_impact_limit_payload(value: Any) -> int:
-    if value is None or value == "":
-        return int(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
-    try:
-        minutes = int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError("time_impact_limit_minutes must be a whole number.") from exc
-    if minutes < 0 or minutes > 240:
-        raise ValueError("time_impact_limit_minutes must be between 0 and 240.")
-    return minutes
+def _build_planner_config(config_payload: dict[str, Any]) -> Any:
+    """Compatibility seam for the thin API shell; validation lives in planner_core."""
+    return build_planner_config(config_payload)
 
 
 def _planner_config_payload(config_payload: dict[str, Any]) -> dict[str, Any]:
-    normalized_input = dict(config_payload or {})
-    window_start, start_minutes = _parse_clock_payload(
-        normalized_input.get("time_window_start"),
-        "time_window_start",
-        "06:30",
-    )
-    window_end, end_minutes = _parse_clock_payload(
-        normalized_input.get("time_window_end"),
-        "time_window_end",
-        "08:00",
-    )
-    if end_minutes <= start_minutes:
-        raise ValueError("time_window_start must be before time_window_end.")
-    normalized_input["time_window_start"] = window_start
-    normalized_input["time_window_end"] = window_end
-    normalized_input["route_stop_limit"] = _parse_route_stop_limit_payload(
-        normalized_input.get("route_stop_limit")
-    )
-    normalized_input["minimum_vehicle_reduction"] = _parse_minimum_vehicle_reduction_payload(
-        normalized_input.get("minimum_vehicle_reduction")
-    )
-    normalized_input["time_impact_limit_minutes"] = _parse_time_impact_limit_payload(
-        normalized_input.get("time_impact_limit_minutes")
-    )
-    return asdict(_build_planner_config(normalized_input))
+    return asdict(_build_planner_config(config_payload))
 
 
 def _client_core_module() -> Any:
@@ -1891,7 +1828,7 @@ def _current_plan_preview_map(
         return None, "No geocoded points are available for map preview."
     try:
         planner = load_legacy_planner()
-        config = _build_planner_config(config_payload)
+        config = build_planner_config(config_payload)
         assessment_time, assessment_distance = _build_assessment_metric_matrices(
             planner,
             points,
@@ -2078,7 +2015,8 @@ def _attach_current_plan_amap_budget_details(
         max_point_count = 0
         measured_count = 0
         source = ""
-        stop_service_s = max(0, int(getattr(planner, "STOP_SERVICE_SECONDS", 60) or 60))
+        raw_stop_service_s = getattr(planner, "STOP_SERVICE_SECONDS", 60)
+        stop_service_s = max(0, int(60 if raw_stop_service_s is None else raw_stop_service_s))
         for route_id, route_nodes in measurable_routes.items():
             request_points = _route_amap_points(points, {"nodes": route_nodes})
             stats = _amap_route_stats(planner, request_points, cache, state)
@@ -2746,7 +2684,7 @@ def _ai_audit_report_map(record: dict[str, Any] | None) -> dict[str, dict[str, A
     return reports_by_language
 
 
-_SCENARIO_STATUSES = {"passed", "rejected", "infeasible", "legacy_unavailable"}
+_SCENARIO_STATUSES = {"passed", "rejected", "infeasible", "unresolved", "legacy_unavailable"}
 _SCENARIO_RESULT_KEYS = (
     "current_plan_scenario",
     "free_optimization_baseline",
@@ -4251,7 +4189,8 @@ def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -
     )
     config = _job_planner_config_payload(job_record)
     try:
-        dwell_seconds = max(0.0, float(config.get("stop_service_minutes", 1) or 1) * 60.0)
+        raw_dwell_minutes = config.get("stop_service_minutes", 1)
+        dwell_seconds = max(0.0, float(1 if raw_dwell_minutes is None else raw_dwell_minutes) * 60.0)
     except (TypeError, ValueError):
         dwell_seconds = 60.0
 
@@ -5127,7 +5066,7 @@ def _build_rerender_config_for_job(job_record: dict[str, Any]) -> PlannerConfig:
     config_payload = dict(
         job_record.get("config") or metadata.get("planner_config") or {}
     )
-    config = _build_planner_config(config_payload)
+    config = build_planner_config(config_payload)
     if not config.output_directory_name:
         result = dict(job_record.get("result") or {})
         config.output_directory_name = _infer_output_directory_name(result) or str(

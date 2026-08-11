@@ -2465,10 +2465,16 @@ function MetricCard({
 
 function ScenarioDecisionMetricsLine({ scenario }: { scenario: ScenarioRow }) {
   const t = useT();
+  const searchComplete = scenario.constraintSearchOutcome.search_complete !== false;
   return (
     <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 border-t border-current/10 pt-2 text-xs text-muted-foreground">
       <span>{t("Affected riders")}: {scenarioAffectedRidersLabel(scenario, t)}</span>
       <span>{t("Worst miss")}: {scenarioWorstMissLabel(scenario, t)}</span>
+      {!searchComplete ? (
+        <span className="basis-full text-amber-700">
+          {t("Lower route-count search remains unresolved; this plan is usable but not proven minimal.")}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -2640,7 +2646,7 @@ function getAiAuditLanguageKey(language: unknown): "en" | "ko" | "zh" {
   return "en";
 }
 
-type ScenarioStatus = "passed" | "rejected" | "infeasible" | "legacy_unavailable";
+type ScenarioStatus = "passed" | "rejected" | "infeasible" | "unresolved" | "legacy_unavailable";
 
 type ScenarioRow = {
   key: string;
@@ -2651,6 +2657,7 @@ type ScenarioRow = {
   timeConstraint: Record<string, unknown>;
   feasibilityReport: Record<string, unknown>;
   finalTimeImpactGate: Record<string, unknown>;
+  constraintSearchOutcome: Record<string, unknown>;
   exceptionAccepted: boolean;
   routeCount: unknown;
   stopCount: unknown;
@@ -3012,6 +3019,7 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     timeConstraint: {},
     feasibilityReport: {},
     finalTimeImpactGate: {},
+    constraintSearchOutcome: {},
     exceptionAccepted: false,
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
@@ -3037,6 +3045,7 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     timeConstraint: asRecord(scenario.time_constraint),
     feasibilityReport: asRecord(scenario.feasibility_report),
     finalTimeImpactGate: asRecord(scenario.final_time_impact_gate),
+    constraintSearchOutcome: asRecord(scenario.constraint_search_outcome || scenario.vehicle_ladder_search),
     exceptionAccepted: Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
@@ -3270,7 +3279,7 @@ function scenarioCardDetail(
 
 function scenarioStatusFromPayload(scenario: Record<string, unknown>): ScenarioStatus {
   const status = stringValue(scenario.scenario_status) as ScenarioStatus;
-  return ["passed", "rejected", "infeasible", "legacy_unavailable"].includes(status)
+  return ["passed", "rejected", "infeasible", "unresolved", "legacy_unavailable"].includes(status)
     ? status
     : "legacy_unavailable";
 }
@@ -3287,19 +3296,24 @@ function scenarioStatusLabel(status: ScenarioStatus | undefined): string {
   if (status === "passed") return "Passed";
   if (status === "rejected") return "Rejected";
   if (status === "infeasible") return "Infeasible";
+  if (status === "unresolved") return "Unresolved";
   return "Legacy unavailable";
 }
 
 function scenarioStatusTone(status: ScenarioStatus | undefined): "neutral" | "success" | "warning" | "info" {
   if (status === "passed") return "success";
-  if (status === "rejected" || status === "infeasible") return "warning";
+  if (status === "rejected" || status === "infeasible" || status === "unresolved") return "warning";
   return "neutral";
 }
 
 function scenarioUnavailableDetail(status: ScenarioStatus | undefined): string {
-  return status === "infeasible"
-    ? "The solver completed its exact route-count search without finding a route candidate."
-    : "This historical run did not store a comparable scenario result.";
+  if (status === "infeasible") {
+    return "The solver proved that no exact route-count candidate satisfies the submitted hard constraints.";
+  }
+  if (status === "unresolved") {
+    return "The bounded solver search ended without proving whether an exact route-count candidate exists.";
+  }
+  return "This historical run did not store a comparable scenario result.";
 }
 
 function scenarioTrafficTone(
@@ -4140,18 +4154,25 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
         const routeCount = Number(attempt.route_count || 0);
         const frozen = Number(attempt.frozen_route_count || 0);
         const accepted = Boolean(attempt.accepted);
-        return accepted
-          ? template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), accepted {total} total route(s)."), {
-              index: formatNumber(index + 1),
-              frozen: formatNumber(frozen),
-              remaining: formatNumber(remainingLimit),
-              total: formatNumber(routeCount),
-            })
-          : template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), not accepted."), {
-              index: formatNumber(index + 1),
-              frozen: formatNumber(frozen),
-              remaining: formatNumber(remainingLimit),
-            });
+        const attemptStatus = stringValue(attempt.status);
+        const values = {
+          index: formatNumber(index + 1),
+          frozen: formatNumber(frozen),
+          remaining: formatNumber(remainingLimit),
+          total: formatNumber(routeCount),
+          attempts: formatNumber(Number(attempt.solver_attempt_count || 1)),
+          status: stringValue(attempt.solver_status_name) || "OR-Tools unresolved",
+        };
+        if (accepted) {
+          return template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), accepted {total} total route(s)."), values);
+        }
+        if (attemptStatus === "unresolved") {
+          return template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), unresolved after {attempts} solver attempt(s) ({status})."), values);
+        }
+        if (attemptStatus === "infeasible") {
+          return template(t("EP ladder {index}: froze {frozen} current route(s); the {remaining}-route remainder was proven infeasible."), values);
+        }
+        return template(t("EP ladder {index}: froze {frozen} current route(s), tested {remaining} remainder route(s), not accepted."), values);
       });
       return {
         label,
@@ -4159,7 +4180,13 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
         passed: scenarioStatus === "passed",
         neutral: false,
         summary: template(
-          t(acceptedAttempt ? "{count} EP ladder attempt(s); accepted a candidate." : "{count} EP ladder attempt(s); no accepted candidate."),
+          t(
+            acceptedAttempt
+              ? "{count} EP ladder attempt(s); accepted a candidate."
+              : scenarioStatus === "unresolved"
+                ? "{count} EP ladder attempt(s); bounded solver search remains unresolved."
+                : "{count} EP ladder attempt(s); no accepted candidate.",
+          ),
           { count: formatNumber(exceptionAttempts.length) },
         ),
         steps,
@@ -4186,6 +4213,20 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
       const steps = ladderAttempts.map((attempt, index) => {
         const target = Number(attempt.target_vehicle_count || 0);
         const attemptStatus = stringValue(attempt.status);
+        if (attemptStatus === "unresolved") {
+          return template(t("Exact route-count attempt {index}: {routes} route(s) remained unresolved after {attempts} solver attempt(s) ({status})."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(target),
+            attempts: formatNumber(Number(attempt.solver_attempt_count || 1)),
+            status: stringValue(attempt.solver_status_name) || "OR-Tools unresolved",
+          });
+        }
+        if (attemptStatus === "infeasible") {
+          return template(t("Exact route-count attempt {index}: {routes} route(s) were proven infeasible under the submitted hard constraints."), {
+            index: formatNumber(index + 1),
+            routes: formatNumber(target),
+          });
+        }
         if (attemptStatus === "error") {
           return template(t("Exact route-count attempt {index}: local solver did not find an exact {routes}-route candidate within this attempt."), {
             index: formatNumber(index + 1),
@@ -4205,7 +4246,13 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
         passed: false,
         neutral: false,
         summary: template(
-          t("{count} exact route-count attempt(s) from {maximum} to {minimum}; no feasible candidate was found within the configured search budget. This does not prove that no solution exists."),
+          t(
+            scenarioStatus === "unresolved"
+              ? "{count} exact route-count attempt(s) from {maximum} to {minimum} remain unresolved after bounded retries; no no-solution conclusion was made."
+              : scenarioStatus === "infeasible"
+                ? "The solver proved that no candidate exists for {count} tested exact route count(s) from {maximum} to {minimum} under the submitted hard constraints."
+                : "{count} exact route-count attempt(s) from {maximum} to {minimum}; no feasible candidate was found within the configured search budget. This does not prove that no solution exists.",
+          ),
           {
             count: formatNumber(ladderAttempts.length),
             maximum: formatNumber(targets.length ? Math.max(...targets) : allowedMaximum),

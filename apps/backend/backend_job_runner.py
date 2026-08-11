@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import fields
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -10,10 +9,10 @@ import traceback
 from typing import Any
 
 try:
-    from .planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from .planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
-    from planner_core import PlannerConfig, run_backend_planner_with_prepared_data
+    from planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from runtime_store_sqlite import SqliteRuntimeStore
 
 
@@ -63,16 +62,6 @@ def _release_concurrency_slot() -> None:
         return
 
 
-def _build_planner_config(config_payload: dict[str, Any]) -> PlannerConfig:
-    allowed_field_names = {field.name for field in fields(PlannerConfig)}
-    filtered_payload = {
-        key: value
-        for key, value in dict(config_payload or {}).items()
-        if key in allowed_field_names
-    }
-    return PlannerConfig(**filtered_payload)
-
-
 def _is_scheduled_job(job_record: dict[str, Any]) -> bool:
     metadata = dict(job_record.get("metadata") or {})
     return bool(metadata.get("scheduled_job") or job_record.get("scheduled_start_at"))
@@ -100,9 +89,6 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
     required_gate_count = 0
     for scenario_key in (
         "current_plan",
-        "original",
-        "subway",
-        "nearby",
         "time_constrained",
         "exception_preserving",
     ):
@@ -149,7 +135,7 @@ def main() -> int:
 
     result: dict[str, Any] | None = None
     try:
-        config = _build_planner_config(job_record.get("config") or {})
+        config = build_planner_config(job_record.get("config") or {})
         prepared_payload = dict(job_record.get("prepared_payload") or {})
         if _is_scheduled_job(job_record):
             result = run_backend_planner_with_prepared_data(

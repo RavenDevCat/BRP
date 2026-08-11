@@ -700,8 +700,8 @@ class InteractiveMapDataTests(unittest.TestCase):
         assert payload is not None
         stop_impact = payload["stops"][0]["time_impact"]
         self.assertEqual(stop_impact["time_role"], "pickup")
-        self.assertEqual(stop_impact["current_time_label"], "07:39")
-        self.assertEqual(stop_impact["new_time_label"], "07:19")
+        self.assertEqual(stop_impact["current_time_label"], "07:40")
+        self.assertEqual(stop_impact["new_time_label"], "07:20")
         self.assertEqual(stop_impact["delta_minutes"], -20)
         self.assertEqual(stop_impact["adverse_delta_minutes"], 20)
         self.assertEqual(stop_impact["acceptance_threshold_minutes"], 15)

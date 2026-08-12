@@ -342,24 +342,17 @@ function AuditHistoryItem({
         : "text-muted-foreground";
     return (
         <div className="min-w-0 px-1 py-1">
-            <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">
-                        {getJobName(job)}
-                    </div>
-                    <div className={`mt-1 text-xs ${secondaryClass}`}>
-                        {formatDateTime(job.created_at)}
-                    </div>
-                    {scheduledStartAt ? (
-                        <div className={`mt-1 text-xs ${secondaryClass}`}>
-                            {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
-                        </div>
-                    ) : null}
-                </div>
-                <Badge tone={active ? "neutral" : getJobStatusTone(job.status)}>
-                    {t(job.status)}
-                </Badge>
+            <Badge tone={active ? "neutral" : getJobStatusTone(job.status)}>
+                {t(job.status)}
+            </Badge>
+            <div className={`mt-2 text-xs ${secondaryClass}`}>
+                {formatDateTime(job.created_at)}
             </div>
+            {scheduledStartAt ? (
+                <div className={`mt-1 text-xs ${secondaryClass}`}>
+                    {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
+                </div>
+            ) : null}
             <div className={`mt-2 grid grid-cols-2 gap-2 text-xs ${secondaryClass}`}>
                 <span>
                     {formatNumber(jobInputStopCount(summary))} {t("stops")}

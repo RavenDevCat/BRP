@@ -800,21 +800,14 @@ function DistanceHistoryItem({
     : "text-muted-foreground";
   return (
     <div className="min-w-0 px-1 py-1">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">
-            {job.title || t("Distance & Cost Run")}
-          </div>
-          <div className={cn("mt-1 text-xs", secondaryClass)}>
-            {formatDateTime(job.created_at)}
-          </div>
-          <div className={cn("mt-1 truncate text-xs", secondaryClass)}>
-            {t("Submitted by")} {job.owner_email || t("Unknown")}
-          </div>
-        </div>
-        <Badge tone={active ? "neutral" : isReference ? "info" : "success"}>
-          {badgeLabel}
-        </Badge>
+      <Badge tone={active ? "neutral" : isReference ? "info" : "success"}>
+        {badgeLabel}
+      </Badge>
+      <div className={cn("mt-2 text-xs", secondaryClass)}>
+        {formatDateTime(job.created_at)}
+      </div>
+      <div className={cn("mt-1 truncate text-xs", secondaryClass)}>
+        {t("Submitted by")} {job.owner_email || t("Unknown")}
       </div>
       <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", secondaryClass)}>
         {isReference ? (

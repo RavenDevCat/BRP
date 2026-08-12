@@ -249,77 +249,93 @@ export function HistorySidebar<T>({
           event.dataTransfer.setData("text/plain", id);
         }}
         className={[
-          "flex items-stretch gap-1 rounded-md border p-2 transition",
+          "rounded-md border p-2 transition",
           draggable ? "cursor-grab active:cursor-grabbing" : "",
           active
             ? "border-primary bg-primary text-primary-foreground"
             : "border-border bg-surface text-foreground hover:border-primary/50 hover:bg-muted",
         ].join(" ")}
       >
-        {selecting && (deletable || onSelectionAction || groupScope) ? (
-          <input
-            type="checkbox"
-            className="mt-2 h-4 w-4 shrink-0 accent-primary"
-            checked={selectedIds.has(id)}
-            aria-label={`${t("Select")} ${id}`}
-            onChange={() => toggleSelected(id)}
-          />
-        ) : null}
-        <button
-          type="button"
-          className="min-w-0 flex-1 text-left"
-          onClick={() => {
-            onOpen(id);
-            onCollapsedChange(true);
-          }}
-        >
-          {renderItem(item, active)}
-        </button>
-        {!selecting && groupScope && deletable ? (
+        <div className="flex min-w-0 items-start gap-2">
+          {selecting && (deletable || onSelectionAction || groupScope) ? (
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 shrink-0 accent-primary"
+              checked={selectedIds.has(id)}
+              aria-label={`${t("Select")} ${id}`}
+              onChange={() => toggleSelected(id)}
+            />
+          ) : null}
           <button
             type="button"
-            className={[
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-              active
-                ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
-                : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-foreground",
-            ].join(" ")}
-            aria-label={t("Rename history item")}
-            title={t("Rename history item")}
-            disabled={renameItemMutation.isPending}
+            className="min-w-0 flex-1 text-left"
             onClick={() => {
-              const currentName = itemName(item).trim();
-              const name = window.prompt(t("Task name"), currentName)?.trim();
-              if (name && name !== currentName) {
-                renameItemMutation.mutate({ itemId: id, name });
-              }
+              onOpen(id);
+              onCollapsedChange(true);
             }}
           >
-            {renameItemMutation.isPending && renameItemMutation.variables?.itemId === id ? (
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
-            ) : (
-              <Pencil className="h-4 w-4" aria-hidden="true" />
-            )}
+            <span className="block break-words text-sm font-semibold leading-5">
+              {itemName(item)}
+            </span>
           </button>
-        ) : null}
-        {!selecting && deletable ? (
+        </div>
+        <div className="mt-2 flex min-w-0 items-start gap-1">
           <button
             type="button"
-            className={[
-              "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
-              active
-                ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
-                : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
-            ].join(" ")}
-            aria-label={t("Delete history item")}
-            disabled={deletingId === id}
+            className="min-w-0 flex-1 text-left"
             onClick={() => {
-              if (window.confirm(t("Delete this history item? This cannot be undone."))) onDelete(id);
+              onOpen(id);
+              onCollapsedChange(true);
             }}
           >
-            {deletingId === id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+            {renderItem(item, active)}
           </button>
-        ) : null}
+          {!selecting && groupScope && deletable ? (
+            <button
+              type="button"
+              className={[
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                active
+                  ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
+                  : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-foreground",
+              ].join(" ")}
+              aria-label={t("Rename history item")}
+              title={t("Rename history item")}
+              disabled={renameItemMutation.isPending}
+              onClick={() => {
+                const currentName = itemName(item).trim();
+                const name = window.prompt(t("Task name"), currentName)?.trim();
+                if (name && name !== currentName) {
+                  renameItemMutation.mutate({ itemId: id, name });
+                }
+              }}
+            >
+              {renameItemMutation.isPending && renameItemMutation.variables?.itemId === id ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+              ) : (
+                <Pencil className="h-4 w-4" aria-hidden="true" />
+              )}
+            </button>
+          ) : null}
+          {!selecting && deletable ? (
+            <button
+              type="button"
+              className={[
+                "flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition",
+                active
+                  ? "border-primary-foreground/30 text-primary-foreground/80 hover:bg-primary-foreground/10"
+                  : "border-transparent text-muted-foreground hover:border-border hover:bg-surface hover:text-destructive",
+              ].join(" ")}
+              aria-label={t("Delete history item")}
+              disabled={deletingId === id}
+              onClick={() => {
+                if (window.confirm(t("Delete this history item? This cannot be undone."))) onDelete(id);
+              }}
+            >
+              {deletingId === id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
+            </button>
+          ) : null}
+        </div>
       </div>
     );
   };

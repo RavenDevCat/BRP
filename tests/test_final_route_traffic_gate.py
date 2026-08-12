@@ -356,6 +356,8 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
             self._BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(
                 service_direction="From School",
                 from_school_departure_time="15:40",
+                time_window_start="15:40",
+                time_window_end="16:40",
             )
 
         def log(self, _message):
@@ -959,15 +961,14 @@ def test_korea_final_route_gate_uses_kakao_future_departure_and_chunks(monkeypat
     assert [item[1].strftime("%H:%M") for item in departures] == ["07:30", "07:40"]
 
 
-def test_pm_final_route_gate_caps_duration_at_two_hour_window(monkeypatch):
+def test_pm_final_route_gate_uses_explicit_time_window(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(planner_core, "PM_ROUTE_GATE_GRACE_MINUTES", 0)
-    monkeypatch.setattr(planner_core, "PM_MAX_ROUTE_WINDOW_MINUTES", 120)
 
     def fake_amap_route_stats(_planner, _points, _cache, state):
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
-        return {"duration_s": 125 * 60, "distance_m": 1234, "source": "fake_amap"}
+        return {"duration_s": 95 * 60, "distance_m": 1234, "source": "fake_amap"}
 
     monkeypatch.setattr(planner_core, "_amap_route_stats", fake_amap_route_stats)
 
@@ -989,13 +990,18 @@ def test_pm_final_route_gate_caps_duration_at_two_hour_window(monkeypatch):
         FakePlanner(),
         scenario,
         points,
-        planner_core.PlannerConfig(service_direction="From School", from_school_departure_time="15:40"),
+        planner_core.PlannerConfig(
+            service_direction="From School",
+            from_school_departure_time="15:40",
+            time_window_start="15:40",
+            time_window_end="17:10",
+        ),
         [{"address": "Shanghai"}],
         "pm-window-smoke",
     )
 
     assert gate["status"] == "failed"
-    assert gate["target_duration_minutes"] == 120
+    assert gate["target_duration_minutes"] == 90
     assert round(gate["max_route_duration_overrun_minutes"]) == 5
 
 

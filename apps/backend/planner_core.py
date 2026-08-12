@@ -99,9 +99,10 @@ PM_ROUTE_GATE_GRACE_MINUTES = max(
 )
 AM_EARLIEST_DEPARTURE_MINUTES = 6 * 60
 AM_LATEST_ARRIVAL_MINUTES = 8 * 60
-PM_MAX_ROUTE_WINDOW_MINUTES = max(
-    1,
-    int(os.environ.get("BRP_PM_MAX_ROUTE_WINDOW_MINUTES", "120") or 120),
+PROTECTED_ROUTE_PRESERVING_BATCH_SIZE = 60
+PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES = max(
+    PROTECTED_ROUTE_PRESERVING_BATCH_SIZE,
+    int(os.environ.get("BRP_PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES", "240") or 240),
 )
 FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED = os.environ.get(
     "BRP_FINAL_ROUTE_TRAFFIC_REPLAN_ENABLED",
@@ -549,6 +550,17 @@ def build_planner_config(config_payload: dict[str, Any] | None = None) -> Planne
 
     for field_name in ("to_school_arrival_time", "from_school_departure_time"):
         clock(field_name)
+    supplied_window_fields = {
+        field_name for field_name in ("time_window_start", "time_window_end") if field_name in payload
+    }
+    if len(supplied_window_fields) == 1:
+        raise ValueError("time_window_start and time_window_end must be provided together.")
+    if payload["service_direction"] == "From School" and not supplied_window_fields:
+        departure_label = str(payload["from_school_departure_time"])
+        departure_hours, departure_minutes = (int(part) for part in departure_label.split(":"))
+        end_minutes = departure_hours * 60 + departure_minutes + 120
+        payload["time_window_start"] = departure_label
+        payload["time_window_end"] = f"{(end_minutes // 60) % 24:02d}:{end_minutes % 60:02d}"
     _, window_start = clock("time_window_start")
     _, window_end = clock("time_window_end")
     if window_end <= window_start:
@@ -651,14 +663,8 @@ def _to_school_time_window(config: PlannerConfig) -> tuple[int, int]:
 
 def _from_school_time_window(config: PlannerConfig) -> tuple[int, int]:
     departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
-    raw_start = str(config.time_window_start or "").strip()
-    raw_end = str(config.time_window_end or "").strip()
-    if raw_start == "06:30" and raw_end == "08:00":
-        return departure_minutes, departure_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES)
     start_minutes = _parse_minutes_clock(config.time_window_start, departure_minutes)
-    end_minutes = _parse_minutes_clock(config.time_window_end, start_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES))
-    if end_minutes <= start_minutes:
-        return start_minutes, start_minutes + int(PM_MAX_ROUTE_WINDOW_MINUTES)
+    end_minutes = _parse_minutes_clock(config.time_window_end, start_minutes)
     return start_minutes, end_minutes
 
 
@@ -1033,10 +1039,6 @@ def _attach_final_route_traffic_gate_impl(
     earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
     from_school_departure_minutes, from_school_latest_minutes = _from_school_time_window(config)
     gate_type = "arrival_window" if is_to_school else "route_duration"
-    default_from_school_window = (
-        str(config.time_window_start or "").strip() == "06:30"
-        and str(config.time_window_end or "").strip() == "08:00"
-    )
     traffic_policy = resolve_final_route_traffic_policy(planner, config, input_records)
     country, city = traffic_policy.country, traffic_policy.city
     routes = list(scenario.get("routes") or [])
@@ -1047,11 +1049,10 @@ def _attach_final_route_traffic_gate_impl(
     )
     final_route_duration_limit_s = route_duration_limit_s
     if not is_to_school:
-        pm_window_s = PM_MAX_ROUTE_WINDOW_MINUTES * 60.0
-        final_route_duration_limit_s = min(route_duration_limit_s, pm_window_s) if route_duration_limit_s > 0 else pm_window_s
-        if default_from_school_window:
-            from_school_departure_minutes = _parse_minutes_clock(config.from_school_departure_time, 15 * 60 + 40)
-            from_school_latest_minutes = from_school_departure_minutes + (final_route_duration_limit_s / 60.0)
+        final_route_duration_limit_s = max(
+            0,
+            from_school_latest_minutes - from_school_departure_minutes,
+        ) * 60.0
     gate: dict[str, Any] = {
         "enabled": bool(FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED),
         "scenario": scenario_label,
@@ -1066,7 +1067,6 @@ def _attach_final_route_traffic_gate_impl(
         "target_duration_minutes": (
             final_route_duration_limit_s / 60.0 if final_route_duration_limit_s > 0 else None
         ),
-        "pm_max_route_window_minutes": PM_MAX_ROUTE_WINDOW_MINUTES if not is_to_school else None,
         "solver_target_duration_minutes": (
             solver_route_duration_limit_s / 60.0 if solver_route_duration_limit_s > 0 else None
         ),
@@ -3807,542 +3807,6 @@ def _rebuild_current_plan_from_route_rows(
     }
 
 
-def _select_constrained_improvement_moves(
-    recommendations: list[dict[str, Any]],
-    route_opportunity_profiles: list[dict[str, Any]] | None = None,
-    limit: int = 3,
-) -> list[dict[str, Any]]:
-    route_opportunity_profiles = list(route_opportunity_profiles or [])
-    selected: list[dict[str, Any]] = []
-    touched_routes: set[str] = set()
-    touched_stop_ids: set[str] = set()
-    recommendations_by_from_route: dict[str, list[dict[str, Any]]] = {}
-    for item in recommendations:
-        from_route_id = str(item.get("from_route_id", "")).strip()
-        if not from_route_id:
-            continue
-        recommendations_by_from_route.setdefault(from_route_id, []).append(item)
-
-    ordered_profiles = sorted(
-        route_opportunity_profiles,
-        key=lambda item: (
-            -(
-                3 if str(item.get("route_action_stage", "")).strip() == "route_removable_now"
-                else 2 if str(item.get("route_action_stage", "")).strip() == "route_removal_path"
-                else 1 if str(item.get("route_action_stage", "")).strip() == "route_consolidation_path"
-                else 0
-            ),
-            -int(item.get("supporting_stage_move_count", 0) or 0),
-            -int(item.get("supporting_move_count", 0) or 0),
-            -float(item.get("best_network_time_saving_s", 0.0) or 0.0),
-            -float(item.get("best_network_distance_saving_m", 0.0) or 0.0),
-        ),
-    )
-
-    def try_add(item: dict[str, Any]) -> bool:
-        from_route_id = str(item.get("from_route_id", "")).strip()
-        to_route_id = str(item.get("to_route_id", "")).strip()
-        stop_ids = [str(stop_id).strip() for stop_id in list(item.get("stop_ids") or []) if str(stop_id).strip()]
-        if not from_route_id or not to_route_id or not stop_ids:
-            return False
-        if from_route_id in touched_routes or to_route_id in touched_routes:
-            return False
-        if any(stop_id in touched_stop_ids for stop_id in stop_ids):
-            return False
-        selected.append(item)
-        touched_routes.add(from_route_id)
-        touched_routes.add(to_route_id)
-        touched_stop_ids.update(stop_ids)
-        return True
-
-    def try_add_package(items: list[dict[str, Any]]) -> bool:
-        if not items:
-            return False
-        normalized_items: list[dict[str, Any]] = []
-        package_stop_ids: set[str] = set()
-        package_routes: set[str] = set()
-        for item in items:
-            from_route_id = str(item.get("from_route_id", "")).strip()
-            to_route_id = str(item.get("to_route_id", "")).strip()
-            stop_ids = [str(stop_id).strip() for stop_id in list(item.get("stop_ids") or []) if str(stop_id).strip()]
-            if not from_route_id or not to_route_id or not stop_ids:
-                return False
-            if from_route_id in touched_routes or to_route_id in touched_routes:
-                return False
-            if any(stop_id in touched_stop_ids or stop_id in package_stop_ids for stop_id in stop_ids):
-                return False
-            package_routes.add(from_route_id)
-            package_routes.add(to_route_id)
-            package_stop_ids.update(stop_ids)
-            normalized_items.append(item)
-
-        if len(selected) + len(normalized_items) > limit:
-            return False
-
-        selected.extend(normalized_items)
-        touched_routes.update(package_routes)
-        touched_stop_ids.update(package_stop_ids)
-        return True
-
-    def build_route_package(profile: dict[str, Any]) -> list[dict[str, Any]]:
-        route_id = str(profile.get("route_id", "")).strip()
-        if not route_id:
-            return []
-        route_stage = str(profile.get("route_action_stage", "")).strip()
-        if route_stage not in {"route_removal_path", "route_removable_now", "route_consolidation_path"}:
-            return []
-        if int(profile.get("supporting_stage_move_count", 0) or 0) < 2:
-            return []
-
-        preferred_to_route_id = str(profile.get("best_to_route_id", "")).strip()
-        max_package_size = 2 if route_stage == "route_consolidation_path" else 3
-        route_candidates = sorted(recommendations_by_from_route.get(route_id, []), key=_reallocation_sort_key)
-        if not route_candidates:
-            return []
-
-        grouped_by_to_route: dict[str, list[dict[str, Any]]] = {}
-        for candidate in route_candidates:
-            candidate_to_route_id = str(candidate.get("to_route_id", "")).strip()
-            if not candidate_to_route_id:
-                continue
-            grouped_by_to_route.setdefault(candidate_to_route_id, []).append(candidate)
-
-        def build_candidate_package(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-            package: list[dict[str, Any]] = []
-            package_stop_ids: set[str] = set()
-            for candidate in items:
-                stop_ids = [
-                    str(stop_id).strip()
-                    for stop_id in list(candidate.get("stop_ids") or [])
-                    if str(stop_id).strip()
-                ]
-                if any(stop_id in package_stop_ids for stop_id in stop_ids):
-                    continue
-                package.append(candidate)
-                package_stop_ids.update(stop_ids)
-                if len(package) >= max_package_size:
-                    break
-            return package if len(package) >= 2 else []
-
-        def score_candidate_package(package: list[dict[str, Any]], receiving_route_id: str) -> tuple[float, float, float, float, int, int, int]:
-            total_time_saving_s = sum(float(item.get("network_total_duration_saving_s", 0.0) or 0.0) for item in package)
-            total_distance_saving_m = sum(float(item.get("network_total_distance_saving_m", 0.0) or 0.0) for item in package)
-            total_score = sum(float(item.get("score", 0.0) or 0.0) for item in package)
-            stop_count = sum(len(list(item.get("stop_ids") or [])) for item in package)
-            receiving_route_support = sum(
-                1 for item in route_candidates if str(item.get("to_route_id", "")).strip() == receiving_route_id
-            )
-            preferred_bonus = 1 if preferred_to_route_id and receiving_route_id == preferred_to_route_id else 0
-            return (
-                total_score,
-                total_time_saving_s,
-                total_distance_saving_m,
-                float(stop_count),
-                len(package),
-                receiving_route_support,
-                preferred_bonus,
-            )
-
-        package_options: list[tuple[tuple[float, float, float, float, int, int, int], list[dict[str, Any]]]] = []
-        for receiving_route_id, grouped_candidates in grouped_by_to_route.items():
-            candidate_package = build_candidate_package(grouped_candidates)
-            if candidate_package:
-                package_options.append(
-                    (score_candidate_package(candidate_package, receiving_route_id), candidate_package)
-                )
-
-        if not package_options:
-            return []
-
-        package_options.sort(
-            key=lambda item: (
-                -item[0][0],
-                -item[0][1],
-                -item[0][2],
-                -item[0][3],
-                -item[0][4],
-                -item[0][5],
-                -item[0][6],
-            )
-        )
-        return package_options[0][1]
-
-    for profile in ordered_profiles:
-        if len(selected) >= limit:
-            break
-        route_id = str(profile.get("route_id", "")).strip()
-        preferred_to_route_id = str(profile.get("best_to_route_id", "")).strip()
-        route_package = build_route_package(profile)
-        if route_package and try_add_package(route_package):
-            continue
-        route_candidates = sorted(recommendations_by_from_route.get(route_id, []), key=_reallocation_sort_key)
-        if preferred_to_route_id:
-            route_candidates = sorted(
-                route_candidates,
-                key=lambda item: (
-                    0 if str(item.get("to_route_id", "")).strip() == preferred_to_route_id else 1,
-                    *_reallocation_sort_key(item),
-                ),
-            )
-        for candidate in route_candidates:
-            if try_add(candidate):
-                break
-
-    for item in sorted(recommendations, key=_reallocation_sort_key):
-        from_route_id = str(item.get("from_route_id", "")).strip()
-        if from_route_id and from_route_id in touched_routes:
-            continue
-        if try_add(item):
-            pass
-        if len(selected) >= limit:
-            break
-    return selected
-
-
-def _annotate_constrained_move_packages(selected_moves: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    package_keys: dict[tuple[str, str], int] = {}
-    annotated: list[dict[str, Any]] = []
-    next_package_index = 1
-    for item in selected_moves:
-        from_route_id = str(item.get("from_route_id", "")).strip()
-        to_route_id = str(item.get("to_route_id", "")).strip()
-        package_key = (from_route_id, to_route_id)
-        if package_key not in package_keys:
-            package_keys[package_key] = next_package_index
-            next_package_index += 1
-        annotated_item = dict(item)
-        annotated_item["constrained_package_id"] = f"P{package_keys[package_key]}"
-        annotated.append(annotated_item)
-    return annotated
-
-
-def _summarize_constrained_move_packages(
-    selected_moves: list[dict[str, Any]],
-    current_plan: dict[str, Any] | None,
-    config: PlannerConfig,
-) -> list[dict[str, Any]]:
-    normalized = _normalize_current_plan(current_plan)
-    if not normalized or not selected_moves:
-        return []
-
-    route_rows_by_id = _extract_current_plan_route_rows(normalized)
-    if not route_rows_by_id:
-        return []
-
-    bus_capacity_lookup = _build_bus_capacity_lookup(config, normalized)
-    grouped: dict[str, list[dict[str, Any]]] = {}
-    for item in selected_moves:
-        package_id = str(item.get("constrained_package_id", "")).strip()
-        if not package_id:
-            continue
-        grouped.setdefault(package_id, []).append(item)
-
-    package_summaries: list[dict[str, Any]] = []
-    label_lookup = {
-        "route_removable_now": "Route removable now",
-        "route_removal_path": "Strong removal path",
-        "route_consolidation_path": "Consolidation path",
-        "local_improvement": "Local improvement",
-    }
-
-    for package_id, items in sorted(grouped.items()):
-        first = items[0]
-        from_route_id = str(first.get("from_route_id", "")).strip()
-        to_route_id = str(first.get("to_route_id", "")).strip()
-        if not from_route_id or not to_route_id:
-            continue
-        from_rows = list(route_rows_by_id.get(from_route_id) or [])
-        to_rows = list(route_rows_by_id.get(to_route_id) or [])
-        if len(from_rows) <= 1 or not to_rows:
-            continue
-
-        service_direction = normalize_service_direction(normalized.get("service_direction") or config.service_direction)
-        from_terminal, original_from_service_rows = split_route_terminal_rows(from_rows, service_direction)
-        from_bus_type = str(from_terminal.get("bus_type", "")).strip()
-        from_capacity = int(bus_capacity_lookup.get(from_bus_type, 0) or 0)
-        original_from_stop_count = len(original_from_service_rows)
-        original_from_passenger_count = sum(int(row.get("passenger_count", 0) or 0) for row in original_from_service_rows)
-
-        package_stop_ids: list[str] = []
-        package_addresses: list[str] = []
-        moved_passenger_count = 0
-        total_time_saving_s = 0.0
-        total_distance_saving_m = 0.0
-        transfer_distances_m: list[float] = []
-        strongest_move_stage = "local_improvement"
-        stage_priority = {
-            "local_improvement": 0,
-            "route_consolidation_path": 1,
-            "route_removal_path": 2,
-            "route_removable_now": 3,
-        }
-
-        seen_stop_ids: set[str] = set()
-        for item in items:
-            for stop_id in list(item.get("stop_ids") or []):
-                normalized_stop_id = str(stop_id).strip()
-                if normalized_stop_id and normalized_stop_id not in seen_stop_ids:
-                    seen_stop_ids.add(normalized_stop_id)
-                    package_stop_ids.append(normalized_stop_id)
-            for address in list(item.get("addresses") or []):
-                normalized_address = str(address).strip()
-                if normalized_address:
-                    package_addresses.append(normalized_address)
-            moved_passenger_count += int(item.get("moved_passenger_count", 0) or 0)
-            total_time_saving_s += float(item.get("network_total_duration_saving_s", 0.0) or 0.0)
-            total_distance_saving_m += float(item.get("network_total_distance_saving_m", 0.0) or 0.0)
-            transfer_distance_m = float(item.get("transfer_to_route_min_distance_m", 0.0) or 0.0)
-            if transfer_distance_m > 0:
-                transfer_distances_m.append(transfer_distance_m)
-            move_stage = str(item.get("route_action_stage", "")).strip() or "local_improvement"
-            if stage_priority.get(move_stage, 0) > stage_priority.get(strongest_move_stage, 0):
-                strongest_move_stage = move_stage
-
-        remaining_from_rows = [
-            row for row in original_from_service_rows
-            if str(row.get("stop_id", "")).strip() not in seen_stop_ids
-        ]
-        remaining_from_stop_count = len(remaining_from_rows)
-        remaining_from_passenger_count = sum(int(row.get("passenger_count", 0) or 0) for row in remaining_from_rows)
-        moved_stop_share = len(seen_stop_ids) / max(1, original_from_stop_count)
-        moved_passenger_share = moved_passenger_count / max(1, original_from_passenger_count)
-        package_transfer_distance_m = min(transfer_distances_m) if transfer_distances_m else None
-        classification_transfer_distance_m = (
-            package_transfer_distance_m
-            if package_transfer_distance_m is not None
-            else float("inf")
-        )
-
-        (
-            package_action_stage,
-            package_action_label,
-            route_removal_candidate,
-            route_eliminated,
-            route_consolidation_candidate,
-        ) = _classify_route_action_stage(
-            projected_from_non_depot_count=remaining_from_stop_count,
-            projected_from_passenger_count=remaining_from_passenger_count,
-            projected_from_capacity=from_capacity,
-            moved_stop_share=moved_stop_share,
-            moved_passenger_share=moved_passenger_share,
-            network_total_distance_saving_m=total_distance_saving_m,
-            network_total_duration_saving_s=total_time_saving_s,
-            transfer_to_route_min_distance_m=classification_transfer_distance_m,
-        )
-
-        package_summary_parts = [
-            f"{package_id} moves {len(seen_stop_ids)} stop(s) from {from_route_id} to {to_route_id}.",
-        ]
-        if total_time_saving_s > 0:
-            package_summary_parts.append(
-                f"Estimated network time saving is {total_time_saving_s / 60.0:.1f} minutes."
-            )
-        if total_distance_saving_m > 0:
-            package_summary_parts.append(
-                f"Estimated network distance saving is {total_distance_saving_m / 1000.0:.1f} km."
-            )
-        if route_eliminated:
-            package_summary_parts.append(f"{from_route_id} would become empty after this package.")
-        elif route_removal_candidate:
-            package_summary_parts.append(
-                f"{from_route_id} would be reduced to {remaining_from_stop_count} stop(s) and "
-                f"{remaining_from_passenger_count} rider(s), creating a strong removal path."
-            )
-        elif route_consolidation_candidate:
-            package_summary_parts.append(
-                f"{from_route_id} would be reduced to {remaining_from_stop_count} stop(s) and "
-                f"{remaining_from_passenger_count} rider(s), making consolidation more realistic."
-            )
-        else:
-            package_summary_parts.append(
-                f"{from_route_id} would still retain {remaining_from_stop_count} stop(s) and "
-                f"{remaining_from_passenger_count} rider(s), so this remains a local improvement package."
-            )
-
-        package_summaries.append(
-            {
-                "package_id": package_id,
-                "from_route_id": from_route_id,
-                "to_route_id": to_route_id,
-                "move_count": len(items),
-                "stop_ids": package_stop_ids,
-                "addresses": package_addresses,
-                "moved_stop_count": len(seen_stop_ids),
-                "moved_passenger_count": moved_passenger_count,
-                "network_total_duration_saving_s": total_time_saving_s,
-                "network_total_distance_saving_m": total_distance_saving_m,
-                "package_action_stage": package_action_stage,
-                "package_action_label": package_action_label,
-                "strongest_move_stage": strongest_move_stage,
-                "strongest_move_label": label_lookup.get(strongest_move_stage, "Local improvement"),
-                "remaining_from_route_stop_count": remaining_from_stop_count,
-                "remaining_from_route_passenger_count": remaining_from_passenger_count,
-                "original_from_route_stop_count": original_from_stop_count,
-                "original_from_route_passenger_count": original_from_passenger_count,
-                "moved_stop_share": moved_stop_share,
-                "moved_passenger_share": moved_passenger_share,
-                "route_removal_candidate": route_removal_candidate,
-                "route_eliminated": route_eliminated,
-                "route_consolidation_candidate": route_consolidation_candidate,
-                "package_transfer_distance_m": package_transfer_distance_m,
-                "package_summary": " ".join(package_summary_parts),
-            }
-        )
-
-    package_summaries.sort(
-        key=lambda item: (
-            -(3 if bool(item.get("route_eliminated")) else 0),
-            -(2 if bool(item.get("route_removal_candidate")) else 0),
-            -(1 if bool(item.get("route_consolidation_candidate")) else 0),
-            -float(item.get("network_total_duration_saving_s", 0.0) or 0.0),
-            -float(item.get("network_total_distance_saving_m", 0.0) or 0.0),
-        )
-    )
-    return package_summaries
-
-
-def _enrich_constrained_package_summaries(
-    package_summaries: list[dict[str, Any]],
-    current_plan_assessment: dict[str, Any] | None,
-    constrained_improvement_baseline: dict[str, Any] | None,
-) -> list[dict[str, Any]]:
-    if not package_summaries:
-        return []
-
-    current_route_lookup = {
-        str(item.get("route_id", "")).strip(): dict(item)
-        for item in list((current_plan_assessment or {}).get("route_summaries") or [])
-        if str(item.get("route_id", "")).strip()
-    }
-    constrained_route_lookup = {
-        str(item.get("route_id", "")).strip(): dict(item)
-        for item in list((constrained_improvement_baseline or {}).get("route_summaries") or [])
-        if str(item.get("route_id", "")).strip()
-    }
-
-    enriched: list[dict[str, Any]] = []
-    for item in package_summaries:
-        package = dict(item)
-        from_route_id = str(package.get("from_route_id", "")).strip()
-        to_route_id = str(package.get("to_route_id", "")).strip()
-        current_from = dict(current_route_lookup.get(from_route_id) or {})
-        current_to = dict(current_route_lookup.get(to_route_id) or {})
-        constrained_from = dict(constrained_route_lookup.get(from_route_id) or {})
-        constrained_to = dict(constrained_route_lookup.get(to_route_id) or {})
-
-        package["original_to_route_stop_count"] = int(current_to.get("stop_count", 0) or 0)
-        package["original_to_route_passenger_count"] = int(current_to.get("passenger_count", 0) or 0)
-        package["original_to_route_load_factor"] = float(current_to.get("load_factor", 0.0) or 0.0)
-        package["original_to_route_duration_s"] = float(current_to.get("duration_s", 0.0) or 0.0)
-        package["original_to_route_distance_m"] = float(current_to.get("distance_m", 0.0) or 0.0)
-        package["original_from_route_duration_s"] = float(current_from.get("duration_s", 0.0) or 0.0)
-        package["original_from_route_distance_m"] = float(current_from.get("distance_m", 0.0) or 0.0)
-        package["original_from_route_load_factor"] = float(current_from.get("load_factor", 0.0) or 0.0)
-
-        package["projected_from_route_duration_s"] = float(constrained_from.get("duration_s", 0.0) or 0.0)
-        package["projected_from_route_distance_m"] = float(constrained_from.get("distance_m", 0.0) or 0.0)
-        package["projected_from_route_load_factor"] = float(constrained_from.get("load_factor", 0.0) or 0.0)
-
-        package["projected_to_route_stop_count"] = int(constrained_to.get("stop_count", 0) or 0)
-        package["projected_to_route_passenger_count"] = int(constrained_to.get("passenger_count", 0) or 0)
-        package["projected_to_route_load_factor"] = float(constrained_to.get("load_factor", 0.0) or 0.0)
-        package["projected_to_route_duration_s"] = float(constrained_to.get("duration_s", 0.0) or 0.0)
-        package["projected_to_route_distance_m"] = float(constrained_to.get("distance_m", 0.0) or 0.0)
-
-        projected_to_stop_count = int(package.get("projected_to_route_stop_count", 0) or 0)
-        projected_to_passenger_count = int(package.get("projected_to_route_passenger_count", 0) or 0)
-        projected_to_duration_s = float(package.get("projected_to_route_duration_s", 0.0) or 0.0)
-        projected_to_load_factor = float(package.get("projected_to_route_load_factor", 0.0) or 0.0)
-        projected_to_distance_m = float(package.get("projected_to_route_distance_m", 0.0) or 0.0)
-
-        summary_parts = [str(package.get("package_summary", "")).strip()]
-        if to_route_id and projected_to_stop_count > 0:
-            summary_parts.append(
-                f"After the package, {to_route_id} would run with {projected_to_stop_count} stop(s), "
-                f"{projected_to_passenger_count} rider(s), about {projected_to_duration_s / 60.0:.1f} minutes, "
-                f"about {projected_to_distance_m / 1000.0:.1f} km, and a load factor near {projected_to_load_factor * 100.0:.1f}%."
-            )
-        package["package_summary"] = " ".join(part for part in summary_parts if part)
-        enriched.append(package)
-
-    return enriched
-
-
-def build_constrained_improvement_current_plan(
-    current_plan: dict[str, Any] | None,
-    route_reallocation_analysis: dict[str, Any] | None,
-    config: PlannerConfig,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]], list[dict[str, Any]]]:
-    raise RuntimeError(
-        "Retired constrained-improvement solver path; use Strict Plan or Protected Plan."
-    )
-
-    normalized = _normalize_current_plan(current_plan)
-    if not normalized or not route_reallocation_analysis:
-        return None, [], []
-    service_direction = normalize_service_direction(normalized.get("service_direction") or config.service_direction)
-
-    recommendations = list(route_reallocation_analysis.get("recommendations") or [])
-    route_opportunity_profiles = list(route_reallocation_analysis.get("route_opportunity_profiles") or [])
-    selected_moves = _select_constrained_improvement_moves(
-        recommendations,
-        route_opportunity_profiles=route_opportunity_profiles,
-        limit=3,
-    )
-    selected_moves = _annotate_constrained_move_packages(selected_moves)
-    if not selected_moves:
-        return None, [], []
-
-    route_rows_by_id = _extract_current_plan_route_rows(normalized)
-    if not route_rows_by_id:
-        return None, [], []
-
-    for move in selected_moves:
-        from_route_id = str(move.get("from_route_id", "")).strip()
-        to_route_id = str(move.get("to_route_id", "")).strip()
-        transfer_stop_ids = {
-            str(stop_id).strip()
-            for stop_id in list(move.get("stop_ids") or [])
-            if str(stop_id).strip()
-        }
-        if from_route_id not in route_rows_by_id or to_route_id not in route_rows_by_id:
-            continue
-
-        from_rows = list(route_rows_by_id[from_route_id])
-        to_rows = list(route_rows_by_id[to_route_id])
-        if not from_rows or not to_rows:
-            continue
-
-        from_terminal, from_non_terminal = split_route_terminal_rows(from_rows, service_direction)
-        to_terminal, to_non_terminal = split_route_terminal_rows(to_rows, service_direction)
-        moved_rows = [dict(row) for row in from_non_terminal if str(row.get("stop_id", "")).strip() in transfer_stop_ids]
-        remaining_from_rows = [dict(row) for row in from_non_terminal if str(row.get("stop_id", "")).strip() not in transfer_stop_ids]
-        if not moved_rows:
-            continue
-
-        for row in moved_rows:
-            row["route_id"] = to_route_id
-            row["bus_type"] = str(to_terminal.get("bus_type", "")).strip()
-
-        if service_direction == "To School":
-            route_rows_by_id[from_route_id] = [*remaining_from_rows, dict(from_terminal)]
-            route_rows_by_id[to_route_id] = [*to_non_terminal, *moved_rows, dict(to_terminal)]
-        else:
-            route_rows_by_id[from_route_id] = [dict(from_terminal), *remaining_from_rows]
-            route_rows_by_id[to_route_id] = [dict(to_terminal), *to_non_terminal, *moved_rows]
-
-        if bool(move.get("route_eliminated")) and len(route_rows_by_id[from_route_id]) <= 1:
-            route_rows_by_id.pop(from_route_id, None)
-
-    constrained_plan = _rebuild_current_plan_from_route_rows(
-        route_rows_by_id,
-        list(normalized.get("fleet") or []),
-        service_direction=service_direction,
-    )
-    package_summaries = _summarize_constrained_move_packages(selected_moves, normalized, config)
-    return constrained_plan, selected_moves, package_summaries
-
-
 def compare_current_plan_to_baseline(
     current_plan_assessment: dict[str, Any] | None,
     baseline_result: dict[str, Any] | None,
@@ -6595,8 +6059,22 @@ def _build_route_preserving_protected_scenario(
     baseline_name: str,
     scenario_label: str,
     target_vehicle_count: int | None = None,
+    search_audit: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
+    audit = search_audit if search_audit is not None else {}
+    audit.update(
+        {
+            "enabled": True,
+            "status": "not_started",
+            "generated_candidate_count": 0,
+            "validated_candidate_count": 0,
+            "validation_batch_count": 0,
+            "candidate_budget": int(PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES),
+            "budget_truncated": False,
+        }
+    )
     if normalize_service_direction(config.service_direction) != "To School":
+        audit.update({"status": "not_applicable", "reason": "to_school_only"})
         return None
     current_routes = [deepcopy(route) for route in list(current_plan_scenario.get("routes") or [])]
     current_route_count = len(current_routes)
@@ -6608,6 +6086,7 @@ def _build_route_preserving_protected_scenario(
     target_vehicle_count = min(current_route_count, max(0, int(target_vehicle_count)))
     saving_count = current_route_count - target_vehicle_count
     if saving_count > 3:
+        audit.update({"status": "not_applicable", "reason": "saving_count_above_three"})
         return None
     current_summary = _scenario_exception_summary(current_plan_scenario, config=config)
     frozen_route_ids = {str(item) for item in list(current_summary.get("failed_route_ids") or [])}
@@ -6617,10 +6096,12 @@ def _build_route_preserving_protected_scenario(
     }
     movable_ids = sorted(set(current_by_id) - frozen_route_ids)
     if len(movable_ids) <= saving_count:
+        audit.update({"status": "infeasible", "reason": "insufficient_movable_routes"})
         return None
 
     bounds = dict(node_time_upper_bounds_builder(original_points) or {})
     if not bounds:
+        audit.update({"status": "unavailable", "reason": "missing_time_impact_bounds"})
         return None
     current_elapsed: dict[int, float] = {}
     for route in current_routes:
@@ -6736,123 +6217,143 @@ def _build_route_preserving_protected_scenario(
                         "changed_route_ids": changed_route_ids,
                     }
 
+    ordered_plans = sorted(plans.values(), key=lambda item: item["rank"])
+    candidate_budget = min(len(ordered_plans), int(PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES))
+    audit.update(
+        {
+            "status": "searching" if ordered_plans else "no_candidates",
+            "generated_candidate_count": len(ordered_plans),
+            "candidate_budget": int(PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES),
+            "budget_truncated": len(ordered_plans) > candidate_budget,
+        }
+    )
     previous_osrm_base_url = planner.OSRM_BASE_URL
     planner.OSRM_BASE_URL = planner.resolve_osrm_base_url(original_points)
     try:
-        for attempt_index, plan in enumerate(
-            sorted(plans.values(), key=lambda item: item["rank"])[:60],
-            start=1,
-        ):
-            candidate_routes: list[dict[str, Any]] = []
-            changed_routes: list[dict[str, Any]] = []
-            for route_id, current_route in current_by_id.items():
-                if route_id in plan["donor_ids"]:
-                    continue
-                route = deepcopy(current_route)
-                if route_id in frozen_route_ids:
-                    route["exception_role"] = "frozen_current"
-                elif route_id in plan["changed_route_ids"]:
-                    route["nodes"] = [*plan["nodes"][route_id], 0]
-                    route["load"] = int(plan["loads"][route_id])
-                    route["exception_role"] = "optimized_remainder"
-                    changed_routes.append(route)
-                else:
-                    route["exception_role"] = "protected_unchanged"
-                candidate_routes.append(route)
-            service_nodes = [
-                int(node)
-                for route in candidate_routes
-                for node in list(route.get("nodes") or [])
-                if int(node) != 0
-            ]
-            if sorted(service_nodes) != list(range(1, len(original_points))):
-                continue
-            planner.enrich_routes_with_actual_driving(original_points, changed_routes)
-            planner.annotate_and_price_routes(original_points, changed_routes)
-            if not _assign_protected_route_fleet(candidate_routes, frozen_route_ids, config):
-                continue
-            candidate = planner.build_scenario_result(original_points, candidate_routes, "")
-            candidate["output_html"] = ""
-            candidate["baseline_name"] = baseline_name
-            remaining_stop_count = len(
-                set(range(1, len(original_points)))
-                - set().union(
-                    *[
-                        _route_service_node_ids(current_by_id[route_id])
-                        for route_id in frozen_route_ids
-                    ]
+        for batch_start in range(0, candidate_budget, PROTECTED_ROUTE_PRESERVING_BATCH_SIZE):
+            audit["validation_batch_count"] = int(audit["validation_batch_count"]) + 1
+            batch = ordered_plans[
+                batch_start : min(
+                    batch_start + PROTECTED_ROUTE_PRESERVING_BATCH_SIZE,
+                    candidate_budget,
                 )
-            )
-            candidate["time_constraint"] = {
-                **deepcopy(time_constraint_metadata or {}),
-                "enabled": True,
-                "mode": "hard",
-                "best_effort": False,
-                "strict_satisfied": True,
-                "bounded_solver_stop_count": remaining_stop_count,
-                "expected_solver_stop_count": remaining_stop_count,
-                "applies_to": "exception_preserving_remainder",
-                "frozen_route_count": len(frozen_route_ids),
-            }
-            gate = attach_final_route_traffic_gate(
-                planner,
-                candidate,
-                original_points,
-                config,
-                input_records,
-                scenario_label,
-            )
-            final_time_impact_validator(candidate, original_points)
-            gate = _scope_protected_traffic_gate(candidate, frozen_route_ids)
-            candidate["feasibility_report"] = build_route_feasibility_report(
-                candidate,
-                gate,
-                config,
-                current_min_active_vehicle_count=max(
-                    0,
-                    len(candidate_routes) - len(frozen_route_ids),
-                ),
-                max_vehicle_count=target_vehicle_count,
-                ignored_route_ids=frozen_route_ids,
-            )
-            candidate = _apply_vehicle_saving_target(
-                candidate,
-                current_route_count,
-                max(0, int(config.minimum_vehicle_reduction or 0)),
-                frozen_route_count=len(frozen_route_ids),
-            )
-            accepted = _scenario_feasibility_passed(candidate)
-            candidate["route_preserving_search"] = {
-                "enabled": True,
-                "status": "passed" if accepted else "candidate_failed",
-                "attempt": attempt_index,
-                "candidate_count": len(plans),
-                "donor_route_ids": list(plan["donor_ids"]),
-                "changed_route_ids": sorted(plan["changed_route_ids"]),
-            }
-            candidate["exception_preserving"] = {
-                "enabled": True,
-                "accepted": accepted,
-                "strategy": "route_preserving_reallocation",
-                "frozen_route_count": len(frozen_route_ids),
-                "frozen_route_ids": sorted(frozen_route_ids),
-                "current_failure_summary": current_summary,
-                "remaining_vehicle_limit": max(0, target_vehicle_count - len(frozen_route_ids)),
-                "vehicle_limit_relaxed": False,
-            }
-            candidate["exception_feasible"] = accepted
-            if accepted:
-                candidate["scenario_status"] = "passed"
-                candidate["constraint_search_outcome"] = {
-                    "status": "passed",
+            ]
+            for plan in batch:
+                audit["considered_candidate_count"] = int(audit.get("considered_candidate_count", 0)) + 1
+                attempt_index = int(audit["considered_candidate_count"])
+                candidate_routes: list[dict[str, Any]] = []
+                changed_routes: list[dict[str, Any]] = []
+                for route_id, current_route in current_by_id.items():
+                    if route_id in plan["donor_ids"]:
+                        continue
+                    route = deepcopy(current_route)
+                    if route_id in frozen_route_ids:
+                        route["exception_role"] = "frozen_current"
+                    elif route_id in plan["changed_route_ids"]:
+                        route["nodes"] = [*plan["nodes"][route_id], 0]
+                        route["load"] = int(plan["loads"][route_id])
+                        route["exception_role"] = "optimized_remainder"
+                        changed_routes.append(route)
+                    else:
+                        route["exception_role"] = "protected_unchanged"
+                    candidate_routes.append(route)
+                service_nodes = [
+                    int(node)
+                    for route in candidate_routes
+                    for node in list(route.get("nodes") or [])
+                    if int(node) != 0
+                ]
+                if sorted(service_nodes) != list(range(1, len(original_points))):
+                    continue
+                planner.enrich_routes_with_actual_driving(original_points, changed_routes)
+                planner.annotate_and_price_routes(original_points, changed_routes)
+                if not _assign_protected_route_fleet(candidate_routes, frozen_route_ids, config):
+                    continue
+                candidate = planner.build_scenario_result(original_points, candidate_routes, "")
+                candidate["output_html"] = ""
+                candidate["baseline_name"] = baseline_name
+                remaining_stop_count = len(
+                    set(range(1, len(original_points)))
+                    - set().union(
+                        *[
+                            _route_service_node_ids(current_by_id[route_id])
+                            for route_id in frozen_route_ids
+                        ]
+                    )
+                )
+                candidate["time_constraint"] = {
+                    **deepcopy(time_constraint_metadata or {}),
+                    "enabled": True,
+                    "mode": "hard",
+                    "best_effort": False,
+                    "strict_satisfied": True,
+                    "bounded_solver_stop_count": remaining_stop_count,
+                    "expected_solver_stop_count": remaining_stop_count,
+                    "applies_to": "exception_preserving_remainder",
+                    "frozen_route_count": len(frozen_route_ids),
+                }
+                audit["validated_candidate_count"] = int(audit["validated_candidate_count"]) + 1
+                gate = attach_final_route_traffic_gate(
+                    planner,
+                    candidate,
+                    original_points,
+                    config,
+                    input_records,
+                    scenario_label,
+                )
+                final_time_impact_validator(candidate, original_points)
+                gate = _scope_protected_traffic_gate(candidate, frozen_route_ids)
+                candidate["feasibility_report"] = build_route_feasibility_report(
+                    candidate,
+                    gate,
+                    config,
+                    current_min_active_vehicle_count=max(
+                        0,
+                        len(candidate_routes) - len(frozen_route_ids),
+                    ),
+                    max_vehicle_count=target_vehicle_count,
+                    ignored_route_ids=frozen_route_ids,
+                )
+                candidate = _apply_vehicle_saving_target(
+                    candidate,
+                    current_route_count,
+                    max(0, int(config.minimum_vehicle_reduction or 0)),
+                    frozen_route_count=len(frozen_route_ids),
+                )
+                accepted = _scenario_feasibility_passed(candidate)
+                audit["status"] = "passed" if accepted else "candidate_failed"
+                candidate["route_preserving_search"] = {
+                    **audit,
+                    "attempt": attempt_index,
+                    "candidate_count": len(ordered_plans),
+                    "donor_route_ids": list(plan["donor_ids"]),
+                    "changed_route_ids": sorted(plan["changed_route_ids"]),
+                }
+                candidate["exception_preserving"] = {
+                    "enabled": True,
+                    "accepted": accepted,
                     "strategy": "route_preserving_reallocation",
                     "frozen_route_count": len(frozen_route_ids),
-                    "allowed_max_vehicle_count": target_vehicle_count,
-                    "feasible_candidate_count": 1,
+                    "frozen_route_ids": sorted(frozen_route_ids),
+                    "current_failure_summary": current_summary,
+                    "remaining_vehicle_limit": max(0, target_vehicle_count - len(frozen_route_ids)),
+                    "vehicle_limit_relaxed": False,
                 }
-                return candidate
+                candidate["exception_feasible"] = accepted
+                if accepted:
+                    candidate["scenario_status"] = "passed"
+                    candidate["constraint_search_outcome"] = {
+                        "status": "passed",
+                        "strategy": "route_preserving_reallocation",
+                        "frozen_route_count": len(frozen_route_ids),
+                        "allowed_max_vehicle_count": target_vehicle_count,
+                        "feasible_candidate_count": 1,
+                    }
+                    return candidate
     finally:
         planner.OSRM_BASE_URL = previous_osrm_base_url
+    if ordered_plans:
+        audit["status"] = "budget_exhausted" if audit.get("budget_truncated") else "exhausted"
     return None
 
 
@@ -6924,11 +6425,11 @@ def build_exception_preserving_scenario(
             remaining_limits = [0]
         if remaining_service_count and not remaining_limits and best_accepted_candidate is None:
             preflight_infeasible = True
-            remaining_limits = [remaining_max_vehicle_count]
 
         for remaining_limit_candidate in remaining_limits:
             target_vehicle_count_candidate = frozen_count + remaining_limit_candidate
             route_preserving: dict[str, Any] | None = None
+            route_preserving_audit: dict[str, Any] = {}
             if (
                 callable(node_time_upper_bounds_builder)
                 and callable(final_time_impact_validator)
@@ -6947,6 +6448,7 @@ def build_exception_preserving_scenario(
                     baseline_name=baseline_name,
                     scenario_label=scenario_label,
                     target_vehicle_count=target_vehicle_count_candidate,
+                    search_audit=route_preserving_audit,
                 )
             if route_preserving is not None:
                 protected = dict(route_preserving.get("exception_preserving") or {})
@@ -6966,6 +6468,9 @@ def build_exception_preserving_scenario(
                         "vehicle_saving_target": dict(
                             route_preserving.get("vehicle_saving_target") or {}
                         ),
+                        "route_preserving_search": dict(
+                            route_preserving.get("route_preserving_search") or route_preserving_audit
+                        ),
                     }
                 )
                 if (
@@ -6975,6 +6480,21 @@ def build_exception_preserving_scenario(
                 ):
                     best_accepted_candidate = route_preserving
                 continue
+            if route_preserving_audit and route_preserving_audit.get("status") not in {
+                "not_applicable",
+                "not_started",
+            }:
+                attempts.append(
+                    {
+                        "strategy": "route_preserving_reallocation",
+                        "frozen_route_count": frozen_count,
+                        "target_vehicle_count": target_vehicle_count_candidate,
+                        "heuristic_remaining_vehicle_limit": remaining_limit_candidate,
+                        "accepted": False,
+                        "status": str(route_preserving_audit.get("status") or "exhausted"),
+                        "route_preserving_search": dict(route_preserving_audit),
+                    }
+                )
             try:
                 if remaining_service_count:
                     optimized = _compute_scenario_without_render(

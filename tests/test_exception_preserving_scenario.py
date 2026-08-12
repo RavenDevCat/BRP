@@ -623,7 +623,7 @@ def test_protected_infeasible_result_names_unfrozen_remainder_limit(monkeypatch)
         FakePlanner(),
         points,
         current,
-        planner_core.PlannerConfig(),
+        planner_core.PlannerConfig(minimum_vehicle_reduction=1),
         [],
         [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
         2,
@@ -649,7 +649,7 @@ def test_protected_infeasible_result_names_unfrozen_remainder_limit(monkeypatch)
             FakePlanner(),
             points,
             current,
-            planner_core.PlannerConfig(),
+            planner_core.PlannerConfig(minimum_vehicle_reduction=1),
             [],
             [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
             2,
@@ -697,7 +697,7 @@ def test_protected_unresolved_remainder_is_not_reported_as_infeasible(monkeypatc
         FakePlanner(),
         points,
         current,
-        planner_core.PlannerConfig(),
+        planner_core.PlannerConfig(minimum_vehicle_reduction=1),
         [],
         [{"name": "30-fbus", "capacity": 30, "max_count": 3}],
         2,
@@ -712,6 +712,214 @@ def test_protected_unresolved_remainder_is_not_reported_as_infeasible(monkeypatc
     assert "unresolved_reason" in result
     assert result["constraint_search_outcome"]["status"] == "unresolved"
     assert result["constraint_search_outcome"]["search_complete"] is False
+
+
+def test_protected_preflight_uses_fleet_remaining_after_frozen_routes(monkeypatch):
+    points = [
+        {"node_id": 0, "is_depot": True, "passenger_count": 0},
+        {"node_id": 1, "passenger_count": 1},
+        {"node_id": 2, "passenger_count": 8},
+        {"node_id": 3, "passenger_count": 7},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 3,
+        "routes": [
+            {
+                "route_id": "R0",
+                "nodes": [1, 0],
+                "load": 1,
+                "bus_type_name": "Large Bus",
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 5,
+                },
+            },
+            {
+                "route_id": "R1",
+                "nodes": [2, 0],
+                "load": 8,
+                "bus_type_name": "Small Bus",
+                "final_route_traffic_gate": {"status": "passed"},
+            },
+            {
+                "route_id": "R2",
+                "nodes": [3, 0],
+                "load": 7,
+                "bus_type_name": "Small Bus",
+                "final_route_traffic_gate": {"status": "passed"},
+            },
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R0"],
+            "max_time_window_overrun_minutes": 5,
+        },
+    }
+    compute = pytest.fail
+
+    monkeypatch.setattr(
+        planner_core,
+        "_compute_scenario_without_render",
+        lambda *_args, **_kwargs: compute("known-bad Protected model was solved"),
+    )
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(
+            minimum_vehicle_reduction=1,
+            large_bus_capacity=40,
+            small_bus_capacity=10,
+        ),
+        [],
+        [
+            {"name": "Large Bus", "capacity": 40, "max_count": 1},
+            {"name": "Small Bus", "capacity": 10, "max_count": 1},
+        ],
+        2,
+        standard_scenarios=[],
+    )
+
+    outcome = result["constraint_search_outcome"]
+    assert result["scenario_status"] == "infeasible"
+    assert outcome["reason"] == "minimum_vehicle_lower_bound_exceeds_allowed_maximum"
+    assert outcome["allowed_remainder_max_vehicle_count"] == 1
+    assert outcome["theoretical_remainder_min_vehicle_count"] == 2
+    assert outcome["attempted_remainder_vehicle_caps"] == []
+
+
+def test_route_preserving_search_continues_into_the_next_batch(monkeypatch):
+    class RoutePreservingPlanner(FakePlanner):
+        OSRM_BASE_URL = "original"
+
+        def resolve_osrm_base_url(self, _points):
+            return "resolved"
+
+        def enrich_routes_with_actual_driving(self, _points, _routes):
+            return None
+
+        def annotate_and_price_routes(self, _points, _routes):
+            return None
+
+    points = [
+        {"node_id": 0, "is_depot": True, "passenger_count": 0},
+        *[
+            {"node_id": node_id, "passenger_count": 1}
+            for node_id in range(1, 5)
+        ],
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 4,
+        "routes": [
+            {
+                "route_id": "R0",
+                "nodes": [1, 0],
+                "load": 1,
+                "bus_type_name": "Large Bus",
+                "bus_capacity": 42,
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 5,
+                },
+            },
+            *[
+                {
+                    "route_id": f"R{node_id}",
+                    "nodes": [node_id, 0],
+                    "load": 1,
+                    "bus_type_name": "Large Bus",
+                    "bus_capacity": 42,
+                    "final_route_traffic_gate": {"status": "passed"},
+                }
+                for node_id in range(2, 5)
+            ],
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R0"],
+            "max_time_window_overrun_minutes": 5,
+        },
+    }
+    gate_calls = 0
+
+    def fake_gate(_planner, scenario, *_args):
+        nonlocal gate_calls
+        gate_calls += 1
+        failed_ids = ["R0"]
+        if gate_calls == 1:
+            failed_ids.append(
+                next(
+                    route["route_id"]
+                    for route in scenario["routes"]
+                    if route.get("exception_role") == "optimized_remainder"
+                )
+            )
+        scenario["traffic_gate"] = {
+            "status": "failed",
+            "gate_type": "arrival_window",
+            "failed_route_count": len(failed_ids),
+            "failed_route_ids": failed_ids,
+            "max_time_window_overrun_minutes": 5,
+        }
+        for route in scenario["routes"]:
+            route["final_route_traffic_gate"] = {
+                "status": "failed" if route["route_id"] in failed_ids else "passed",
+                "time_window_overrun_minutes": 5 if route["route_id"] in failed_ids else 0,
+            }
+        return scenario["traffic_gate"]
+
+    def final_validator(scenario, _points):
+        scenario["final_time_impact_gate"] = {
+            "status": "passed",
+            "compared_stop_count": 3,
+            "over_limit_stop_count": 0,
+            "over_limit_rider_count": 0,
+            "max_adverse_minutes": 0,
+        }
+        return scenario["final_time_impact_gate"]
+
+    monkeypatch.setattr(planner_core, "PROTECTED_ROUTE_PRESERVING_BATCH_SIZE", 1)
+    monkeypatch.setattr(planner_core, "PROTECTED_ROUTE_PRESERVING_MAX_CANDIDATES", 10)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+    audit = {}
+    result = planner_core._build_route_preserving_protected_scenario(
+        RoutePreservingPlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(
+            service_direction="To School",
+            minimum_vehicle_reduction=1,
+            route_stop_limit=10,
+            mid_bus_max_count=0,
+            small_bus_max_count=0,
+        ),
+        [],
+        node_time_upper_bounds_builder=lambda _points: {
+            node_id: 900 for node_id in range(1, 5)
+        },
+        time_constraint_metadata={"enabled": True},
+        final_time_impact_validator=final_validator,
+        solve_time=[
+            [0 if left == right else 60 for right in range(5)]
+            for left in range(5)
+        ],
+        baseline_name="exception_preserving_optimization",
+        scenario_label="Protected Plan",
+        target_vehicle_count=3,
+        search_audit=audit,
+    )
+
+    assert result is not None
+    assert gate_calls == 2
+    assert audit["status"] == "passed"
+    assert audit["validation_batch_count"] == 2
+    assert audit["validated_candidate_count"] == 2
+    assert audit["generated_candidate_count"] >= 2
+    assert audit["budget_truncated"] is False
 
 
 def test_protected_zero_minimum_uses_baseline_and_continues_downward(monkeypatch):

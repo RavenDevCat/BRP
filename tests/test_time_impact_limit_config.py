@@ -175,15 +175,45 @@ def test_route_budget_does_not_shorten_user_time_window():
     assert planner_core.effective_route_duration_limit_minutes(config) == 90
 
 
-def test_from_school_does_not_inherit_default_am_window():
-    config = planner_core.PlannerConfig(
-        service_direction="From School",
-        from_school_departure_time="15:40",
-        max_route_duration_minutes=122,
+def test_from_school_config_preparation_supplies_explicit_default_window():
+    config = planner_core.build_planner_config(
+        {
+            "service_direction": "From School",
+            "from_school_departure_time": "15:40",
+            "max_route_duration_minutes": 122,
+        }
     )
 
     assert planner_core.effective_route_duration_limit_minutes(config) == 120
     assert planner_core._from_school_time_window(config) == (15 * 60 + 40, 17 * 60 + 40)
+
+
+def test_from_school_solver_consumes_explicit_window_without_guessing():
+    config = planner_core.build_planner_config(
+        {
+            "service_direction": "From School",
+            "from_school_departure_time": "15:40",
+            "time_window_start": "06:30",
+            "time_window_end": "08:00",
+        }
+    )
+
+    assert planner_core._from_school_time_window(config) == (6 * 60 + 30, 8 * 60)
+    assert planner_core.effective_route_duration_limit_minutes(config) == 90
+
+
+def test_time_window_must_be_supplied_as_a_complete_pair():
+    try:
+        planner_core.build_planner_config(
+            {
+                "service_direction": "From School",
+                "time_window_start": "15:40",
+            }
+        )
+    except ValueError as exc:
+        assert "provided together" in str(exc)
+    else:
+        raise AssertionError("a one-sided time window was accepted")
 
 
 def test_from_school_route_limit_respects_custom_time_window():

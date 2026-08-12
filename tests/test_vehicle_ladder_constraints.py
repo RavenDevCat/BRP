@@ -166,9 +166,15 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
         solve.assert_called_once()
 
-    def test_retired_constrained_improvement_entry_is_sealed(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "Retired constrained-improvement solver path"):
-            planner_core.build_constrained_improvement_current_plan({}, {}, planner_core.PlannerConfig())
+    def test_retired_constrained_improvement_path_is_removed(self) -> None:
+        for name in (
+            "_select_constrained_improvement_moves",
+            "_annotate_constrained_move_packages",
+            "_summarize_constrained_move_packages",
+            "_enrich_constrained_package_summaries",
+            "build_constrained_improvement_current_plan",
+        ):
+            self.assertFalse(hasattr(planner_core, name), name)
 
     def test_solver_route_duration_dimension_uses_the_hard_user_limit(self) -> None:
         captured: dict[str, int] = {}

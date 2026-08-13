@@ -1237,8 +1237,16 @@ def test_protected_continues_below_minimum_saving(monkeypatch):
     assert next(route for route in result["routes"] if route["route_id"] == "R0")[
         "display_route_id"
     ] == "R0"
+    assert next(route for route in result["routes"] if route["route_id"] == "R0")[
+        "route_change_type"
+    ] == "frozen"
     assert {
         route["display_route_id"]
         for route in result["routes"]
         if route["route_id"] != "R0"
     } == {"Opt Bus 1"}
+    assert {
+        route["route_change_type"]
+        for route in result["routes"]
+        if route["route_id"] != "R0"
+    } == {"new"}

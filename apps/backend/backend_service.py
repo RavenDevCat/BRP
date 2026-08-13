@@ -45,6 +45,7 @@ try:
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
+        attach_route_display_metadata,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
         build_planner_config,
@@ -76,6 +77,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
+        attach_route_display_metadata,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
         build_planner_config,
@@ -164,7 +166,13 @@ MAP_SCENARIO_LABELS = {
     "time_constrained": "Strict Plan",
     "exception_preserving": "Protected Plan",
 }
-OPTIMIZED_ROUTE_SCENARIOS = {"time_constrained", "exception_preserving"}
+OPTIMIZED_ROUTE_SCENARIOS = {
+    "original",
+    "subway",
+    "nearby",
+    "time_constrained",
+    "exception_preserving",
+}
 MAP_ARTIFACT_TOP_LEVEL_KEYS = {
     "current_plan": "current_plan_html",
     "original": "original_html",
@@ -2760,10 +2768,21 @@ def _adapt_legacy_scenario_statuses_for_read(
     if not result:
         return adapted
 
+    result_scenario_keys = dict(
+        zip(
+            _SCENARIO_RESULT_KEYS,
+            _STRUCTURED_SCENARIO_KEYS,
+            strict=True,
+        )
+    )
     for key in _SCENARIO_RESULT_KEYS:
         scenario = dict(result.get(key) or {})
         if scenario:
             scenario["scenario_status"] = _legacy_scenario_status_for_read(scenario)
+            scenario["routes"] = _routes_with_display_ids(
+                [dict(route or {}) for route in list(scenario.get("routes") or [])],
+                result_scenario_keys[key],
+            )
             result[key] = scenario
 
     structured = dict(result.get("structured_results") or {})
@@ -2771,6 +2790,10 @@ def _adapt_legacy_scenario_statuses_for_read(
         scenario = dict(structured.get(key) or {})
         if scenario:
             scenario["scenario_status"] = _legacy_scenario_status_for_read(scenario)
+            scenario["routes"] = _routes_with_display_ids(
+                [dict(route or {}) for route in list(scenario.get("routes") or [])],
+                key,
+            )
             structured[key] = scenario
     if structured:
         result["structured_results"] = structured
@@ -3490,31 +3513,12 @@ def _routes_with_display_ids(
     routes: list[dict[str, Any]],
     scenario_key: str,
 ) -> list[dict[str, Any]]:
-    optimized_index = 0
-    decorated: list[dict[str, Any]] = []
-    for route_index, raw_route in enumerate(routes, start=1):
-        route = dict(raw_route or {})
-        source_route_id = str(
-            route.get("source_route_id")
-            or route.get("route_id")
-            or route.get("id")
-            or f"Bus {route_index}"
-        ).strip()
-        route["source_route_id"] = source_route_id
-        if (
-            scenario_key in OPTIMIZED_ROUTE_SCENARIOS
-            and str(route.get("exception_role") or "") != "frozen_current"
-        ):
-            optimized_index += 1
-            route["display_route_id"] = str(
-                route.get("display_route_id") or f"Opt Bus {optimized_index}"
-            ).strip()
-        else:
-            route["display_route_id"] = str(
-                route.get("display_route_id") or source_route_id
-            ).strip()
-        decorated.append(route)
-    return decorated
+    payload = {"routes": [dict(route or {}) for route in routes]}
+    attach_route_display_metadata(
+        payload,
+        optimized=scenario_key in OPTIMIZED_ROUTE_SCENARIOS,
+    )
+    return list(payload["routes"])
 
 
 def _format_time_impact_limit_minutes(value: Any) -> str:
@@ -4896,6 +4900,7 @@ def _build_job_map_payload(
                 "id": route_id,
                 "source_route_id": source_route_id,
                 "exception_role": str(route.get("exception_role") or "").strip(),
+                "route_change_type": str(route.get("route_change_type") or "").strip(),
                 "route_index": route_index,
                 "vehicle_id": route.get("vehicle_id"),
                 "bus_type_name": str(route.get("bus_type_name") or "").strip(),

@@ -5483,22 +5483,46 @@ def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -
     }
 
 
-def _attach_optimized_route_display_ids(result: dict[str, Any]) -> dict[str, Any]:
+def attach_route_display_metadata(
+    result: dict[str, Any],
+    *,
+    optimized: bool = True,
+) -> dict[str, Any]:
     optimized_index = 0
     for route_index, route in enumerate(list(result.get("routes") or []), start=1):
+        route_id = str(route.get("route_id") or route.get("id") or "").strip()
         source_route_id = str(
             route.get("source_route_id")
-            or route.get("route_id")
-            or route.get("id")
+            or route_id
             or f"Bus {route_index}"
         ).strip()
         route["source_route_id"] = source_route_id
-        if str(route.get("exception_role") or "") == "frozen_current":
+        if not optimized:
+            route["route_change_type"] = "current"
+            route["display_route_id"] = source_route_id
+            continue
+        change_type = str(route.get("route_change_type") or "").strip().lower()
+        if change_type not in {"frozen", "merged", "retained", "new"}:
+            role = str(route.get("exception_role") or "").strip()
+            if role == "frozen_current":
+                change_type = "frozen"
+            elif role == "protected_unchanged":
+                change_type = "retained"
+            elif role == "optimized_remainder" and not route_id.startswith("Opt Bus "):
+                change_type = "merged"
+            else:
+                change_type = "new"
+        route["route_change_type"] = change_type
+        if change_type in {"frozen", "merged", "retained"}:
             route["display_route_id"] = source_route_id
             continue
         optimized_index += 1
         route["display_route_id"] = f"Opt Bus {optimized_index}"
     return result
+
+
+def _attach_optimized_route_display_ids(result: dict[str, Any]) -> dict[str, Any]:
+    return attach_route_display_metadata(result)
 
 
 def _attach_vehicle_ladder_metadata(
@@ -5890,6 +5914,7 @@ def _remap_exception_route_nodes(
 
     remapped["route_id"] = route_id
     remapped["exception_role"] = "optimized_remainder"
+    remapped["route_change_type"] = "new"
     remapped["nodes"] = [original_node_id(node_id) for node_id in list(remapped.get("nodes") or [])]
     for leg in list(remapped.get("leg_details") or []):
         if isinstance(leg, dict):
@@ -6249,13 +6274,16 @@ def _build_route_preserving_protected_scenario(
                     route = deepcopy(current_route)
                     if route_id in frozen_route_ids:
                         route["exception_role"] = "frozen_current"
+                        route["route_change_type"] = "frozen"
                     elif route_id in plan["changed_route_ids"]:
                         route["nodes"] = [*plan["nodes"][route_id], 0]
                         route["load"] = int(plan["loads"][route_id])
                         route["exception_role"] = "optimized_remainder"
+                        route["route_change_type"] = "merged"
                         changed_routes.append(route)
                     else:
                         route["exception_role"] = "protected_unchanged"
+                        route["route_change_type"] = "retained"
                     candidate_routes.append(route)
                 service_nodes = [
                     int(node)
@@ -6528,6 +6556,7 @@ def build_exception_preserving_scenario(
                 candidate_frozen_routes = [deepcopy(route) for route in frozen_routes]
                 for route in candidate_frozen_routes:
                     route["exception_role"] = "frozen_current"
+                    route["route_change_type"] = "frozen"
                 combined_routes = candidate_frozen_routes + optimized_routes
                 candidate = planner.build_scenario_result(original_points, combined_routes, "")
                 candidate["output_html"] = ""

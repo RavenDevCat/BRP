@@ -2207,30 +2207,19 @@ function BaselineRouteTable({
   const t = useT();
   let optimizedIndex = 0;
   const displayRoutes = routes.map((route, index) => {
-    const frozen = stringValue(route.exception_role) === "frozen_current";
-    const role = stringValue(route.exception_role);
     const sourceRouteId = stringValue(
       route.source_route_id || route.route_id || route.vehicle_id || index + 1,
     );
-    const optimized = ["time_constrained", "exception_preserving"].includes(scenarioKey) && !frozen;
-    if (optimized) optimizedIndex += 1;
+    const changeType = routeChangeType(scenarioKey, route);
+    const frozen = changeType === "frozen";
+    if (changeType === "new") optimizedIndex += 1;
     return {
       route,
       frozen,
       sourceRouteId,
-      changeType: (
-        scenarioKey === "current_plan"
-          ? "current"
-          : scenarioKey === "exception_preserving"
-            ? role === "frozen_current"
-              ? "frozen"
-              : role === "protected_unchanged"
-                ? "retained"
-                : "merged"
-            : "new"
-      ) as RouteChangeType,
+      changeType,
       displayRouteId: stringValue(
-        route.display_route_id || (optimized ? `Opt Bus ${optimizedIndex}` : sourceRouteId),
+        route.display_route_id || (changeType === "new" ? `Opt Bus ${optimizedIndex}` : sourceRouteId),
       ),
     };
   });
@@ -2701,6 +2690,25 @@ type ArrivalReverseCheck = {
 
 type RouteChangeType = "current" | "new" | "frozen" | "merged" | "retained";
 
+function routeChangeType(
+  scenarioKey: string,
+  route: Record<string, unknown>,
+): RouteChangeType {
+  const explicit = stringValue(route.route_change_type) as RouteChangeType;
+  if (["current", "new", "frozen", "merged", "retained"].includes(explicit)) {
+    return explicit;
+  }
+  if (scenarioKey === "current_plan") return "current";
+  const role = stringValue(route.exception_role);
+  if (role === "frozen_current") return "frozen";
+  if (role === "protected_unchanged") return "retained";
+  if (role === "optimized_remainder") {
+    const routeId = stringValue(route.route_id || route.id);
+    return routeId.startsWith("Opt Bus ") ? "new" : "merged";
+  }
+  return "new";
+}
+
 type ArrivalReverseRoute = {
   scenarioName: string;
   routeId: string;
@@ -2773,17 +2781,7 @@ function routeLineage(
     ),
   );
   const absorbedRouteIds = contributorRouteIds.filter((routeId) => routeId !== sourceRouteId);
-  const role = stringValue(route.exception_role);
-  const changeType: RouteChangeType =
-    scenarioKey === "current_plan"
-      ? "current"
-      : scenarioKey === "exception_preserving"
-        ? role === "frozen_current"
-          ? "frozen"
-          : role === "protected_unchanged"
-            ? "retained"
-            : "merged"
-        : "new";
+  const changeType = routeChangeType(scenarioKey, route);
   return { sourceRouteId, changeType, contributorRouteIds, absorbedRouteIds };
 }
 
@@ -2957,7 +2955,7 @@ function normalizeArrivalReverseRoute(
   const lineage = routeLineage(scenarioKey, scenarioRoute, currentContext);
   const displayRouteId = stringValue(
     scenarioRoute.display_route_id ||
-      (lineage.changeType === "frozen" ? lineage.sourceRouteId : "") ||
+      (["frozen", "merged", "retained"].includes(lineage.changeType) ? lineage.sourceRouteId : "") ||
       scenarioRoute.route_id ||
       route.route_id ||
       route.vehicle_id ||
@@ -3501,6 +3499,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     frozenRoute: t("Frozen route"),
     mergedRoute: t("Merged route"),
     retainedRoute: t("Retained route"),
+    newOptimizedRoute: t("New optimized route"),
     min: t("min"),
   }).replace(/</g, "\\u003c");
   return `<!doctype html>
@@ -3675,7 +3674,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     }
     function fitRoute(route) { const geometry = routeGeometry(route); if (!route || geometry.length < 2) return; const connectorPoints = routeConnectors.filter(connector => connector.route_id === route.id).flatMap(connector => connector.geometry || []); const points = geometry.concat(connectorPoints); const lngs = points.map(p => p[0]).filter(Number.isFinite); const lats = points.map(p => p[1]).filter(Number.isFinite); map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 96, duration: 500 }); }
     function statusBadge(route) { const gate = route.am_arrival_gate || {}; const status = gate.status === 'failed' ? labels.timeWindow : gate.status === 'unavailable' ? labels.unverified : route.load / (route.bus_capacity || 0) >= 1 ? labels.capacity : route.load / (route.bus_capacity || 1) >= .85 ? labels.highLoadBadge : route.duration_s >= 3600 ? labels.longBadge : ''; if (!status) return ''; return '<span class="badge ' + (status === labels.capacity || status === labels.timeWindow ? 'capacity' : status === labels.highLoadBadge || status === labels.unverified ? 'high' : '') + '">' + esc(status) + '</span>'; }
-    function lineageBadge(route) { const label = route.exception_role === 'frozen_current' ? labels.frozenRoute : route.exception_role === 'optimized_remainder' ? labels.mergedRoute : route.exception_role === 'protected_unchanged' ? labels.retainedRoute : ''; return label ? '<span class="badge">' + esc(label) + '</span>' : ''; }
+    function lineageBadge(route) { const type = route.route_change_type || (route.exception_role === 'frozen_current' ? 'frozen' : route.exception_role === 'optimized_remainder' ? 'merged' : route.exception_role === 'protected_unchanged' ? 'retained' : ''); const label = type === 'frozen' ? labels.frozenRoute : type === 'merged' ? labels.mergedRoute : type === 'retained' ? labels.retainedRoute : type === 'new' ? labels.newOptimizedRoute : ''; return label ? '<span class="badge">' + esc(label) + '</span>' : ''; }
     function stopTiming(stop) { return (stop.scheduled_time_label ? esc(stop.scheduled_time_label) + ' · ' : '') + duration(stop.cumulative_duration_s); }
     function color(index) { return colors[index % colors.length]; }
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }

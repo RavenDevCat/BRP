@@ -131,6 +131,13 @@ class InteractiveMapDataTests(unittest.TestCase):
                         "routes": [
                             route("R1", 1, exception_role="frozen_current"),
                             route("R2", 2, exception_role="optimized_remainder"),
+                            route("R3", 1, exception_role="protected_unchanged"),
+                            route(
+                                "Opt Bus 9",
+                                2,
+                                exception_role="optimized_remainder",
+                                source_route_id="Bus 9",
+                            ),
                         ],
                     },
                 }
@@ -163,16 +170,43 @@ class InteractiveMapDataTests(unittest.TestCase):
         )
         self.assertEqual(
             [route_payload["id"] for route_payload in protected["routes"]],
-            ["R1", "Opt Bus 1"],
+            ["R1", "R2", "R3", "Opt Bus 1"],
+        )
+        self.assertEqual(
+            [route_payload["route_change_type"] for route_payload in protected["routes"]],
+            ["frozen", "merged", "retained", "new"],
         )
         self.assertEqual(
             protected["routes"][0]["exception_role"],
             "frozen_current",
         )
         self.assertEqual(
-            protected["stops"][-2]["source_route_id"],
+            protected["stops"][2]["source_route_id"],
             "R2",
         )
+
+    def test_legacy_job_read_uses_same_route_names_in_result_copies(self) -> None:
+        job_record = {
+            "result": {
+                "time_constrained_optimization": {
+                    "routes": [{"route_id": "R8"}],
+                },
+                "structured_results": {
+                    "time_constrained": {
+                        "routes": [{"route_id": "R8"}],
+                    },
+                },
+            },
+        }
+
+        adapted = self.service._adapt_legacy_scenario_statuses_for_read(job_record)
+
+        top_route = adapted["result"]["time_constrained_optimization"]["routes"][0]
+        structured_route = adapted["result"]["structured_results"]["time_constrained"]["routes"][0]
+        self.assertEqual(top_route["display_route_id"], "Opt Bus 1")
+        self.assertEqual(structured_route["display_route_id"], "Opt Bus 1")
+        self.assertEqual(top_route["route_change_type"], "new")
+        self.assertEqual(structured_route["route_change_type"], "new")
 
     def test_schedule_impact_uses_source_route_identity(self) -> None:
         current = {
@@ -481,7 +515,7 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(stop_impact["comparison_status"], "matched")
         self.assertEqual(stop_impact["time_role"], "dropoff")
         self.assertEqual(stop_impact["current_route_id"], "Bus 1")
-        self.assertEqual(stop_impact["new_route_id"], "R6")
+        self.assertEqual(stop_impact["new_route_id"], "Opt Bus 1")
         self.assertEqual(stop_impact["current_time_label"], "15:50")
         self.assertEqual(stop_impact["new_time_label"], "16:05")
         self.assertEqual(stop_impact["delta_minutes"], 15)

@@ -131,7 +131,7 @@ def _compact_traffic_gate(scenario: dict[str, Any]) -> dict[str, Any]:
 
 def _compact_route(route: dict[str, Any]) -> dict[str, Any]:
     return {
-        "route_id": route.get("route_id"),
+        "route_id": route.get("display_route_id") or route.get("route_id"),
         "bus_type": route.get("bus_type"),
         "stop_count": _route_service_stop_count(route),
         "passenger_count": route.get("passenger_count"),

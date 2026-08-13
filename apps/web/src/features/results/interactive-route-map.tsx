@@ -1695,13 +1695,14 @@ function routeStatusLabel(route: JobMapRoute) {
 }
 
 function routeListAccentClass(route: JobMapRoute) {
-    if (route.exception_role === "frozen_current") {
+    const changeType = routeChangeType(route);
+    if (changeType === "frozen") {
         return "border-l-indigo-400";
     }
-    if (route.exception_role === "optimized_remainder") {
+    if (changeType === "merged") {
         return "border-l-cyan-400";
     }
-    if (route.exception_role === "protected_unchanged") {
+    if (changeType === "retained") {
         return "border-l-slate-300";
     }
     const status = routeStatusLabel(route);
@@ -1740,9 +1741,19 @@ function RouteStatusBadge({ route }: { route: JobMapRoute }) {
 }
 
 function routeLineageLabel(route: JobMapRoute) {
-    if (route.exception_role === "frozen_current") return "Frozen route";
-    if (route.exception_role === "optimized_remainder") return "Merged route";
-    if (route.exception_role === "protected_unchanged") return "Retained route";
+    const changeType = routeChangeType(route);
+    if (changeType === "frozen") return "Frozen route";
+    if (changeType === "merged") return "Merged route";
+    if (changeType === "retained") return "Retained route";
+    if (changeType === "new") return "New optimized route";
+    return "";
+}
+
+function routeChangeType(route: JobMapRoute) {
+    if (route.route_change_type) return route.route_change_type;
+    if (route.exception_role === "frozen_current") return "frozen";
+    if (route.exception_role === "protected_unchanged") return "retained";
+    if (route.exception_role === "optimized_remainder") return "merged";
     return "";
 }
 
@@ -1758,7 +1769,9 @@ function RouteLineageBadge({ route }: { route: JobMapRoute }) {
                     ? "border-indigo-200 bg-indigo-50 text-indigo-700"
                     : label === "Merged route"
                       ? "border-cyan-200 bg-cyan-50 text-cyan-800"
-                      : "border-slate-200 bg-slate-50 text-slate-700",
+                      : label === "New optimized route"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : "border-slate-200 bg-slate-50 text-slate-700",
             )}
         >
             {t(label)}
@@ -1767,7 +1780,7 @@ function RouteLineageBadge({ route }: { route: JobMapRoute }) {
 }
 
 function routeIsFrozen(route: JobMapRoute) {
-    return route.exception_role === "frozen_current";
+    return routeChangeType(route) === "frozen";
 }
 
 function RouteMetric({ label, value }: { label: string; value: string }) {

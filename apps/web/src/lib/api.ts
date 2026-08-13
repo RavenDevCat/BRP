@@ -195,6 +195,7 @@ export type JobMapRoute = {
     id: string;
     source_route_id?: string;
     exception_role?: string;
+    route_change_type?: "current" | "new" | "frozen" | "merged" | "retained";
     route_index: number;
     vehicle_id?: string | number | null;
     bus_type_name: string;

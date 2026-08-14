@@ -577,6 +577,89 @@ class VehicleLadderConstraintTests(unittest.TestCase):
 
         self.assertEqual(calls, [20])
 
+    def test_vehicle_ladder_observes_contract_shadow_without_changing_result(self) -> None:
+        points = [
+            {
+                "node_id": 0,
+                "is_depot": True,
+                "address": "School",
+                "lat": 31.2,
+                "lng": 121.4,
+                "passenger_count": 0,
+            },
+            {
+                "node_id": 1,
+                "address": "Stop",
+                "lat": 31.21,
+                "lng": 121.41,
+                "passenger_count": 4,
+            },
+        ]
+        bus_configs = [{"name": "Bus", "capacity": 10, "max_count": 2}]
+
+        class Planner:
+            BUS_TYPE_CONFIGS = bus_configs
+            _BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(
+                service_direction="To School",
+                max_route_duration_minutes=60,
+            )
+
+        candidate = {
+            "points": points,
+            "bus_count": 1,
+            "routes": [
+                {
+                    "route_id": "Opt Bus 1",
+                    "nodes": [1, 0],
+                    "load": 4,
+                    "bus_capacity": 10,
+                    "bus_type_name": "Bus",
+                    "time_s": 600,
+                    "distance_m": 4000,
+                }
+            ],
+            "traffic_gate": {"status": "passed"},
+            "feasibility_report": {
+                "status": "passed",
+                "failure_reasons": [],
+                "hard_constraints": {},
+            },
+        }
+        observed = []
+        with (
+            mock.patch.object(
+                planner_core,
+                "_compute_scenario_without_render",
+                return_value=candidate,
+            ),
+            mock.patch.object(
+                planner_core,
+                "_minimum_vehicle_count_for_hard_constraints",
+                return_value=1,
+            ),
+            mock.patch.object(
+                planner_core,
+                "observe_planning_shadow",
+                side_effect=lambda shadow, **_kwargs: observed.append(shadow),
+            ) as observer,
+        ):
+            result = planner_core._solve_vehicle_ladder_scenario(
+                Planner(),
+                points,
+                "test",
+                current_route_count=2,
+                minimum_vehicle_reduction=1,
+                bus_type_configs=bus_configs,
+            )
+
+        observer.assert_called_once()
+        self.assertEqual(len(observed), 1)
+        self.assertTrue(observed[0].parity_passed)
+        self.assertTrue(observed[0].constraints_passed)
+        self.assertNotIn("planning_contract_shadow", result)
+        self.assertNotIn("contract_shadow", result)
+        self.assertEqual(result["bus_count"], 1)
+
     def test_vehicle_ladder_does_not_hide_technical_failures(self) -> None:
         with (
             mock.patch.object(

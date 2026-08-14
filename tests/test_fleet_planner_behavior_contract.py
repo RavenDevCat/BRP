@@ -92,14 +92,24 @@ def test_fleet_legacy_solver_preserves_contract_invariants(fixture_name: str) ->
         kwargs["time_limit_seconds"] = 1
         return real_search_builder(*args, **kwargs)
 
+    observed_shadows = []
     with (
         patch.object(demand_global_optimizer, "get_planning_assumptions", return_value=assumptions),
-        patch.object(demand_global_optimizer, "_build_osrm_matrix", return_value=_matrix(len(request.points))),
+        patch.object(
+            demand_global_optimizer,
+            "_build_osrm_matrix",
+            return_value=_matrix(len(request.points)),
+        ) as matrix_mock,
         patch.object(
             demand_global_optimizer,
             "build_guided_local_search_parameters",
             side_effect=quick_search,
         ),
+        patch.object(
+            demand_global_optimizer,
+            "observe_planning_shadow",
+            side_effect=lambda shadow, **_kwargs: observed_shadows.append(shadow),
+        ) as observe_mock,
     ):
         result = demand_global_optimizer.build_global_ortools_plan(
             _geocode_payload(request),
@@ -120,6 +130,12 @@ def test_fleet_legacy_solver_preserves_contract_invariants(fixture_name: str) ->
     assert all(row["stops"] <= constraints.max_stops_per_route for row in rows)
     assert all(route["duration_s"] <= constraints.max_route_duration_s for route in routes)
     assert result["summary"]["service_direction"] == request.direction
+    assert matrix_mock.call_count == 1
+    observe_mock.assert_called_once()
+    assert len(observed_shadows) == 1
+    assert observed_shadows[0].parity_passed is True
+    assert observed_shadows[0].constraints_passed is True
+    assert not any("contract" in key or "shadow" in key for key in result)
     if request.direction == "to_school":
         assert all(route["order"][-1] == 0 for route in routes)
     else:

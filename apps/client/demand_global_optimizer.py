@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import logging
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,9 +26,48 @@ from demand_routing import (
 )
 from planning_assumptions import PlanningAssumptions, get_planning_assumptions
 from vehicle_catalog import get_vehicle_catalog
+try:
+    from planning_contract_adapters import (
+        fleet_shadow_from_normalized,
+        observe_planning_shadow,
+    )
+except ImportError:  # pragma: no cover - package import used by backend runtime.
+    from apps.planning_contract_adapters import (
+        fleet_shadow_from_normalized,
+        observe_planning_shadow,
+    )
 
 
 HUGE_COST = 10**9
+LOGGER = logging.getLogger("brp.fleet_planner.contract_shadow")
+
+
+def _observe_fleet_planning_contract_shadow(
+    *,
+    points: list[dict[str, Any]],
+    vehicle_pool: list[dict[str, Any]],
+    result: dict[str, Any],
+    assumptions: PlanningAssumptions,
+    service_direction: str,
+) -> None:
+    """Normalize the completed solve without changing its returned payload."""
+
+    try:
+        shadow = fleet_shadow_from_normalized(
+            points=points,
+            vehicle_pool=vehicle_pool,
+            result=result,
+            market=assumptions.market,
+            direction=service_direction,
+            max_route_duration_s=int(assumptions.max_route_duration_minutes * 60),
+            max_stops_per_route=int(assumptions.max_stops_per_route),
+        )
+        observe_planning_shadow(shadow, logger=LOGGER)
+    except Exception:
+        LOGGER.warning(
+            "Fleet Planner contract shadow normalization failed.",
+            exc_info=True,
+        )
 
 
 def _vehicle_category_rank(vehicle: dict[str, Any]) -> int:
@@ -407,7 +447,7 @@ def build_global_ortools_plan(
 
     route_rows.sort(key=lambda row: str(row["cluster_id"]))
     route_details.sort(key=lambda route: str(route["cluster_id"]))
-    return {
+    result = {
         "school": school,
         "routes": route_details,
         "summary": {
@@ -423,3 +463,11 @@ def build_global_ortools_plan(
         },
         "route_rows": route_rows,
     }
+    _observe_fleet_planning_contract_shadow(
+        points=points,
+        vehicle_pool=vehicle_pool,
+        result=result,
+        assumptions=assumptions,
+        service_direction=service_direction,
+    )
+    return result

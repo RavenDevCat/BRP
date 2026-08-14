@@ -10,6 +10,7 @@ import importlib.util
 import io
 import itertools
 import json
+import logging
 import math
 import os
 from pathlib import Path
@@ -31,9 +32,21 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
 
+try:
+    from planning_contract_adapters import (
+        audit_shadow_from_legacy,
+        observe_planning_shadow,
+    )
+except ImportError:  # pragma: no cover - package import used by backend runtime.
+    from apps.planning_contract_adapters import (
+        audit_shadow_from_legacy,
+        observe_planning_shadow,
+    )
+
 
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent.parent
+CONTRACT_SHADOW_LOGGER = logging.getLogger("brp.route_audit.contract_shadow")
 LEGACY_PLANNER_PATH = BASE_DIR / "BusingProblem.py"
 OUTPUT_DIR = BASE_DIR / "outputs"
 CACHE_DIR = Path(os.environ.get("BRP_BACKEND_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
@@ -5582,6 +5595,49 @@ def _failed_scenario_rank(result: dict[str, Any]) -> tuple[int, int, int, float,
     )
 
 
+def _observe_audit_planning_contract_shadow(
+    planner: Any,
+    points: list[dict[str, Any]],
+    bus_type_configs: list[dict[str, Any]],
+    result: dict[str, Any],
+    attempted_vehicle_count: int | None,
+) -> None:
+    """Normalize a selected Audit candidate without changing its result payload."""
+
+    routes = [dict(route or {}) for route in list(result.get("routes") or [])]
+    if routes and any(
+        not isinstance(route.get("nodes"), (list, tuple))
+        or not (
+            route.get("bus_capacity")
+            or route.get("capacity")
+            or route.get("comfort_capacity")
+        )
+        for route in routes
+    ):
+        return
+    if not bus_type_configs:
+        return
+    active_config = getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig()
+    source_points = [
+        dict(point or {})
+        for point in list(result.get("points") or points)
+    ]
+    try:
+        shadow = audit_shadow_from_legacy(
+            points=source_points,
+            bus_type_configs=bus_type_configs,
+            result=result,
+            config=active_config,
+            attempted_vehicle_count=attempted_vehicle_count,
+        )
+        observe_planning_shadow(shadow, logger=CONTRACT_SHADOW_LOGGER)
+    except Exception:
+        CONTRACT_SHADOW_LOGGER.warning(
+            "Route Audit contract shadow normalization failed.",
+            exc_info=True,
+        )
+
+
 def _solve_vehicle_ladder_scenario(
     planner: Any,
     points: list[dict[str, Any]],
@@ -5731,13 +5787,21 @@ def _solve_vehicle_ladder_scenario(
         "unresolved_vehicle_caps": unresolved_vehicle_caps,
     }
     result["constraint_search_outcome"] = search_outcome
-    return _attach_vehicle_ladder_metadata(
+    final_result = _attach_vehicle_ladder_metadata(
         result,
         attempts,
         current_route_count=current_route_count,
         minimum_vehicle_reduction=minimum_vehicle_reduction,
         selected_target_vehicle_count=selected_target_vehicle_count,
     )
+    _observe_audit_planning_contract_shadow(
+        planner,
+        points,
+        active_bus_type_configs,
+        final_result,
+        selected_target_vehicle_count,
+    )
+    return final_result
 
 
 def _route_display_id(route: dict[str, Any], fallback_index: int) -> str:

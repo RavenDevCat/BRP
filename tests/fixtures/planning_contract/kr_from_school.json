@@ -1,0 +1,100 @@
+{
+  "request": {
+    "contract_version": 1,
+    "market": "KR",
+    "direction": "from_school",
+    "points": [
+      {
+        "node_id": 0,
+        "kind": "depot",
+        "address": "Synthetic KR School",
+        "latitude": 37.5,
+        "longitude": 127.02,
+        "demand": 0,
+        "metadata": {}
+      },
+      {
+        "node_id": 1,
+        "kind": "service",
+        "address": "Synthetic KR Stop A",
+        "latitude": 37.51,
+        "longitude": 127.03,
+        "demand": 5,
+        "metadata": {}
+      },
+      {
+        "node_id": 2,
+        "kind": "service",
+        "address": "Synthetic KR Stop B",
+        "latitude": 37.52,
+        "longitude": 127.04,
+        "demand": 4,
+        "metadata": {}
+      },
+      {
+        "node_id": 3,
+        "kind": "service",
+        "address": "Synthetic KR Stop C",
+        "latitude": 37.53,
+        "longitude": 127.05,
+        "demand": 3,
+        "metadata": {}
+      }
+    ],
+    "vehicles": [
+      {
+        "vehicle_type": "kr_contract_bus",
+        "capacity": 7,
+        "available_count": 3,
+        "metadata": {"category": "mini_bus"}
+      }
+    ],
+    "constraints": {
+      "max_route_duration_s": 360,
+      "max_stops_per_route": 2,
+      "comfort_load_factor": 1.0,
+      "stop_dwell_s": 0,
+      "exact_vehicle_count": null
+    },
+    "metadata": {"fixture": "kr_from_school"}
+  },
+  "candidate_plan": {
+    "contract_version": 1,
+    "source": "route_audit_legacy",
+    "status": "passed",
+    "routes": [
+      {
+        "route_id": "R1",
+        "vehicle_type": "kr_contract_bus",
+        "node_ids": [0, 1],
+        "load": 5,
+        "capacity": 7,
+        "duration_s": 80,
+        "distance_m": 800.0,
+        "metadata": {}
+      },
+      {
+        "route_id": "R2",
+        "vehicle_type": "kr_contract_bus",
+        "node_ids": [0, 3, 2],
+        "load": 7,
+        "capacity": 7,
+        "duration_s": 180,
+        "distance_m": 1800.0,
+        "metadata": {}
+      }
+    ],
+    "attempted_vehicle_count": 2,
+    "failure_reasons": [],
+    "metadata": {"fixture": "kr_from_school"}
+  },
+  "expected": {
+    "service_point_count": 3,
+    "total_demand": 12,
+    "total_available_capacity": 21,
+    "candidate_route_count": 2,
+    "candidate_total_load": 12,
+    "candidate_total_duration_s": 260,
+    "candidate_total_distance_m": 2600.0
+  }
+}

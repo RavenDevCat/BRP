@@ -1,0 +1,100 @@
+{
+  "request": {
+    "contract_version": 1,
+    "market": "CN",
+    "direction": "to_school",
+    "points": [
+      {
+        "node_id": 0,
+        "kind": "depot",
+        "address": "Synthetic CN School",
+        "latitude": 31.2,
+        "longitude": 121.45,
+        "demand": 0,
+        "metadata": {}
+      },
+      {
+        "node_id": 1,
+        "kind": "service",
+        "address": "Synthetic CN Stop A",
+        "latitude": 31.21,
+        "longitude": 121.44,
+        "demand": 4,
+        "metadata": {}
+      },
+      {
+        "node_id": 2,
+        "kind": "service",
+        "address": "Synthetic CN Stop B",
+        "latitude": 31.22,
+        "longitude": 121.43,
+        "demand": 3,
+        "metadata": {}
+      },
+      {
+        "node_id": 3,
+        "kind": "service",
+        "address": "Synthetic CN Stop C",
+        "latitude": 31.23,
+        "longitude": 121.42,
+        "demand": 2,
+        "metadata": {}
+      }
+    ],
+    "vehicles": [
+      {
+        "vehicle_type": "cn_contract_bus",
+        "capacity": 6,
+        "available_count": 3,
+        "metadata": {"category": "mini_bus"}
+      }
+    ],
+    "constraints": {
+      "max_route_duration_s": 360,
+      "max_stops_per_route": 2,
+      "comfort_load_factor": 1.0,
+      "stop_dwell_s": 0,
+      "exact_vehicle_count": null
+    },
+    "metadata": {"fixture": "cn_to_school"}
+  },
+  "candidate_plan": {
+    "contract_version": 1,
+    "source": "fleet_planner_legacy",
+    "status": "passed",
+    "routes": [
+      {
+        "route_id": "G01",
+        "vehicle_type": "cn_contract_bus",
+        "node_ids": [3, 1, 0],
+        "load": 6,
+        "capacity": 6,
+        "duration_s": 200,
+        "distance_m": 2000.0,
+        "metadata": {}
+      },
+      {
+        "route_id": "G02",
+        "vehicle_type": "cn_contract_bus",
+        "node_ids": [2, 0],
+        "load": 3,
+        "capacity": 6,
+        "duration_s": 120,
+        "distance_m": 1200.0,
+        "metadata": {}
+      }
+    ],
+    "attempted_vehicle_count": 3,
+    "failure_reasons": [],
+    "metadata": {"fixture": "cn_to_school"}
+  },
+  "expected": {
+    "service_point_count": 3,
+    "total_demand": 9,
+    "total_available_capacity": 18,
+    "candidate_route_count": 2,
+    "candidate_total_load": 9,
+    "candidate_total_duration_s": 320,
+    "candidate_total_distance_m": 3200.0
+  }
+}

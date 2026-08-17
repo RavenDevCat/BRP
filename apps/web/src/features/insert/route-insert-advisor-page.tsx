@@ -61,9 +61,25 @@ function proposalNewStopAddress(proposal: Record<string, unknown>): string {
 
 function proposalPosition(proposal: Record<string, unknown>, t: (key: string) => string): string {
   const newAddress = proposalNewStopAddress(proposal) || t("New stop");
-  return text(proposal.type) === "walk_to_stop"
-    ? `${t("Walk to")} ${String(proposal.target_stop_address || "-")}`
-    : `${String(proposal.insert_after_address || "-")} -> ${newAddress} -> ${String(proposal.insert_before_address || "-")}`;
+  if (text(proposal.type) === "walk_to_stop") {
+    return `${t("Walk to")} ${String(proposal.target_stop_address || "-")}`;
+  }
+  const afterAddress = text(proposal.insert_after_address);
+  const beforeAddress = text(proposal.insert_before_address);
+  const positionKind = text(proposal.position_kind);
+  if (positionKind === "first_pickup") {
+    return `${t("First pickup")}: ${newAddress}${beforeAddress ? ` -> ${beforeAddress}` : ""}`;
+  }
+  if (positionKind === "first_dropoff") {
+    return `${t("First drop-off")}: ${[afterAddress, newAddress, beforeAddress].filter(Boolean).join(" -> ")}`;
+  }
+  if (positionKind === "last_pickup") {
+    return `${t("Last pickup before school")}: ${[afterAddress, newAddress, beforeAddress].filter(Boolean).join(" -> ")}`;
+  }
+  if (positionKind === "last_dropoff") {
+    return `${t("Final drop-off")}: ${afterAddress ? `${afterAddress} -> ` : ""}${newAddress}`;
+  }
+  return [afterAddress, newAddress, beforeAddress].filter(Boolean).join(" -> ");
 }
 
 function recommendationList(result: RouteInsertAdvisorProposalResponse): Array<Record<string, unknown>> {

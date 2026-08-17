@@ -1442,7 +1442,7 @@ def route_insert_advisor_capabilities() -> JSONResponse:
         200,
         {
             "status": "interface_ready",
-            "version": 1,
+            "version": 2,
             "proposal_endpoint": "/route-insert-advisor/proposals",
             "mutates_original_plan": False,
             "supported_sources": [
@@ -1456,6 +1456,7 @@ def route_insert_advisor_capabilities() -> JSONResponse:
                 "existing_rider_impact",
                 "new_rider_time",
                 "address_review",
+                "route_boundary_slots",
             ],
         },
     )
@@ -1576,6 +1577,44 @@ def _insert_stop_limit(route: dict[str, Any], constraints: dict[str, Any]) -> in
     return limit if limit > 0 else None
 
 
+def _insert_route_slots(
+    route_stops: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if len(route_stops) < 2:
+        return []
+
+    slots: list[dict[str, Any]] = []
+    for slot_index in range(len(route_stops) + 1):
+        before = route_stops[slot_index - 1] if slot_index > 0 else None
+        after = route_stops[slot_index] if slot_index < len(route_stops) else None
+        # Keep the school/depot fixed. Only the passenger side of a route is
+        # open for a new first pickup or final drop-off.
+        if before is None and after and bool(after.get("is_depot")):
+            continue
+        if after is None and before and bool(before.get("is_depot")):
+            continue
+
+        if before is None:
+            position_kind = "first_pickup"
+        elif after is None:
+            position_kind = "last_dropoff"
+        elif bool(before.get("is_depot")):
+            position_kind = "first_dropoff"
+        elif bool(after.get("is_depot")):
+            position_kind = "last_pickup"
+        else:
+            position_kind = "between_stops"
+        slots.append(
+            {
+                "insert_slot_index": slot_index,
+                "position_kind": position_kind,
+                "before": before,
+                "after": after,
+            }
+        )
+    return slots
+
+
 def _insert_coord_payload(point: dict[str, Any], country: str, city: str) -> dict[str, Any]:
     lat = _insert_float(point.get("lat"))
     lng = _insert_float(point.get("lng"))
@@ -1600,7 +1639,8 @@ def _refine_insert_proposals_with_osrm(
     candidates = [
         item
         for item in proposals
-        if item.get("type") == "insert_stop" and item.get("insert_after_point") and item.get("insert_before_point")
+        if item.get("type") == "insert_stop"
+        and (item.get("insert_after_point") or item.get("insert_before_point"))
     ][: max(0, limit)]
     if not candidates:
         return
@@ -1608,17 +1648,39 @@ def _refine_insert_proposals_with_osrm(
     previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
     try:
         for item in candidates:
-            before = _insert_coord_payload(dict(item.get("insert_after_point") or {}), country, city)
+            before = (
+                _insert_coord_payload(dict(item.get("insert_after_point") or {}), country, city)
+                if item.get("insert_after_point")
+                else None
+            )
             new_stop = _insert_coord_payload(dict(item.get("new_stop") or {}), country, city)
-            after = _insert_coord_payload(dict(item.get("insert_before_point") or {}), country, city)
-            points = [before, new_stop, after]
+            after = (
+                _insert_coord_payload(dict(item.get("insert_before_point") or {}), country, city)
+                if item.get("insert_before_point")
+                else None
+            )
+            points = [point for point in (before, new_stop, after) if point is not None]
             try:
                 resolver = getattr(planner, "resolve_osrm_base_url", None)
                 if callable(resolver):
                     planner.OSRM_BASE_URL = resolver(points)
                 time_matrix, distance_matrix = planner.build_osrm_full_matrix(points)
-                delta_s = max(0, int(time_matrix[0][1]) + int(time_matrix[1][2]) - int(time_matrix[0][2]))
-                delta_m = max(0, int(distance_matrix[0][1]) + int(distance_matrix[1][2]) - int(distance_matrix[0][2]))
+                if before is not None and after is not None:
+                    delta_s = max(
+                        0,
+                        int(time_matrix[0][1])
+                        + int(time_matrix[1][2])
+                        - int(time_matrix[0][2]),
+                    )
+                    delta_m = max(
+                        0,
+                        int(distance_matrix[0][1])
+                        + int(distance_matrix[1][2])
+                        - int(distance_matrix[0][2]),
+                    )
+                else:
+                    delta_s = max(0, int(time_matrix[0][1]))
+                    delta_m = max(0, int(distance_matrix[0][1]))
                 item["delta_duration_s"] = delta_s
                 item["delta_distance_m"] = delta_m
                 item["estimated_route_duration_s"] = round(
@@ -1704,6 +1766,7 @@ def _insert_proposal_identity(proposal: dict[str, Any]) -> tuple[Any, ...]:
         proposal.get("target_stop_order"),
         proposal.get("insert_after_order"),
         proposal.get("insert_before_order"),
+        proposal.get("insert_slot_index"),
     )
 
 
@@ -1717,6 +1780,7 @@ def _insert_proposal_sort_key(proposal: dict[str, Any]) -> tuple[int, float]:
 def _insert_selection_matches(
     proposal: dict[str, Any], selection: dict[str, Any]
 ) -> bool:
+    slot_requested = selection.get("insert_slot_index") not in (None, "")
     return all(
         str(proposal.get(key) if proposal.get(key) is not None else "")
         == str(selection.get(key) if selection.get(key) is not None else "")
@@ -1727,6 +1791,7 @@ def _insert_selection_matches(
             "insert_after_order",
             "insert_before_order",
         )
+        + (("insert_slot_index",) if slot_requested else ())
     )
 
 
@@ -2019,25 +2084,43 @@ def _insert_filtered_map_data(
 
 
 def _insert_order_segment_actions(
-    before: dict[str, Any],
+    before: dict[str, Any] | None,
     actions: list[dict[str, Any]],
-    after: dict[str, Any],
+    after: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
     if len(actions) < 2:
         return actions
 
     def path_distance(items: tuple[dict[str, Any], ...]) -> float:
-        points = [before, *(dict(item.get("new_stop") or {}) for item in items), after]
+        points = [
+            *([before] if before else []),
+            *(dict(item.get("new_stop") or {}) for item in items),
+            *([after] if after else []),
+        ]
         return sum(_insert_haversine_m(points[index], points[index + 1]) for index in range(len(points) - 1))
 
     if len(actions) <= 6:
         return list(min(permutations(actions), key=path_distance))
 
-    # ponytail: large same-segment batches use nearest-neighbour order; switch to
-    # a bounded search only if real insert batches regularly exceed six stops.
+    if not before and after:
+        remaining = list(actions)
+        reverse_ordered: list[dict[str, Any]] = []
+        current = after
+        while remaining:
+            next_action = min(
+                remaining,
+                key=lambda item: _insert_haversine_m(
+                    current, dict(item.get("new_stop") or {})
+                ),
+            )
+            reverse_ordered.append(next_action)
+            remaining.remove(next_action)
+            current = dict(next_action.get("new_stop") or {})
+        return list(reversed(reverse_ordered))
+
     remaining = list(actions)
     ordered: list[dict[str, Any]] = []
-    current = before
+    current = before or dict(actions[0].get("new_stop") or {})
     while remaining:
         next_action = min(
             remaining,
@@ -2052,31 +2135,40 @@ def _insert_order_segment_actions(
 def _insert_route_sequence(
     route_stops: list[dict[str, Any]], actions: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    if len(route_stops) < 2:
+    if not route_stops:
         return [deepcopy(stop) for stop in route_stops]
-    actions_by_segment: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    actions_by_slot: dict[int, list[dict[str, Any]]] = {}
+    order_to_index = {
+        _insert_int(stop.get("order"), -1): index
+        for index, stop in enumerate(route_stops)
+    }
     for action in actions:
         if action.get("type") != "insert_stop":
             continue
-        key = (
-            _insert_int(action.get("insert_after_order"), -1),
-            _insert_int(action.get("insert_before_order"), -1),
-        )
-        actions_by_segment.setdefault(key, []).append(action)
+        raw_slot = action.get("insert_slot_index")
+        slot_index = _insert_int(raw_slot, -1) if raw_slot not in (None, "") else -1
+        if not 0 <= slot_index <= len(route_stops):
+            after_order = _insert_int(action.get("insert_after_order"), -1)
+            before_order = _insert_int(action.get("insert_before_order"), -1)
+            if after_order in order_to_index and before_order in order_to_index:
+                after_index = order_to_index[after_order]
+                before_index = order_to_index[before_order]
+                if before_index == after_index + 1:
+                    slot_index = before_index
+            elif after_order in order_to_index:
+                slot_index = order_to_index[after_order] + 1
+            elif before_order in order_to_index:
+                slot_index = order_to_index[before_order]
+        if 0 <= slot_index <= len(route_stops):
+            actions_by_slot.setdefault(slot_index, []).append(action)
 
-    sequence: list[dict[str, Any]] = [deepcopy(route_stops[0])]
-    for index in range(len(route_stops) - 1):
-        before = route_stops[index]
-        after = route_stops[index + 1]
+    sequence: list[dict[str, Any]] = []
+    for slot_index in range(len(route_stops) + 1):
+        before = route_stops[slot_index - 1] if slot_index > 0 else None
+        after = route_stops[slot_index] if slot_index < len(route_stops) else None
         segment_actions = _insert_order_segment_actions(
             before,
-            actions_by_segment.get(
-                (
-                    _insert_int(before.get("order"), -1),
-                    _insert_int(after.get("order"), -1),
-                ),
-                [],
-            ),
+            actions_by_slot.get(slot_index, []),
             after,
         )
         for action in segment_actions:
@@ -2096,7 +2188,8 @@ def _insert_route_sequence(
                     "_is_inserted": True,
                 }
             )
-        sequence.append(deepcopy(after))
+        if after is not None:
+            sequence.append(deepcopy(after))
     return sequence
 
 
@@ -2590,16 +2683,22 @@ def _build_route_insert_proposals(
             if seconds_per_meter <= 0:
                 seconds_per_meter = 180.0 / 1000.0
             route_candidates: list[dict[str, Any]] = []
-            for index in range(len(route_stops) - 1):
-                before = route_stops[index]
-                after = route_stops[index + 1]
-                # ponytail: direct-distance delta is only the first-pass ranker; use OSRM/AMap when final-priced inserts are needed.
-                delta_m = max(
-                    0.0,
-                    _insert_haversine_m(before, new_stop)
-                    + _insert_haversine_m(new_stop, after)
-                    - _insert_haversine_m(before, after),
-                )
+            for slot in _insert_route_slots(route_stops):
+                before = slot.get("before")
+                after = slot.get("after")
+                if before and after:
+                    delta_m = max(
+                        0.0,
+                        _insert_haversine_m(before, new_stop)
+                        + _insert_haversine_m(new_stop, after)
+                        - _insert_haversine_m(before, after),
+                    )
+                elif before:
+                    delta_m = _insert_haversine_m(before, new_stop)
+                elif after:
+                    delta_m = _insert_haversine_m(new_stop, after)
+                else:
+                    continue
                 delta_s = delta_m * seconds_per_meter
                 feasible = capacity_ok and stop_ok
                 warnings = []
@@ -2613,12 +2712,22 @@ def _build_route_insert_proposals(
                         "new_stop": new_stop,
                         "route_id": route_id,
                         "route_index": route.get("route_index"),
-                        "insert_after_order": before.get("order"),
-                        "insert_after_address": before.get("address"),
-                        "insert_after_point": _insert_coord_payload(before, default_country, default_city),
-                        "insert_before_order": after.get("order"),
-                        "insert_before_address": after.get("address"),
-                        "insert_before_point": _insert_coord_payload(after, default_country, default_city),
+                        "insert_slot_index": slot.get("insert_slot_index"),
+                        "position_kind": slot.get("position_kind"),
+                        "insert_after_order": before.get("order") if before else None,
+                        "insert_after_address": before.get("address") if before else None,
+                        "insert_after_point": (
+                            _insert_coord_payload(before, default_country, default_city)
+                            if before
+                            else None
+                        ),
+                        "insert_before_order": after.get("order") if after else None,
+                        "insert_before_address": after.get("address") if after else None,
+                        "insert_before_point": (
+                            _insert_coord_payload(after, default_country, default_city)
+                            if after
+                            else None
+                        ),
                         "delta_distance_m": round(delta_m),
                         "delta_duration_s": round(delta_s),
                         "base_route_duration_s": base_duration_s,

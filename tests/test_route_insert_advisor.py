@@ -37,7 +37,208 @@ def proposal(stop_index: int, route_id: str, *, base_load: int, capacity: int) -
     }
 
 
+def route_stop(order: int, address: str, *, depot: bool = False) -> dict:
+    return {
+        "id": f"R1:{order}",
+        "route_id": "R1",
+        "route_index": 0,
+        "order": order,
+        "node_index": order,
+        "address": address,
+        "passenger_count": 0 if depot else 1,
+        "is_depot": depot,
+        "lat": 31.0 + order * 0.01,
+        "lng": 121.0 + order * 0.01,
+    }
+
+
+def insert_action(stop_index: int, slot_index: int, position_kind: str) -> dict:
+    item = proposal(stop_index, "R1", base_load=5, capacity=15)
+    item.update(
+        {
+            "insert_slot_index": slot_index,
+            "position_kind": position_kind,
+            "insert_after_order": None,
+            "insert_before_order": None,
+        }
+    )
+    return item
+
+
 class RouteInsertAdvisorTests(unittest.TestCase):
+    def test_to_school_slots_include_first_pickup_and_keep_school_terminal(self) -> None:
+        stops = [
+            route_stop(0, "Stop A"),
+            route_stop(1, "Stop B"),
+            route_stop(2, "School", depot=True),
+        ]
+
+        slots = api_app._insert_route_slots(stops)
+
+        self.assertEqual([item["insert_slot_index"] for item in slots], [0, 1, 2])
+        self.assertEqual(
+            [item["position_kind"] for item in slots],
+            ["first_pickup", "between_stops", "last_pickup"],
+        )
+        self.assertIsNone(slots[0]["before"])
+        self.assertEqual(slots[0]["after"]["address"], "Stop A")
+
+    def test_from_school_slots_include_final_dropoff_and_keep_school_terminal(self) -> None:
+        stops = [
+            route_stop(0, "School", depot=True),
+            route_stop(1, "Stop A"),
+            route_stop(2, "Stop B"),
+        ]
+
+        slots = api_app._insert_route_slots(stops)
+
+        self.assertEqual([item["insert_slot_index"] for item in slots], [1, 2, 3])
+        self.assertEqual(
+            [item["position_kind"] for item in slots],
+            ["first_dropoff", "between_stops", "last_dropoff"],
+        )
+        self.assertEqual(slots[-1]["before"]["address"], "Stop B")
+        self.assertIsNone(slots[-1]["after"])
+
+    def test_proposal_builder_can_recommend_a_new_first_pickup(self) -> None:
+        stops = [
+            route_stop(0, "Stop A"),
+            route_stop(1, "Stop B"),
+            route_stop(2, "School", depot=True),
+        ]
+        new_stop = {
+            "index": 0,
+            "address": "New first pickup",
+            "lat": 30.99,
+            "lng": 120.99,
+            "passenger_count": 1,
+        }
+        map_data = {
+            "routes": [
+                {
+                    "id": "R1",
+                    "route_index": 0,
+                    "duration_s": 1800,
+                    "distance_m": 20_000,
+                    "bus_capacity": 15,
+                    "load": 5,
+                    "stop_count": 2,
+                }
+            ],
+            "stops": stops,
+        }
+        selected_plan = {
+            "status": "ready",
+            "feasible": True,
+            "actions": [],
+        }
+
+        with (
+            mock.patch.object(
+                api_app,
+                "_insert_geocode_stops",
+                return_value=([new_stop], []),
+            ),
+            mock.patch.object(api_app, "_refine_insert_proposals_with_osrm"),
+            mock.patch.object(
+                api_app,
+                "_insert_build_selected_plan",
+                return_value=(selected_plan, map_data),
+            ),
+        ):
+            result = api_app._build_route_insert_proposals(
+                {"job_id": "boundary-test"},
+                {
+                    "_map_data": map_data,
+                    "new_stops": [{"address": "New first pickup"}],
+                    "constraints": {
+                        "country": "China",
+                        "city": "Shanghai",
+                    },
+                },
+            )
+
+        selected = result["recommendations"][0]["selected"]
+        self.assertEqual(selected["position_kind"], "first_pickup")
+        self.assertEqual(selected["insert_slot_index"], 0)
+        self.assertIsNone(selected["insert_after_order"])
+        self.assertEqual(selected["insert_before_order"], 0)
+
+    def test_route_sequence_applies_first_and_final_boundary_slots(self) -> None:
+        to_school = [
+            route_stop(0, "Stop A"),
+            route_stop(1, "School", depot=True),
+        ]
+        first = insert_action(0, 0, "first_pickup")
+        from_school = [
+            route_stop(0, "School", depot=True),
+            route_stop(1, "Stop A"),
+        ]
+        final = insert_action(1, 2, "last_dropoff")
+
+        first_sequence = api_app._insert_route_sequence(to_school, [first])
+        final_sequence = api_app._insert_route_sequence(from_school, [final])
+
+        self.assertEqual(
+            [item["address"] for item in first_sequence],
+            ["New 1", "Stop A", "School"],
+        )
+        self.assertEqual(
+            [item["address"] for item in final_sequence],
+            ["School", "Stop A", "New 2"],
+        )
+
+    def test_osrm_refines_leading_and_trailing_boundary_legs(self) -> None:
+        class Planner:
+            OSRM_BASE_URL = "original"
+
+            @staticmethod
+            def resolve_osrm_base_url(_points: list[dict]) -> str:
+                return "boundary"
+
+            @staticmethod
+            def build_osrm_full_matrix(
+                _points: list[dict],
+            ) -> tuple[list[list[int]], list[list[int]]]:
+                return [[0, 75], [75, 0]], [[0, 900], [900, 0]]
+
+        leading = insert_action(0, 0, "first_pickup")
+        leading.update(
+            {
+                "new_stop": {
+                    "index": 0,
+                    "address": "New 1",
+                    "lat": 31.0,
+                    "lng": 120.99,
+                },
+                "insert_before_point": route_stop(0, "Stop A"),
+            }
+        )
+        trailing = insert_action(1, 2, "last_dropoff")
+        trailing.update(
+            {
+                "new_stop": {
+                    "index": 1,
+                    "address": "New 2",
+                    "lat": 31.0,
+                    "lng": 121.02,
+                },
+                "insert_after_point": route_stop(1, "Stop A"),
+            }
+        )
+
+        with mock.patch.object(
+            api_app.backend_service, "load_legacy_planner", return_value=Planner()
+        ):
+            api_app._refine_insert_proposals_with_osrm(
+                [leading, trailing], country="China", city="Shanghai", limit=2
+            )
+
+        self.assertTrue(leading["refined"])
+        self.assertTrue(trailing["refined"])
+        self.assertEqual(leading["delta_duration_s"], 75)
+        self.assertEqual(trailing["delta_distance_m"], 900)
+
     def test_joint_selection_avoids_combined_capacity_overflow(self) -> None:
         stops = [
             {"index": 0, "address": "New 1", "passenger_count": 1},

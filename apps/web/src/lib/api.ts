@@ -83,6 +83,66 @@ export type JobRecord = JobSummary & {
     ai_audit_error?: string | null;
 };
 
+export type DeepVerificationCandidate = {
+    candidate_id: string;
+    verification_id: string;
+    target_vehicle_count: number;
+    attempt_number: number;
+    status: string;
+    actual_vehicle_count?: number | null;
+    solver_time_limit_seconds?: number;
+    elapsed_seconds?: number;
+    provider_api_calls?: number;
+    created_at?: string;
+    error?: string | null;
+};
+
+export type DeepVerificationTargetState = {
+    target_vehicle_count: number;
+    status: string;
+    attempt_count: number;
+    source?: string;
+    last_elapsed_seconds?: number;
+    last_solver_time_limit_seconds?: number;
+    last_provider_api_calls?: number;
+    last_actual_vehicle_count?: number | null;
+    last_error?: string | null;
+};
+
+export type DeepVerificationRecord = {
+    verification_id: string;
+    parent_job_id: string;
+    owner_email?: string;
+    scenario_key: "time_constrained" | "exception_preserving" | string;
+    scenario_label: string;
+    status: string;
+    automatic: boolean;
+    created_at?: string | null;
+    updated_at?: string | null;
+    started_at?: string | null;
+    finished_at?: string | null;
+    initial_best_vehicle_count: number;
+    best_vehicle_count: number;
+    lower_bound_vehicle_count: number;
+    target_vehicle_count?: number | null;
+    pending_target_vehicle_counts: number[];
+    target_states: Record<string, DeepVerificationTargetState>;
+    elapsed_seconds: number;
+    total_budget_seconds: number;
+    provider_api_calls: number;
+    provider_call_budget: number;
+    result_job_ids: string[];
+    completion_reason?: string | null;
+    error?: string | null;
+    candidates: DeepVerificationCandidate[];
+};
+
+export type DeepVerificationResponse = {
+    job_id: string;
+    verifications: DeepVerificationRecord[];
+    created_count?: number;
+};
+
 export type HistoryGroupScope =
     | "route_audit"
     | "fleet_planner"
@@ -990,6 +1050,43 @@ export function previewOperationsReview(jobIds: string[]) {
 
 export function getJob(jobId: string) {
     return apiFetch<JobRecord>(`/jobs/${encodeURIComponent(jobId)}`);
+}
+
+export function getJobDeepVerification(jobId: string) {
+    return apiFetch<DeepVerificationResponse>(
+        `/jobs/${encodeURIComponent(jobId)}/deep-verification`,
+    );
+}
+
+export function startJobDeepVerification(jobId: string) {
+    return apiFetch<DeepVerificationResponse>(
+        `/jobs/${encodeURIComponent(jobId)}/deep-verification/start`,
+        { method: "POST" },
+    );
+}
+
+export function controlDeepVerification(
+    verificationId: string,
+    action: "pause" | "resume" | "cancel",
+) {
+    return apiFetch<DeepVerificationRecord>(
+        `/deep-verifications/${encodeURIComponent(verificationId)}/actions/${encodeURIComponent(action)}`,
+        { method: "POST" },
+    );
+}
+
+export function extendDeepVerificationBudget(
+    verificationId: string,
+    additionalSeconds = 1800,
+) {
+    return apiFetch<DeepVerificationRecord>(
+        `/deep-verifications/${encodeURIComponent(verificationId)}/extend-budget`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ additional_seconds: additionalSeconds }),
+        },
+    );
 }
 
 export function getJobArtifactUrl(

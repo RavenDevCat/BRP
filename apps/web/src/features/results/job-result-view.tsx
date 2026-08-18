@@ -14,10 +14,15 @@ import {
   Loader2,
   Map,
   Maximize2,
+  Pause,
+  Play,
+  Plus,
   RefreshCw,
   Route,
+  SearchCheck,
   TriangleAlert,
   X,
+  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,10 +31,17 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import {
+  controlDeepVerification,
+  extendDeepVerificationBudget,
   generateAiAudit,
+  getCurrentUser,
   getJobArtifactUrl,
+  getJobDeepVerification,
   getJobExportUrl,
   getJobMapData,
+  startJobDeepVerification,
+  type DeepVerificationRecord,
+  type DeepVerificationResponse,
   type JobMapData,
   type JobMapRoute,
   type JobMapStop,
@@ -246,6 +258,8 @@ function SummaryPanel({
       </div>
 
       <SolveProcessCard rows={solveProcessRows} />
+
+      <DeepVerificationPanel job={job} />
 
       <AiAuditPanel
         job={job}
@@ -480,6 +494,281 @@ function SolveProcessCard({ rows }: { rows: ReturnType<typeof buildSolveProcessR
         ))}
       </div>
     </CollapsibleSection>
+  );
+}
+
+function DeepVerificationPanel({ job }: { job: JobRecord }) {
+  const t = useT();
+  const queryClient = useQueryClient();
+  const userQuery = useQuery({
+    queryKey: ["me"],
+    queryFn: getCurrentUser,
+    staleTime: 60_000,
+  });
+  const queryKey = ["deep-verification", job.job_id];
+  const verificationQuery = useQuery({
+    queryKey,
+    queryFn: () => getJobDeepVerification(job.job_id),
+    enabled: job.status === "succeeded" && !Boolean(asRecord(job.metadata).deep_verification_result),
+    staleTime: 2_000,
+    refetchInterval: (query) =>
+      deepVerificationIsActive(query.state.data as DeepVerificationResponse | undefined)
+        ? 5_000
+        : false,
+  });
+  const refresh = async () => {
+    await queryClient.invalidateQueries({ queryKey });
+    await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+  };
+  const startMutation = useMutation({
+    mutationFn: () => startJobDeepVerification(job.job_id),
+    onSuccess: refresh,
+  });
+  const actionMutation = useMutation({
+    mutationFn: ({
+      verificationId,
+      action,
+    }: {
+      verificationId: string;
+      action: "pause" | "resume" | "cancel";
+    }) => controlDeepVerification(verificationId, action),
+    onSuccess: refresh,
+  });
+  const extendMutation = useMutation({
+    mutationFn: (verificationId: string) =>
+      extendDeepVerificationBudget(verificationId),
+    onSuccess: refresh,
+  });
+  const isAdmin = userQuery.data?.is_admin === true;
+  const records = verificationQuery.data?.verifications || [];
+  const mutationError = startMutation.error || actionMutation.error || extendMutation.error;
+
+  if (!verificationQuery.isLoading && !verificationQuery.error && !records.length && !isAdmin) {
+    return null;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div className="flex items-start gap-2">
+            <SearchCheck className="mt-0.5 h-4 w-4 flex-none text-primary" aria-hidden="true" />
+            <div>
+              <h2 className="text-sm font-semibold">{t("Minimum fleet verification")}</h2>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                {t("The completed result stays available while a low-priority background search checks every unresolved lower vehicle count.")}
+              </p>
+            </div>
+          </div>
+          {isAdmin && !records.length ? (
+            <Button
+              type="button"
+              variant="secondary"
+              icon={startMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+              disabled={startMutation.isPending || verificationQuery.isLoading}
+              onClick={() => startMutation.mutate()}
+            >
+              {t("Start verification")}
+            </Button>
+          ) : null}
+        </div>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {verificationQuery.isLoading ? (
+          <div className="flex min-h-20 items-center justify-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            {t("Loading verification status")}
+          </div>
+        ) : verificationQuery.error ? (
+          <div className="text-sm text-red-700">{(verificationQuery.error as Error).message}</div>
+        ) : records.length ? (
+          records.map((record) => (
+            <DeepVerificationRecordCard
+              key={record.verification_id}
+              record={record}
+              isAdmin={isAdmin}
+              busy={actionMutation.isPending || extendMutation.isPending}
+              onAction={(action) =>
+                actionMutation.mutate({
+                  verificationId: record.verification_id,
+                  action,
+                })
+              }
+              onExtend={() => extendMutation.mutate(record.verification_id)}
+            />
+          ))
+        ) : (
+          <div className="rounded-md border border-border bg-muted px-3 py-3 text-sm text-muted-foreground">
+            {t("No unresolved lower vehicle counts were found for this result.")}
+          </div>
+        )}
+        {mutationError ? (
+          <div className="text-sm text-red-700">{(mutationError as Error).message}</div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}
+
+function DeepVerificationRecordCard({
+  record,
+  isAdmin,
+  busy,
+  onAction,
+  onExtend,
+}: {
+  record: DeepVerificationRecord;
+  isAdmin: boolean;
+  busy: boolean;
+  onAction: (action: "pause" | "resume" | "cancel") => void;
+  onExtend: () => void;
+}) {
+  const t = useT();
+  const states = Object.values(record.target_states || {});
+  const totalTargets = states.length;
+  const attemptedTargets = states.filter(
+    (state) => Number(state.attempt_count || 0) > 0 || state.source === "parent_search",
+  ).length;
+  const resolvedTargets = states.filter((state) =>
+    ["feasible", "certified_infeasible"].includes(String(state.status || "")),
+  ).length;
+  const progress = totalTargets ? Math.min(100, (resolvedTargets / totalTargets) * 100) : 100;
+  const active = ["queued", "running"].includes(record.status);
+  const resumable = record.status === "paused";
+  const resultJobId = record.result_job_ids?.at(-1);
+  const improvedBy = Math.max(
+    0,
+    Number(record.initial_best_vehicle_count || 0) - Number(record.best_vehicle_count || 0),
+  );
+
+  return (
+    <div className="rounded-lg border border-border bg-surface px-4 py-4">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-sm font-semibold">{t(record.scenario_label)}</h3>
+            <Badge tone={deepVerificationStatusTone(record.status)}>
+              {t(deepVerificationStatusLabel(record.status))}
+            </Badge>
+          </div>
+          <p className="mt-2 text-sm leading-6 text-muted-foreground">
+            {deepVerificationRecordSummary(record, t)}
+          </p>
+        </div>
+        {isAdmin ? (
+          <div className="flex flex-wrap gap-2">
+            {active ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="h-8"
+                icon={<Pause className="h-4 w-4" />}
+                disabled={busy}
+                title={t("Pause and keep the last saved checkpoint")}
+                onClick={() => onAction("pause")}
+              >
+                {t("Pause")}
+              </Button>
+            ) : null}
+            {resumable ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="h-8"
+                icon={<Play className="h-4 w-4" />}
+                disabled={busy}
+                title={t("Resume from the saved checkpoint")}
+                onClick={() => onAction("resume")}
+              >
+                {t("Resume")}
+              </Button>
+            ) : null}
+            {["budget_exhausted", "best_found_unproven"].includes(record.status) ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="h-8"
+                icon={<Plus className="h-4 w-4" />}
+                disabled={busy}
+                title={t("Add 30 minutes and one attempt per unresolved vehicle count")}
+                onClick={onExtend}
+              >
+                {t("Add 30 min")}
+              </Button>
+            ) : null}
+            {active || record.status === "paused" ? (
+              <Button
+                type="button"
+                variant="secondary"
+                className="h-8"
+                icon={<XCircle className="h-4 w-4" />}
+                disabled={busy}
+                onClick={() => onAction("cancel")}
+              >
+                {t("Cancel")}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <DeepVerificationMetric
+          label={t("Best verified fleet")}
+          value={`${formatNumber(record.best_vehicle_count)} ${t("routes")}`}
+          detail={improvedBy ? `${formatNumber(improvedBy)} ${t("vehicle(s) fewer")}` : t("No lower fleet found yet")}
+        />
+        <DeepVerificationMetric
+          label={t("Search progress")}
+          value={`${formatNumber(resolvedTargets)} / ${formatNumber(totalTargets)}`}
+          detail={`${formatNumber(attemptedTargets)} ${t("target count(s) attempted")}`}
+        />
+        <DeepVerificationMetric
+          label={t("Current target")}
+          value={record.target_vehicle_count == null ? t("Complete") : `${formatNumber(record.target_vehicle_count)} ${t("routes")}`}
+          detail={`${t("Structural lower bound")}: ${formatNumber(record.lower_bound_vehicle_count)}`}
+        />
+        <DeepVerificationMetric
+          label={t("Budget used")}
+          value={`${formatVerificationDuration(record.elapsed_seconds)} / ${formatVerificationDuration(record.total_budget_seconds)}`}
+          detail={`${formatNumber(record.provider_api_calls)} / ${formatNumber(record.provider_call_budget)} ${t("provider calls")}`}
+        />
+      </div>
+
+      <div className="mt-3 h-2 overflow-hidden rounded-full bg-muted" aria-label={t("Verification progress")}>
+        <div className="h-full bg-primary transition-all" style={{ width: `${progress}%` }} />
+      </div>
+
+      {record.error ? <div className="mt-3 text-sm text-red-700">{record.error}</div> : null}
+      {resultJobId ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-3">
+          <div className="text-sm text-emerald-900">
+            {t("A better verified result was saved as a separate history task. The original result was not changed.")}
+          </div>
+          <a className={buttonClassName("secondary", "h-8")} href={`/jobs/${encodeURIComponent(resultJobId)}`}>
+            {t("Open verified result")}
+          </a>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DeepVerificationMetric({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string;
+  detail: string;
+}) {
+  return (
+    <div className="rounded-md border border-border bg-muted px-3 py-3">
+      <div className="text-xs font-medium uppercase text-muted-foreground">{label}</div>
+      <div className="mt-2 text-lg font-semibold text-foreground">{value}</div>
+      <div className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</div>
+    </div>
   );
 }
 
@@ -4414,6 +4703,75 @@ function buildSolveProcessRow(label: string, scenario: Record<string, unknown>, 
 
 function template(text: string, values: Record<string, string | number>) {
   return text.replace(/\{(\w+)\}/g, (match, key) => String(values[key] ?? match));
+}
+
+function deepVerificationIsActive(payload?: DeepVerificationResponse) {
+  return Boolean(
+    payload?.verifications?.some((record) =>
+      ["queued", "running"].includes(String(record.status || "")),
+    ),
+  );
+}
+
+function deepVerificationStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "Waiting for background capacity",
+    running: "Verifying lower vehicle counts",
+    paused: "Verification paused",
+    certified_minimum: "Minimum fleet certified",
+    best_found_unproven: "Better plan found; minimum not proven",
+    budget_exhausted: "Verification budget reached",
+    technical_failure: "Verification needs attention",
+    canceled: "Verification canceled",
+  };
+  return labels[String(status || "").toLowerCase()] || "Verification status unknown";
+}
+
+function deepVerificationStatusTone(
+  status: string,
+): "neutral" | "success" | "warning" | "danger" | "info" {
+  if (status === "certified_minimum") return "success";
+  if (["queued", "running"].includes(status)) return "info";
+  if (["best_found_unproven", "budget_exhausted", "paused"].includes(status)) return "warning";
+  if (["technical_failure", "canceled"].includes(status)) return "danger";
+  return "neutral";
+}
+
+function deepVerificationRecordSummary(
+  record: DeepVerificationRecord,
+  t: (key: string) => string,
+) {
+  const bestCount = formatNumber(record.best_vehicle_count);
+  if (record.status === "certified_minimum") {
+    return `${t("The verified minimum is")} ${bestCount} ${t("routes")}. ${t("Every lower vehicle count down to the structural bound was proven infeasible by the solver model.")}`;
+  }
+  if (record.status === "best_found_unproven") {
+    return `${t("The best verified result uses")} ${bestCount} ${t("routes")}. ${t("Some lower counts remain unresolved, so this is not a minimum certificate.")}`;
+  }
+  if (record.status === "budget_exhausted") {
+    return `${t("The current best uses")} ${bestCount} ${t("routes")}. ${t("The time or provider-call budget ended before every lower count was resolved.")}`;
+  }
+  if (record.status === "technical_failure") {
+    return t("The saved checkpoint is intact, but an operational error stopped the background verifier.");
+  }
+  if (record.status === "paused") {
+    return `${t("Verification is paused at")} ${record.target_vehicle_count == null ? t("the saved checkpoint") : `${formatNumber(record.target_vehicle_count)} ${t("routes")}`}.`;
+  }
+  if (record.status === "canceled") {
+    return t("Verification was canceled. The completed audit and any separately saved better result remain available.");
+  }
+  const target = record.target_vehicle_count == null
+    ? t("the next unresolved count")
+    : `${formatNumber(record.target_vehicle_count)} ${t("routes")}`;
+  return `${t("Current best")}: ${bestCount} ${t("routes")}. ${t("Now checking")} ${target}; ${t("normal audit jobs have priority over this work")}.`;
+}
+
+function formatVerificationDuration(value: unknown) {
+  const totalSeconds = Math.max(0, Number(value || 0));
+  if (totalSeconds < 60) return `${Math.round(totalSeconds)}s`;
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.round((totalSeconds % 3600) / 60);
+  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
 function formatSignedNumber(value: unknown): string {

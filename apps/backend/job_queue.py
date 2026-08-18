@@ -112,6 +112,26 @@ class JobStoreProtocol(Protocol):
 
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None: ...
 
+    def list_queued_deep_verifications(self) -> list[dict[str, Any]]: ...
+
+    def list_running_deep_verifications(self) -> list[dict[str, Any]]: ...
+
+    def claim_queued_deep_verification(
+        self,
+        verification_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    def get_deep_verification(
+        self, verification_id: str
+    ) -> dict[str, Any] | None: ...
+
+    def update_deep_verification(
+        self, verification_id: str, **changes: Any
+    ) -> dict[str, Any] | None: ...
+
 
 class JobConcurrencyGate:
     def __init__(
@@ -230,6 +250,7 @@ class JobQueueManager:
         *,
         job_store: JobStoreProtocol,
         runner_path: Path,
+        verification_runner_path: Path | None = None,
         base_dir: Path,
         python_executable: str | None = None,
         max_concurrent_jobs: int = 0,
@@ -239,6 +260,7 @@ class JobQueueManager:
     ) -> None:
         self.job_store = job_store
         self.runner_path = runner_path
+        self.verification_runner_path = verification_runner_path
         self.base_dir = base_dir
         self.python_executable = python_executable or sys.executable
         self.poll_seconds = max(1.0, float(poll_seconds or 5.0))
@@ -340,16 +362,151 @@ class JobQueueManager:
             self.gate.cleanup_stale_slots()
         self.schedule_queued_jobs()
 
+    def spawn_deep_verification_worker(
+        self, verification_id: str
+    ) -> dict[str, Any] | None:
+        normalized_id = str(verification_id or "").strip()
+        if not normalized_id or self.verification_runner_path is None:
+            return None
+        slot_owner_id = f"deep:{normalized_id}"
+        slot_path = self.gate.acquire(slot_owner_id)
+        if self.gate.enabled and slot_path is None:
+            return None
+        with self._worker_state_lock:
+            claimed = self.job_store.claim_queued_deep_verification(
+                normalized_id,
+                job_slot_path=str(slot_path) if slot_path else None,
+            )
+            if not claimed:
+                self.gate.release(slot_path)
+                return None
+            env = os.environ.copy()
+            if slot_path:
+                env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
+                env["BRP_JOB_CONCURRENCY_ROOT"] = str(self.gate.slot_dir)
+            try:
+                process = subprocess.Popen(
+                    [
+                        self.python_executable,
+                        str(self.verification_runner_path),
+                        normalized_id,
+                    ],
+                    cwd=str(self.base_dir),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env=env,
+                    creationflags=worker_creation_flags(),
+                )
+            except Exception as exc:
+                self.gate.release(slot_path)
+                self.job_store.update_deep_verification(
+                    normalized_id,
+                    status="queued",
+                    error=f"Failed to start deep-verification worker: {exc}",
+                    worker_pid=None,
+                    job_slot_path=None,
+                )
+                raise
+            self.gate.attach_worker(slot_path, int(process.pid))
+            updated = self.job_store.update_deep_verification(
+                normalized_id,
+                worker_pid=int(process.pid),
+                job_slot_path=str(slot_path) if slot_path else None,
+            )
+            threading.Thread(
+                target=self._reap_deep_verification_worker,
+                args=(normalized_id, process, slot_path),
+                name=f"brp-deep-verification-reaper-{process.pid}",
+                daemon=True,
+            ).start()
+        return updated or self.job_store.get_deep_verification(normalized_id) or claimed
+
+    def _reap_deep_verification_worker(
+        self,
+        verification_id: str,
+        process: subprocess.Popen[Any],
+        slot_path: Path | None,
+    ) -> None:
+        exit_code = int(process.wait())
+        slot_owner_id = f"deep:{verification_id}"
+        with self._worker_state_lock:
+            record = self.job_store.get_deep_verification(verification_id)
+            if str((record or {}).get("status") or "").strip().lower() == "running":
+                crash_count = safe_int((record or {}).get("worker_crash_count"), 0) + 1
+                terminal = crash_count >= 3
+                self.job_store.update_deep_verification(
+                    verification_id,
+                    status="technical_failure" if terminal else "queued",
+                    finished_at=utc_now_iso() if terminal else None,
+                    error=(
+                        f"Deep-verification worker exited with code {exit_code} "
+                        "before saving its checkpoint."
+                    ),
+                    worker_exit_code=exit_code,
+                    worker_crash_count=crash_count,
+                    worker_pid=None,
+                    job_slot_path=None,
+                )
+            self.gate.release(
+                (record or {}).get("job_slot_path") or slot_path,
+                job_id=slot_owner_id,
+            )
+            self.gate.cleanup_stale_slots()
+        self.schedule_queued_jobs()
+
+    def _preempt_running_deep_verification(self) -> bool:
+        list_running = getattr(
+            self.job_store, "list_running_deep_verifications", lambda: []
+        )
+        running = list_running()
+        if not running:
+            return False
+        record = running[0]
+        verification_id = str(record.get("verification_id") or "").strip()
+        if not verification_id:
+            return False
+        slot_owner_id = f"deep:{verification_id}"
+        with self._worker_state_lock:
+            terminate_worker_process(safe_int(record.get("worker_pid"), 0))
+            self.gate.release(record.get("job_slot_path"), job_id=slot_owner_id)
+            self.gate.cleanup_stale_slots()
+            self.job_store.update_deep_verification(
+                verification_id,
+                status="queued",
+                worker_pid=None,
+                job_slot_path=None,
+                last_preempted_at=utc_now_iso(),
+                preemption_count=safe_int(record.get("preemption_count"), 0) + 1,
+            )
+        return True
+
     def schedule_queued_jobs(self) -> None:
         if not self._scheduler_lock.acquire(blocking=False):
             return
         try:
             self.gate.cleanup_stale_slots()
             self.job_store.release_due_scheduled_jobs()
+            normal_queue_blocked = False
             for job_record in self.job_store.list_queued_jobs():
                 spawned = self.spawn_job_worker(str(job_record.get("job_id", "")))
                 if spawned is None and self.gate.enabled:
+                    if self._preempt_running_deep_verification():
+                        spawned = self.spawn_job_worker(
+                            str(job_record.get("job_id", ""))
+                        )
+                if spawned is None and self.gate.enabled:
+                    normal_queue_blocked = True
                     break
+            if normal_queue_blocked:
+                return
+            list_queued_verifications = getattr(
+                self.job_store, "list_queued_deep_verifications", lambda: []
+            )
+            for record in list_queued_verifications():
+                self.spawn_deep_verification_worker(
+                    str(record.get("verification_id") or "")
+                )
+                break
         finally:
             self._scheduler_lock.release()
 
@@ -391,5 +548,52 @@ class JobQueueManager:
                 job_slot_path=None,
                 result=None,
             )
+        self.schedule_queued_jobs()
+        return updated
+
+    def set_deep_verification_status(
+        self, verification_id: str, action: str
+    ) -> dict[str, Any] | None:
+        normalized_id = str(verification_id or "").strip()
+        normalized_action = str(action or "").strip().lower()
+        if normalized_action not in {"pause", "resume", "cancel"}:
+            raise ValueError(f"Unsupported deep-verification action: {action}")
+        slot_owner_id = f"deep:{normalized_id}"
+        with self._worker_state_lock:
+            record = self.job_store.get_deep_verification(normalized_id)
+            if not record:
+                return None
+            status = str(record.get("status") or "").strip().lower()
+            if normalized_action == "resume":
+                if status != "paused":
+                    return record
+                updated = self.job_store.update_deep_verification(
+                    normalized_id,
+                    status="queued",
+                    finished_at=None,
+                    error=None,
+                    worker_pid=None,
+                    job_slot_path=None,
+                )
+            else:
+                terminate_worker_process(safe_int(record.get("worker_pid"), 0))
+                self.gate.release(
+                    record.get("job_slot_path"), job_id=slot_owner_id
+                )
+                self.gate.cleanup_stale_slots()
+                updated = self.job_store.update_deep_verification(
+                    normalized_id,
+                    status="paused" if normalized_action == "pause" else "canceled",
+                    finished_at=(
+                        None if normalized_action == "pause" else utc_now_iso()
+                    ),
+                    completion_reason=(
+                        "paused_by_admin"
+                        if normalized_action == "pause"
+                        else "canceled_by_admin"
+                    ),
+                    worker_pid=None,
+                    job_slot_path=None,
+                )
         self.schedule_queued_jobs()
         return updated

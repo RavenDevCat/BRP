@@ -18,6 +18,7 @@ class FakeJobStore:
         }
         self.claims = 0
         self.release_due_calls = 0
+        self.deep_records: dict[str, dict[str, Any]] = {}
 
     def claim_queued_job(
         self,
@@ -57,6 +58,54 @@ class FakeJobStore:
 
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
         record = self.records.get(job_id)
+        if not record:
+            return None
+        record.update(changes)
+        return dict(record)
+
+    def list_queued_deep_verifications(self) -> list[dict[str, Any]]:
+        return [
+            dict(record)
+            for record in self.deep_records.values()
+            if record.get("status") == "queued"
+        ]
+
+    def list_running_deep_verifications(self) -> list[dict[str, Any]]:
+        return [
+            dict(record)
+            for record in self.deep_records.values()
+            if record.get("status") == "running"
+        ]
+
+    def claim_queued_deep_verification(
+        self,
+        verification_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        record = self.deep_records.get(verification_id)
+        if not record or record.get("status") != "queued":
+            return None
+        if self.list_running_deep_verifications():
+            return None
+        record.update(
+            status="running",
+            worker_pid=worker_pid,
+            job_slot_path=job_slot_path,
+        )
+        return dict(record)
+
+    def get_deep_verification(
+        self, verification_id: str
+    ) -> dict[str, Any] | None:
+        record = self.deep_records.get(verification_id)
+        return dict(record) if record else None
+
+    def update_deep_verification(
+        self, verification_id: str, **changes: Any
+    ) -> dict[str, Any] | None:
+        record = self.deep_records.get(verification_id)
         if not record:
             return None
         record.update(changes)
@@ -292,3 +341,83 @@ def test_cancel_wins_race_with_worker_reaper(tmp_path: Path, monkeypatch) -> Non
     assert "worker_exit_code" not in store.records["job1"]
     assert not slot_path.exists()
     assert scheduled == [True, True]
+
+
+def test_scheduler_starts_normal_work_before_one_deep_verifier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    store.deep_records = {
+        "verify1": {"verification_id": "verify1", "status": "queued"},
+        "verify2": {"verification_id": "verify2", "status": "queued"},
+    }
+    calls: list[str] = []
+    finish = threading.Event()
+
+    class FakeProcess:
+        def __init__(self, pid: int) -> None:
+            self.pid = pid
+
+        def wait(self) -> int:
+            finish.wait()
+            return 0
+
+    def fake_popen(args: list[str], **kwargs: Any) -> FakeProcess:
+        calls.append(Path(args[1]).name)
+        return FakeProcess(5000 + len(calls))
+
+    monkeypatch.setattr(job_queue.subprocess, "Popen", fake_popen)
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        verification_runner_path=tmp_path / "deep_verification_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=0,
+        concurrency_dir=tmp_path / "slots",
+    )
+
+    manager.schedule_queued_jobs()
+
+    assert calls == ["backend_job_runner.py", "deep_verification_runner.py"]
+    assert store.deep_records["verify1"]["status"] == "running"
+    assert store.deep_records["verify2"]["status"] == "queued"
+    store.update_job("job1", status="succeeded")
+    store.update_deep_verification("verify1", status="paused")
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: None)
+    finish.set()
+
+
+def test_normal_job_can_preempt_running_deep_verifier(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        verification_runner_path=tmp_path / "deep_verification_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    slot_path = manager.gate.acquire("deep:verify1")
+    assert slot_path is not None
+    store.deep_records = {
+        "verify1": {
+            "verification_id": "verify1",
+            "status": "running",
+            "worker_pid": 9911,
+            "job_slot_path": str(slot_path),
+        }
+    }
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        job_queue, "terminate_worker_process", lambda pid: terminated.append(pid)
+    )
+
+    assert manager._preempt_running_deep_verification() is True
+    assert terminated == [9911]
+    assert store.deep_records["verify1"]["status"] == "queued"
+    assert store.deep_records["verify1"]["preemption_count"] == 1
+    assert not slot_path.exists()

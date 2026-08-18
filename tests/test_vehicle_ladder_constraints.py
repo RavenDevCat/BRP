@@ -33,6 +33,60 @@ class FakeRoutingSolve:
 
 
 class VehicleLadderConstraintTests(unittest.TestCase):
+    def test_background_solver_budget_wraps_the_entire_route_solve(self) -> None:
+        observed_deadlines = []
+
+        def fake_solve(_points, _time_matrix, _distance_matrix):
+            observed_deadlines.append(legacy_planner._BRP_SOLVER_DEADLINE_MONOTONIC)
+            return []
+
+        with (
+            mock.patch.dict(
+                legacy_planner.os.environ,
+                {"BRP_SOLVER_TOTAL_WALL_CLOCK_SECONDS": "60"},
+            ),
+            mock.patch.object(legacy_planner, "_solve_routes_impl", side_effect=fake_solve),
+        ):
+            result = legacy_planner.solve_routes([], [], [])
+
+        self.assertEqual(result, [])
+        self.assertEqual(len(observed_deadlines), 1)
+        self.assertIsNotNone(observed_deadlines[0])
+        self.assertIsNone(legacy_planner._BRP_SOLVER_DEADLINE_MONOTONIC)
+
+    def test_background_solver_budget_can_persist_across_replan_calls(self) -> None:
+        observed_deadlines = []
+
+        def fake_solve(_points, _time_matrix, _distance_matrix):
+            observed_deadlines.append(legacy_planner._BRP_SOLVER_DEADLINE_MONOTONIC)
+            return []
+
+        try:
+            with (
+                mock.patch.dict(
+                    legacy_planner.os.environ,
+                    {
+                        "BRP_SOLVER_TOTAL_WALL_CLOCK_SECONDS": "60",
+                        "BRP_SOLVER_TOTAL_WALL_CLOCK_PERSIST_ACROSS_CALLS": "1",
+                    },
+                ),
+                mock.patch.object(
+                    legacy_planner, "_solve_routes_impl", side_effect=fake_solve
+                ),
+            ):
+                legacy_planner.solve_routes([], [], [])
+                legacy_planner.solve_routes([], [], [])
+
+            self.assertEqual(len(observed_deadlines), 2)
+            self.assertIsNotNone(observed_deadlines[0])
+            self.assertEqual(observed_deadlines[0], observed_deadlines[1])
+            self.assertEqual(
+                legacy_planner._BRP_SOLVER_DEADLINE_MONOTONIC,
+                observed_deadlines[0],
+            )
+        finally:
+            legacy_planner._BRP_SOLVER_DEADLINE_MONOTONIC = None
+
     def test_timeout_retries_same_model_once_and_can_recover(self) -> None:
         routing = FakeRoutingSolve([None, object()], [4, 1])
         search = mock.Mock()
@@ -57,6 +111,65 @@ class VehicleLadderConstraintTests(unittest.TestCase):
         self.assertEqual(routing.calls, 2)
         self.assertEqual([attempt["status_name"] for attempt in attempts], ["ROUTING_FAIL_TIMEOUT", "ROUTING_SUCCESS"])
         self.assertEqual(build_retry.call_args.kwargs["time_limit_seconds"], 20)
+
+    def test_retry_is_deferred_when_total_solver_slice_budget_is_exhausted(self) -> None:
+        routing = FakeRoutingSolve([None], [4])
+        search = mock.Mock()
+        search.time_limit.seconds = 10
+
+        with (
+            mock.patch.object(
+                legacy_planner,
+                "_remaining_solver_time_limit_seconds",
+                return_value=0,
+            ),
+            mock.patch.object(
+                legacy_planner, "build_guided_local_search_parameters"
+            ) as build_retry,
+        ):
+            solution, attempts = legacy_planner._solve_routing_model_with_retry(
+                routing,
+                search,
+                None,
+                first_solution_only=False,
+                retry_unresolved=True,
+            )
+
+        self.assertIsNone(solution)
+        self.assertEqual(routing.calls, 1)
+        self.assertEqual(len(attempts), 1)
+        build_retry.assert_not_called()
+
+    def test_retry_is_capped_by_remaining_total_solver_slice_budget(self) -> None:
+        routing = FakeRoutingSolve([None, object()], [4, 1])
+        search = mock.Mock()
+        search.time_limit.seconds = 10
+        retry_search = mock.Mock()
+        retry_search.time_limit.seconds = 4
+
+        with (
+            mock.patch.object(
+                legacy_planner,
+                "_remaining_solver_time_limit_seconds",
+                return_value=4,
+            ),
+            mock.patch.object(
+                legacy_planner,
+                "build_guided_local_search_parameters",
+                return_value=retry_search,
+            ) as build_retry,
+        ):
+            solution, attempts = legacy_planner._solve_routing_model_with_retry(
+                routing,
+                search,
+                None,
+                first_solution_only=False,
+                retry_unresolved=True,
+            )
+
+        self.assertIsNotNone(solution)
+        self.assertEqual(routing.calls, 2)
+        self.assertEqual(build_retry.call_args.kwargs["time_limit_seconds"], 4)
 
     def test_non_exact_timeout_is_reported_without_retry(self) -> None:
         routing = FakeRoutingSolve([None], [4])
@@ -576,6 +689,57 @@ class VehicleLadderConstraintTests(unittest.TestCase):
             planner_core._minimum_vehicle_count_for_hard_constraints = original_minimum
 
         self.assertEqual(calls, [20])
+
+    def test_vehicle_ladder_verification_solves_only_the_requested_exact_target(self) -> None:
+        calls: list[int] = []
+
+        def fake_compute(*_args, **kwargs):
+            target = int(kwargs["reduced_vehicle_limit"])
+            calls.append(target)
+            self.assertEqual(kwargs["forced_vehicle_count"], target)
+            return {
+                "bus_count": target,
+                "routes": [{} for _ in range(target)],
+                "traffic_gate": {"status": "passed"},
+                "feasibility_report": {"status": "passed", "failure_reasons": []},
+            }
+
+        with (
+            mock.patch.object(
+                planner_core, "_compute_scenario_without_render", side_effect=fake_compute
+            ),
+            mock.patch.object(
+                planner_core, "_minimum_vehicle_count_for_hard_constraints", return_value=10
+            ),
+        ):
+            result = planner_core._solve_vehicle_ladder_scenario(
+                object(),
+                [{"is_depot": True}, {"is_depot": False}],
+                "deep verification",
+                current_route_count=22,
+                minimum_vehicle_reduction=2,
+                exact_target_vehicle_count=18,
+            )
+
+        self.assertEqual(calls, [18])
+        self.assertEqual(result["bus_count"], 18)
+        self.assertEqual(result["constraint_search_outcome"]["attempted_vehicle_caps"], [18])
+        self.assertEqual(result["constraint_search_outcome"]["exact_target_vehicle_count"], 18)
+        self.assertTrue(result["constraint_search_outcome"]["verification_exact_target"])
+
+    def test_vehicle_ladder_rejects_exact_target_above_parent_route_count(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "cannot exceed the current-plan route count",
+        ):
+            planner_core._solve_vehicle_ladder_scenario(
+                object(),
+                [{"is_depot": True}, {"is_depot": False}],
+                "deep verification",
+                current_route_count=22,
+                minimum_vehicle_reduction=0,
+                exact_target_vehicle_count=23,
+            )
 
     def test_vehicle_ladder_observes_contract_shadow_without_changing_result(self) -> None:
         points = [

@@ -98,6 +98,10 @@ FINAL_ROUTE_TRAFFIC_MAX_CALLS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_CALLS", "40") or 40),
 )
+FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET = max(
+    0,
+    int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET", "0") or 0),
+)
 FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS", "16") or 16),
@@ -776,7 +780,9 @@ def _amap_route_stats(
         end = min(len(request_points), start + max_points)
         stats = None
         for attempt in range(2):
-            if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
+            if int(state.get("api_calls", 0)) >= int(
+                state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS)
+            ):
                 return None
             state["api_calls"] = int(state.get("api_calls", 0)) + 1
             try:
@@ -935,7 +941,9 @@ def _kakao_route_stats(
     current_departure = departure_time
     segment_rows: list[dict[str, Any]] = []
     for index, chunk in enumerate(chunks, start=1):
-        if int(state.get("api_calls", 0)) >= FINAL_ROUTE_TRAFFIC_MAX_CALLS:
+        if int(state.get("api_calls", 0)) >= int(
+            state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS)
+        ):
             return None
         stats = _kakao_route_segment_stats(chunk, current_departure)
         state["api_calls"] = int(state.get("api_calls", 0)) + 1
@@ -1126,7 +1134,20 @@ def _attach_final_route_traffic_gate_impl(
         if cache is None:
             cache = {}
             setattr(config, cache_attribute, cache)
-    state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
+    api_call_limit = FINAL_ROUTE_TRAFFIC_MAX_CALLS
+    runtime_profile = getattr(planner, "_BRP_RUNTIME_PROFILE", None)
+    if FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET > 0 and isinstance(runtime_profile, dict):
+        consumed_calls = max(0, int(runtime_profile.get("traffic_api_calls", 0) or 0))
+        api_call_limit = min(
+            api_call_limit,
+            max(0, FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET - consumed_calls),
+        )
+    state = {
+        "api_calls": 0,
+        "api_call_limit": api_call_limit,
+        "cache_hits": 0,
+        "cache_changed": 0,
+    }
     target_minutes = latest_arrival_minutes
     departure_minutes = from_school_departure_minutes
     grace_s = (AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES) * 60.0
@@ -5651,6 +5672,7 @@ def _solve_vehicle_ladder_scenario(
     node_time_soft_upper_bounds_builder: Any | None = None,
     time_constraint_metadata: dict[str, Any] | None = None,
     final_time_impact_validator: Any | None = None,
+    exact_target_vehicle_count: int | None = None,
 ) -> dict[str, Any]:
     current_route_count = max(0, int(current_route_count or 0))
     minimum_vehicle_reduction = max(0, int(minimum_vehicle_reduction or 0))
@@ -5666,11 +5688,25 @@ def _solve_vehicle_ladder_scenario(
         active_bus_type_configs,
         getattr(planner, "_BRP_ACTIVE_CONFIG", None) or PlannerConfig(),
     )
-    preflight_infeasible = minimum_target_vehicle_count > required_target_vehicle_count
+    requested_exact_target = (
+        None
+        if exact_target_vehicle_count is None
+        else max(0, int(exact_target_vehicle_count))
+    )
+    if requested_exact_target is not None and requested_exact_target > current_route_count:
+        raise ValueError(
+            "Exact verification target cannot exceed the current-plan route count."
+        )
+    search_max_vehicle_count = (
+        requested_exact_target
+        if requested_exact_target is not None
+        else required_target_vehicle_count
+    )
+    preflight_infeasible = minimum_target_vehicle_count > search_max_vehicle_count
     target_vehicle_counts = (
-        [required_target_vehicle_count]
-        if preflight_infeasible
-        else list(range(required_target_vehicle_count, minimum_target_vehicle_count - 1, -1))
+        [search_max_vehicle_count]
+        if requested_exact_target is not None or preflight_infeasible
+        else list(range(search_max_vehicle_count, minimum_target_vehicle_count - 1, -1))
     )
     attempts: list[dict[str, Any]] = []
     best_target_result: dict[str, Any] | None = None
@@ -5757,7 +5793,7 @@ def _solve_vehicle_ladder_scenario(
         )
         result = build_empty_result(
             f"{scenario_label} could not produce a candidate between the hard vehicle limits "
-            f"{minimum_target_vehicle_count} and {required_target_vehicle_count}."
+            f"{minimum_target_vehicle_count} and {search_max_vehicle_count}."
         )
         result = _apply_vehicle_saving_target(result, current_route_count, minimum_vehicle_reduction)
     else:
@@ -5778,7 +5814,9 @@ def _solve_vehicle_ladder_scenario(
             if scenario_status == "rejected"
             else "all_hard_gates_passed"
         ),
-        "allowed_max_vehicle_count": required_target_vehicle_count,
+        "allowed_max_vehicle_count": search_max_vehicle_count,
+        "exact_target_vehicle_count": requested_exact_target,
+        "verification_exact_target": requested_exact_target is not None,
         "theoretical_min_vehicle_count": minimum_target_vehicle_count,
         "attempted_vehicle_caps": [int(item["target_vehicle_count"]) for item in attempts],
         "candidate_count": sum(1 for item in attempts if item.get("actual_vehicle_count") is not None),
@@ -6466,6 +6504,8 @@ def build_exception_preserving_scenario(
     solve_time: list[list[float]] | None = None,
     baseline_name: str = "exception_preserving_optimization",
     scenario_label: str = "Exception preserving optimization",
+    exact_target_vehicle_count: int | None = None,
+    enable_route_preserving_search: bool = True,
 ) -> dict[str, Any]:
     del standard_scenarios, reduced_vehicle_limit
     if not current_plan_scenario or not current_plan_scenario.get("routes"):
@@ -6483,6 +6523,17 @@ def build_exception_preserving_scenario(
     current_route_count = int(current_plan_scenario.get("bus_count") or len(current_routes) or 0)
     minimum_vehicle_reduction = max(0, int(config.minimum_vehicle_reduction or 0))
     target_vehicle_count = max(0, current_route_count - minimum_vehicle_reduction)
+    requested_exact_target = (
+        None
+        if exact_target_vehicle_count is None
+        else max(0, int(exact_target_vehicle_count))
+    )
+    if requested_exact_target is not None:
+        if requested_exact_target > current_route_count:
+            raise ValueError(
+                "Exact verification target cannot exceed the current-plan route count."
+            )
+        target_vehicle_count = requested_exact_target
     attempts: list[dict[str, Any]] = []
     best_accepted_candidate: dict[str, Any] | None = None
     best_failed_candidate: dict[str, Any] | None = None
@@ -6509,7 +6560,13 @@ def build_exception_preserving_scenario(
             if remaining_service_count
             else 0
         )
-        if remaining_service_count:
+        if remaining_service_count and requested_exact_target is not None:
+            remaining_limits = (
+                [remaining_max_vehicle_count]
+                if remaining_max_vehicle_count >= remaining_min_vehicle_count
+                else []
+            )
+        elif remaining_service_count:
             remaining_limits = list(
                 range(remaining_max_vehicle_count, remaining_min_vehicle_count - 1, -1)
             )
@@ -6523,7 +6580,8 @@ def build_exception_preserving_scenario(
             route_preserving: dict[str, Any] | None = None
             route_preserving_audit: dict[str, Any] = {}
             if (
-                callable(node_time_upper_bounds_builder)
+                enable_route_preserving_search
+                and callable(node_time_upper_bounds_builder)
                 and callable(final_time_impact_validator)
                 and solve_time is not None
             ):
@@ -6842,6 +6900,8 @@ def build_exception_preserving_scenario(
             "reason": "all_hard_gates_passed" if accepted else "candidate_failed_hard_gates",
             "frozen_route_count": len(failed_routes),
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
+            "exact_target_vehicle_count": requested_exact_target,
+            "verification_exact_target": requested_exact_target is not None,
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
             "selected_vehicle_count": _scenario_bus_count(best_candidate) if accepted else None,
             "search_complete": not unresolved_remaining_limits,
@@ -6880,6 +6940,8 @@ def build_exception_preserving_scenario(
             ),
             "frozen_route_count": len(failed_routes),
             "allowed_remainder_max_vehicle_count": max(0, target_vehicle_count - len(failed_routes)),
+            "exact_target_vehicle_count": requested_exact_target,
+            "verification_exact_target": requested_exact_target is not None,
             "theoretical_remainder_min_vehicle_count": remaining_min_vehicle_count,
             "search_complete": not unresolved_remaining_limits,
             "unresolved_remainder_vehicle_caps": unresolved_remaining_limits,
@@ -7271,9 +7333,31 @@ def run_backend_planner_with_prepared_data(
     config: PlannerConfig | None = None,
     progress_callback: Any | None = None,
     require_fresh_final_traffic: bool = False,
+    *,
+    verification_scenario_key: str | None = None,
+    verification_target_vehicle_count: int | None = None,
+    verification_reference_result: dict[str, Any] | None = None,
+    require_fresh_candidate_traffic: bool = False,
 ) -> dict[str, Any]:
+    normalized_verification_key = str(verification_scenario_key or "").strip().lower()
+    verification_mode = bool(normalized_verification_key)
+    if verification_mode != (verification_target_vehicle_count is not None):
+        raise ValueError(
+            "Deep verification requires both a scenario key and an exact vehicle target."
+        )
+    if verification_mode and normalized_verification_key not in {
+        "time_constrained",
+        "exception_preserving",
+    }:
+        raise ValueError(
+            f"Unsupported deep-verification scenario: {normalized_verification_key}"
+        )
+    if verification_mode and require_fresh_final_traffic:
+        raise ValueError(
+            "Scheduled current-plan refresh and targeted deep verification cannot run together."
+        )
     config = create_request_scoped_config(build_planner_config(asdict(config or PlannerConfig())))
-    if require_fresh_final_traffic:
+    if require_fresh_final_traffic or require_fresh_candidate_traffic or verification_mode:
         setattr(config, "_fresh_final_route_traffic_required", True)
     input_records = _normalize_input_records(prepared_payload.get("input_records") or [])
     if not input_records:
@@ -7323,6 +7407,31 @@ def run_backend_planner_with_prepared_data(
         assessment_distance = None
         current_plan_assessment = None
         current_plan_scenario = None
+        if verification_mode:
+            reference_result = dict(verification_reference_result or {})
+            reference_structured = dict(reference_result.get("structured_results") or {})
+            assessment_time, assessment_distance = _build_assessment_metric_matrices(
+                planner, original_points
+            )
+            current_plan_assessment = deepcopy(
+                reference_structured.get("current_plan_assessment")
+                or reference_result.get("current_plan_assessment")
+                or {}
+            )
+            current_plan_scenario = deepcopy(
+                reference_structured.get("current_plan")
+                or reference_structured.get("current_plan_scenario")
+                or reference_result.get("current_plan_scenario")
+                or {}
+            )
+            if not current_plan_assessment or not current_plan_scenario.get("routes"):
+                raise RuntimeError(
+                    "Deep verification requires the completed parent current-plan evidence."
+                )
+            planner.log(
+                "[BACKEND] Deep verification reuses immutable parent current-plan evidence; "
+                "only the exact candidate route set receives fresh final-provider validation."
+            )
         if require_fresh_final_traffic:
             if not current_plan:
                 raise RuntimeError("Scheduled run requires a current plan for fresh traffic validation.")
@@ -7433,6 +7542,87 @@ def run_backend_planner_with_prepared_data(
                     or "Time-impact constraints were not available."
                 )
             )
+        if verification_mode:
+            exact_target = max(0, int(verification_target_vehicle_count or 0))
+            if normalized_verification_key == "time_constrained":
+                verification_result = _solve_vehicle_ladder_scenario(
+                    planner,
+                    original_points,
+                    time_constrained_solver_label,
+                    current_route_count=current_plan_route_count_for_reduction,
+                    minimum_vehicle_reduction=minimum_vehicle_reduction,
+                    bus_type_configs=solver_bus_type_configs,
+                    node_time_lower_bounds_builder=time_constraint_lower_builder,
+                    node_time_upper_bounds_builder=time_constraint_builder,
+                    time_constraint_metadata=deepcopy(time_constraint_metadata),
+                    final_time_impact_validator=final_time_impact_validator,
+                    exact_target_vehicle_count=exact_target,
+                )
+                verification_result["baseline_name"] = "time_constrained_optimization"
+                verification_result["display_name"] = time_constrained_display_label
+                verification_result["scenario_label"] = time_constrained_display_label
+            else:
+                protected_time_constraint_metadata = {
+                    **deepcopy(time_constraint_metadata),
+                    "source": "exception_preserving_remainder",
+                    "display_name": "Protected Plan",
+                }
+                verification_result = build_exception_preserving_scenario(
+                    planner,
+                    original_points,
+                    current_plan_scenario,
+                    config,
+                    input_records,
+                    solver_bus_type_configs,
+                    None,
+                    standard_scenarios=[],
+                    node_time_lower_bounds_builder=time_constraint_lower_builder,
+                    node_time_upper_bounds_builder=time_constraint_builder,
+                    time_constraint_metadata=protected_time_constraint_metadata,
+                    final_time_impact_validator=final_time_impact_validator,
+                    solve_time=assessment_time,
+                    exact_target_vehicle_count=exact_target,
+                    enable_route_preserving_search=False,
+                )
+                verification_result["display_name"] = "Protected Plan"
+                verification_result["scenario_label"] = "Protected Plan"
+            verification_result["time_impact_limit_minutes"] = time_impact_limit_minutes
+            verification_result["deep_verification"] = {
+                "enabled": True,
+                "scenario_key": normalized_verification_key,
+                "exact_target_vehicle_count": exact_target,
+                "parent_evidence_reused": True,
+                "fresh_candidate_traffic_required": True,
+            }
+            service_direction = normalize_service_direction(config.service_direction)
+            elapsed_seconds = time.perf_counter() - started_at
+            targeted_structured_results = {
+                "current_plan": current_plan_scenario,
+                "current_plan_assessment": current_plan_assessment,
+                normalized_verification_key: verification_result,
+                "service_direction": service_direction,
+                "traffic_profile_name": traffic_profile_name,
+                "traffic_profile_context": traffic_profile_context,
+                "planner_config": asdict(config),
+                "deep_verification": {
+                    "scenario_key": normalized_verification_key,
+                    "exact_target_vehicle_count": exact_target,
+                },
+                "runtime_profile": {
+                    **deepcopy(getattr(planner, "_BRP_RUNTIME_PROFILE", {}) or {}),
+                    "total_seconds": elapsed_seconds,
+                },
+            }
+            log_stream.flush()
+            return {
+                "structured_results": targeted_structured_results,
+                "scenario_key": normalized_verification_key,
+                "scenario_result": verification_result,
+                "logs": log_stream.getvalue(),
+                "elapsed_seconds": elapsed_seconds,
+                "service_direction": service_direction,
+                "planner_config": asdict(config),
+            }
         hard_time_constraint_metadata = deepcopy(time_constraint_metadata)
         time_constrained_result = _solve_vehicle_ladder_scenario(
             planner,

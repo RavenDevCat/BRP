@@ -9,9 +9,11 @@ import traceback
 from typing import Any
 
 try:
+    from .deep_verification import build_automatic_verification_records
     from .planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
+    from deep_verification import build_automatic_verification_records
     from planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from runtime_store_sqlite import SqliteRuntimeStore
 
@@ -42,6 +44,14 @@ def _load_job(job_id: str) -> dict[str, Any]:
 
 def _save_job(payload: dict[str, Any]) -> None:
     _runtime_store().upsert_job(payload)
+
+
+def _create_automatic_deep_verifications(payload: dict[str, Any]) -> None:
+    store = _runtime_store()
+    if store.list_deep_verifications(parent_job_id=str(payload.get("job_id") or "")):
+        return
+    for record in build_automatic_verification_records(payload):
+        store.upsert_deep_verification(record)
 
 
 def _release_concurrency_slot() -> None:
@@ -159,6 +169,7 @@ def main() -> int:
         job_record["worker_pid"] = None
         job_record["job_slot_path"] = None
         _save_job(job_record)
+        _create_automatic_deep_verifications(job_record)
         return 0
     except Exception as exc:
         job_record = _load_job(job_id)

@@ -150,6 +150,65 @@ def test_sqlite_job_claim_transitions_queued_job_once(tmp_path: Path) -> None:
     assert stored["job_slot_path"] == str(tmp_path / "slot-1")
 
 
+def test_deep_verification_store_claims_one_worker_and_cascades(tmp_path: Path) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    base = {
+        "parent_job_id": "job1",
+        "owner_email": "alice@example.com",
+        "scenario_key": "time_constrained",
+        "status": "queued",
+        "priority": 100,
+        "created_at": "2026-08-18T00:00:00+00:00",
+        "target_vehicle_count": 19,
+        "best_vehicle_count": 20,
+    }
+    store.upsert_deep_verification({**base, "verification_id": "verify1"})
+    store.upsert_deep_verification({**base, "verification_id": "verify2"})
+
+    claimed = store.claim_queued_deep_verification(
+        "verify1", worker_pid=123, job_slot_path=str(tmp_path / "slot-1")
+    )
+
+    assert claimed is not None
+    assert claimed["status"] == "running"
+    assert claimed["worker_pid"] == 123
+    assert store.claim_queued_deep_verification("verify2", worker_pid=456) is None
+
+    candidate = {
+        "verification_id": "verify1",
+        "target_vehicle_count": 19,
+        "attempt_number": 1,
+        "status": "feasible",
+        "scenario_result": {"bus_count": 19},
+    }
+    store.upsert_deep_verification_candidate(candidate)
+    assert store.list_deep_verification_candidates("verify1")[0][
+        "scenario_result"
+    ] == {"bus_count": 19}
+
+    assert store.delete_job("job1") is True
+    assert store.get_deep_verification("verify1") is None
+    assert store.list_deep_verification_candidates("verify1") == []
+
+
+def test_derived_job_inherits_parent_workspace(tmp_path: Path) -> None:
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    store.upsert_job(job_record("job1", "alice@example.com"))
+    store.upsert_job(job_record("job2", "alice@example.com"))
+    group = store.assign_history_group(
+        "route_audit", "alice@example.com", "Verified plans", ["job1"]
+    )
+
+    assert store.copy_route_audit_workspace("job1", "job2") is True
+    refreshed = next(
+        item
+        for item in store.list_history_groups("route_audit", "alice@example.com")
+        if item["group_id"] == group["group_id"]
+    )
+    assert refreshed["item_ids"] == ["job1", "job2"]
+
+
 def test_sqlite_side_tool_store_filters_and_deletes(tmp_path: Path) -> None:
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
     store.upsert_side_tool_run("fleet_planner", side_tool_record("run1", "alice@example.com"))

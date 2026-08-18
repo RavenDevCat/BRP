@@ -212,6 +212,114 @@ def test_exception_preserving_freezes_current_failure_and_remaps_remainder(monke
     assert result["routes"][1]["nodes"] == [2, 3, 0]
 
 
+def test_exact_background_verification_skips_route_preserving_prescan(monkeypatch):
+    points = [
+        {"node_id": 0, "address": "school", "is_depot": True},
+        {"node_id": 1, "address": "frozen stop", "passenger_count": 1},
+        {"node_id": 2, "address": "remaining stop", "passenger_count": 1},
+    ]
+    current = {
+        "enabled": True,
+        "bus_count": 2,
+        "routes": [
+            {
+                "route_id": "R1",
+                "nodes": [1, 0],
+                "load": 1,
+                "final_route_traffic_gate": {
+                    "status": "failed",
+                    "time_window_overrun_minutes": 5,
+                },
+            },
+            {
+                "route_id": "R2",
+                "nodes": [2, 0],
+                "load": 1,
+                "final_route_traffic_gate": {"status": "passed"},
+            },
+        ],
+        "traffic_gate": {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R1"],
+            "max_time_window_overrun_minutes": 5,
+        },
+    }
+    exact_calls: list[int] = []
+
+    def fail_if_prescan_runs(*_args, **_kwargs):
+        raise AssertionError("route-preserving prescan must be disabled")
+
+    def fake_compute(
+        _planner,
+        subset_points,
+        *_args,
+        forced_vehicle_count=None,
+        **_kwargs,
+    ):
+        exact_calls.append(int(forced_vehicle_count))
+        return {
+            "points": subset_points,
+            "routes": [
+                {
+                    "route_id": "Bus 1",
+                    "nodes": [1, 0],
+                    "load": 1,
+                    "final_route_traffic_gate": {"status": "passed"},
+                }
+            ],
+            "time_constraint": {"strict_satisfied": True},
+        }
+
+    def fake_gate(_planner, scenario, *_args):
+        scenario["traffic_gate"] = {
+            "status": "failed",
+            "failed_route_count": 1,
+            "failed_route_ids": ["R1"],
+            "max_time_window_overrun_minutes": 5,
+        }
+        return scenario["traffic_gate"]
+
+    def fake_impact(scenario, _points):
+        scenario["final_time_impact_gate"] = {
+            "status": "passed",
+            "over_limit_stop_count": 0,
+            "over_limit_rider_count": 0,
+            "max_adverse_minutes": 0,
+        }
+
+    monkeypatch.setattr(
+        planner_core,
+        "_build_route_preserving_protected_scenario",
+        fail_if_prescan_runs,
+    )
+    monkeypatch.setattr(planner_core, "_compute_scenario_without_render", fake_compute)
+    monkeypatch.setattr(planner_core, "attach_final_route_traffic_gate", fake_gate)
+
+    result = planner_core.build_exception_preserving_scenario(
+        FakePlanner(),
+        points,
+        current,
+        planner_core.PlannerConfig(
+            service_direction="To School",
+            minimum_vehicle_reduction=0,
+        ),
+        [{"address": "Shanghai", "passenger_count": 1}],
+        [{"name": "18-fbus", "capacity": 15, "max_count": 2}],
+        2,
+        standard_scenarios=[],
+        node_time_upper_bounds_builder=lambda _points: {1: 900},
+        time_constraint_metadata={"enabled": True},
+        final_time_impact_validator=fake_impact,
+        solve_time=[[0, 60, 60], [60, 0, 60], [60, 60, 0]],
+        exact_target_vehicle_count=2,
+        enable_route_preserving_search=False,
+    )
+
+    assert exact_calls == [1]
+    assert result["constraint_search_outcome"]["exact_target_vehicle_count"] == 2
+
+
 def test_exception_preserving_runs_independently_without_current_failures(monkeypatch):
     points = [
         {"node_id": 0, "is_depot": True},

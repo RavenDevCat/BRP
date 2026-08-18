@@ -191,6 +191,7 @@ MIN_SOLVER_VEHICLE_COUNT = 0
 _BRP_RUNTIME_PROFILE: dict[str, float | int] = {}
 _BRP_OSRM_MATRIX_CACHE: dict[Any, Any] | None = None
 _BRP_OSRM_LEG_CACHE: dict[Any, Any] | None = None
+_BRP_SOLVER_DEADLINE_MONOTONIC: float | None = None
 
 HUGE_TIME_SECONDS = 6 * 3600
 HUGE_DISTANCE_METERS = 300_000
@@ -209,6 +210,54 @@ def _record_runtime_metric(name: str, value: float | int = 1) -> None:
     profile = globals().get("_BRP_RUNTIME_PROFILE")
     if isinstance(profile, dict):
         profile[name] = profile.get(name, 0) + value
+
+
+def _configured_solver_wall_clock_budget_seconds() -> int:
+    try:
+        return max(
+            0,
+            int(os.environ.get("BRP_SOLVER_TOTAL_WALL_CLOCK_SECONDS", "0") or 0),
+        )
+    except (TypeError, ValueError):
+        return 0
+
+
+@contextmanager
+def _solver_wall_clock_budget_scope():
+    global _BRP_SOLVER_DEADLINE_MONOTONIC
+    budget_seconds = _configured_solver_wall_clock_budget_seconds()
+    persist_across_calls = os.environ.get(
+        "BRP_SOLVER_TOTAL_WALL_CLOCK_PERSIST_ACROSS_CALLS", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    owns_deadline = _BRP_SOLVER_DEADLINE_MONOTONIC is None and budget_seconds > 0
+    if owns_deadline:
+        _BRP_SOLVER_DEADLINE_MONOTONIC = time.perf_counter() + budget_seconds
+    try:
+        yield
+    finally:
+        if owns_deadline and not persist_across_calls:
+            _BRP_SOLVER_DEADLINE_MONOTONIC = None
+
+
+def _remaining_solver_time_limit_seconds(requested_seconds: int) -> int:
+    requested = max(1, int(requested_seconds or 1))
+    deadline = _BRP_SOLVER_DEADLINE_MONOTONIC
+    if deadline is None:
+        return requested
+    remaining = deadline - time.perf_counter()
+    if remaining < 1.0:
+        return 0
+    return max(1, min(requested, int(remaining)))
+
+
+def _raise_solver_wall_clock_budget_exhausted() -> None:
+    raise SolverUnresolvedError(
+        "The bounded solver slice exhausted its total wall-clock budget before "
+        "feasibility or infeasibility was proven.",
+        status_code=4,
+        status_name="ROUTING_FAIL_TIMEOUT",
+        attempts=[],
+    )
 
 
 class RateLimiter:
@@ -1517,6 +1566,13 @@ def _solve_routing_model_with_retry(
 
     primary_limit = max(1, _search_time_limit_seconds(search) or int(SOLVER_TIME_LIMIT_SECONDS))
     retry_limit = min(primary_limit * 2, primary_limit + 30)
+    retry_limit = _remaining_solver_time_limit_seconds(retry_limit)
+    if retry_limit <= 0:
+        log(
+            "[INFO] OR-Tools returned an unresolved status, but the total solver "
+            "slice budget is exhausted; deferring the retry to a later slice."
+        )
+        return None, attempts
     retry_search = build_guided_local_search_parameters(
         pywrapcp,
         routing_enums_pb2,
@@ -1707,15 +1763,20 @@ def _solve_routes_for_fleet_impl(
             >= min_active_vehicles
         )
 
+    search_time_limit_seconds = _remaining_solver_time_limit_seconds(
+        SOLVER_TIME_LIMIT_SECONDS
+    )
+    if search_time_limit_seconds <= 0:
+        _raise_solver_wall_clock_budget_exhausted()
     search = build_guided_local_search_parameters(
         pywrapcp,
         routing_enums_pb2,
         first_solution_strategy=routing_enums_pb2.FirstSolutionStrategy.PARALLEL_CHEAPEST_INSERTION,
-        time_limit_seconds=SOLVER_TIME_LIMIT_SECONDS,
+        time_limit_seconds=search_time_limit_seconds,
     )
     if first_solution_only:
         search.solution_limit = 1
-        search.time_limit.seconds = min(3, max(1, int(SOLVER_TIME_LIMIT_SECONDS)))
+        search.time_limit.seconds = min(3, search_time_limit_seconds)
     initial_solution = routing.ReadAssignmentFromRoutes(seed_routes, True) if seed_routes is not None else None
     solution, solver_attempts = _solve_routing_model_with_retry(
         routing,
@@ -1810,7 +1871,7 @@ def solve_routes_for_fleet(
         _record_runtime_metric("solver_seconds", time.perf_counter() - started_at)
 
 
-def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], distance_matrix: list[list[int]]) -> list[dict[str, Any]]:
+def _solve_routes_impl(points: list[dict[str, Any]], time_matrix: list[list[int]], distance_matrix: list[list[int]]) -> list[dict[str, Any]]:
     if not points:
         return []
     full_fleet = build_vehicle_fleet()
@@ -1926,6 +1987,15 @@ def solve_routes(points: list[dict[str, Any]], time_matrix: list[list[int]], dis
     for route_id, route in enumerate(combined_routes, start=1):
         route["vehicle_id"] = route_id
     return combined_routes
+
+
+def solve_routes(
+    points: list[dict[str, Any]],
+    time_matrix: list[list[int]],
+    distance_matrix: list[list[int]],
+) -> list[dict[str, Any]]:
+    with _solver_wall_clock_budget_scope():
+        return _solve_routes_impl(points, time_matrix, distance_matrix)
 
 
 def osrm_distance_matrix_batch(origin_points: list[dict[str, Any]], destination_point: dict[str, Any]) -> list[tuple[int, int]]:

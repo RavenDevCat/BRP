@@ -22,6 +22,7 @@ from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 class FakeJobStore:
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
+        self.deep_records: dict[str, dict[str, Any]] = {}
         self.deleted: list[str] = []
         self.created: list[dict[str, Any]] = []
         self.updated: list[tuple[str, dict[str, Any]]] = []
@@ -84,6 +85,48 @@ class FakeJobStore:
             return None
         record.update(changes)
         self.updated.append((job_id, dict(changes)))
+        return dict(record)
+
+    def list_job_deep_verifications(self, parent_job_id: str) -> list[dict[str, Any]]:
+        return [
+            dict(record)
+            for record in self.deep_records.values()
+            if record.get("parent_job_id") == parent_job_id
+        ]
+
+    def ensure_deep_verifications(
+        self,
+        parent_job: dict[str, Any],
+        *,
+        automatic: bool,
+    ) -> list[dict[str, Any]]:
+        parent_job_id = str(parent_job.get("job_id") or "")
+        existing = self.list_job_deep_verifications(parent_job_id)
+        if existing:
+            return existing
+        record = {
+            "verification_id": "verify-1",
+            "parent_job_id": parent_job_id,
+            "scenario_key": "time_constrained",
+            "status": "queued",
+            "automatic": automatic,
+            "total_budget_seconds": 5400,
+            "max_attempts_per_target": 3,
+        }
+        self.deep_records["verify-1"] = record
+        return [dict(record)]
+
+    def get_deep_verification(self, verification_id: str) -> dict[str, Any] | None:
+        record = self.deep_records.get(verification_id)
+        return dict(record) if record else None
+
+    def update_deep_verification(
+        self, verification_id: str, **changes: Any
+    ) -> dict[str, Any] | None:
+        record = self.deep_records.get(verification_id)
+        if not record:
+            return None
+        record.update(changes)
         return dict(record)
 
     def begin_ai_audit(
@@ -604,6 +647,76 @@ class FastApiThinShellTests(unittest.TestCase):
         self.assertEqual(forbidden_response.status_code, 403)
         self.assertEqual(delete_response.json(), {"deleted": True, "job_id": "owned"})
         self.assertEqual(store.deleted, ["owned"])
+
+    def test_deep_verification_routes_keep_parent_visibility_and_admin_controls(self) -> None:
+        store = FakeJobStore()
+        store.records["parent-job"] = {
+            "job_id": "parent-job",
+            "owner_email": "owner@example.com",
+            "status": "succeeded",
+        }
+        queue = mock.Mock()
+
+        def set_status(verification_id: str, action: str) -> dict[str, Any] | None:
+            status_by_action = {
+                "pause": "paused",
+                "resume": "queued",
+                "cancel": "canceled",
+            }
+            return store.update_deep_verification(
+                verification_id,
+                status=status_by_action[action],
+            )
+
+        queue.set_deep_verification_status.side_effect = set_status
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=store,
+            JOB_QUEUE=queue,
+        ):
+            denied_start = self.client.post(
+                "/api/jobs/parent-job/deep-verification/start",
+                headers=auth_headers("owner@example.com"),
+            )
+            started = self.client.post(
+                "/api/jobs/parent-job/deep-verification/start",
+                headers=auth_headers("admin@example.com"),
+            )
+            visible = self.client.get(
+                "/api/jobs/parent-job/deep-verification",
+                headers=auth_headers("owner@example.com"),
+            )
+            paused = self.client.post(
+                "/api/deep-verifications/verify-1/actions/pause",
+                headers=auth_headers("admin@example.com"),
+            )
+            extended = self.client.post(
+                "/api/deep-verifications/verify-1/extend-budget",
+                headers=auth_headers("admin@example.com"),
+                json={"additional_seconds": 600},
+            )
+            invalid_action = self.client.post(
+                "/api/deep-verifications/verify-1/actions/restart",
+                headers=auth_headers("admin@example.com"),
+            )
+
+        self.assertEqual(denied_start.status_code, 403)
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()["created_count"], 1)
+        self.assertEqual(visible.status_code, 200)
+        self.assertEqual(
+            visible.json()["verifications"][0]["verification_id"], "verify-1"
+        )
+        self.assertEqual(paused.status_code, 200)
+        self.assertEqual(paused.json()["status"], "paused")
+        self.assertEqual(extended.status_code, 200)
+        self.assertEqual(extended.json()["status"], "queued")
+        self.assertEqual(extended.json()["total_budget_seconds"], 6000)
+        self.assertEqual(extended.json()["max_attempts_per_target"], 4)
+        self.assertEqual(invalid_action.status_code, 400)
+        self.assertGreaterEqual(queue.schedule_queued_jobs.call_count, 2)
 
     def test_scheduled_job_release_endpoint_queues_authorized_job(self) -> None:
         store = FakeJobStore()

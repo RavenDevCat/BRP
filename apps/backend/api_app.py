@@ -1243,6 +1243,105 @@ def get_job(
     return _json_response(200, _job_for_context(job_id, context))
 
 
+@_api_route("GET", "/jobs/{job_id}/deep-verification")
+def get_job_deep_verification(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+    _authorized: None = Depends(require_authorized_request),
+) -> JSONResponse:
+    job_record = _job_for_context(job_id, context)
+    normalized_job_id = str(job_record.get("job_id") or job_id).strip()
+    return _json_response(
+        200,
+        {
+            "job_id": normalized_job_id,
+            "verifications": backend_service.JOB_STORE.list_job_deep_verifications(
+                normalized_job_id
+            ),
+        },
+    )
+
+
+@_api_route("POST", "/jobs/{job_id}/deep-verification/start")
+def start_job_deep_verification(
+    job_id: str,
+    context: UserContext = Depends(require_admin_context),
+) -> JSONResponse:
+    job_record = _job_for_context(job_id, context)
+    records = backend_service.JOB_STORE.ensure_deep_verifications(
+        job_record, automatic=False
+    )
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(
+        200,
+        {
+            "job_id": str(job_record.get("job_id") or job_id),
+            "verifications": backend_service.JOB_STORE.list_job_deep_verifications(
+                str(job_record.get("job_id") or job_id)
+            ),
+            "created_count": len(records),
+        },
+    )
+
+
+@_api_route("POST", "/deep-verifications/{verification_id}/actions/{action}")
+def control_deep_verification(
+    verification_id: str,
+    action: str,
+    context: UserContext = Depends(require_admin_context),
+) -> JSONResponse:
+    del context
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action not in {"pause", "resume", "cancel"}:
+        raise BackendHttpError(
+            400, {"error": f"Unsupported deep-verification action: {action}"}
+        )
+    updated = backend_service._set_deep_verification_status(
+        str(verification_id or "").strip(), normalized_action
+    )
+    if not updated:
+        raise BackendHttpError(
+            404, {"error": f"Deep verification not found: {verification_id}"}
+        )
+    return _json_response(200, updated)
+
+
+@_api_route("POST", "/deep-verifications/{verification_id}/extend-budget")
+def extend_deep_verification_budget(
+    verification_id: str,
+    payload: FlexiblePayload = Body(...),
+    context: UserContext = Depends(require_admin_context),
+) -> JSONResponse:
+    del context
+    normalized_id = str(verification_id or "").strip()
+    record = backend_service.JOB_STORE.get_deep_verification(normalized_id)
+    if not record:
+        raise BackendHttpError(
+            404, {"error": f"Deep verification not found: {normalized_id}"}
+        )
+    payload_dict = _payload_dict(payload)
+    additional_seconds = max(
+        60, int(payload_dict.get("additional_seconds") or 1800)
+    )
+    updated = backend_service.JOB_STORE.update_deep_verification(
+        normalized_id,
+        total_budget_seconds=(
+            int(record.get("total_budget_seconds") or 0) + additional_seconds
+        ),
+        max_attempts_per_target=(
+            int(record.get("max_attempts_per_target") or 3) + 1
+        ),
+        status="queued",
+        finished_at=None,
+        completion_reason=None,
+        error=None,
+        worker_pid=None,
+        job_slot_path=None,
+    )
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(200, updated or record)
+
+
 @_api_route("DELETE", "/jobs/{job_id}")
 def delete_job(
     job_id: str,

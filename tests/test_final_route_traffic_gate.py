@@ -1175,3 +1175,52 @@ def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
     assert next_run_gate["api_calls"] == 1
     assert next_run_gate["cache_hits"] == 0
     assert calls["count"] == 2
+
+
+def test_deep_verification_provider_budget_is_shared_across_gates(monkeypatch):
+    monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
+    monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET", 1)
+
+    calls = {"count": 0}
+
+    def fake_amap_segment_stats(_planner, _points):
+        calls["count"] += 1
+        return {"duration_s": 20 * 60, "distance_m": 1234}
+
+    monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_amap_segment_stats)
+
+    class FakePlanner:
+        AMAP_KEY = "fake"
+        MAX_ROUTE_DURATION_SECONDS = 60 * 60
+        _BRP_RUNTIME_PROFILE = {}
+
+    planner = FakePlanner()
+    points = [
+        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+    ]
+    scenario = {
+        "routes": [
+            {"route_id": "Bus 1", "nodes": [0, 1], "time_s": 20 * 60, "stop_service_time_s": 0},
+        ]
+    }
+    config = planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00")
+
+    first_gate = planner_core.attach_final_route_traffic_gate(
+        planner, dict(scenario), points, config, [{"address": "Shanghai"}], "first"
+    )
+    second_gate = planner_core.attach_final_route_traffic_gate(
+        planner,
+        dict(scenario),
+        points,
+        planner_core.PlannerConfig(service_direction="To School", to_school_arrival_time="08:00"),
+        [{"address": "Shanghai"}],
+        "second",
+    )
+
+    assert first_gate["api_calls"] == 1
+    assert second_gate["api_calls"] == 0
+    assert second_gate["status"] == "unavailable"
+    assert planner._BRP_RUNTIME_PROFILE["traffic_api_calls"] == 1
+    assert calls["count"] == 1

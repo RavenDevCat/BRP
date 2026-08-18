@@ -25,6 +25,10 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from .deep_verification import (
+        build_automatic_verification_records,
+        public_verification_record,
+    )
     from .job_queue import (
         JobQueueManager,
         pid_is_alive,
@@ -57,6 +61,10 @@ try:
         run_backend_planner_with_prepared_data,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from deep_verification import (
+        build_automatic_verification_records,
+        public_verification_record,
+    )
     from job_queue import (
         JobQueueManager,
         pid_is_alive,
@@ -102,6 +110,7 @@ SIDE_TOOLS_DIR = Path(RAW_SIDE_TOOLS_DIR or str(DEFAULT_SIDE_TOOLS_DIR)).expandu
 RAW_RUNTIME_DB_PATH = os.environ.get("BRP_RUNTIME_DB_PATH", "").strip()
 RUNTIME_DB_PATH = Path(RAW_RUNTIME_DB_PATH or str(JOBS_DIR.parent / "brp_runtime.sqlite")).expanduser()
 JOB_RUNNER_PATH = BASE_DIR / "backend_job_runner.py"
+DEEP_VERIFICATION_RUNNER_PATH = BASE_DIR / "deep_verification_runner.py"
 SERVICE_TOKEN = os.environ.get("BRP_BACKEND_SERVICE_TOKEN", "").strip()
 DEV_USER_EMAIL = os.environ.get("BRP_DEV_USER_EMAIL", "local@brp.dev").strip().lower()
 AUTH_PROVIDER = (
@@ -2948,6 +2957,7 @@ class JobStore:
         self.lock = threading.Lock()
         _runtime_sqlite_store().initialize()
         self.reconcile_running_jobs()
+        self.reconcile_running_deep_verifications()
 
     def _load_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
         try:
@@ -2974,7 +2984,7 @@ class JobStore:
     def _matches_queue_scope(self, record: dict[str, Any]) -> bool:
         metadata = dict(record.get("metadata") or {})
         scope = _normalize_job_queue_scope(
-            metadata.get("job_queue_scope") or record.get("job_queue_scope")
+            record.get("job_queue_scope") or metadata.get("job_queue_scope")
         )
         if not scope:
             return JOB_QUEUE_SCOPE in {"", "default"}
@@ -3215,6 +3225,126 @@ class JobStore:
                     record["job_slot_path"] = None
                     self._save_job_unlocked(job_id, record)
 
+    def list_queued_deep_verifications(self) -> list[dict[str, Any]]:
+        with self.lock:
+            records = _runtime_sqlite_store().list_deep_verifications(
+                statuses=["queued"]
+            )
+            return [
+                deepcopy(record)
+                for record in records
+                if self._matches_queue_scope(record)
+            ]
+
+    def list_running_deep_verifications(self) -> list[dict[str, Any]]:
+        with self.lock:
+            records = _runtime_sqlite_store().list_deep_verifications(
+                statuses=["running"]
+            )
+            return [
+                deepcopy(record)
+                for record in records
+                if self._matches_queue_scope(record)
+            ]
+
+    def claim_queued_deep_verification(
+        self,
+        verification_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        with self.lock:
+            record = _runtime_sqlite_store().get_deep_verification(verification_id)
+            if not record or not self._matches_queue_scope(record):
+                return None
+            claimed = _runtime_sqlite_store().claim_queued_deep_verification(
+                verification_id,
+                worker_pid=worker_pid,
+                job_slot_path=job_slot_path,
+            )
+            return deepcopy(claimed) if claimed else None
+
+    def get_deep_verification(
+        self, verification_id: str
+    ) -> dict[str, Any] | None:
+        with self.lock:
+            record = _runtime_sqlite_store().get_deep_verification(verification_id)
+            return deepcopy(record) if record else None
+
+    def update_deep_verification(
+        self, verification_id: str, **changes: Any
+    ) -> dict[str, Any] | None:
+        with self.lock:
+            record = _runtime_sqlite_store().get_deep_verification(verification_id)
+            if not record:
+                return None
+            record.update(changes)
+            record["updated_at"] = utc_now_iso()
+            _runtime_sqlite_store().upsert_deep_verification(record)
+            return deepcopy(record)
+
+    def list_job_deep_verifications(
+        self, parent_job_id: str
+    ) -> list[dict[str, Any]]:
+        with self.lock:
+            records = _runtime_sqlite_store().list_deep_verifications(
+                parent_job_id=parent_job_id
+            )
+            return [
+                public_verification_record(
+                    record,
+                    _runtime_sqlite_store().list_deep_verification_candidates(
+                        str(record.get("verification_id") or "")
+                    ),
+                )
+                for record in records
+            ]
+
+    def ensure_deep_verifications(
+        self,
+        parent_job: dict[str, Any],
+        *,
+        automatic: bool,
+    ) -> list[dict[str, Any]]:
+        parent_job_id = str(parent_job.get("job_id") or "").strip()
+        if not parent_job_id:
+            return []
+        with self.lock:
+            existing = _runtime_sqlite_store().list_deep_verifications(
+                parent_job_id=parent_job_id
+            )
+            if existing:
+                return [deepcopy(record) for record in existing]
+            records = build_automatic_verification_records(
+                parent_job,
+                queue_scope=JOB_QUEUE_SCOPE,
+            )
+            for record in records:
+                record["automatic"] = bool(automatic)
+                _runtime_sqlite_store().upsert_deep_verification(record)
+            return [deepcopy(record) for record in records]
+
+    def reconcile_running_deep_verifications(self) -> None:
+        with self.lock:
+            records = _runtime_sqlite_store().list_deep_verifications(
+                statuses=["queued", "running"]
+            )
+            for record in records:
+                if not self._matches_queue_scope(record):
+                    continue
+                status = str(record.get("status") or "").strip().lower()
+                worker_pid = safe_int(record.get("worker_pid"), 0)
+                if status == "running" and pid_is_alive(worker_pid):
+                    continue
+                record["status"] = "queued"
+                record["worker_pid"] = None
+                record["job_slot_path"] = None
+                record["updated_at"] = utc_now_iso()
+                if status == "running":
+                    record["last_recovered_at"] = utc_now_iso()
+                _runtime_sqlite_store().upsert_deep_verification(record)
+
 
 class SideToolHistoryStore:
     def __init__(self, root_dir: Path, tool_key: str) -> None:
@@ -3329,6 +3459,7 @@ ROUTE_INSERT_ADVISOR_HISTORY_STORE = SideToolHistoryStore(
 JOB_QUEUE = JobQueueManager(
     job_store=JOB_STORE,
     runner_path=JOB_RUNNER_PATH,
+    verification_runner_path=DEEP_VERIFICATION_RUNNER_PATH,
     base_dir=BASE_DIR,
     python_executable=sys.executable,
     max_concurrent_jobs=MAX_CONCURRENT_JOBS,
@@ -3459,6 +3590,12 @@ def _terminate_worker_process(pid: int) -> None:
 
 def _cancel_job(job_id: str) -> dict[str, Any] | None:
     return JOB_QUEUE.cancel_job(job_id)
+
+
+def _set_deep_verification_status(
+    verification_id: str, action: str
+) -> dict[str, Any] | None:
+    return JOB_QUEUE.set_deep_verification_status(verification_id, action)
 
 
 def _can_access_job(

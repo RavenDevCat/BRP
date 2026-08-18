@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -106,6 +106,23 @@ def side_tool_summary(tool_key: str, record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def deep_verification_summary(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "verification_id": str(record.get("verification_id") or ""),
+        "parent_job_id": str(record.get("parent_job_id") or ""),
+        "owner_email": normalize_email(record.get("owner_email")),
+        "scenario_key": str(record.get("scenario_key") or ""),
+        "status": str(record.get("status") or "queued"),
+        "priority": int(record.get("priority", 100) or 100),
+        "created_at": record.get("created_at"),
+        "started_at": record.get("started_at"),
+        "finished_at": record.get("finished_at"),
+        "target_vehicle_count": record.get("target_vehicle_count"),
+        "best_vehicle_count": record.get("best_vehicle_count"),
+        "error": record.get("error"),
+    }
+
+
 @dataclass(frozen=True)
 class RuntimeJsonPaths:
     jobs_dir: Path
@@ -160,6 +177,44 @@ class SqliteRuntimeStore:
                 CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_jobs_owner_email ON jobs(owner_email);
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+                CREATE TABLE IF NOT EXISTS deep_verifications (
+                    verification_id TEXT PRIMARY KEY,
+                    parent_job_id TEXT NOT NULL,
+                    owner_email TEXT NOT NULL DEFAULT '',
+                    scenario_key TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    priority INTEGER NOT NULL DEFAULT 100,
+                    created_at TEXT,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    target_vehicle_count INTEGER,
+                    best_vehicle_count INTEGER,
+                    error TEXT,
+                    record_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(parent_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_deep_verifications_parent
+                    ON deep_verifications(parent_job_id, created_at);
+                CREATE INDEX IF NOT EXISTS idx_deep_verifications_queue
+                    ON deep_verifications(status, priority, created_at);
+                CREATE TABLE IF NOT EXISTS deep_verification_candidates (
+                    candidate_id TEXT PRIMARY KEY,
+                    verification_id TEXT NOT NULL,
+                    target_vehicle_count INTEGER NOT NULL,
+                    attempt_number INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    record_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY(verification_id) REFERENCES deep_verifications(verification_id)
+                        ON DELETE CASCADE,
+                    UNIQUE(verification_id, target_vehicle_count, attempt_number)
+                );
+                CREATE INDEX IF NOT EXISTS idx_deep_verification_candidates_lookup
+                    ON deep_verification_candidates(
+                        verification_id, target_vehicle_count, attempt_number
+                    );
                 CREATE TABLE IF NOT EXISTS side_tool_runs (
                     tool_key TEXT NOT NULL,
                     run_id TEXT NOT NULL,
@@ -438,6 +493,295 @@ class SqliteRuntimeStore:
             if cursor.rowcount:
                 self._delete_history_group_items(conn, ("route_audit",), job_id)
             return cursor.rowcount > 0
+
+    def copy_route_audit_workspace(self, source_job_id: str, target_job_id: str) -> bool:
+        """Place a derived result in the same workspace as its parent job."""
+
+        normalized_source = str(source_job_id or "").strip()
+        normalized_target = str(target_job_id or "").strip()
+        if not normalized_source or not normalized_target:
+            return False
+        self.initialize()
+        now = utc_now_iso()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                """
+                SELECT owner_email, group_id
+                FROM history_group_items
+                WHERE scope = 'route_audit' AND item_id = ?
+                LIMIT 1
+                """,
+                (normalized_source,),
+            ).fetchone()
+            if not row:
+                conn.rollback()
+                return False
+            conn.execute(
+                """
+                INSERT INTO history_group_items(
+                    scope, owner_email, item_id, group_id, created_at
+                ) VALUES('route_audit', ?, ?, ?, ?)
+                ON CONFLICT(scope, item_id) DO UPDATE SET
+                    owner_email = excluded.owner_email,
+                    group_id = excluded.group_id,
+                    created_at = excluded.created_at
+                """,
+                (
+                    str(row["owner_email"] or ""),
+                    normalized_target,
+                    str(row["group_id"] or ""),
+                    now,
+                ),
+            )
+            conn.execute(
+                "UPDATE history_groups SET updated_at = ? WHERE group_id = ?",
+                (now, str(row["group_id"] or "")),
+            )
+            conn.commit()
+        return True
+
+    def upsert_deep_verification(self, record: dict[str, Any]) -> None:
+        summary = deep_verification_summary(record)
+        verification_id = str(summary.get("verification_id") or "").strip()
+        parent_job_id = str(summary.get("parent_job_id") or "").strip()
+        scenario_key = str(summary.get("scenario_key") or "").strip()
+        if not verification_id:
+            raise ValueError("verification_id is required")
+        if not parent_job_id:
+            raise ValueError("parent_job_id is required")
+        if not scenario_key:
+            raise ValueError("scenario_key is required")
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO deep_verifications(
+                    verification_id, parent_job_id, owner_email, scenario_key,
+                    status, priority, created_at, started_at, finished_at,
+                    target_vehicle_count, best_vehicle_count, error,
+                    record_json, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(verification_id) DO UPDATE SET
+                    parent_job_id = excluded.parent_job_id,
+                    owner_email = excluded.owner_email,
+                    scenario_key = excluded.scenario_key,
+                    status = excluded.status,
+                    priority = excluded.priority,
+                    created_at = excluded.created_at,
+                    started_at = excluded.started_at,
+                    finished_at = excluded.finished_at,
+                    target_vehicle_count = excluded.target_vehicle_count,
+                    best_vehicle_count = excluded.best_vehicle_count,
+                    error = excluded.error,
+                    record_json = excluded.record_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    verification_id,
+                    parent_job_id,
+                    summary["owner_email"],
+                    scenario_key,
+                    summary["status"],
+                    summary["priority"],
+                    summary.get("created_at"),
+                    summary.get("started_at"),
+                    summary.get("finished_at"),
+                    summary.get("target_vehicle_count"),
+                    summary.get("best_vehicle_count"),
+                    summary.get("error"),
+                    json_dumps(record),
+                    utc_now_iso(),
+                ),
+            )
+
+    def get_deep_verification(
+        self, verification_id: str
+    ) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT record_json FROM deep_verifications WHERE verification_id = ?",
+                (str(verification_id or "").strip(),),
+            ).fetchone()
+        if not row:
+            return None
+        payload = json_loads(row["record_json"], {})
+        return payload if isinstance(payload, dict) else None
+
+    def list_deep_verifications(
+        self,
+        *,
+        parent_job_id: str | None = None,
+        statuses: Iterable[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        clauses: list[str] = []
+        params: list[Any] = []
+        if parent_job_id is not None:
+            clauses.append("parent_job_id = ?")
+            params.append(str(parent_job_id or "").strip())
+        normalized_statuses = [
+            str(item or "").strip().lower() for item in (statuses or []) if str(item or "").strip()
+        ]
+        if normalized_statuses:
+            placeholders = ",".join("?" for _ in normalized_statuses)
+            clauses.append(f"LOWER(status) IN ({placeholders})")
+            params.extend(normalized_statuses)
+        sql = "SELECT record_json FROM deep_verifications"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY priority, COALESCE(created_at, ''), verification_id"
+        with self.connect() as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json_loads(row["record_json"], {})
+            if isinstance(payload, dict):
+                records.append(payload)
+        return records
+
+    def claim_queued_deep_verification(
+        self,
+        verification_id: str,
+        *,
+        worker_pid: int | None = None,
+        job_slot_path: str | None = None,
+    ) -> dict[str, Any] | None:
+        normalized_id = str(verification_id or "").strip()
+        if not normalized_id:
+            return None
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                active = conn.execute(
+                    """
+                    SELECT verification_id
+                    FROM deep_verifications
+                    WHERE status = 'running' AND verification_id != ?
+                    LIMIT 1
+                    """,
+                    (normalized_id,),
+                ).fetchone()
+                if active:
+                    conn.rollback()
+                    return None
+                row = conn.execute(
+                    """
+                    SELECT status, record_json
+                    FROM deep_verifications
+                    WHERE verification_id = ?
+                    """,
+                    (normalized_id,),
+                ).fetchone()
+                if not row or str(row["status"] or "").strip().lower() != "queued":
+                    conn.rollback()
+                    return None
+                record = json_loads(row["record_json"], {})
+                if not isinstance(record, dict) or str(record.get("status") or "").strip().lower() != "queued":
+                    conn.rollback()
+                    return None
+                record["status"] = "running"
+                record["started_at"] = record.get("started_at") or utc_now_iso()
+                record["last_slice_started_at"] = utc_now_iso()
+                record["worker_pid"] = worker_pid
+                record["job_slot_path"] = job_slot_path
+                record["error"] = None
+                summary = deep_verification_summary(record)
+                cursor = conn.execute(
+                    """
+                    UPDATE deep_verifications SET
+                        status = ?, started_at = ?, finished_at = ?,
+                        target_vehicle_count = ?, best_vehicle_count = ?, error = ?,
+                        record_json = ?, updated_at = ?
+                    WHERE verification_id = ? AND status = 'queued'
+                    """,
+                    (
+                        summary["status"],
+                        summary.get("started_at"),
+                        summary.get("finished_at"),
+                        summary.get("target_vehicle_count"),
+                        summary.get("best_vehicle_count"),
+                        summary.get("error"),
+                        json_dumps(record),
+                        utc_now_iso(),
+                        normalized_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    conn.rollback()
+                    return None
+                conn.commit()
+                return record
+            except Exception:
+                conn.rollback()
+                raise
+
+    def upsert_deep_verification_candidate(
+        self, record: dict[str, Any]
+    ) -> None:
+        verification_id = str(record.get("verification_id") or "").strip()
+        target_vehicle_count = int(record.get("target_vehicle_count") or 0)
+        attempt_number = max(1, int(record.get("attempt_number") or 1))
+        status = str(record.get("status") or "unknown").strip().lower() or "unknown"
+        if not verification_id:
+            raise ValueError("verification_id is required")
+        if target_vehicle_count < 0:
+            raise ValueError("target_vehicle_count must be non-negative")
+        candidate_id = str(record.get("candidate_id") or "").strip()
+        if not candidate_id:
+            candidate_id = f"{verification_id}:{target_vehicle_count}:{attempt_number}"
+            record["candidate_id"] = candidate_id
+        record["created_at"] = record.get("created_at") or utc_now_iso()
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO deep_verification_candidates(
+                    candidate_id, verification_id, target_vehicle_count,
+                    attempt_number, status, created_at, record_json, updated_at
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(verification_id, target_vehicle_count, attempt_number)
+                DO UPDATE SET
+                    candidate_id = excluded.candidate_id,
+                    status = excluded.status,
+                    created_at = excluded.created_at,
+                    record_json = excluded.record_json,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    candidate_id,
+                    verification_id,
+                    target_vehicle_count,
+                    attempt_number,
+                    status,
+                    record["created_at"],
+                    json_dumps(record),
+                    utc_now_iso(),
+                ),
+            )
+
+    def list_deep_verification_candidates(
+        self, verification_id: str
+    ) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT record_json
+                FROM deep_verification_candidates
+                WHERE verification_id = ?
+                ORDER BY target_vehicle_count DESC, attempt_number
+                """,
+                (str(verification_id or "").strip(),),
+            ).fetchall()
+        records: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json_loads(row["record_json"], {})
+            if isinstance(payload, dict):
+                records.append(payload)
+        return records
 
     def upsert_side_tool_run(self, tool_key: str, record: dict[str, Any]) -> None:
         summary = side_tool_summary(tool_key, record)

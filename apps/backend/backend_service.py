@@ -2784,6 +2784,8 @@ def _adapt_legacy_scenario_statuses_for_read(
             strict=True,
         )
     )
+    structured = dict(result.get("structured_results") or {})
+    reference_routes = _current_plan_reference_routes(result)
     for key in _SCENARIO_RESULT_KEYS:
         scenario = dict(result.get(key) or {})
         if scenario:
@@ -2791,10 +2793,10 @@ def _adapt_legacy_scenario_statuses_for_read(
             scenario["routes"] = _routes_with_display_ids(
                 [dict(route or {}) for route in list(scenario.get("routes") or [])],
                 result_scenario_keys[key],
+                reference_routes=reference_routes,
             )
             result[key] = scenario
 
-    structured = dict(result.get("structured_results") or {})
     for key in _STRUCTURED_SCENARIO_KEYS:
         scenario = dict(structured.get(key) or {})
         if scenario:
@@ -2802,6 +2804,7 @@ def _adapt_legacy_scenario_statuses_for_read(
             scenario["routes"] = _routes_with_display_ids(
                 [dict(route or {}) for route in list(scenario.get("routes") or [])],
                 key,
+                reference_routes=reference_routes,
             )
             structured[key] = scenario
     if structured:
@@ -3646,14 +3649,30 @@ def _job_result_scenario(result: dict[str, Any], scenario_key: str) -> dict[str,
     return merged
 
 
+def _current_plan_reference_routes(result: dict[str, Any]) -> list[dict[str, Any]]:
+    structured = dict(result.get("structured_results") or {})
+    current_plan = dict(
+        structured.get("current_plan")
+        or structured.get("current_plan_scenario")
+        or result.get("current_plan_scenario")
+        or {}
+    )
+    return [dict(route or {}) for route in list(current_plan.get("routes") or [])]
+
+
 def _routes_with_display_ids(
     routes: list[dict[str, Any]],
     scenario_key: str,
+    *,
+    reference_routes: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     payload = {"routes": [dict(route or {}) for route in routes]}
     attach_route_display_metadata(
         payload,
         optimized=scenario_key in OPTIMIZED_ROUTE_SCENARIOS,
+        reference_routes=(
+            reference_routes if scenario_key == "time_constrained" else None
+        ),
     )
     return list(payload["routes"])
 
@@ -4913,6 +4932,7 @@ def _build_job_map_payload(
     routes = _routes_with_display_ids(
         [dict(route or {}) for route in list(scenario.get("routes") or [])],
         scenario_key,
+        reference_routes=_current_plan_reference_routes(result),
     )
     if not points or not routes:
         return None, f"Map data is not available: {artifact_key}"
@@ -5256,6 +5276,7 @@ def _build_scenario_template_export(
     scenario["routes"] = _routes_with_display_ids(
         [dict(route or {}) for route in list(scenario.get("routes") or [])],
         scenario_key,
+        reference_routes=_current_plan_reference_routes(result),
     )
     planner_config = dict(
         result.get("planner_config") or job_record.get("config") or {}

@@ -185,6 +185,80 @@ class InteractiveMapDataTests(unittest.TestCase):
             "R2",
         )
 
+    def test_strict_route_lineage_uses_retained_merged_and_new_names(self) -> None:
+        result = {
+            "routes": [
+                {"route_id": "Bus 1", "nodes": [2, 1, 0]},
+                {"route_id": "Bus 2", "nodes": [3, 4, 5, 0]},
+                {"route_id": "Bus 3", "nodes": [6, 7, 0]},
+                {"route_id": "Bus 4", "nodes": [8, 0]},
+            ]
+        }
+        reference_routes = [
+            {"route_id": "R1", "nodes": [1, 2, 0]},
+            {"route_id": "R2", "nodes": [3, 4, 0]},
+            {"route_id": "R3", "nodes": [5, 6, 0]},
+            {"route_id": "R4", "nodes": [7, 8, 0]},
+        ]
+
+        self.service.attach_route_display_metadata(
+            result,
+            reference_routes=reference_routes,
+        )
+
+        self.assertEqual(
+            [route["display_route_id"] for route in result["routes"]],
+            ["R1", "R2", "Opt Bus 1", "Opt Bus 2"],
+        )
+        self.assertEqual(
+            [route["route_change_type"] for route in result["routes"]],
+            ["retained", "merged", "new", "new"],
+        )
+        self.assertEqual(
+            result["routes"][1]["lineage_source_route_ids"],
+            ["R2", "R3"],
+        )
+
+    def test_legacy_strict_history_infers_names_from_current_plan(self) -> None:
+        job_record = {
+            "result": {
+                "time_constrained_optimization": {
+                    "routes": [
+                        {"route_id": "Bus 1", "nodes": [1, 2, 0]},
+                        {"route_id": "Bus 2", "nodes": [3, 4, 5, 0]},
+                    ],
+                },
+                "structured_results": {
+                    "current_plan": {
+                        "routes": [
+                            {"route_id": "R1", "nodes": [1, 2, 0]},
+                            {"route_id": "R2", "nodes": [3, 4, 0]},
+                            {"route_id": "R3", "nodes": [5, 6, 0]},
+                        ],
+                    },
+                    "time_constrained": {
+                        "routes": [
+                            {"route_id": "Bus 1", "nodes": [1, 2, 0]},
+                            {"route_id": "Bus 2", "nodes": [3, 4, 5, 0]},
+                        ],
+                    },
+                },
+            },
+        }
+
+        adapted = self.service._adapt_legacy_scenario_statuses_for_read(job_record)
+
+        top_routes = adapted["result"]["time_constrained_optimization"]["routes"]
+        structured_routes = adapted["result"]["structured_results"]["time_constrained"]["routes"]
+        self.assertEqual(
+            [route["display_route_id"] for route in top_routes],
+            ["R1", "R2"],
+        )
+        self.assertEqual(
+            [route["display_route_id"] for route in structured_routes],
+            ["R1", "R2"],
+        )
+
     def test_legacy_job_read_uses_same_route_names_in_result_copies(self) -> None:
         job_record = {
             "result": {

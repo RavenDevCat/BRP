@@ -5517,13 +5517,155 @@ def _vehicle_ladder_attempt(result: dict[str, Any], target_vehicle_count: int) -
     }
 
 
+def _route_service_node_sequence(route: dict[str, Any]) -> tuple[int, ...]:
+    sequence: list[int] = []
+    for node_id in list(route.get("nodes") or []):
+        try:
+            parsed = int(node_id)
+        except (TypeError, ValueError):
+            continue
+        if parsed != 0:
+            sequence.append(parsed)
+    return tuple(sequence)
+
+
+def _infer_route_lineage_metadata(
+    routes: list[dict[str, Any]],
+    reference_routes: list[dict[str, Any]],
+) -> None:
+    references: list[dict[str, Any]] = []
+    for index, reference_route in enumerate(reference_routes, start=1):
+        sequence = _route_service_node_sequence(reference_route)
+        if not sequence:
+            continue
+        source_route_id = str(
+            reference_route.get("source_route_id")
+            or reference_route.get("display_route_id")
+            or reference_route.get("route_id")
+            or reference_route.get("id")
+            or f"Bus {index}"
+        ).strip()
+        references.append(
+            {
+                "source_route_id": source_route_id,
+                "sequence": sequence,
+                "nodes": set(sequence),
+            }
+        )
+    if not references:
+        return
+
+    claimed_source_ids = {
+        str(route.get("source_route_id") or "").strip()
+        for route in routes
+        if str(route.get("exception_role") or "").strip()
+        or str(route.get("route_change_type") or "").strip().lower()
+        in {"frozen", "merged", "retained"}
+    }
+    claimed_source_ids.discard("")
+    pending_indices = [
+        index
+        for index, route in enumerate(routes)
+        if not str(route.get("exception_role") or "").strip()
+        and str(route.get("route_change_type") or "").strip().lower()
+        not in {"frozen", "merged", "retained"}
+    ]
+
+    # Preserve an original route name when the optimized route serves the same
+    # stop set. Exact order is used only to disambiguate duplicate stop sets.
+    for route_index in list(pending_indices):
+        route = routes[route_index]
+        sequence = _route_service_node_sequence(route)
+        node_set = set(sequence)
+        matches = [
+            reference
+            for reference in references
+            if reference["source_route_id"] not in claimed_source_ids
+            and reference["nodes"] == node_set
+        ]
+        ordered_matches = [
+            reference for reference in matches if reference["sequence"] == sequence
+        ]
+        if len(ordered_matches) == 1:
+            matches = ordered_matches
+        if len(matches) != 1:
+            continue
+        source_route_id = str(matches[0]["source_route_id"])
+        route["source_route_id"] = source_route_id
+        route["route_change_type"] = "retained"
+        route["lineage_source_route_ids"] = [source_route_id]
+        route["route_lineage_inferred"] = True
+        claimed_source_ids.add(source_route_id)
+        pending_indices.remove(route_index)
+
+    # A merged route may inherit one old name only when it has a unique dominant
+    # contributor. Competing optimized routes cannot inherit the same old name.
+    merged_candidates: list[tuple[tuple[float, ...], int, str, list[str]]] = []
+    for route_index in pending_indices:
+        node_set = set(_route_service_node_sequence(routes[route_index]))
+        contributors = [
+            (len(node_set.intersection(reference["nodes"])), reference)
+            for reference in references
+            if node_set.intersection(reference["nodes"])
+        ]
+        contributors.sort(
+            key=lambda item: (-item[0], str(item[1]["source_route_id"]))
+        )
+        if len(contributors) < 2:
+            continue
+        top_count, top_reference = contributors[0]
+        second_count = contributors[1][0]
+        source_route_id = str(top_reference["source_route_id"])
+        if top_count <= second_count or source_route_id in claimed_source_ids:
+            continue
+        source_fully_retained = float(top_reference["nodes"].issubset(node_set))
+        dominance_ratio = top_count / max(1, len(node_set))
+        contributor_ids = [str(item[1]["source_route_id"]) for item in contributors]
+        rank = (
+            source_fully_retained,
+            float(top_count),
+            float(top_count - second_count),
+            dominance_ratio,
+            float(-route_index),
+        )
+        merged_candidates.append(
+            (rank, route_index, source_route_id, contributor_ids)
+        )
+
+    for _rank, route_index, source_route_id, contributor_ids in sorted(
+        merged_candidates,
+        key=lambda item: item[0],
+        reverse=True,
+    ):
+        if source_route_id in claimed_source_ids:
+            continue
+        route = routes[route_index]
+        route["source_route_id"] = source_route_id
+        route["route_change_type"] = "merged"
+        route["lineage_source_route_ids"] = contributor_ids
+        route["route_lineage_inferred"] = True
+        claimed_source_ids.add(source_route_id)
+
+    for route_index in pending_indices:
+        route = routes[route_index]
+        if str(route.get("route_change_type") or "").strip().lower() == "merged":
+            continue
+        route["route_change_type"] = "new"
+        route["route_lineage_inferred"] = True
+
+
 def attach_route_display_metadata(
     result: dict[str, Any],
     *,
     optimized: bool = True,
+    reference_routes: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    routes = [dict(route or {}) for route in list(result.get("routes") or [])]
+    result["routes"] = routes
+    if optimized and reference_routes:
+        _infer_route_lineage_metadata(routes, reference_routes)
     optimized_index = 0
-    for route_index, route in enumerate(list(result.get("routes") or []), start=1):
+    for route_index, route in enumerate(routes, start=1):
         route_id = str(route.get("route_id") or route.get("id") or "").strip()
         source_route_id = str(
             route.get("source_route_id")
@@ -5555,8 +5697,11 @@ def attach_route_display_metadata(
     return result
 
 
-def _attach_optimized_route_display_ids(result: dict[str, Any]) -> dict[str, Any]:
-    return attach_route_display_metadata(result)
+def _attach_optimized_route_display_ids(
+    result: dict[str, Any],
+    reference_routes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return attach_route_display_metadata(result, reference_routes=reference_routes)
 
 
 def _attach_vehicle_ladder_metadata(
@@ -7561,6 +7706,10 @@ def run_backend_planner_with_prepared_data(
                 verification_result["baseline_name"] = "time_constrained_optimization"
                 verification_result["display_name"] = time_constrained_display_label
                 verification_result["scenario_label"] = time_constrained_display_label
+                attach_route_display_metadata(
+                    verification_result,
+                    reference_routes=list(current_plan_scenario.get("routes") or []),
+                )
             else:
                 protected_time_constraint_metadata = {
                     **deepcopy(time_constraint_metadata),
@@ -7652,6 +7801,10 @@ def run_backend_planner_with_prepared_data(
                 or 0
             ),
         }
+        attach_route_display_metadata(
+            time_constrained_result,
+            reference_routes=list(current_plan_scenario.get("routes") or []),
+        )
         protected_time_constraint_metadata = {
             **deepcopy(time_constraint_metadata),
             "source": "exception_preserving_remainder",

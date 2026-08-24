@@ -428,30 +428,37 @@ class JobQueueManager:
         slot_path: Path | None,
     ) -> None:
         exit_code = int(process.wait())
+        exited_worker_pid = safe_int(getattr(process, "pid", 0), 0)
         slot_owner_id = f"deep:{verification_id}"
         with self._worker_state_lock:
             record = self.job_store.get_deep_verification(verification_id)
-            if str((record or {}).get("status") or "").strip().lower() == "running":
-                crash_count = safe_int((record or {}).get("worker_crash_count"), 0) + 1
-                terminal = crash_count >= 3
-                self.job_store.update_deep_verification(
-                    verification_id,
-                    status="technical_failure" if terminal else "queued",
-                    finished_at=utc_now_iso() if terminal else None,
-                    error=(
-                        f"Deep-verification worker exited with code {exit_code} "
-                        "before saving its checkpoint."
-                    ),
-                    worker_exit_code=exit_code,
-                    worker_crash_count=crash_count,
-                    worker_pid=None,
-                    job_slot_path=None,
-                )
-            self.gate.release(
-                (record or {}).get("job_slot_path") or slot_path,
-                job_id=slot_owner_id,
+            status = str((record or {}).get("status") or "").strip().lower()
+            record_worker_pid = safe_int((record or {}).get("worker_pid"), 0)
+            newer_worker_running = (
+                status == "running"
+                and exited_worker_pid > 0
+                and record_worker_pid > 0
+                and record_worker_pid != exited_worker_pid
             )
-            self.gate.cleanup_stale_slots()
+            if not newer_worker_running:
+                if status == "running":
+                    crash_count = safe_int((record or {}).get("worker_crash_count"), 0) + 1
+                    terminal = crash_count >= 3
+                    self.job_store.update_deep_verification(
+                        verification_id,
+                        status="technical_failure" if terminal else "queued",
+                        finished_at=utc_now_iso() if terminal else None,
+                        error=(
+                            f"Deep-verification worker exited with code {exit_code} "
+                            "before saving its checkpoint."
+                        ),
+                        worker_exit_code=exit_code,
+                        worker_crash_count=crash_count,
+                        worker_pid=None,
+                        job_slot_path=None,
+                    )
+                self.gate.release(slot_path, job_id=slot_owner_id)
+                self.gate.cleanup_stale_slots()
         self.schedule_queued_jobs()
 
     def _preempt_running_deep_verification(self) -> bool:

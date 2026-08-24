@@ -421,3 +421,100 @@ def test_normal_job_can_preempt_running_deep_verifier(
     assert store.deep_records["verify1"]["status"] == "queued"
     assert store.deep_records["verify1"]["preemption_count"] == 1
     assert not slot_path.exists()
+
+
+def test_deep_verifier_reaper_does_not_overwrite_new_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        verification_runner_path=tmp_path / "deep_verification_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    old_slot_path = manager.gate.acquire("deep:verify1")
+    assert old_slot_path is not None
+    manager.gate.attach_worker(old_slot_path, 1111)
+    manager.gate.release(old_slot_path, job_id="deep:verify1")
+    reused_slot_path = manager.gate.acquire("deep:verify1")
+    assert reused_slot_path == old_slot_path
+    manager.gate.attach_worker(reused_slot_path, 2222)
+    store.deep_records = {
+        "verify1": {
+            "verification_id": "verify1",
+            "status": "running",
+            "worker_pid": 2222,
+            "job_slot_path": str(reused_slot_path),
+        }
+    }
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+
+    class PreviousProcess:
+        pid = 1111
+
+        def wait(self) -> int:
+            return 0
+
+    before = dict(store.deep_records["verify1"])
+    manager._reap_deep_verification_worker(
+        "verify1", PreviousProcess(), old_slot_path
+    )
+
+    assert store.deep_records["verify1"] == before
+    assert reused_slot_path.exists()
+    metadata = manager.gate._read_metadata(reused_slot_path)
+    assert metadata["job_id"] == "deep:verify1"
+    assert metadata["worker_pid"] == 2222
+    assert scheduled == [True]
+
+
+def test_deep_verifier_reaper_requeues_matching_crashed_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = FakeJobStore()
+    manager = job_queue.JobQueueManager(
+        job_store=store,
+        runner_path=tmp_path / "backend_job_runner.py",
+        verification_runner_path=tmp_path / "deep_verification_runner.py",
+        base_dir=tmp_path,
+        python_executable=sys.executable,
+        max_concurrent_jobs=1,
+        concurrency_dir=tmp_path / "slots",
+    )
+    slot_path = manager.gate.acquire("deep:verify1")
+    assert slot_path is not None
+    manager.gate.attach_worker(slot_path, 3333)
+    store.deep_records = {
+        "verify1": {
+            "verification_id": "verify1",
+            "status": "running",
+            "worker_pid": 3333,
+            "job_slot_path": str(slot_path),
+        }
+    }
+    scheduled: list[bool] = []
+    monkeypatch.setattr(manager, "schedule_queued_jobs", lambda: scheduled.append(True))
+
+    class CrashedProcess:
+        pid = 3333
+
+        def wait(self) -> int:
+            return 7
+
+    manager._reap_deep_verification_worker(
+        "verify1", CrashedProcess(), slot_path
+    )
+
+    record = store.deep_records["verify1"]
+    assert record["status"] == "queued"
+    assert record["worker_exit_code"] == 7
+    assert record["worker_crash_count"] == 1
+    assert record["worker_pid"] is None
+    assert record["job_slot_path"] is None
+    assert not slot_path.exists()
+    assert scheduled == [True]

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calculator, FileSpreadsheet, Fuel, Loader2, MapPinned, Ruler, Upload } from "lucide-react";
+import { DirectSchoolAnalysisPage } from "@/features/distance/direct-school-analysis-page";
 import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -50,9 +51,24 @@ const routeCostProfiles = {
 };
 
 export function DistanceCheckerPage() {
+  const [activeTool, setActiveTool] = useState<DistancePageMode>("reference");
+  if (activeTool === "direct_school") {
+    return <DirectSchoolAnalysisPage onToolChange={setActiveTool} />;
+  }
+  return <LegacyDistanceCheckerPage activeTool={activeTool} setActiveTool={setActiveTool} />;
+}
+
+type DistancePageMode = DistanceCheckerToolMode | "direct_school";
+
+function LegacyDistanceCheckerPage({
+  activeTool,
+  setActiveTool,
+}: {
+  activeTool: DistanceCheckerToolMode;
+  setActiveTool: (tool: DistancePageMode) => void;
+}) {
   const t = useT();
   const queryClient = useQueryClient();
-  const [activeTool, setActiveTool] = useState<DistanceCheckerToolMode>("reference");
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
@@ -496,6 +512,9 @@ export function DistanceCheckerPage() {
                   </ToolTab>
                   <ToolTab active={activeTool === "route_cost"} onClick={() => handleToolChange("route_cost")}>
                     {t("Route Cost")}
+                  </ToolTab>
+                  <ToolTab active={false} onClick={() => setActiveTool("direct_school")}>
+                    {t("Direct-to-School")}
                   </ToolTab>
                 </div>
               </div>

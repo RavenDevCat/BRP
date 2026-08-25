@@ -34,6 +34,7 @@ class FakeJobStore:
                 "owner_email": record.get("owner_email"),
                 "shared_with_all": bool(record.get("shared_with_all")),
                 "status": record.get("status", "succeeded"),
+                "metadata": dict(record.get("metadata") or {}),
             }
             for job_id, record in self.records.items()
             if include_all
@@ -1056,6 +1057,8 @@ class FastApiThinShellTests(unittest.TestCase):
             _handle_distance_workbook_preview=make_handler("distance-preview"),
             _handle_reference_distance_check=make_handler("reference"),
             _handle_current_plan_route_cost=make_handler("route-cost"),
+            _handle_direct_school_preview=make_handler("direct-school-preview"),
+            _handle_direct_school_submit=make_handler("direct-school-submit"),
             _handle_fleet_planner_preview=make_handler("fleet-preview"),
             _handle_fleet_planner_geocode=make_handler("fleet-geocode"),
             _handle_fleet_planner_clusters=make_handler("fleet-clusters"),
@@ -1067,6 +1070,7 @@ class FastApiThinShellTests(unittest.TestCase):
                 "/api/distance-checker/workbook-preview",
                 "/api/distance-checker/reference",
                 "/api/distance-checker/route-cost",
+                "/api/distance-checker/direct-school/preview",
                 "/api/fleet-planner/preview",
                 "/api/fleet-planner/geocode",
                 "/api/fleet-planner/clusters",
@@ -1082,10 +1086,65 @@ class FastApiThinShellTests(unittest.TestCase):
                 headers=auth_headers(),
                 json={"title": "save"},
             )
+            direct_submit_response = self.client.post(
+                "/api/distance-checker/direct-school/jobs",
+                headers=auth_headers(),
+                json={"title": "measure"},
+            )
 
         self.assertTrue(all(response.status_code == 200 for response in responses))
         self.assertEqual(history_response.status_code, 201)
-        self.assertEqual(calls[-1], ("fleet-history", {"title": "save"}, "admin@example.com"))
+        self.assertEqual(direct_submit_response.status_code, 202)
+        self.assertEqual(calls[-2], ("fleet-history", {"title": "save"}, "admin@example.com"))
+        self.assertEqual(calls[-1], ("direct-school-submit", {"title": "measure"}, "admin@example.com"))
+
+    def test_direct_school_jobs_are_partitioned_from_route_audit_history(self) -> None:
+        store = FakeJobStore()
+        store.records = {
+            "audit-job": {
+                "job_id": "audit-job",
+                "owner_email": "admin@example.com",
+                "status": "succeeded",
+                "metadata": {"job_kind": "route_audit", "job_name": "Audit"},
+            },
+            "direct-job": {
+                "job_id": "direct-job",
+                "owner_email": "admin@example.com",
+                "status": "succeeded",
+                "metadata": {
+                    "job_kind": backend_service.DIRECT_SCHOOL_JOB_KIND,
+                    "job_name": "Direct measurement",
+                    "analysis_signature": "same-inputs",
+                },
+                "result": {"status": "complete", "summary": {"address_count": 3}, "stops": []},
+            },
+        }
+
+        with patched_backend(
+            SERVICE_TOKEN="secret",
+            ADMIN_EMAILS={"admin@example.com"},
+            JOB_STORE=store,
+        ):
+            audit_response = self.client.get("/api/jobs", headers=auth_headers())
+            list_response = self.client.get(
+                "/api/distance-checker/direct-school/jobs", headers=auth_headers()
+            )
+            detail_response = self.client.get(
+                "/api/distance-checker/direct-school/jobs/direct-job",
+                headers=auth_headers(),
+            )
+
+        self.assertEqual(
+            [item["job_id"] for item in audit_response.json()["jobs"]],
+            ["audit-job"],
+        )
+        self.assertEqual(
+            [item["job_id"] for item in list_response.json()["jobs"]],
+            ["direct-job"],
+        )
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.json()["metadata"]["job_name"], "Direct measurement")
+        self.assertEqual(detail_response.json()["multi_day"]["run_count"], 1)
 
 
     def test_core_job_post_routes_delegate_to_legacy_workflows(self) -> None:

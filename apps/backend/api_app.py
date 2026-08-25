@@ -174,13 +174,28 @@ def _job_for_context(job_id: str, context: UserContext) -> dict[str, Any]:
     job_record = backend_service.JOB_STORE.get_job(normalized_job_id)
     if not job_record:
         raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})
+    workspace_scope = (
+        "distance_direct_school"
+        if backend_service._job_kind(job_record) == backend_service.DIRECT_SCHOOL_JOB_KIND
+        else "route_audit"
+    )
     if not backend_service._can_access_job(
         job_record, context.email, include_all=context.is_admin
-    ) and not _workspace_item_role("route_audit", normalized_job_id, context):
+    ) and not _workspace_item_role(workspace_scope, normalized_job_id, context):
         raise BackendHttpError(
             403, {"error": f"Job is not available for user: {context.email}"}
         )
     return backend_service._adapt_legacy_scenario_statuses_for_read(job_record)
+
+
+def _direct_school_job_for_context(job_id: str, context: UserContext) -> dict[str, Any]:
+    record = _job_for_context(job_id, context)
+    if backend_service._job_kind(record) != backend_service.DIRECT_SCHOOL_JOB_KIND:
+        raise BackendHttpError(
+            404,
+            {"error": f"Direct-to-School Analysis job not found: {str(job_id or '').strip()}"},
+        )
+    return record
 
 
 def _require_record_mutation_access(
@@ -310,6 +325,7 @@ HISTORY_GROUP_SCOPES = {
     "fleet_planner",
     "distance_reference",
     "distance_route_cost",
+    "distance_direct_school",
     "route_insert_advisor",
 }
 
@@ -320,7 +336,11 @@ def _history_entries_for_scope(
     if scope not in HISTORY_GROUP_SCOPES:
         raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
     if scope == "route_audit":
-        return backend_service.JOB_STORE.list_jobs(
+        return backend_service._list_route_audit_jobs(
+            user_email=context.email, include_all=context.is_admin
+        )
+    if scope == "distance_direct_school":
+        return backend_service._direct_school_jobs(
             user_email=context.email, include_all=context.is_admin
         )
     if scope == "fleet_planner":
@@ -343,7 +363,7 @@ def _history_entries_for_scope(
 
 
 def _history_item_ids_for_scope(scope: str, context: UserContext) -> set[str]:
-    id_key = "job_id" if scope == "route_audit" else "run_id"
+    id_key = "job_id" if scope in {"route_audit", "distance_direct_school"} else "run_id"
     return {
         str(entry.get(id_key) or "").strip()
         for entry in _history_entries_for_scope(scope, context)
@@ -498,8 +518,10 @@ def rename_history_item(
     normalized_item_id = str(item_id or "").strip()
     name = _history_item_name(_payload_dict(payload).get("name"))
 
-    if scope == "route_audit":
+    if scope in {"route_audit", "distance_direct_school"}:
         record = _job_for_context(normalized_item_id, context)
+        if scope == "distance_direct_school" and backend_service._job_kind(record) != backend_service.DIRECT_SCHOOL_JOB_KIND:
+            raise BackendHttpError(404, {"error": "Direct-to-School Analysis job not found."})
         _require_record_mutation_access(record, context)
         metadata = dict(record.get("metadata") or {})
         metadata["job_name"] = name
@@ -1097,7 +1119,7 @@ def list_jobs(context: UserContext = Depends(current_user_context)) -> JSONRespo
     return _json_response(
         200,
         {
-            "jobs": backend_service.JOB_STORE.list_jobs(
+            "jobs": backend_service._list_route_audit_jobs(
                 user_email=context.email, include_all=context.is_admin
             )
         },
@@ -1419,6 +1441,159 @@ def current_plan_route_cost(
 ) -> JSONResponse:
     return _json_response(
         200, backend_service._handle_current_plan_route_cost(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/direct-school/preview",
+    dependencies=[Depends(require_authorized_request)],
+)
+def direct_school_preview(
+    payload: FlexiblePayload | None = Body(default=None),
+) -> JSONResponse:
+    return _json_response(
+        200, backend_service._handle_direct_school_preview(_payload_dict(payload))
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/direct-school/jobs",
+    dependencies=[Depends(require_authorized_request)],
+)
+def create_direct_school_job(
+    payload: FlexiblePayload | None = Body(default=None),
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        202,
+        backend_service._handle_direct_school_submit(
+            _payload_dict(payload), user_email=context.email
+        ),
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/direct-school/jobs",
+    dependencies=[Depends(require_authorized_request)],
+)
+def list_direct_school_jobs(
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    return _json_response(
+        200,
+        {
+            "jobs": backend_service._direct_school_jobs(
+                user_email=context.email, include_all=context.is_admin
+            )
+        },
+    )
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/direct-school/jobs/{job_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def get_direct_school_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    record = _direct_school_job_for_context(job_id, context)
+    return _json_response(
+        200,
+        backend_service._direct_school_public_record(
+            record, user_email=context.email, include_all=context.is_admin
+        ),
+    )
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/direct-school/jobs/{job_id}/retry",
+    dependencies=[Depends(require_authorized_request)],
+)
+def retry_direct_school_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    record = _direct_school_job_for_context(job_id, context)
+    _require_record_mutation_access(record, context)
+    status = str(record.get("status") or "").strip().lower()
+    if status in {"queued", "running", "scheduled"}:
+        raise BackendHttpError(409, {"error": "This analysis is already active."})
+    updated = backend_service.JOB_STORE.update_job(
+        str(job_id or "").strip(),
+        status="queued",
+        started_at=None,
+        finished_at=None,
+        worker_pid=None,
+        job_slot_path=None,
+        error=None,
+        traceback=None,
+    )
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(202, updated or record)
+
+
+@_api_route(
+    "POST",
+    "/distance-checker/direct-school/jobs/{job_id}/cancel",
+    dependencies=[Depends(require_authorized_request)],
+)
+def cancel_direct_school_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    record = _direct_school_job_for_context(job_id, context)
+    _require_record_mutation_access(record, context)
+    updated = backend_service._cancel_job(str(job_id or "").strip())
+    if not updated:
+        raise BackendHttpError(404, {"error": f"Job not found: {job_id}"})
+    return _json_response(200, updated)
+
+
+@_api_route(
+    "DELETE",
+    "/distance-checker/direct-school/jobs/{job_id}",
+    dependencies=[Depends(require_authorized_request)],
+)
+def delete_direct_school_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> JSONResponse:
+    record = _direct_school_job_for_context(job_id, context)
+    _require_record_mutation_access(record, context)
+    normalized_id = str(job_id or "").strip()
+    backend_service._cancel_job(normalized_id)
+    backend_service.JOB_STORE.delete_job(normalized_id)
+    return _json_response(200, {"deleted": True, "job_id": normalized_id})
+
+
+@_api_route(
+    "GET",
+    "/distance-checker/direct-school/jobs/{job_id}/export",
+    dependencies=[Depends(require_authorized_request)],
+)
+def export_direct_school_job(
+    job_id: str,
+    context: UserContext = Depends(current_user_context),
+) -> Response:
+    record = _direct_school_job_for_context(job_id, context)
+    try:
+        workbook = backend_service._build_direct_school_export(
+            record, user_email=context.email, include_all=context.is_admin
+        )
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    return _bytes_response(
+        200,
+        workbook,
+        content_type=backend_service.WORKBOOK_CONTENT_TYPE,
+        filename=f"direct_school_analysis_{str(job_id or '').strip()}.xlsx",
+        inline=False,
     )
 
 

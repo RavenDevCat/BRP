@@ -545,6 +545,10 @@ class JobQueueManager:
             terminate_worker_process(pid)
             self.gate.release(job_record.get("job_slot_path"), job_id=job_id)
             self.gate.cleanup_stale_slots()
+            preserve_result = (
+                str(dict(job_record.get("metadata") or {}).get("job_kind") or "").strip().lower()
+                == "direct_school_analysis"
+            )
             updated = self.job_store.update_job(
                 job_id,
                 status="canceled",
@@ -553,7 +557,7 @@ class JobQueueManager:
                 traceback=None,
                 worker_pid=None,
                 job_slot_path=None,
-                result=None,
+                result=job_record.get("result") if preserve_result else None,
             )
         self.schedule_queued_jobs()
         return updated

@@ -17,9 +17,9 @@ def main() -> int:
     released = backend_service.JOB_STORE.release_due_scheduled_jobs()
     backend_service._schedule_queued_jobs()
     if released:
-        print("released scheduled audit jobs:", ", ".join(str(job.get("job_id")) for job in released))
+        print("released scheduled jobs:", ", ".join(str(job.get("job_id")) for job in released))
     else:
-        print("released scheduled audit jobs: none")
+        print("released scheduled jobs: none")
     return 0
 
 

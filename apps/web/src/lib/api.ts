@@ -148,6 +148,7 @@ export type HistoryGroupScope =
     | "fleet_planner"
     | "distance_reference"
     | "distance_route_cost"
+    | "distance_direct_school"
     | "route_insert_advisor";
 
 export type HistoryGroup = {
@@ -631,6 +632,123 @@ export type DistanceCheckerHistoryCreateResponse = {
 };
 
 export type DistanceCheckerToolMode = "reference" | "route_cost";
+
+export type DirectSchoolAnalysisConfig = {
+    service_direction: "To School" | "From School";
+    stop_service_minutes: number;
+    time_window_start: string;
+    time_window_end: string;
+    from_school_departure_time: string;
+    far_distance_km: number;
+    far_duration_minutes: number;
+    burden_minutes: number;
+    bypass_candidate_limit: number;
+    candidate_cluster_radius_km: number;
+};
+
+export type DirectSchoolPreview = {
+    source_label: string;
+    selected_sheet: string;
+    service_direction: "To School" | "From School";
+    summary: {
+        unique_address_count: number;
+        route_count: number;
+        estimated_logical_provider_calls: number;
+        bypass_candidate_count: number;
+        service_stop_count?: number;
+        assignment_count?: number;
+    };
+    school: {
+        country?: string;
+        city?: string;
+        address?: string;
+        lat?: number;
+        lng?: number;
+    };
+    analysis_config: DirectSchoolAnalysisConfig;
+    client_prep: {
+        geocode_warnings?: Array<Record<string, unknown>>;
+        excluded_stops?: Array<Record<string, unknown>>;
+        elapsed_seconds?: number;
+    };
+};
+
+export type DirectSchoolStopResult = {
+    stop_key: string;
+    country?: string;
+    city?: string;
+    address: string;
+    riders: number;
+    route_ids: string[];
+    primary_route_id?: string;
+    lat?: number | null;
+    lng?: number | null;
+    provider_status: string;
+    quality_status?: string;
+    recommendation: string;
+    reasons?: string[];
+    risk_score?: number;
+    direct_distance_km?: number;
+    direct_duration_min?: number;
+    direct_service_duration_min?: number;
+    osrm_distance_km?: number;
+    osrm_duration_min?: number;
+    straight_distance_km?: number;
+    congestion_increment_min?: number;
+    live_to_osrm_ratio?: number | null;
+    road_to_straight_ratio?: number | null;
+    estimated_current_ride_min?: number;
+    rider_detour_min?: number;
+    marginal_route_burden_min?: number;
+    marginal_route_burden_km?: number;
+    latest_direct_departure?: string;
+    estimated_direct_arrival?: string;
+    provider_called_at?: string;
+    direct_geometry?: number[][];
+};
+
+export type DirectSchoolAnalysisResult = {
+    analysis_version: number;
+    analysis_type: "direct_school";
+    status: string;
+    generated_at?: string;
+    completed_at?: string;
+    provider: string;
+    service_direction: "To School" | "From School";
+    school: Record<string, unknown>;
+    parameters: DirectSchoolAnalysisConfig;
+    summary: Record<string, number | string | null | undefined>;
+    progress: {
+        phase: string;
+        completed: number;
+        total: number;
+        provider_api_calls: number;
+        in_run_reuse_count: number;
+    };
+    stops: DirectSchoolStopResult[];
+    routes: Array<Record<string, unknown>>;
+    candidate_clusters: Array<Record<string, unknown>>;
+    errors: Array<Record<string, unknown>>;
+};
+
+export type DirectSchoolJobSummary = JobSummary & {
+    title?: string;
+    result_status?: string;
+    result_summary?: Record<string, unknown>;
+};
+
+export type DirectSchoolMultiDay = {
+    run_count: number;
+    run_ids: string[];
+    stop_count: number;
+    stops: Array<Record<string, unknown>>;
+    samples: Array<Record<string, unknown>>;
+};
+
+export type DirectSchoolJobRecord = JobRecord & {
+    result?: DirectSchoolAnalysisResult | null;
+    multi_day: DirectSchoolMultiDay;
+};
 
 export type FleetPlannerPreviewResponse = {
     summary: {
@@ -1311,6 +1429,85 @@ export function saveDistanceCheckerHistory(payload: {
             body: JSON.stringify(payload),
         },
     );
+}
+
+export function previewDirectSchoolAnalysis(payload: {
+    file_name: string;
+    file_base64: string;
+    config: { service_direction: "To School" | "From School" };
+    analysis_config: DirectSchoolAnalysisConfig;
+}) {
+    return apiFetch<DirectSchoolPreview>("/distance-checker/direct-school/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+}
+
+export function createDirectSchoolAnalysisJob(payload: {
+    file_name: string;
+    file_base64: string;
+    config: { service_direction: "To School" | "From School" };
+    analysis_config: DirectSchoolAnalysisConfig;
+    job_custom_name?: string;
+    scheduled_job?: boolean;
+    scheduled_date?: string;
+    scheduled_time?: string;
+}) {
+    return apiFetch<{ job: DirectSchoolJobSummary; preview: DirectSchoolPreview }>(
+        "/distance-checker/direct-school/jobs",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        },
+    );
+}
+
+export async function listDirectSchoolAnalysisJobs() {
+    const payload = await apiFetch<{ jobs: DirectSchoolJobSummary[] }>(
+        "/distance-checker/direct-school/jobs",
+    );
+    return payload.jobs;
+}
+
+export function getDirectSchoolAnalysisJob(jobId: string) {
+    return apiFetch<DirectSchoolJobRecord>(
+        `/distance-checker/direct-school/jobs/${encodeURIComponent(jobId)}`,
+    );
+}
+
+export function cancelDirectSchoolAnalysisJob(jobId: string) {
+    return apiFetch<DirectSchoolJobRecord>(
+        `/distance-checker/direct-school/jobs/${encodeURIComponent(jobId)}/cancel`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        },
+    );
+}
+
+export function retryDirectSchoolAnalysisJob(jobId: string) {
+    return apiFetch<DirectSchoolJobRecord>(
+        `/distance-checker/direct-school/jobs/${encodeURIComponent(jobId)}/retry`,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+        },
+    );
+}
+
+export function deleteDirectSchoolAnalysisJob(jobId: string) {
+    return apiFetch<{ deleted: boolean; job_id: string }>(
+        `/distance-checker/direct-school/jobs/${encodeURIComponent(jobId)}`,
+        { method: "DELETE" },
+    );
+}
+
+export function getDirectSchoolAnalysisExportUrl(jobId: string) {
+    return `${API_BASE_URL}/distance-checker/direct-school/jobs/${encodeURIComponent(jobId)}/export`;
 }
 
 export function previewFleetPlanner(payload: {

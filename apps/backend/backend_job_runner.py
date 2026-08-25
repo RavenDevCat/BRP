@@ -10,10 +10,12 @@ from typing import Any
 
 try:
     from .deep_verification import build_automatic_verification_records
+    from .direct_school_analysis import run_direct_school_analysis
     from .planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
     from deep_verification import build_automatic_verification_records
+    from direct_school_analysis import run_direct_school_analysis
     from planner_core import build_planner_config, run_backend_planner_with_prepared_data
     from runtime_store_sqlite import SqliteRuntimeStore
 
@@ -145,19 +147,39 @@ def main() -> int:
 
     result: dict[str, Any] | None = None
     try:
-        config = build_planner_config(job_record.get("config") or {})
+        metadata = dict(job_record.get("metadata") or {})
+        job_kind = str(metadata.get("job_kind") or "route_audit").strip().lower()
         prepared_payload = dict(job_record.get("prepared_payload") or {})
-        if _is_scheduled_job(job_record):
-            result = run_backend_planner_with_prepared_data(
+        if job_kind == "direct_school_analysis":
+            def save_checkpoint(partial_result: dict[str, Any]) -> None:
+                current = _load_job(job_id)
+                if str(current.get("status", "")).strip().lower() == "canceled":
+                    raise RuntimeError("Direct-to-school analysis was canceled.")
+                current["result"] = partial_result
+                current["updated_at"] = utc_now_iso()
+                _save_job(current)
+
+            result = run_direct_school_analysis(
                 prepared_payload,
-                config=config,
-                require_fresh_final_traffic=True,
+                dict(metadata.get("analysis_config") or {}),
+                scheduled_start_at=job_record.get("scheduled_start_at"),
+                run_seed=str(job_record.get("scheduled_start_at") or job_id),
+                checkpoint=save_checkpoint,
+                resume_result=dict(job_record.get("result") or {}),
             )
-            validation_error = _scheduled_final_traffic_validation_error(result)
-            if validation_error:
-                raise RuntimeError(validation_error)
         else:
-            result = run_backend_planner_with_prepared_data(prepared_payload, config=config)
+            config = build_planner_config(job_record.get("config") or {})
+            if _is_scheduled_job(job_record):
+                result = run_backend_planner_with_prepared_data(
+                    prepared_payload,
+                    config=config,
+                    require_fresh_final_traffic=True,
+                )
+                validation_error = _scheduled_final_traffic_validation_error(result)
+                if validation_error:
+                    raise RuntimeError(validation_error)
+            else:
+                result = run_backend_planner_with_prepared_data(prepared_payload, config=config)
         job_record = _load_job(job_id)
         if str(job_record.get("status", "")).strip().lower() == "canceled":
             return 0
@@ -169,7 +191,8 @@ def main() -> int:
         job_record["worker_pid"] = None
         job_record["job_slot_path"] = None
         _save_job(job_record)
-        _create_automatic_deep_verifications(job_record)
+        if job_kind == "route_audit":
+            _create_automatic_deep_verifications(job_record)
         return 0
     except Exception as exc:
         job_record = _load_job(job_id)

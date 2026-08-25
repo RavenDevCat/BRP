@@ -8,6 +8,11 @@ import MapView, {
     type MapRef,
 } from "react-map-gl/maplibre";
 import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
+import type {
+    FeatureCollection as GeoJsonFeatureCollection,
+    Geometry,
+    GeoJsonProperties,
+} from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -64,18 +69,7 @@ const MAP_STYLE: StyleSpecification = {
     ],
 };
 
-type FeatureCollection = {
-    type: "FeatureCollection";
-    features: Array<{
-        type: "Feature";
-        id?: string;
-        properties: Record<string, string | number | boolean | null>;
-        geometry: {
-            type: "LineString" | "Point";
-            coordinates: number[] | number[][];
-        };
-    }>;
-};
+type FeatureCollection = GeoJsonFeatureCollection<Geometry, GeoJsonProperties>;
 
 type HoverInfo =
     | {
@@ -342,7 +336,7 @@ export function InteractiveRouteMap({
         () => ({
             type: "FeatureCollection",
             features: routeFeatures.features.filter(
-                (feature) => feature.properties.route_id === selectedRouteId,
+                (feature) => feature.properties?.route_id === selectedRouteId,
             ),
         }),
         [routeFeatures, selectedRouteId],
@@ -351,7 +345,7 @@ export function InteractiveRouteMap({
         () => ({
             type: "FeatureCollection",
             features: routeConnectorFeatures.features.filter(
-                (feature) => feature.properties.route_id === selectedRouteId,
+                (feature) => feature.properties?.route_id === selectedRouteId,
             ),
         }),
         [routeConnectorFeatures, selectedRouteId],
@@ -406,7 +400,7 @@ export function InteractiveRouteMap({
         () => ({
             type: "FeatureCollection",
             features: stopFeatures.features.filter(
-                (feature) => feature.properties.route_id === selectedRouteId,
+                (feature) => feature.properties?.route_id === selectedRouteId,
             ),
         }),
         [selectedRouteId, stopFeatures],
@@ -417,7 +411,7 @@ export function InteractiveRouteMap({
             features: selectedRouteId
                 ? stopFeatures.features.filter(
                       (feature) =>
-                          feature.properties.route_id !== selectedRouteId,
+                          feature.properties?.route_id !== selectedRouteId,
                   )
                 : stopFeatures.features,
         }),

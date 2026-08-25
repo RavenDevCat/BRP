@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import importlib
 import io
 import json
@@ -25,6 +26,11 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from .direct_school_analysis import (
+        aggregate_direct_school_results,
+        build_direct_school_workbook,
+        DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
+    )
     from .deep_verification import (
         build_automatic_verification_records,
         public_verification_record,
@@ -61,6 +67,11 @@ try:
         run_backend_planner_with_prepared_data,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from direct_school_analysis import (
+        aggregate_direct_school_results,
+        build_direct_school_workbook,
+        DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
+    )
     from deep_verification import (
         build_automatic_verification_records,
         public_verification_record,
@@ -2199,6 +2210,321 @@ def _auto_route_budget_from_current_plan(
     except Exception as exc:
         return {"status": "unavailable", "reason": exc.__class__.__name__}
     return details or {"status": "unavailable", "reason": "no_measurable_current_routes"}
+
+
+DIRECT_SCHOOL_JOB_KIND = "direct_school_analysis"
+
+
+def _job_kind(record: dict[str, Any]) -> str:
+    return str(dict(record.get("metadata") or {}).get("job_kind") or "route_audit").strip().lower()
+
+
+def _list_route_audit_jobs(*, user_email: str, include_all: bool) -> list[dict[str, Any]]:
+    return [
+        entry
+        for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)
+        if _job_kind(entry) == "route_audit"
+    ]
+
+
+def _direct_school_jobs(*, user_email: str, include_all: bool) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all):
+        if _job_kind(entry) != DIRECT_SCHOOL_JOB_KIND:
+            continue
+        job_id = str(entry.get("job_id") or "").strip()
+        record = JOB_STORE.get_job(job_id) if job_id else None
+        result = dict((record or {}).get("result") or {})
+        summary = dict(result.get("summary") or {})
+        summaries.append(
+            {
+                **entry,
+                "title": str(dict(entry.get("metadata") or {}).get("job_name") or "Direct-to-School Analysis"),
+                "result_status": result.get("status"),
+                "result_summary": summary,
+            }
+        )
+    return summaries
+
+
+def _direct_school_unique_stop_count(current_plan: dict[str, Any]) -> int:
+    keys = {
+        "|".join(
+            " ".join(str(stop.get(field) or "").strip().lower().split())
+            for field in ("country", "city", "address")
+        )
+        for stop in list(current_plan.get("stops") or [])
+        if not bool(stop.get("is_depot"))
+    }
+    return len(keys)
+
+
+def _direct_school_address_token(value: Any) -> str:
+    return " ".join(str(value or "").strip().casefold().split())
+
+
+def _direct_school_school_point(
+    current_plan: dict[str, Any], prepared_payload: dict[str, Any]
+) -> dict[str, Any]:
+    input_records = [
+        dict(item) for item in list(current_plan.get("input_records") or [])
+    ]
+    if not input_records:
+        raise ValueError("The workbook does not contain a shared school address.")
+    school_address = _direct_school_address_token(input_records[0].get("address"))
+    for raw_point in list(prepared_payload.get("original_points") or []):
+        point = dict(raw_point)
+        point_addresses = {
+            _direct_school_address_token(point.get("address")),
+            _direct_school_address_token(point.get("display_address")),
+            _direct_school_address_token(point.get("requested_address")),
+            *(
+                _direct_school_address_token(member)
+                for member in list(point.get("original_members") or [])
+            ),
+        }
+        if school_address and school_address in point_addresses:
+            return point
+    raise ValueError("The shared school address could not be geocoded.")
+
+
+def _prepare_direct_school_upload(
+    payload: dict[str, Any],
+) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]:
+    client_core, source_label, current_plan = _read_current_plan_upload(payload)
+    config_payload = _planner_config_payload(dict(payload.get("config") or {}))
+    config_payload["service_direction"] = str(
+        current_plan.get("service_direction") or config_payload.get("service_direction") or "To School"
+    )
+    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    client_config = _build_client_planner_config(client_core, config_payload)
+    client_prep = client_core.prepare_client_payload(
+        input_records,
+        current_plan_data=current_plan,
+        config=client_config,
+    )
+    prepared_payload = dict(client_prep.get("prepared_payload") or {})
+    points = list(prepared_payload.get("original_points") or [])
+    _direct_school_school_point(current_plan, prepared_payload)
+    if len(points) < 2:
+        raise ValueError("The workbook has no geocoded service addresses to analyze.")
+    return source_label, current_plan, prepared_payload, {
+        "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
+        "excluded_stops": list(client_prep.get("excluded_stops") or []),
+        "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
+    }
+
+
+def _direct_school_analysis_config(
+    payload: dict[str, Any], current_plan: dict[str, Any]
+) -> dict[str, Any]:
+    requested = dict(payload.get("analysis_config") or {})
+    config = {**DIRECT_SCHOOL_DEFAULTS, **requested}
+    config["service_direction"] = str(
+        current_plan.get("service_direction") or config.get("service_direction") or "To School"
+    )
+    return config
+
+
+def _direct_school_schedule_trigger(
+    *,
+    scheduled_date: Any,
+    scheduled_time: Any,
+    current_plan: dict[str, Any],
+) -> tuple[str, str]:
+    input_records = [dict(item) for item in list(current_plan.get("input_records") or [])]
+    country, _city = infer_traffic_location(input_records)
+    local_tz = ZoneInfo("Asia/Seoul") if str(country or "").strip().upper() == "SOUTH KOREA" else ZoneInfo("Asia/Shanghai")
+    try:
+        target_day = date.fromisoformat(str(scheduled_date or "").strip())
+    except ValueError as exc:
+        raise ValueError("scheduled_date must use YYYY-MM-DD format.") from exc
+    time_label, _minutes = _parse_clock_payload(
+        scheduled_time,
+        "scheduled_time",
+        "06:30",
+    )
+    hour, minute = (int(part) for part in time_label.split(":", 1))
+    target = datetime.combine(target_day, datetime_time(hour, minute), local_tz)
+    if target <= datetime.now(local_tz).replace(microsecond=0):
+        raise ValueError("Scheduled date/time has already passed.")
+    return target.isoformat(), f"{time_label} direct-to-school measurement"
+
+
+def _direct_school_signature(
+    current_plan: dict[str, Any], analysis_config: dict[str, Any]
+) -> str:
+    signature_payload = {
+        "service_direction": current_plan.get("service_direction"),
+        "stops": [
+            {
+                key: stop.get(key)
+                for key in (
+                    "route_id", "stop_sequence", "country", "city", "address",
+                    "passenger_count", "is_depot",
+                )
+            }
+            for stop in list(current_plan.get("stops") or [])
+        ],
+        "parameters": {
+            key: analysis_config.get(key)
+            for key in sorted(analysis_config)
+            if key not in {"provider_call_limit"}
+        },
+    }
+    raw = json.dumps(signature_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _handle_direct_school_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    source_label, current_plan, prepared_payload, prep_summary = _prepare_direct_school_upload(payload)
+    analysis_config = _direct_school_analysis_config(payload, current_plan)
+    return _direct_school_preview_from_prepared(
+        source_label,
+        current_plan,
+        prepared_payload,
+        prep_summary,
+        analysis_config,
+    )
+
+
+def _direct_school_preview_from_prepared(
+    source_label: str,
+    current_plan: dict[str, Any],
+    prepared_payload: dict[str, Any],
+    prep_summary: dict[str, Any],
+    analysis_config: dict[str, Any],
+) -> dict[str, Any]:
+    unique_stop_count = _direct_school_unique_stop_count(current_plan)
+    route_count = int(dict(current_plan.get("summary") or {}).get("route_count", 0) or 0)
+    bypass_count = min(unique_stop_count, max(0, int(analysis_config.get("bypass_candidate_limit", 0) or 0)))
+    school = _direct_school_school_point(current_plan, prepared_payload)
+    school_record = dict(list(current_plan.get("input_records") or [{}])[0])
+    return {
+        "source_label": source_label,
+        "selected_sheet": "current_plan_assignments",
+        "service_direction": current_plan.get("service_direction"),
+        "summary": {
+            **dict(current_plan.get("summary") or {}),
+            "unique_address_count": unique_stop_count,
+            "route_count": route_count,
+            "estimated_logical_provider_calls": unique_stop_count + route_count + bypass_count,
+            "bypass_candidate_count": bypass_count,
+        },
+        "school": {
+            "country": school.get("country"),
+            "city": school.get("city"),
+            "address": school.get("display_address") or school.get("address") or school_record.get("address"),
+            "lat": school.get("plot_lat", school.get("lat")),
+            "lng": school.get("plot_lng", school.get("lng")),
+        },
+        "analysis_config": analysis_config,
+        "client_prep": prep_summary,
+    }
+
+
+def _handle_direct_school_submit(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    source_label, current_plan, prepared_payload, prep_summary = _prepare_direct_school_upload(payload)
+    analysis_config = _direct_school_analysis_config(payload, current_plan)
+    scheduled_requested = bool(payload.get("scheduled_job"))
+    if scheduled_requested and not SCHEDULED_JOBS_ENABLED:
+        raise ValueError("Scheduled jobs are not enabled for this deployment.")
+    scheduled_start_at = None
+    scheduled_trigger_label = None
+    if scheduled_requested:
+        scheduled_start_at, scheduled_trigger_label = _direct_school_schedule_trigger(
+            scheduled_date=payload.get("scheduled_date"),
+            scheduled_time=payload.get("scheduled_time"),
+            current_plan=current_plan,
+        )
+    custom_name = str(payload.get("job_custom_name") or "").strip()
+    job_name = custom_name or f"{Path(source_label).stem} direct-to-school"
+    signature = _direct_school_signature(current_plan, analysis_config)
+    metadata = {
+        "job_kind": DIRECT_SCHOOL_JOB_KIND,
+        "job_name": job_name,
+        "job_default_name": f"{Path(source_label).stem} direct-to-school",
+        "job_custom_name": custom_name,
+        "source_label": source_label,
+        "selected_sheet": "current_plan_assignments",
+        "scheduled_job": scheduled_requested,
+        "scheduled_date": payload.get("scheduled_date") if scheduled_requested else None,
+        "scheduled_time": payload.get("scheduled_time") if scheduled_requested else None,
+        "scheduled_start_at": scheduled_start_at,
+        "scheduled_trigger_label": scheduled_trigger_label,
+        "analysis_config": analysis_config,
+        "analysis_signature": signature,
+        "client_prep": prep_summary,
+    }
+    summary = JOB_STORE.create_job(
+        {},
+        prepared_payload,
+        metadata=metadata,
+        owner_email=user_email,
+        status="scheduled" if scheduled_requested else "queued",
+        scheduled_start_at=scheduled_start_at,
+        scheduled_trigger_label=scheduled_trigger_label,
+    )
+    if not scheduled_requested:
+        spawned = _spawn_job_worker(str(summary["job_id"]))
+        if spawned:
+            summary["worker_pid"] = spawned.get("worker_pid")
+    return {
+        "job": summary,
+        "preview": _direct_school_preview_from_prepared(
+            source_label,
+            current_plan,
+            prepared_payload,
+            prep_summary,
+            analysis_config,
+        ),
+    }
+
+
+def _direct_school_compatible_records(
+    record: dict[str, Any], *, user_email: str, include_all: bool
+) -> list[dict[str, Any]]:
+    signature = str(dict(record.get("metadata") or {}).get("analysis_signature") or "")
+    if not signature:
+        return [record]
+    records: list[dict[str, Any]] = []
+    for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all):
+        if _job_kind(entry) != DIRECT_SCHOOL_JOB_KIND:
+            continue
+        if str(dict(entry.get("metadata") or {}).get("analysis_signature") or "") != signature:
+            continue
+        candidate = JOB_STORE.get_job(str(entry.get("job_id") or ""))
+        if candidate:
+            records.append(candidate)
+    return records
+
+
+def _direct_school_public_record(
+    record: dict[str, Any], *, user_email: str, include_all: bool
+) -> dict[str, Any]:
+    compatible = _direct_school_compatible_records(record, user_email=user_email, include_all=include_all)
+    return {
+        "job_id": record.get("job_id"),
+        "owner_email": record.get("owner_email"),
+        "status": record.get("status"),
+        "created_at": record.get("created_at"),
+        "started_at": record.get("started_at"),
+        "finished_at": record.get("finished_at"),
+        "scheduled_start_at": record.get("scheduled_start_at"),
+        "scheduled_trigger_label": record.get("scheduled_trigger_label"),
+        "metadata": dict(record.get("metadata") or {}),
+        "prepared_payload_summary": dict(record.get("prepared_payload_summary") or {}),
+        "result": dict(record.get("result") or {}),
+        "error": record.get("error"),
+        "multi_day": aggregate_direct_school_results(compatible),
+    }
+
+
+def _build_direct_school_export(
+    record: dict[str, Any], *, user_email: str, include_all: bool
+) -> bytes:
+    compatible = _direct_school_compatible_records(record, user_email=user_email, include_all=include_all)
+    return build_direct_school_workbook(record, aggregate_direct_school_results(compatible))
 
 
 def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:

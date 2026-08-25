@@ -244,7 +244,8 @@ export function DirectSchoolAnalysisPage({
   }
 
   const selectedRecord = detailQuery.data || null;
-  const result = selectedRecord?.result || null;
+  const rawResult = selectedRecord?.result;
+  const result = rawResult && Array.isArray(rawResult.stops) ? rawResult : null;
   const filteredStops = useMemo(() => {
     const rows = result?.stops || [];
     const search = searchText.trim().toLowerCase();
@@ -498,7 +499,7 @@ export function DirectSchoolAnalysisPage({
                     {selectedRecord.status === "failed" || selectedRecord.result?.status === "partial" ? (
                       <Button type="button" variant="secondary" className="w-full" disabled={retryMutation.isPending} icon={<RefreshCw className={cn("h-4 w-4", retryMutation.isPending && "animate-spin")} />} onClick={() => retryMutation.mutate(selectedRecord.job_id)}>{t("Retry missing measurements")}</Button>
                     ) : null}
-                    {selectedRecord.result ? (
+                    {result ? (
                       <a className={cn(buttonClassName("secondary"), "w-full")} href={getDirectSchoolAnalysisExportUrl(selectedRecord.job_id)}>
                         <Download className="h-4 w-4" aria-hidden="true" />
                         {t("Download Excel")}

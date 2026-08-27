@@ -327,15 +327,50 @@ def _osrm_leg(
         f"{value:.6f}" for value in (*origin_coords, *destination_coords)
     )
     if key not in cache:
-        detail = distance_tool.compute_osrm_route_leg_details([origin, destination])[0]
+        # Audit maps route on plot coordinates (WGS84), while China geocoders also
+        # retain raw GCJ-02 coordinates in lat/lng. Normalize the request before
+        # calling the shared distance helper so the route and map markers use the
+        # same coordinate system.
+        route_origin = {
+            **origin,
+            "lat": origin_coords[0],
+            "lng": origin_coords[1],
+        }
+        route_destination = {
+            **destination,
+            "lat": destination_coords[0],
+            "lng": destination_coords[1],
+        }
+        detail = distance_tool.compute_osrm_route_leg_details(
+            [route_origin, route_destination]
+        )[0]
         geometry = [
             [float(lng), float(lat)]
             for lat, lng in list(detail.get("geometry") or [])
         ]
+        snap_connectors: list[dict[str, Any]] = []
+        for connector in list(detail.get("snap_connectors") or []):
+            connector_geometry = [
+                [float(lng), float(lat)]
+                for lat, lng in list(dict(connector or {}).get("geometry") or [])
+            ]
+            if len(connector_geometry) < 2:
+                continue
+            snap_connectors.append(
+                {
+                    "type": str(dict(connector or {}).get("type") or "snap"),
+                    "distance_m": _safe_float(
+                        dict(connector or {}).get("distance_m")
+                    ),
+                    "geometry": connector_geometry,
+                }
+            )
         cache[key] = {
             "duration_s": detail.get("duration_s"),
             "distance_m": detail.get("distance_m"),
             "geometry": geometry,
+            "snap_connectors": snap_connectors,
+            "coordinate_source": "plot_wgs84",
         }
     return deepcopy(cache[key])
 
@@ -359,7 +394,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 3,
+        "analysis_version": 4,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -559,6 +594,8 @@ def run_direct_school_analysis(
                     "live_to_osrm_ratio": round(direct_duration_s / osrm_duration_s, 3) if osrm_duration_s > 0 else None,
                     "road_to_straight_ratio": round((direct_distance_m / 1000.0) / straight_km, 3) if straight_km > 0 else None,
                     "direct_geometry": osrm.get("geometry") or [],
+                    "direct_snap_connectors": osrm.get("snap_connectors") or [],
+                    "direct_geometry_source": osrm.get("coordinate_source") or "plot_wgs84",
                 }
             )
             if config["service_direction"] == "To School":

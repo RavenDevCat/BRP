@@ -85,6 +85,57 @@ def fake_osrm(origin: dict, destination: dict, _cache: dict) -> dict:
     }
 
 
+def test_osrm_leg_uses_audit_plot_coordinates_and_snap_connectors(monkeypatch) -> None:
+    origin = {
+        **point("Origin", 31.2400, 121.4800),
+        "plot_lat": 31.2421,
+        "plot_lng": 121.4754,
+    }
+    destination = {
+        **point("School", 31.2000, 121.5000),
+        "plot_lat": 31.2022,
+        "plot_lng": 121.4953,
+    }
+
+    def fake_leg_details(points: list[dict]) -> list[dict]:
+        assert points[0]["lat"] == origin["plot_lat"]
+        assert points[0]["lng"] == origin["plot_lng"]
+        assert points[1]["lat"] == destination["plot_lat"]
+        assert points[1]["lng"] == destination["plot_lng"]
+        return [
+            {
+                "duration_s": 600,
+                "distance_m": 5000,
+                "geometry": [(31.2420, 121.4755), (31.2023, 121.4952)],
+                "snap_connectors": [
+                    {
+                        "type": "origin",
+                        "distance_m": 32,
+                        "geometry": [(31.2421, 121.4754), (31.2420, 121.4755)],
+                    }
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(
+        analysis.distance_tool,
+        "compute_osrm_route_leg_details",
+        fake_leg_details,
+    )
+
+    result = analysis._osrm_leg(origin, destination, {})
+
+    assert result["coordinate_source"] == "plot_wgs84"
+    assert result["geometry"] == [[121.4755, 31.2420], [121.4952, 31.2023]]
+    assert result["snap_connectors"] == [
+        {
+            "type": "origin",
+            "distance_m": 32.0,
+            "geometry": [[121.4754, 31.2421], [121.4755, 31.2420]],
+        }
+    ]
+
+
 def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
     monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
@@ -101,6 +152,7 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     )
 
     assert result["status"] == "complete"
+    assert result["analysis_version"] == 4
     assert result["summary"]["address_count"] == 2
     assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")

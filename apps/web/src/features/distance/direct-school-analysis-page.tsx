@@ -28,6 +28,12 @@ import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
+  BRP_MAP_STYLE,
+  brpSelectedRouteCasingPaint,
+  brpSelectedRouteConnectorPaint,
+  brpSelectedRouteLinePaint,
+} from "@/features/results/interactive-route-map";
+import {
   cancelDirectSchoolAnalysisJob,
   createDirectSchoolAnalysisJob,
   deleteDirectSchoolAnalysisJob,
@@ -61,19 +67,6 @@ const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
 
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
-
-const MAP_STYLE = {
-  version: 8 as const,
-  sources: {
-    osm: {
-      type: "raster" as const,
-      tiles: ["/api/map-tiles/{z}/{x}/{y}.png"],
-      tileSize: 256,
-      attribution: "OpenStreetMap contributors",
-    },
-  },
-  layers: [{ id: "osm", type: "raster" as const, source: "osm" }],
-};
 
 export function DirectSchoolAnalysisPage({
   onToolChange,
@@ -800,6 +793,30 @@ function AddressClassificationBoard({
   );
 }
 
+function validMapCoordinate(value: number[] | undefined): value is number[] {
+  return Boolean(
+    value
+    && value.length >= 2
+    && Number.isFinite(Number(value[0]))
+    && Number.isFinite(Number(value[1]))
+    && Math.abs(Number(value[0])) <= 180
+    && Math.abs(Number(value[1])) <= 90,
+  );
+}
+
+function directRouteMapPoints(
+  stop: DirectSchoolStopResult,
+  school: { lat?: number; lng?: number },
+): number[][] {
+  const points = [
+    ...(stop.direct_geometry || []),
+    ...(stop.direct_snap_connectors || []).flatMap((connector) => connector.geometry || []),
+    [Number(stop.lng), Number(stop.lat)],
+    [Number(school.lng), Number(school.lat)],
+  ];
+  return points.filter(validMapCoordinate);
+}
+
 function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: { result: NonNullable<DirectSchoolJobRecord["result"]>; selectedStop: DirectSchoolStopResult | null; selectionRevision: number; onSelect: (key: string) => void }) {
   const t = useT();
   const mapRef = useRef<MapRef | null>(null);
@@ -833,11 +850,26 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
   }), [school.lat, school.lng, selectedStop?.stop_key, visibleStops]);
   const lineData = useMemo<FeatureCollection<LineString>>(() => ({
     type: "FeatureCollection",
-    features: selectedStop?.direct_geometry?.length ? [{
+    features: selectedStop && (selectedStop.direct_geometry?.length || 0) >= 2 ? [{
       type: "Feature",
       properties: { color: classificationColor(selectedCategory) },
-      geometry: { type: "LineString", coordinates: selectedStop.direct_geometry },
+      geometry: { type: "LineString", coordinates: selectedStop.direct_geometry || [] },
     }] : [],
+  }), [selectedCategory, selectedStop]);
+  const connectorData = useMemo<FeatureCollection<LineString>>(() => ({
+    type: "FeatureCollection",
+    features: (selectedStop?.direct_snap_connectors || [])
+      .filter((connector) => (connector.geometry?.length || 0) >= 2)
+      .map((connector, index) => ({
+        type: "Feature" as const,
+        id: `${selectedStop?.stop_key || "route"}:connector:${index}`,
+        properties: {
+          color: classificationColor(selectedCategory),
+          connector_type: connector.type || "snap",
+          distance_m: Number(connector.distance_m || 0),
+        },
+        geometry: { type: "LineString" as const, coordinates: connector.geometry },
+      })),
   }), [selectedCategory, selectedStop]);
 
   const fitAll = () => {
@@ -853,11 +885,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
 
   useEffect(() => {
     if (!mapRef.current || !selectedStop || selectionRevision < 1) return;
-    const routePoints = selectedStop?.direct_geometry?.length
-      ? selectedStop.direct_geometry
-      : Number.isFinite(selectedStop?.lng) && Number.isFinite(selectedStop?.lat) && Number.isFinite(school.lng) && Number.isFinite(school.lat)
-        ? [[Number(selectedStop?.lng), Number(selectedStop?.lat)], [Number(school.lng), Number(school.lat)]]
-        : [];
+    const routePoints = directRouteMapPoints(selectedStop, school);
     if (!routePoints.length) return;
     const lngs = routePoints.map((coords) => Number(coords[0]));
     const lats = routePoints.map((coords) => Number(coords[1]));
@@ -885,7 +913,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
           <MapView
             ref={mapRef}
             initialViewState={{ longitude: Number(school.lng || 121.47), latitude: Number(school.lat || 31.23), zoom: 9 }}
-            mapStyle={MAP_STYLE}
+            mapStyle={BRP_MAP_STYLE}
             interactiveLayerIds={["direct-school-points"]}
             onLoad={fitAll}
             onClick={(event) => {
@@ -893,10 +921,13 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
               if (key && key !== "school") onSelect(key);
             }}
           >
-            <NavigationControl position="top-right" />
+            <NavigationControl position="bottom-right" />
+            <Source id="direct-school-connectors-source" type="geojson" data={connectorData}>
+              <Layer id="direct-school-connectors" type="line" paint={brpSelectedRouteConnectorPaint()} />
+            </Source>
             <Source id="direct-school-line-source" type="geojson" data={lineData}>
-              <Layer id="direct-school-line-casing" type="line" paint={{ "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.9 }} />
-              <Layer id="direct-school-line" type="line" paint={{ "line-color": ["get", "color"], "line-width": 5, "line-opacity": 0.95 }} />
+              <Layer id="direct-school-line-casing" type="line" paint={brpSelectedRouteCasingPaint()} />
+              <Layer id="direct-school-line" type="line" paint={brpSelectedRouteLinePaint()} />
             </Source>
             <Source id="direct-school-points-source" type="geojson" data={pointData}>
               <Layer id="direct-school-points" type="circle" paint={{
@@ -955,6 +986,7 @@ function downloadDirectSchoolMapHtml(
       directDurationMin: row.direct_duration_min,
       currentRideMin: row.estimated_current_ride_min,
       geometry: row.direct_geometry || [],
+      connectors: row.direct_snap_connectors || [],
     }));
   const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? stops.filter((row) => row.category === "direct_over_limit").reduce((total, row) => total + row.riders, 0));
   const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? stops.filter((row) => row.category === "route_only_over_limit").reduce((total, row) => total + row.riders, 0));
@@ -1035,7 +1067,7 @@ function downloadDirectSchoolMapHtml(
       center: Number.isFinite(data.school.lng) && Number.isFinite(data.school.lat) ? [data.school.lng, data.school.lat] : [121.47, 31.23],
       zoom: 9,
     });
-    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    map.addControl(new maplibregl.NavigationControl(), "bottom-right");
     document.getElementById("summaryTitle").textContent = labels.title;
     document.getElementById("fitAll").textContent = labels.fitAll;
     document.getElementById("directLabel").textContent = labels.directOver;
@@ -1057,6 +1089,11 @@ function downloadDirectSchoolMapHtml(
       const stop = data.stops.find(item => item.stopKey === selectedStopKey);
       return { type: "FeatureCollection", features: stop && Array.isArray(stop.geometry) && stop.geometry.length ? [{ type: "Feature", properties: { color: stop.color }, geometry: { type: "LineString", coordinates: stop.geometry } }] : [] };
     }
+    function connectorGeojson() {
+      const stop = data.stops.find(item => item.stopKey === selectedStopKey);
+      const connectors = stop && Array.isArray(stop.connectors) ? stop.connectors : [];
+      return { type: "FeatureCollection", features: connectors.filter(connector => Array.isArray(connector.geometry) && connector.geometry.length >= 2).map((connector, index) => ({ type: "Feature", id: stop.stopKey + ":connector:" + index, properties: { color: stop.color, connectorType: connector.type || "snap", distanceM: Number(connector.distance_m || 0) }, geometry: { type: "LineString", coordinates: connector.geometry } })) };
+    }
     function fitAll() {
       const points = data.stops.map(stop => [stop.lng, stop.lat]);
       if (Number.isFinite(data.school.lng) && Number.isFinite(data.school.lat)) points.push([data.school.lng, data.school.lat]);
@@ -1065,7 +1102,8 @@ function downloadDirectSchoolMapHtml(
       map.fitBounds(bounds, { padding: 70, duration: 0, maxZoom: 13 });
     }
     function focusSelected(stop) {
-      const points = Array.isArray(stop.geometry) && stop.geometry.length ? stop.geometry : [[stop.lng, stop.lat], [data.school.lng, data.school.lat]];
+      const connectorPoints = (Array.isArray(stop.connectors) ? stop.connectors : []).flatMap(connector => Array.isArray(connector.geometry) ? connector.geometry : []);
+      const points = [...(Array.isArray(stop.geometry) ? stop.geometry : []), ...connectorPoints, [stop.lng, stop.lat], [data.school.lng, data.school.lat]];
       const valid = points.filter(point => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
       if (!valid.length) return;
       const bounds = valid.reduce((value, point) => value.extend(point), new maplibregl.LngLatBounds(valid[0], valid[0]));
@@ -1076,6 +1114,7 @@ function downloadDirectSchoolMapHtml(
       if (!stop) return;
       selectedStopKey = key;
       map.getSource("points").setData(pointGeojson());
+      map.getSource("selected-connectors").setData(connectorGeojson());
       map.getSource("selected-line").setData(lineGeojson());
       document.getElementById("address").textContent = stop.address;
       document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students;
@@ -1085,9 +1124,11 @@ function downloadDirectSchoolMapHtml(
       if (focus) focusSelected(stop);
     }
     map.on("load", () => {
+      map.addSource("selected-connectors", { type: "geojson", data: connectorGeojson() });
+      map.addLayer({ id: "selected-connectors", type: "line", source: "selected-connectors", paint: { "line-color": ["get", "color"], "line-width": 3, "line-opacity": .86, "line-dasharray": [1.5, 1.5] } });
       map.addSource("selected-line", { type: "geojson", data: lineGeojson() });
-      map.addLayer({ id: "selected-line-casing", type: "line", source: "selected-line", paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .9 } });
-      map.addLayer({ id: "selected-line", type: "line", source: "selected-line", paint: { "line-color": ["get", "color"], "line-width": 5, "line-opacity": .95 } });
+      map.addLayer({ id: "selected-line-casing", type: "line", source: "selected-line", paint: { "line-color": "#ffffff", "line-width": 13, "line-opacity": .98 } });
+      map.addLayer({ id: "selected-line", type: "line", source: "selected-line", paint: { "line-color": ["get", "color"], "line-width": 8, "line-opacity": .98 } });
       map.addSource("points", { type: "geojson", data: pointGeojson() });
       map.addLayer({ id: "points", type: "circle", source: "points", paint: { "circle-color": ["get", "color"], "circle-radius": ["case", ["==", ["get", "school"], true], 9, ["==", ["get", "selected"], true], 10, 6], "circle-stroke-color": ["case", ["==", ["get", "selected"], true], "#111827", "#ffffff"], "circle-stroke-width": ["case", ["==", ["get", "selected"], true], 4, 2] } });
       map.on("click", "points", event => { const key = event.features && event.features[0] && event.features[0].properties.stopKey; if (key && key !== "school") selectStop(String(key), true); });

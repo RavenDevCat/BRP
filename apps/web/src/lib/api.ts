@@ -700,6 +700,12 @@ export type DirectSchoolStopResult = {
     estimated_direct_arrival?: string;
     provider_called_at?: string;
     direct_geometry?: number[][];
+    direct_geometry_source?: string;
+    direct_snap_connectors?: Array<{
+        type?: string;
+        distance_m?: number;
+        geometry: number[][];
+    }>;
     route_contexts?: Array<{
         route_id?: string;
         stop_sequence?: number;

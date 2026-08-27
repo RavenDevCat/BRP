@@ -7,7 +7,11 @@ import MapView, {
     type MapLayerMouseEvent,
     type MapRef,
 } from "react-map-gl/maplibre";
-import type { ExpressionSpecification, StyleSpecification } from "maplibre-gl";
+import type {
+    ExpressionSpecification,
+    LineLayerSpecification,
+    StyleSpecification,
+} from "maplibre-gl";
 import type {
     FeatureCollection as GeoJsonFeatureCollection,
     Geometry,
@@ -50,7 +54,7 @@ const ROUTE_COLORS = [
     "#166534",
 ];
 
-const MAP_STYLE: StyleSpecification = {
+export const BRP_MAP_STYLE: StyleSpecification = {
     version: 8,
     sources: {
         osm: {
@@ -68,6 +72,37 @@ const MAP_STYLE: StyleSpecification = {
         },
     ],
 };
+
+export function brpSelectedRouteConnectorPaint(
+    visible = true,
+): LineLayerSpecification["paint"] {
+    return {
+        "line-color": ["get", "color"],
+        "line-width": 3,
+        "line-opacity": visible ? 0.86 : 0,
+        "line-dasharray": [1.5, 1.5],
+    };
+}
+
+export function brpSelectedRouteCasingPaint(
+    visible = true,
+): LineLayerSpecification["paint"] {
+    return {
+        "line-color": "#ffffff",
+        "line-width": 13,
+        "line-opacity": visible ? 0.98 : 0,
+    };
+}
+
+export function brpSelectedRouteLinePaint(
+    visible = true,
+): LineLayerSpecification["paint"] {
+    return {
+        "line-color": ["get", "color"],
+        "line-width": 8,
+        "line-opacity": visible ? 0.98 : 0,
+    };
+}
 
 type FeatureCollection = GeoJsonFeatureCollection<Geometry, GeoJsonProperties>;
 
@@ -964,7 +999,7 @@ export function InteractiveRouteMap({
                 <MapView
                     ref={mapRef}
                     initialViewState={initialViewState}
-                    mapStyle={MAP_STYLE}
+                    mapStyle={BRP_MAP_STYLE}
                     interactiveLayerIds={INTERACTIVE_LAYER_IDS}
                     onLoad={() => fitMapToData(mapRef.current, data)}
                     onClick={handleMapClick}
@@ -1037,12 +1072,7 @@ export function InteractiveRouteMap({
                         <Layer
                             id="selected-route-connectors-line"
                             type="line"
-                            paint={{
-                                "line-color": ["get", "color"],
-                                "line-width": 3,
-                                "line-opacity": selectedRouteId ? 0.86 : 0,
-                                "line-dasharray": [1.5, 1.5],
-                            }}
+                            paint={brpSelectedRouteConnectorPaint(Boolean(selectedRouteId))}
                         />
                     </Source>
                     <Source
@@ -1053,20 +1083,12 @@ export function InteractiveRouteMap({
                         <Layer
                             id="selected-route-casing"
                             type="line"
-                            paint={{
-                                "line-color": "#ffffff",
-                                "line-width": 13,
-                                "line-opacity": selectedRouteId ? 0.98 : 0,
-                            }}
+                            paint={brpSelectedRouteCasingPaint(Boolean(selectedRouteId))}
                         />
                         <Layer
                             id="selected-route-line"
                             type="line"
-                            paint={{
-                                "line-color": ["get", "color"],
-                                "line-width": 8,
-                                "line-opacity": selectedRouteId ? 0.98 : 0,
-                            }}
+                            paint={brpSelectedRouteLinePaint(Boolean(selectedRouteId))}
                         />
                         <Layer
                             id="selected-route-arrows"

@@ -56,7 +56,6 @@ const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
   time_window_start: "06:30",
   time_window_end: "08:00",
   from_school_departure_time: "15:40",
-  far_distance_km: 20,
   far_duration_minutes: 45,
   burden_minutes: 15,
   bypass_candidate_limit: 10,
@@ -403,7 +402,6 @@ export function DirectSchoolAnalysisPage({
                     </select>
                   </Field>
                   <div className="grid grid-cols-2 gap-3">
-                    <NumberField label="Far distance km" value={config.far_distance_km} min={1} step={1} onChange={(value) => updateConfig({ far_distance_km: value })} />
                     <NumberField label="Far duration min" value={config.far_duration_minutes} min={1} step={5} onChange={(value) => updateConfig({ far_duration_minutes: value })} />
                     <NumberField label="Burden threshold min" value={config.burden_minutes} min={1} step={1} onChange={(value) => updateConfig({ burden_minutes: value })} />
                     <NumberField label="Bypass checks" value={config.bypass_candidate_limit} min={0} max={50} step={1} onChange={(value) => updateConfig({ bypass_candidate_limit: value })} />
@@ -411,7 +409,7 @@ export function DirectSchoolAnalysisPage({
                     <NumberField label="Stop dwell min" value={config.stop_service_minutes} min={0} step={0.5} onChange={(value) => updateConfig({ stop_service_minutes: value })} />
                   </div>
                   <p className="text-xs leading-5 text-muted-foreground">
-                    {t("Dedicated service is suggested only when a stop is remote and its measured route burden is also material.")}
+                    {t("Dedicated service is suggested only when direct travel time exceeds the limit and measured route burden is material. Distance remains a reported measurement only.")}
                   </p>
                 </CardContent>
               </Card>
@@ -1084,7 +1082,7 @@ function recommendationLabel(value: string) {
     all: "All",
     dedicated_candidate: "Dedicated candidate",
     route_adjustment: "Route adjustment",
-    far_not_main_cause: "Far, not main cause",
+    far_not_main_cause: "Direct over limit, not route cause",
     data_review: "Data review",
     within_range: "Within range",
     pending: "Pending",

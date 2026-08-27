@@ -639,7 +639,6 @@ export type DirectSchoolAnalysisConfig = {
     time_window_start: string;
     time_window_end: string;
     from_school_departure_time: string;
-    far_distance_km: number;
     far_duration_minutes: number;
     burden_minutes: number;
     bypass_candidate_limit: number;

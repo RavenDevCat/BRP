@@ -94,7 +94,6 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
         prepared_payload(),
         {
             "service_direction": "To School",
-            "far_distance_km": 20,
             "far_duration_minutes": 45,
             "burden_minutes": 15,
             "bypass_candidate_limit": 2,
@@ -117,6 +116,31 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
     assert result["route_window_analysis"][0]["post_primary_duration_min"] == 16
     assert checkpoints
     assert checkpoints[0]["analysis_type"] == "direct_school"
+
+
+def test_distance_is_reported_but_never_triggers_a_recommendation(monkeypatch) -> None:
+    monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+
+    result = analysis.run_direct_school_analysis(
+        prepared_payload(),
+        {
+            "service_direction": "To School",
+            "far_distance_km": 1,
+            "far_duration_minutes": 120,
+            "burden_minutes": 200,
+            "time_window_start": "06:30",
+            "time_window_end": "09:30",
+            "bypass_candidate_limit": 0,
+        },
+        run_seed="time-only-threshold-test",
+    )
+
+    far = next(row for row in result["stops"] if row["address"] == "Far stop")
+    assert far["direct_distance_km"] == 30
+    assert far["direct_duration_min"] == 60
+    assert far["recommendation"] == "within_range"
+    assert "far_distance_km" not in result["parameters"]
 
 
 def test_analysis_counts_route_only_students_by_occurrence(monkeypatch) -> None:
@@ -207,7 +231,7 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
             "service_direction": "To School",
             "school": {"address": "School"},
             "summary": {"address_count": 1},
-            "parameters": {"far_distance_km": 20},
+            "parameters": {"far_duration_minutes": 45},
             "stops": [
                 {
                     "stop_key": "far",

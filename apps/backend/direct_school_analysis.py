@@ -34,7 +34,6 @@ DEFAULT_ANALYSIS_CONFIG: dict[str, Any] = {
     "time_window_start": "06:30",
     "time_window_end": "08:00",
     "from_school_departure_time": "15:40",
-    "far_distance_km": 20.0,
     "far_duration_minutes": 45.0,
     "burden_minutes": 15.0,
     "bypass_candidate_limit": 10,
@@ -191,12 +190,12 @@ def _percentile(values: list[float], quantile: float) -> float | None:
 
 def _analysis_config(value: dict[str, Any] | None) -> dict[str, Any]:
     config = {**DEFAULT_ANALYSIS_CONFIG, **dict(value or {})}
+    config.pop("far_distance_km", None)
     config["service_direction"] = (
         "To School" if str(config.get("service_direction")) == "To School" else "From School"
     )
     for key in (
         "stop_service_minutes",
-        "far_distance_km",
         "far_duration_minutes",
         "burden_minutes",
         "candidate_cluster_radius_km",
@@ -748,40 +747,38 @@ def run_direct_school_analysis(
         progress["in_run_reuse_count"] = int(provider.state.get("cache_hits", 0))
         save_checkpoint()
 
-    far_distance = float(config["far_distance_km"])
     far_duration = float(config["far_duration_minutes"])
     burden_threshold = float(config["burden_minutes"])
     for row in rows:
         if row.get("provider_status") != "resolved":
             row["recommendation"] = "data_review"
             continue
-        direct_far = _safe_float(row.get("direct_distance_km")) >= far_distance or _safe_float(row.get("direct_duration_min")) >= far_duration
+        direct_over_time = _safe_float(row.get("direct_duration_min")) >= far_duration
         route_burden = max(
             _safe_float(row.get("rider_detour_min")),
             _safe_float(row.get("marginal_route_burden_min")),
         )
         reasons: list[str] = []
-        if direct_far:
-            reasons.append("Direct trip exceeds the configured distance or duration threshold.")
+        if direct_over_time:
+            reasons.append("Direct trip exceeds the configured time threshold.")
         if _safe_float(row.get("rider_detour_min")) >= burden_threshold:
             reasons.append("The rider's current in-vehicle detour exceeds the configured burden threshold.")
         if _safe_float(row.get("marginal_route_burden_min")) >= burden_threshold:
             reasons.append("Removing this stop materially reduces its current route duration.")
-        if direct_far and route_burden >= burden_threshold:
+        if direct_over_time and route_burden >= burden_threshold:
             recommendation = "dedicated_candidate"
         elif route_burden >= burden_threshold:
             recommendation = "route_adjustment"
-        elif direct_far:
+        elif direct_over_time:
             recommendation = "far_not_main_cause"
-            reasons.append("The stop is remote, but its measured route burden is below the configured threshold.")
+            reasons.append("The direct trip exceeds the time limit, but measured route burden is below the configured threshold.")
         else:
             recommendation = "within_range"
-            reasons.append("Direct remoteness and current-route burden are both below the configured thresholds.")
+            reasons.append("Direct travel time and current-route burden are both below the configured thresholds.")
         row["recommendation"] = recommendation
         row["reasons"] = reasons
         row["risk_score"] = round(
-            (_safe_float(row.get("direct_duration_min")) / max(1.0, far_duration)) * 35
-            + (_safe_float(row.get("direct_distance_km")) / max(1.0, far_distance)) * 20
+            (_safe_float(row.get("direct_duration_min")) / max(1.0, far_duration)) * 55
             + (max(0.0, _safe_float(row.get("rider_detour_min"))) / max(1.0, burden_threshold)) * 25
             + (_safe_float(row.get("marginal_route_burden_min")) / max(1.0, burden_threshold)) * 20,
             1,
@@ -1192,7 +1189,6 @@ def build_direct_school_workbook(
         ("time_window_start", parameters.get("time_window_start"), "Route window start / 路线窗口开始"),
         ("time_window_end", parameters.get("time_window_end"), "Route window end / 路线窗口结束"),
         ("stop_service_minutes", parameters.get("stop_service_minutes"), "Dwell per stop / 每站停靠时间"),
-        ("far_distance_km", parameters.get("far_distance_km"), "Distance reference only / 距离参考阈值"),
     ]
     for row in parameter_rows:
         summary_sheet.append(list(row))

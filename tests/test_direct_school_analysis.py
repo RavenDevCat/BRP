@@ -213,8 +213,28 @@ def test_analysis_recommends_additional_removal_until_route_fits(monkeypatch) ->
     assert conclusion["post_primary"]["over_window_count"] == 1
     assert conclusion["additional_removal"]["rider_count"] == 2
     assert route["additional_removals"][0]["address"] == "Far stop"
+    assert route["additional_removals"][0]["selection_rank"] == 1
+    assert route["additional_removals"][0]["selection_basis"] == analysis.ADDITIONAL_REMOVAL_STRATEGY
+    assert route["additional_removal_strategy"] == analysis.ADDITIONAL_REMOVAL_STRATEGY
     assert route["final_duration_min"] == 16
     assert route["status"] == "within_window"
+
+
+def test_additional_removal_ranking_prefers_longest_direct_trip() -> None:
+    long_trip_rank = analysis._additional_removal_rank(
+        {"direct_duration_min": 55},
+        estimated_saving_min=4,
+        riders=5,
+        stop_sequence=8,
+    )
+    short_trip_rank = analysis._additional_removal_rank(
+        {"direct_duration_min": 25},
+        estimated_saving_min=20,
+        riders=1,
+        stop_sequence=2,
+    )
+
+    assert long_trip_rank > short_trip_rank
 
 
 def test_multi_day_aggregation_requires_repeated_evidence() -> None:

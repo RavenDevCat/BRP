@@ -38,6 +38,8 @@ DEFAULT_ANALYSIS_CONFIG: dict[str, Any] = {
     "provider_call_limit": 500,
 }
 
+ADDITIONAL_REMOVAL_STRATEGY = "direct_duration_desc_then_route_saving"
+
 
 def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -168,6 +170,22 @@ def _estimated_removal_saving_min(
         bypass_s = _safe_float(_osrm_leg(points[previous_index], points[next_index], osrm_cache).get("duration_s"))
         drive_s = max(0.0, through_s - bypass_s)
     return round(max(0.0, drive_s * scale / 60.0) + stop_service_minutes, 2)
+
+
+def _additional_removal_rank(
+    occurrence: dict[str, Any],
+    *,
+    estimated_saving_min: float,
+    riders: int,
+    stop_sequence: int,
+) -> tuple[float, float, int, int]:
+    """Prefer the longest direct trip, with deterministic operational tie-breakers."""
+    return (
+        _safe_float(occurrence.get("direct_duration_min")),
+        _safe_float(estimated_saving_min),
+        -max(0, riders),
+        -max(0, stop_sequence),
+    )
 
 
 def _percentile(values: list[float], quantile: float) -> float | None:
@@ -341,7 +359,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 2,
+        "analysis_version": 3,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -753,12 +771,14 @@ def run_direct_school_analysis(
             additional_entries: list[dict[str, Any]] = []
             final_measurement = dict(post_primary)
             while _safe_float(final_measurement.get("total_duration_min")) > route_window_min:
-                candidates: list[tuple[float, float, int, int]] = []
+                candidates: list[dict[str, Any]] = []
                 for index in active_indexes:
                     stop = ordered[index]
                     if bool(stop.get("is_depot")):
                         continue
                     riders = max(0, _safe_int(stop.get("passenger_count")))
+                    sequence = _safe_int(stop.get("stop_sequence"))
+                    occurrence = occurrence_lookup.get((route_id, sequence), {})
                     saving = _estimated_removal_saving_min(
                         runtime,
                         active_indexes,
@@ -766,18 +786,34 @@ def run_direct_school_analysis(
                         float(config["stop_service_minutes"]),
                         osrm_cache,
                     )
-                    candidates.append((saving / max(1, riders), saving, -riders, index))
+                    candidates.append(
+                        {
+                            "index": index,
+                            "occurrence": occurrence,
+                            "estimated_saving_min": saving,
+                            "rank": _additional_removal_rank(
+                                occurrence,
+                                estimated_saving_min=saving,
+                                riders=riders,
+                                stop_sequence=sequence,
+                            ),
+                        }
+                    )
                 if not candidates:
                     break
-                _efficiency, estimated_saving, _negative_riders, remove_index = max(candidates)
+                candidate = max(candidates, key=lambda item: item["rank"])
+                remove_index = _safe_int(candidate.get("index"))
+                estimated_saving = _safe_float(candidate.get("estimated_saving_min"))
                 stop = ordered[remove_index]
                 sequence = _safe_int(stop.get("stop_sequence"))
                 entry = {
-                    **occurrence_lookup.get((route_id, sequence), {}),
+                    **dict(candidate.get("occurrence") or {}),
                     "route_id": route_id,
                     "stop_sequence": sequence,
                     "riders": max(0, _safe_int(stop.get("passenger_count"))),
                     "estimated_route_saving_min": estimated_saving,
+                    "selection_rank": len(additional_entries) + 1,
+                    "selection_basis": ADDITIONAL_REMOVAL_STRATEGY,
                     "operational_category": "additional_window_candidate",
                 }
                 additional_entries.append(entry)
@@ -807,6 +843,7 @@ def run_direct_school_analysis(
                     "additional_removed_addresses": len(additional_entries),
                     "additional_removed_riders": sum(_safe_int(item.get("riders")) for item in additional_entries),
                     "additional_removals": additional_entries,
+                    "additional_removal_strategy": ADDITIONAL_REMOVAL_STRATEGY,
                     "final_duration_min": final_measurement.get("total_duration_min"),
                     "final_stop_count": final_measurement.get("stop_count"),
                     "final_riders": final_measurement.get("riders"),
@@ -889,6 +926,7 @@ def run_direct_school_analysis(
         "additional_removal": {
             "address_count": len(additional_stop_keys),
             "rider_count": additional_rider_count,
+            "selection_strategy": ADDITIONAL_REMOVAL_STRATEGY,
         },
         "final": {
             "over_window_count": len(final_over),
@@ -1088,6 +1126,11 @@ def build_direct_school_workbook(
         post_primary.get("over_window_count"),
         _final_conclusion_label(final),
     ])
+    summary_sheet.append([
+        "Selection rule / 补充摘除顺序",
+        "Longest direct trip first; route saving breaks ties / 按直达时间从长到短；同分时优先路线节省更大的站点",
+        "-", "-", "-", ADDITIONAL_REMOVAL_STRATEGY,
+    ])
     summary_sheet.append([])
     summary_sheet.append(["Parameter / 参数", "Value / 数值", "Meaning / 含义"])
     parameter_rows = [
@@ -1118,7 +1161,7 @@ def build_direct_school_workbook(
     _write_readable_table(
         workbook.create_sheet("Route Outcomes"),
         "Route Window Outcomes / 路线时间窗复测",
-        "Routes are remeasured after the first two student groups are removed. Additional removals are then tested until the route fits or cannot be resolved. / 摘出前两类学生后实时复测，仍超窗则继续验证补充摘除。",
+        "Routes are remeasured after the first two student groups are removed. Additional removals are tested from longest to shortest direct trip until the route fits or cannot be resolved. / 摘出前两类学生后实时复测，仍超窗则按直达时间从长到短验证补充摘除。",
         [
             "Route / 路线", "Window min / 窗口", "Original min / 原始", "Primary removed students / 首轮摘出学生",
             "After primary min / 首轮后", "Still over? / 是否仍超", "Additional students / 补充摘出学生",
@@ -1245,7 +1288,17 @@ def _student_classification_rows(result: dict[str, Any]) -> list[list[Any]]:
 
 def _route_outcome_rows(result: dict[str, Any]) -> list[list[Any]]:
     rows: list[list[Any]] = []
-    for route in list(result.get("route_window_analysis") or []):
+    route_results = list(result.get("route_window_analysis") or [])
+    route_results.sort(
+        key=lambda route: (
+            0 if route.get("status") == "still_over_window" else
+            1 if route.get("status") == "data_review" else
+            2 if _safe_int(route.get("additional_removed_riders")) > 0 else
+            3 if _safe_int(route.get("primary_removed_riders")) > 0 else 4,
+            str(route.get("route_id") or ""),
+        )
+    )
+    for route in route_results:
         additional = list(route.get("additional_removals") or [])
         rows.append([
             route.get("route_id"), route.get("window_limit_min"), route.get("original_duration_min"),
@@ -1289,7 +1342,7 @@ def _operational_category_label(value: Any) -> str:
 
 def _style_summary_sheet(sheet: Any) -> None:
     header_fill = PatternFill("solid", fgColor="DDE9E8")
-    for row_index in (6, 11):
+    for row_index in (6, 12):
         for cell in sheet[row_index]:
             if cell.value is not None:
                 cell.font = Font(bold=True, color="164E63")

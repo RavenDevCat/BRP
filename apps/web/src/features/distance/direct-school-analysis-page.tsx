@@ -97,6 +97,7 @@ export function DirectSchoolAnalysisPage({
   const [selectedJobId, setSelectedJobId] = useState("");
   const [deletingJobId, setDeletingJobId] = useState("");
   const [selectedStopKey, setSelectedStopKey] = useState("");
+  const [selectionRevision, setSelectionRevision] = useState(0);
   const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>("all");
   const [searchText, setSearchText] = useState("");
 
@@ -173,6 +174,7 @@ export function DirectSchoolAnalysisPage({
       const firstId = created[0]?.job.job_id || "";
       setSelectedJobId(firstId);
       setSelectedStopKey("");
+      setSelectionRevision(0);
     },
   });
 
@@ -257,6 +259,10 @@ export function DirectSchoolAnalysisPage({
   }, [classificationFilter, result?.stops, searchText]);
   const selectedStop = result?.stops.find((row) => row.stop_key === selectedStopKey) || filteredStops[0] || null;
   const scheduledEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
+  const selectStop = (stopKey: string) => {
+    setSelectedStopKey(stopKey);
+    setSelectionRevision((value) => value + 1);
+  };
 
   return (
     <div className="pb-16 lg:pb-0">
@@ -279,6 +285,7 @@ export function DirectSchoolAnalysisPage({
           onOpen={(jobId) => {
             setSelectedJobId(jobId);
             setSelectedStopKey("");
+            setSelectionRevision(0);
           }}
           onDelete={(jobId) => deleteMutation.mutate([jobId])}
           onBulkDelete={(jobIds) => deleteMutation.mutate(jobIds)}
@@ -364,14 +371,15 @@ export function DirectSchoolAnalysisPage({
                     search={searchText}
                     onFilter={setClassificationFilter}
                     onSearch={setSearchText}
-                    onSelect={setSelectedStopKey}
+                    onSelect={selectStop}
                   />
                   <div className="grid min-w-0 gap-4">
-                    <DirectSchoolMap result={result} selectedStop={selectedStop} onSelect={setSelectedStopKey} />
-                    <DistanceScatter rows={result.stops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={setSelectedStopKey} />
+                    <DirectSchoolMap result={result} selectedStop={selectedStop} selectionRevision={selectionRevision} onSelect={selectStop} />
+                    <DistanceScatter rows={result.stops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
                   </div>
-                  <StopDetailTable rows={filteredStops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={setSelectedStopKey} />
+                  <StopDetailTable rows={filteredStops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
                   <MultiDayPanel record={selectedRecord!} />
+                  <RouteRecoveryPanel rows={result.route_window_analysis} />
                 </>
               ) : selectedRecord ? (
                 <PendingResult record={selectedRecord} />
@@ -542,7 +550,6 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   const result = record.result;
   if (!result) return null;
   const conclusion = result.operational_conclusion;
-  const routeRows = result.route_window_analysis || [];
   const totalRiders = result.stops.reduce((total, row) => total + Math.max(0, Number(row.riders || 0)), 0);
   return (
     <Card>
@@ -602,7 +609,6 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
                 </Badge>
               </div>
             </div>
-            <RouteRecoveryTable rows={routeRows} />
           </>
         ) : Number(result.analysis_version || 0) >= 2 ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
@@ -636,30 +642,53 @@ function ConclusionStep({ step, title, description, riders, totalRiders, address
   );
 }
 
-function RouteRecoveryTable({ rows }: { rows: NonNullable<DirectSchoolJobRecord["result"]>["route_window_analysis"] }) {
+function RouteRecoveryPanel({ rows }: { rows: NonNullable<DirectSchoolJobRecord["result"]>["route_window_analysis"] }) {
   const t = useT();
-  const reviewed = (rows || []).filter((row) => row.primary_removed_riders || row.additional_removed_riders || row.status !== "within_window");
-  if (!reviewed.length) return <div className="text-xs text-muted-foreground">{t("No route requires a removal review.")}</div>;
+  const reviewed = (rows || [])
+    .filter((row) => row.primary_removed_riders || row.additional_removed_riders || row.status !== "within_window")
+    .sort((left, right) => routeRecoveryPriority(left) - routeRecoveryPriority(right) || String(left.route_id).localeCompare(String(right.route_id), undefined, { numeric: true }));
+  if (!reviewed.length) return null;
   return (
-    <div className="overflow-auto rounded-md border border-border">
-      <table className="min-w-[850px] w-full divide-y divide-border text-left text-sm">
-        <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
-        <tbody className="divide-y divide-border">
-          {reviewed.map((row) => (
-            <tr key={row.route_id}>
-              <td className="px-3 py-2 font-medium">{row.route_id}</td>
-              <td className="px-3 py-2">{minutes(row.original_duration_min)}</td>
-              <td className="px-3 py-2">{formatNumber(row.primary_removed_riders || 0)} {t("students")}</td>
-              <td className="px-3 py-2">{minutes(row.post_primary_duration_min)}</td>
-              <td className="px-3 py-2">{formatNumber(row.additional_removed_riders || 0)} {t("students")}</td>
-              <td className="px-3 py-2">{minutes(row.final_duration_min)}</td>
-              <td className="px-3 py-2"><Badge tone={row.status === "within_window" ? "success" : row.status === "data_review" ? "warning" : "danger"}>{t(row.status === "within_window" ? "Within window" : row.status === "data_review" ? "Data review" : "Still over window")}</Badge></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold">{t("Route recovery details")}</h2>
+            <p className="mt-1 text-xs text-muted-foreground">{t("Additional-removal candidates are tested from longest to shortest direct trip.")}</p>
+          </div>
+          <Badge tone="neutral">{formatNumber(reviewed.length)} {t("routes")}</Badge>
+        </div>
+      </CardHeader>
+      <CardContent className="p-0">
+        <div className="overflow-auto">
+          <table className="min-w-[850px] w-full divide-y divide-border text-left text-sm">
+            <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
+            <tbody className="divide-y divide-border">
+              {reviewed.map((row) => (
+                <tr key={row.route_id} className={cn(row.status === "within_window" && "text-muted-foreground")}>
+                  <td className="px-3 py-2 font-medium text-foreground">{row.route_id}</td>
+                  <td className="px-3 py-2">{minutes(row.original_duration_min)}</td>
+                  <td className="px-3 py-2">{formatNumber(row.primary_removed_riders || 0)} {t("students")}</td>
+                  <td className="px-3 py-2">{minutes(row.post_primary_duration_min)}</td>
+                  <td className="px-3 py-2">{formatNumber(row.additional_removed_riders || 0)} {t("students")}</td>
+                  <td className="px-3 py-2">{minutes(row.final_duration_min)}</td>
+                  <td className="px-3 py-2"><Badge tone={row.status === "within_window" ? "success" : row.status === "data_review" ? "warning" : "danger"}>{t(row.status === "within_window" ? "Within window" : row.status === "data_review" ? "Data review" : "Still over window")}</Badge></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </CardContent>
+    </Card>
   );
+}
+
+function routeRecoveryPriority(row: NonNullable<NonNullable<DirectSchoolJobRecord["result"]>["route_window_analysis"]>[number]) {
+  if (row.status === "still_over_window") return 0;
+  if (row.status === "data_review") return 1;
+  if (Number(row.additional_removed_riders || 0) > 0) return 2;
+  if (Number(row.primary_removed_riders || 0) > 0) return 3;
+  return 4;
 }
 
 function AddressClassificationBoard({
@@ -771,11 +800,15 @@ function AddressClassificationBoard({
   );
 }
 
-function DirectSchoolMap({ result, selectedStop, onSelect }: { result: NonNullable<DirectSchoolJobRecord["result"]>; selectedStop: DirectSchoolStopResult | null; onSelect: (key: string) => void }) {
+function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: { result: NonNullable<DirectSchoolJobRecord["result"]>; selectedStop: DirectSchoolStopResult | null; selectionRevision: number; onSelect: (key: string) => void }) {
   const t = useT();
   const mapRef = useRef<MapRef | null>(null);
   const school = result.school as { lat?: number; lng?: number; address?: string };
-  const visibleStops = result.stops.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng));
+  const visibleStops = useMemo(() => result.stops.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)), [result.stops]);
+  const conclusion = result.operational_conclusion;
+  const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? result.stops.filter((row) => operationalCategory(row) === "direct_over_limit").reduce((total, row) => total + Number(row.riders || 0), 0));
+  const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? result.stops.filter((row) => operationalCategory(row) === "route_only_over_limit").reduce((total, row) => total + Number(row.riders || 0), 0));
+  const selectedCategory = selectedStop ? operationalCategory(selectedStop) : "within_limit";
   const pointData = useMemo<FeatureCollection<Point>>(() => ({
     type: "FeatureCollection",
     features: [
@@ -788,43 +821,73 @@ function DirectSchoolMap({ result, selectedStop, onSelect }: { result: NonNullab
       ...visibleStops.map((row) => ({
         type: "Feature" as const,
         id: row.stop_key,
-        properties: { stop_key: row.stop_key, category: operationalCategory(row), color: classificationColor(operationalCategory(row)) },
+        properties: {
+          stop_key: row.stop_key,
+          category: operationalCategory(row),
+          color: classificationColor(operationalCategory(row)),
+          selected: row.stop_key === selectedStop?.stop_key,
+        },
         geometry: { type: "Point" as const, coordinates: [Number(row.lng), Number(row.lat)] },
       })),
     ],
-  }), [school.lat, school.lng, visibleStops]);
+  }), [school.lat, school.lng, selectedStop?.stop_key, visibleStops]);
   const lineData = useMemo<FeatureCollection<LineString>>(() => ({
     type: "FeatureCollection",
     features: selectedStop?.direct_geometry?.length ? [{
       type: "Feature",
-      properties: {},
+      properties: { color: classificationColor(selectedCategory) },
       geometry: { type: "LineString", coordinates: selectedStop.direct_geometry },
     }] : [],
-  }), [selectedStop]);
+  }), [selectedCategory, selectedStop]);
 
-  useEffect(() => {
-    const points = pointData.features.map((feature) => feature.geometry.coordinates).filter((coords) => coords.length >= 2);
+  const fitAll = () => {
+    const points = [
+      ...(Number.isFinite(school.lat) && Number.isFinite(school.lng) ? [[Number(school.lng), Number(school.lat)]] : []),
+      ...visibleStops.map((row) => [Number(row.lng), Number(row.lat)]),
+    ];
     if (!mapRef.current || !points.length) return;
     const lngs = points.map((coords) => Number(coords[0]));
     const lats = points.map((coords) => Number(coords[1]));
     mapRef.current.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 60, duration: 0, maxZoom: 13 });
-  }, [pointData]);
+  };
+
+  useEffect(() => {
+    if (!mapRef.current || !selectedStop || selectionRevision < 1) return;
+    const routePoints = selectedStop?.direct_geometry?.length
+      ? selectedStop.direct_geometry
+      : Number.isFinite(selectedStop?.lng) && Number.isFinite(selectedStop?.lat) && Number.isFinite(school.lng) && Number.isFinite(school.lat)
+        ? [[Number(selectedStop?.lng), Number(selectedStop?.lat)], [Number(school.lng), Number(school.lat)]]
+        : [];
+    if (!routePoints.length) return;
+    const lngs = routePoints.map((coords) => Number(coords[0]));
+    const lats = routePoints.map((coords) => Number(coords[1]));
+    mapRef.current.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 80, duration: 350, maxZoom: 14 });
+  }, [school.lat, school.lng, selectedStop, selectionRevision]);
 
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2"><MapPinned className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold">{t("Direct route map")}</h2></div>
-          <span className="max-w-[60%] truncate text-xs text-muted-foreground">{selectedStop?.address || t("Select an address")}</span>
+          <div className="flex min-w-0 items-center justify-end gap-2">
+            <span className="hidden max-w-72 truncate text-xs text-muted-foreground md:block">{selectedStop?.address || t("Select an address")}</span>
+            <Button variant="secondary" className="h-9 w-9 p-0" title={t("Fit all")} aria-label={t("Fit all")} onClick={fitAll}>
+              <MapPinned className="h-4 w-4" />
+            </Button>
+            <Button variant="secondary" className="h-9" icon={<Download className="h-4 w-4" />} onClick={() => downloadDirectSchoolMapHtml(result, selectedStop, t)}>
+              {t("Export map")}
+            </Button>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="p-0">
-        <div className="h-[440px] min-h-[440px] overflow-hidden rounded-b-md">
+        <div className="relative h-[500px] min-h-[500px] overflow-hidden rounded-b-md">
           <MapView
             ref={mapRef}
             initialViewState={{ longitude: Number(school.lng || 121.47), latitude: Number(school.lat || 31.23), zoom: 9 }}
             mapStyle={MAP_STYLE}
             interactiveLayerIds={["direct-school-points"]}
+            onLoad={fitAll}
             onClick={(event) => {
               const key = String(event.features?.[0]?.properties?.stop_key || "");
               if (key && key !== "school") onSelect(key);
@@ -832,16 +895,219 @@ function DirectSchoolMap({ result, selectedStop, onSelect }: { result: NonNullab
           >
             <NavigationControl position="top-right" />
             <Source id="direct-school-line-source" type="geojson" data={lineData}>
-              <Layer id="direct-school-line" type="line" paint={{ "line-color": "#0f766e", "line-width": 5, "line-opacity": 0.9 }} />
+              <Layer id="direct-school-line-casing" type="line" paint={{ "line-color": "#ffffff", "line-width": 9, "line-opacity": 0.9 }} />
+              <Layer id="direct-school-line" type="line" paint={{ "line-color": ["get", "color"], "line-width": 5, "line-opacity": 0.95 }} />
             </Source>
             <Source id="direct-school-points-source" type="geojson" data={pointData}>
-              <Layer id="direct-school-points" type="circle" paint={{ "circle-color": ["get", "color"], "circle-radius": ["case", ["==", ["get", "category"], "school"], 9, 6], "circle-stroke-color": "#ffffff", "circle-stroke-width": 2 }} />
+              <Layer id="direct-school-points" type="circle" paint={{
+                "circle-color": ["get", "color"],
+                "circle-radius": ["case", ["==", ["get", "category"], "school"], 9, ["==", ["get", "selected"], true], 10, 6],
+                "circle-stroke-color": ["case", ["==", ["get", "selected"], true], "#111827", "#ffffff"],
+                "circle-stroke-width": ["case", ["==", ["get", "selected"], true], 4, 2],
+              }} />
             </Source>
           </MapView>
+          <div className="pointer-events-none absolute left-3 top-3 z-10 w-[min(330px,calc(100%-80px))] rounded-md border border-border bg-surface/95 px-3 py-2 shadow-sm backdrop-blur-sm">
+            <div className="text-xs font-semibold text-foreground">{t("Student time-limit summary")}</div>
+            <div className="mt-2 grid gap-1.5 text-xs">
+              <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-muted-foreground"><span className="h-2.5 w-2.5 rounded-full bg-red-600" />{t("Direct-over-limit students")}</span><strong className="text-red-700">{formatNumber(directOverRiders)}</strong></div>
+              <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-muted-foreground"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" />{t("Shared-route over-limit students")}</span><strong className="text-amber-800">{formatNumber(routeOnlyOverRiders)}</strong></div>
+            </div>
+          </div>
+          {selectedStop ? (
+            <div className="pointer-events-none absolute bottom-3 left-3 z-10 w-[min(420px,calc(100%-24px))] rounded-md border border-border bg-surface/95 px-3 py-3 shadow-sm backdrop-blur-sm">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0"><div className="truncate text-sm font-semibold">{selectedStop.address}</div><div className="mt-1 text-xs text-muted-foreground">{selectedStop.primary_route_id || selectedStop.route_ids?.join(", ")} · {formatNumber(selectedStop.riders)} {t("students")}</div></div>
+                <ClassificationBadge value={selectedCategory} />
+              </div>
+              <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+                <MiniMetric label="Direct distance km" value={distance(selectedStop.direct_distance_km)} />
+                <MiniMetric label="Direct duration min" value={minutes(selectedStop.direct_duration_min)} tone={selectedCategory === "direct_over_limit" ? "danger" : "neutral"} />
+                <MiniMetric label="Current route ride" value={minutes(selectedStop.estimated_current_ride_min)} tone={selectedCategory === "route_only_over_limit" ? "warning" : "neutral"} />
+              </div>
+            </div>
+          ) : null}
         </div>
       </CardContent>
     </Card>
   );
+}
+
+function downloadDirectSchoolMapHtml(
+  result: NonNullable<DirectSchoolJobRecord["result"]>,
+  selectedStop: DirectSchoolStopResult | null,
+  t: (key: string) => string,
+) {
+  const school = result.school as { lat?: number; lng?: number; address?: string };
+  const conclusion = result.operational_conclusion;
+  const stops = result.stops
+    .filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng))
+    .map((row) => ({
+      stopKey: row.stop_key,
+      address: row.address,
+      route: row.primary_route_id || row.route_ids?.join(", ") || "-",
+      riders: Number(row.riders || 0),
+      lat: Number(row.lat),
+      lng: Number(row.lng),
+      category: operationalCategory(row),
+      color: classificationColor(operationalCategory(row)),
+      directDistanceKm: row.direct_distance_km,
+      directDurationMin: row.direct_duration_min,
+      currentRideMin: row.estimated_current_ride_min,
+      geometry: row.direct_geometry || [],
+    }));
+  const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? stops.filter((row) => row.category === "direct_over_limit").reduce((total, row) => total + row.riders, 0));
+  const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? stops.filter((row) => row.category === "route_only_over_limit").reduce((total, row) => total + row.riders, 0));
+  const payload = JSON.stringify({
+    school: { address: school.address || "", lat: Number(school.lat), lng: Number(school.lng) },
+    stops,
+    selectedStopKey: selectedStop?.stop_key || stops[0]?.stopKey || "",
+    summary: { directOverRiders, routeOnlyOverRiders },
+  }).replace(/</g, "\\u003c");
+  const labels = JSON.stringify({
+    title: t("Direct route map"),
+    directOver: t("Direct-over-limit students"),
+    routeOnlyOver: t("Shared-route over-limit students"),
+    selectedAddress: t("Selected address details"),
+    route: t("Route"),
+    students: t("students"),
+    directDistance: t("Direct distance km"),
+    directDuration: t("Direct duration min"),
+    currentRide: t("Current route ride"),
+    fitAll: t("Fit all"),
+  }).replace(/</g, "\\u003c");
+  const title = `${t("Direct route map")} - ${selectedStop?.primary_route_id || t("All")}`;
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${htmlEscape(title)}</title>
+  <link href="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.css" rel="stylesheet" />
+  <style>
+    * { box-sizing: border-box; }
+    html, body, #map { width: 100%; height: 100%; margin: 0; }
+    body { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; }
+    .panel { position: absolute; z-index: 3; width: min(360px, calc(100% - 92px)); border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(255,255,255,.94); box-shadow: 0 10px 28px rgba(15,23,42,.18); backdrop-filter: blur(8px); }
+    .summary { top: 14px; left: 14px; padding: 12px; }
+    .detail { left: 14px; bottom: 14px; padding: 12px; }
+    .title-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    h1, h2 { margin: 0; font-size: 14px; }
+    .metric { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; color: #64748b; font-size: 12px; }
+    .metric strong { color: #111827; font-size: 14px; }
+    .metric.danger strong { color: #b91c1c; }
+    .metric.warning strong { color: #b45309; }
+    .address { margin-top: 8px; font-size: 14px; font-weight: 700; line-height: 1.35; }
+    .meta { margin-top: 4px; color: #64748b; font-size: 12px; }
+    .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; margin-top: 10px; }
+    .detail-item { min-width: 0; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; padding: 8px; }
+    .detail-label { color: #64748b; font-size: 10px; line-height: 1.25; }
+    .detail-value { margin-top: 4px; font-size: 12px; font-weight: 700; }
+    button { height: 32px; border: 1px solid #94a3b8; border-radius: 6px; background: white; padding: 0 10px; color: #334155; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
+    @media (max-width: 600px) { .detail-grid { grid-template-columns: 1fr; } .panel { width: min(300px, calc(100% - 28px)); } }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <section class="panel summary">
+    <div class="title-row"><h1 id="summaryTitle"></h1><button id="fitAll" type="button"></button></div>
+    <div class="metric danger"><span id="directLabel"></span><strong id="directValue"></strong></div>
+    <div class="metric warning"><span id="routeLabel"></span><strong id="routeValue"></strong></div>
+  </section>
+  <section class="panel detail">
+    <h2 id="detailTitle"></h2>
+    <div class="address" id="address"></div>
+    <div class="meta" id="meta"></div>
+    <div class="detail-grid">
+      <div class="detail-item"><div class="detail-label" id="distanceLabel"></div><div class="detail-value" id="distanceValue"></div></div>
+      <div class="detail-item"><div class="detail-label" id="durationLabel"></div><div class="detail-value" id="durationValue"></div></div>
+      <div class="detail-item"><div class="detail-label" id="rideLabel"></div><div class="detail-value" id="rideValue"></div></div>
+    </div>
+  </section>
+  <script src="https://unpkg.com/maplibre-gl@5.6.0/dist/maplibre-gl.js"></script>
+  <script>
+    const data = ${payload};
+    const labels = ${labels};
+    let selectedStopKey = data.selectedStopKey;
+    const map = new maplibregl.Map({
+      container: "map",
+      style: { version: 8, sources: { osm: { type: "raster", tiles: ["https://tile.openstreetmap.de/{z}/{x}/{y}.png"], tileSize: 256, attribution: "OpenStreetMap contributors" } }, layers: [{ id: "osm", type: "raster", source: "osm" }] },
+      center: Number.isFinite(data.school.lng) && Number.isFinite(data.school.lat) ? [data.school.lng, data.school.lat] : [121.47, 31.23],
+      zoom: 9,
+    });
+    map.addControl(new maplibregl.NavigationControl(), "top-right");
+    document.getElementById("summaryTitle").textContent = labels.title;
+    document.getElementById("fitAll").textContent = labels.fitAll;
+    document.getElementById("directLabel").textContent = labels.directOver;
+    document.getElementById("routeLabel").textContent = labels.routeOnlyOver;
+    document.getElementById("directValue").textContent = String(data.summary.directOverRiders);
+    document.getElementById("routeValue").textContent = String(data.summary.routeOnlyOverRiders);
+    document.getElementById("detailTitle").textContent = labels.selectedAddress;
+    document.getElementById("distanceLabel").textContent = labels.directDistance;
+    document.getElementById("durationLabel").textContent = labels.directDuration;
+    document.getElementById("rideLabel").textContent = labels.currentRide;
+    document.getElementById("fitAll").addEventListener("click", fitAll);
+
+    function pointGeojson() {
+      const features = data.stops.map(stop => ({ type: "Feature", properties: { stopKey: stop.stopKey, color: stop.color, selected: stop.stopKey === selectedStopKey }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } }));
+      if (Number.isFinite(data.school.lng) && Number.isFinite(data.school.lat)) features.push({ type: "Feature", properties: { stopKey: "school", color: "#111827", selected: false, school: true }, geometry: { type: "Point", coordinates: [data.school.lng, data.school.lat] } });
+      return { type: "FeatureCollection", features };
+    }
+    function lineGeojson() {
+      const stop = data.stops.find(item => item.stopKey === selectedStopKey);
+      return { type: "FeatureCollection", features: stop && Array.isArray(stop.geometry) && stop.geometry.length ? [{ type: "Feature", properties: { color: stop.color }, geometry: { type: "LineString", coordinates: stop.geometry } }] : [] };
+    }
+    function fitAll() {
+      const points = data.stops.map(stop => [stop.lng, stop.lat]);
+      if (Number.isFinite(data.school.lng) && Number.isFinite(data.school.lat)) points.push([data.school.lng, data.school.lat]);
+      if (!points.length) return;
+      const bounds = points.reduce((value, point) => value.extend(point), new maplibregl.LngLatBounds(points[0], points[0]));
+      map.fitBounds(bounds, { padding: 70, duration: 0, maxZoom: 13 });
+    }
+    function focusSelected(stop) {
+      const points = Array.isArray(stop.geometry) && stop.geometry.length ? stop.geometry : [[stop.lng, stop.lat], [data.school.lng, data.school.lat]];
+      const valid = points.filter(point => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
+      if (!valid.length) return;
+      const bounds = valid.reduce((value, point) => value.extend(point), new maplibregl.LngLatBounds(valid[0], valid[0]));
+      map.fitBounds(bounds, { padding: 90, duration: 300, maxZoom: 14 });
+    }
+    function selectStop(key, focus) {
+      const stop = data.stops.find(item => item.stopKey === key);
+      if (!stop) return;
+      selectedStopKey = key;
+      map.getSource("points").setData(pointGeojson());
+      map.getSource("selected-line").setData(lineGeojson());
+      document.getElementById("address").textContent = stop.address;
+      document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students;
+      document.getElementById("distanceValue").textContent = Number.isFinite(stop.directDistanceKm) ? stop.directDistanceKm + " km" : "-";
+      document.getElementById("durationValue").textContent = Number.isFinite(stop.directDurationMin) ? stop.directDurationMin + " min" : "-";
+      document.getElementById("rideValue").textContent = Number.isFinite(stop.currentRideMin) ? stop.currentRideMin + " min" : "-";
+      if (focus) focusSelected(stop);
+    }
+    map.on("load", () => {
+      map.addSource("selected-line", { type: "geojson", data: lineGeojson() });
+      map.addLayer({ id: "selected-line-casing", type: "line", source: "selected-line", paint: { "line-color": "#ffffff", "line-width": 9, "line-opacity": .9 } });
+      map.addLayer({ id: "selected-line", type: "line", source: "selected-line", paint: { "line-color": ["get", "color"], "line-width": 5, "line-opacity": .95 } });
+      map.addSource("points", { type: "geojson", data: pointGeojson() });
+      map.addLayer({ id: "points", type: "circle", source: "points", paint: { "circle-color": ["get", "color"], "circle-radius": ["case", ["==", ["get", "school"], true], 9, ["==", ["get", "selected"], true], 10, 6], "circle-stroke-color": ["case", ["==", ["get", "selected"], true], "#111827", "#ffffff"], "circle-stroke-width": ["case", ["==", ["get", "selected"], true], 4, 2] } });
+      map.on("click", "points", event => { const key = event.features && event.features[0] && event.features[0].properties.stopKey; if (key && key !== "school") selectStop(String(key), true); });
+      map.on("mouseenter", "points", () => { map.getCanvas().style.cursor = "pointer"; });
+      map.on("mouseleave", "points", () => { map.getCanvas().style.cursor = ""; });
+      fitAll();
+      if (selectedStopKey) selectStop(selectedStopKey, true);
+    });
+  </script>
+</body>
+</html>`;
+  const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${sanitizeDownloadFilename(title)}.html`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function DistanceScatter({ rows, selectedStopKey, onSelect }: { rows: DirectSchoolStopResult[]; selectedStopKey: string; onSelect: (key: string) => void }) {
@@ -875,6 +1141,7 @@ function DistanceScatter({ rows, selectedStopKey, onSelect }: { rows: DirectScho
     zoomAt(event.deltaY < 0 ? 0.82 : 1.22, anchorX, anchorY);
   };
   const handlePointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if ((event.target as SVGElement).tagName.toLowerCase() === "circle") return;
     event.currentTarget.setPointerCapture(event.pointerId);
     suppressClickRef.current = false;
     dragRef.current = { clientX: event.clientX, clientY: event.clientY, viewX: view.x, viewY: view.y, moved: false };
@@ -920,7 +1187,23 @@ function DistanceScatter({ rows, selectedStopKey, onSelect }: { rows: DirectScho
               const y = 310 - (Number(row.direct_duration_min) / maxY) * 290;
               const radius = Math.min(14, 5 + Math.sqrt(Math.max(0, row.riders || 0)));
               return (
-                <circle key={row.stop_key} cx={x} cy={y} r={selectedStopKey === row.stop_key ? radius + 3 : radius} fill={classificationColor(operationalCategory(row))} fillOpacity="0.82" stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"} strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5} className="cursor-pointer" onClick={() => { if (!suppressClickRef.current) onSelect(row.stop_key); suppressClickRef.current = false; }}>
+                <circle
+                  key={row.stop_key}
+                  cx={x}
+                  cy={y}
+                  r={selectedStopKey === row.stop_key ? radius + 3 : radius}
+                  fill={classificationColor(operationalCategory(row))}
+                  fillOpacity="0.82"
+                  stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"}
+                  strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5}
+                  className="cursor-pointer"
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`${row.address}: ${row.direct_distance_km} km / ${row.direct_duration_min} min`}
+                  onPointerDown={(event) => event.stopPropagation()}
+                  onClick={(event) => { event.stopPropagation(); onSelect(row.stop_key); suppressClickRef.current = false; }}
+                  onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(row.stop_key); }}
+                >
                   <title>{`${row.address}: ${row.direct_distance_km} km / ${row.direct_duration_min} min`}</title>
                 </circle>
               );
@@ -1168,9 +1451,23 @@ function minutes(value: number | undefined) {
   return Number.isFinite(value) ? `${formatNumber(value)} min` : "-";
 }
 
+function distance(value: number | undefined) {
+  return Number.isFinite(value) ? `${formatNumber(value)} km` : "-";
+}
+
 function metricPair(first: number | undefined, firstUnit: string, second: number | undefined, secondUnit: string) {
   if (!Number.isFinite(first) && !Number.isFinite(second)) return "-";
   return `${Number.isFinite(first) ? formatNumber(first) : "-"} ${firstUnit} / ${Number.isFinite(second) ? formatNumber(second) : "-"} ${secondUnit}`;
+}
+
+function sanitizeDownloadFilename(value: string) {
+  const cleaned = value.replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  return (cleaned || "BRP Map").slice(0, 120).trim();
+}
+
+function htmlEscape(value: string) {
+  const entities: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+  return value.replace(/[&<>"']/g, (character) => entities[character] || character);
 }
 
 function monthKey(date: Date) {

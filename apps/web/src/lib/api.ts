@@ -718,7 +718,7 @@ export type DirectSchoolOperationalConclusion = {
     route_only_over_limit: { address_count: number; rider_count: number };
     primary_removal: { address_count: number; rider_count: number };
     post_primary: { route_count: number; over_window_count: number; within_window_count: number; data_review_count: number };
-    additional_removal: { address_count: number; rider_count: number };
+    additional_removal: { address_count: number; rider_count: number; selection_strategy?: string };
     final: { over_window_count: number; within_window_count: number; data_review_count: number; all_measured_routes_within_window: boolean };
 };
 
@@ -732,6 +732,17 @@ export type DirectSchoolRouteWindowResult = {
     post_primary_duration_min?: number;
     additional_removed_addresses?: number;
     additional_removed_riders?: number;
+    additional_removal_strategy?: string;
+    additional_removals?: Array<{
+        stop_key?: string;
+        address?: string;
+        stop_sequence?: number;
+        riders?: number;
+        direct_duration_min?: number;
+        estimated_route_saving_min?: number;
+        selection_rank?: number;
+        selection_basis?: string;
+    }>;
     final_duration_min?: number;
     error?: string;
 };

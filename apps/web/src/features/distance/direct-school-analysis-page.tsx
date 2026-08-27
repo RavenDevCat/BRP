@@ -571,7 +571,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
                 riders={conclusion.direct_over_limit.rider_count}
                 totalRiders={totalRiders}
                 addresses={conclusion.direct_over_limit.address_count}
-                tone="warning"
+                tone="danger"
               />
               <ConclusionStep
                 step="2"
@@ -580,7 +580,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
                 riders={conclusion.route_only_over_limit.rider_count}
                 totalRiders={totalRiders}
                 addresses={conclusion.route_only_over_limit.address_count}
-                tone="info"
+                tone="warning"
               />
               <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
                 <div className="flex min-w-0 gap-3">
@@ -620,12 +620,12 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   );
 }
 
-function ConclusionStep({ step, title, description, riders, totalRiders, addresses, tone }: { step: string; title: string; description: string; riders: number; totalRiders: number; addresses: number; tone: "warning" | "info" }) {
+function ConclusionStep({ step, title, description, riders, totalRiders, addresses, tone }: { step: string; title: string; description: string; riders: number; totalRiders: number; addresses: number; tone: "danger" | "warning" }) {
   const t = useT();
   return (
     <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
       <div className="flex min-w-0 gap-3">
-        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold", tone === "warning" ? "bg-amber-100 text-amber-900" : "bg-cyan-100 text-cyan-900")}>{step}</span>
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold", tone === "danger" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-900")}>{step}</span>
         <div><div className="text-sm font-semibold">{title}</div><div className="mt-1 text-xs leading-5 text-muted-foreground">{description}</div></div>
       </div>
       <div className="flex items-baseline gap-4 lg:justify-end">
@@ -705,7 +705,7 @@ function AddressClassificationBoard({
           </div>
           <div className="flex flex-wrap gap-2">
             {filters.map((item) => (
-              <button key={item} type="button" className={cn("h-8 rounded-md border px-3 text-xs font-medium", filter === item ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface")} onClick={() => onFilter(item)}>
+              <button key={item} type="button" className={cn("h-8 rounded-md border px-3 text-xs font-medium transition", classificationFilterClass(item, filter === item))} onClick={() => onFilter(item)}>
                 {t(classificationLabel(item))} {item === "all" ? allRows.length : allRows.filter((row) => operationalCategory(row) === item).length}
               </button>
             ))}
@@ -719,7 +719,7 @@ function AddressClassificationBoard({
         </label>
         <div className="grid gap-3 lg:grid-cols-2">
           {visibleRows.map((row) => (
-            <button key={row.stop_key} type="button" className={cn("min-h-36 rounded-md border p-3 text-left transition", selectedStopKey === row.stop_key ? "border-primary bg-primary/5" : "border-border bg-surface hover:bg-muted/40")} onClick={() => onSelect(row.stop_key)}>
+            <button key={row.stop_key} type="button" className={cn("min-h-36 rounded-md border p-3 text-left transition", classificationCardClass(operationalCategory(row)), selectedStopKey === row.stop_key && "ring-2 ring-primary/30")} onClick={() => onSelect(row.stop_key)}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold">{row.address}</div>
@@ -728,9 +728,9 @@ function AddressClassificationBoard({
                 <ClassificationBadge value={operationalCategory(row)} />
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                <MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} />
-                <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} />
-                <MiniMetric label="Over limit" value={minutes(largestOverLimit(row))} />
+                <MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} tone={operationalCategory(row) === "direct_over_limit" ? "danger" : "neutral"} />
+                <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} />
+                <MiniMetric label="Over limit" value={minutes(largestOverLimit(row))} tone={classificationMetricTone(operationalCategory(row))} />
               </div>
               <div className="mt-3 line-clamp-2 text-xs leading-5 text-muted-foreground">{(row.reasons || []).map((reason) => t(reason)).join(" ")}</div>
             </button>
@@ -1064,14 +1064,14 @@ function Metric({ label, value, accent = false }: { label: string; value: ReactN
   return <div className={cn("rounded-md border p-3", accent ? "border-amber-200 bg-amber-50" : "border-border bg-muted/50")}><div className="text-xs text-muted-foreground">{t(label)}</div><div className="mt-1 text-lg font-semibold">{typeof value === "number" ? formatNumber(value) : value}</div></div>;
 }
 
-function MiniMetric({ label, value }: { label: string; value: string }) {
+function MiniMetric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "warning" | "danger" }) {
   const t = useT();
-  return <div className="rounded-md border border-border bg-muted/40 p-2"><div className="text-muted-foreground">{t(label)}</div><div className="mt-1 font-semibold text-foreground">{value}</div></div>;
+  return <div className={cn("rounded-md border p-2", tone === "danger" ? "border-red-300 bg-red-50" : tone === "warning" ? "border-amber-300 bg-amber-50" : "border-border bg-muted/40")}><div className="text-muted-foreground">{t(label)}</div><div className={cn("mt-1 font-semibold", tone === "danger" ? "text-red-800" : tone === "warning" ? "text-amber-900" : "text-foreground")}>{value}</div></div>;
 }
 
 function ClassificationBadge({ value }: { value: string }) {
   const t = useT();
-  const tone = value === "direct_over_limit" || value === "additional_window_candidate" ? "warning" : value === "route_only_over_limit" ? "info" : value === "data_review" ? "danger" : "success";
+  const tone = value === "direct_over_limit" ? "danger" : value === "route_only_over_limit" || value === "additional_window_candidate" ? "warning" : value === "data_review" ? "neutral" : "success";
   return <Badge tone={tone}>{t(classificationLabel(value))}</Badge>;
 }
 
@@ -1097,11 +1097,34 @@ function classificationLabel(value: string) {
 }
 
 function classificationColor(value: string) {
-  if (value === "direct_over_limit") return "#c2410c";
-  if (value === "route_only_over_limit") return "#2563eb";
+  if (value === "direct_over_limit") return "#dc2626";
+  if (value === "route_only_over_limit") return "#d97706";
   if (value === "additional_window_candidate") return "#7c3aed";
-  if (value === "data_review") return "#dc2626";
-  return "#0f766e";
+  if (value === "data_review") return "#64748b";
+  return "#16a34a";
+}
+
+function classificationMetricTone(value: string): "neutral" | "warning" | "danger" {
+  if (value === "direct_over_limit") return "danger";
+  if (value === "route_only_over_limit" || value === "additional_window_candidate") return "warning";
+  return "neutral";
+}
+
+function classificationCardClass(value: string) {
+  if (value === "direct_over_limit") return "border-red-300 bg-red-50/70 hover:bg-red-50";
+  if (value === "route_only_over_limit") return "border-amber-300 bg-amber-50/70 hover:bg-amber-50";
+  if (value === "additional_window_candidate") return "border-violet-300 bg-violet-50/60 hover:bg-violet-50";
+  if (value === "data_review") return "border-slate-300 bg-slate-50 hover:bg-slate-100/70";
+  return "border-border bg-surface hover:bg-muted/40";
+}
+
+function classificationFilterClass(value: ClassificationFilter, active: boolean) {
+  if (value === "direct_over_limit") return active ? "border-red-600 bg-red-600 text-white" : "border-red-300 bg-red-50 text-red-800 hover:bg-red-100";
+  if (value === "route_only_over_limit") return active ? "border-amber-600 bg-amber-600 text-white" : "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100";
+  if (value === "additional_window_candidate") return active ? "border-violet-600 bg-violet-600 text-white" : "border-violet-300 bg-violet-50 text-violet-800 hover:bg-violet-100";
+  if (value === "within_limit") return active ? "border-emerald-600 bg-emerald-600 text-white" : "border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100";
+  if (value === "data_review") return active ? "border-slate-600 bg-slate-600 text-white" : "border-slate-300 bg-slate-50 text-slate-700 hover:bg-slate-100";
+  return active ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface hover:bg-muted";
 }
 
 function operationalCategory(row: DirectSchoolStopResult): Exclude<ClassificationFilter, "all"> {

@@ -5,6 +5,40 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-08-27
+
+### Direct-to-School Travel Analysis
+
+- Distance & Cost now includes a Direct-to-School workflow that measures each
+  service address against the school with fresh market-provider timing and
+  compares that direct trip with the student's current shared-route ride.
+- The operational conclusion separates students whose direct trip already
+  exceeds the configured time limit, students whose direct trip fits but whose
+  shared-route ride exceeds it, and any additional removals needed to bring the
+  remaining route back inside the route window. Distance remains descriptive;
+  classification is time-driven.
+- Additional-removal review is deterministic. It considers the remaining
+  addresses in longest-direct-trip order, uses estimated route saving as a
+  tie-breaker, preserves current stop order, and remeasures the route after
+  each removal. This is an operating scenario, not an automatic route rewrite.
+- Results include linked route-map and 16:9 scatter selection, zoom and pan,
+  selected-stop rider/distance/time details, aggregate student counts, and
+  downloadable map output. Map coordinates are normalized before routing and
+  use the same rendering conventions as Route Audit.
+- Statistics export is available from both the operational conclusion and job
+  actions. The workbook contains Operational Summary, Student Classification,
+  Route Outcomes, Address Measurements, Data Quality, and Daily History.
+- New analysis runs contain the route-window recovery evidence. Older saved
+  results remain readable but must be rerun to receive the new conclusion.
+
+### Queue And Verification Reliability
+
+- Background minimum-fleet verification worker ownership is isolated so a
+  stale reaper cannot release or penalize a newer verifier worker.
+- CN scheduled side-tool jobs reuse the resident queue release path. A
+  redundant high-frequency timer was removed; existing Route Audit AM/PM and
+  OSRM cleanup timers are unchanged.
+
 ## 2026-07-12
 
 ### Shared KR Algorithm And Kakao Rollout

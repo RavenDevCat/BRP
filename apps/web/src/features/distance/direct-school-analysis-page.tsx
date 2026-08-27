@@ -242,7 +242,7 @@ export function DirectSchoolAnalysisPage({
 
   const selectedRecord = detailQuery.data || null;
   const rawResult = selectedRecord?.result;
-  const result = rawResult && Array.isArray(rawResult.stops) ? rawResult : null;
+  const result = rawResult && Array.isArray(rawResult.stops) && !isActiveStatus(selectedRecord?.status) ? rawResult : null;
   const filteredStops = useMemo(() => {
     const rows = result?.stops || [];
     const search = searchText.trim().toLowerCase();
@@ -601,6 +601,11 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
             </div>
             <RouteRecoveryTable rows={routeRows} />
           </>
+        ) : Number(result.analysis_version || 0) >= 2 ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+            <div className="font-medium">{t("This analysis stopped before route-window recovery was completed.")}</div>
+            <div className="mt-1 text-xs leading-5">{t("Retry the missing measurements to complete the student classification and route-removal conclusion.")}</div>
+          </div>
         ) : (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
             <div className="font-medium">{t("This legacy result does not contain route-window recovery evidence.")}</div>
@@ -1013,7 +1018,10 @@ function DirectSchoolHistoryItem({ job, active }: { job: DirectSchoolJobSummary;
       <Badge tone={statusTone(job.status)}>{t(statusLabel(job.status))}</Badge>
       <div className={cn("mt-2 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{formatDateTime(job.created_at)}</div>
       {job.scheduled_start_at ? <div className={cn("mt-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{t("Scheduled for")} {formatDateTime(job.scheduled_start_at)}</div> : null}
-      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}><span>{formatNumber(summary.address_count)} {t("addresses")}</span><span>{formatNumber(overLimitCount || summary.dedicated_candidate_count || 0)} {t("over limit")}</span></div>
+      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>
+        <span>{formatNumber(summary.address_count)} {t("addresses")}</span>
+        <span>{isActiveStatus(job.status) ? t("Measurements pending") : `${formatNumber(overLimitCount || summary.dedicated_candidate_count || 0)} ${t("over limit")}`}</span>
+      </div>
     </div>
   );
 }

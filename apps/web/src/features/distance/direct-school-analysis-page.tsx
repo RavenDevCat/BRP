@@ -543,6 +543,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   if (!result) return null;
   const conclusion = result.operational_conclusion;
   const routeRows = result.route_window_analysis || [];
+  const totalRiders = result.stops.reduce((total, row) => total + Math.max(0, Number(row.riders || 0)), 0);
   return (
     <Card>
       <CardHeader>
@@ -568,6 +569,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
                 title={t("Direct trip already exceeds the student trip limit")}
                 description={t("These students exceed the configured limit even when travelling directly to school.")}
                 riders={conclusion.direct_over_limit.rider_count}
+                totalRiders={totalRiders}
                 addresses={conclusion.direct_over_limit.address_count}
                 tone="warning"
               />
@@ -576,6 +578,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
                 title={t("Direct trip fits, but the current route ride exceeds the limit")}
                 description={t("Their excess time is caused by the shared route rather than the direct trip itself.")}
                 riders={conclusion.route_only_over_limit.rider_count}
+                totalRiders={totalRiders}
                 addresses={conclusion.route_only_over_limit.address_count}
                 tone="info"
               />
@@ -617,7 +620,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   );
 }
 
-function ConclusionStep({ step, title, description, riders, addresses, tone }: { step: string; title: string; description: string; riders: number; addresses: number; tone: "warning" | "info" }) {
+function ConclusionStep({ step, title, description, riders, totalRiders, addresses, tone }: { step: string; title: string; description: string; riders: number; totalRiders: number; addresses: number; tone: "warning" | "info" }) {
   const t = useT();
   return (
     <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
@@ -626,7 +629,7 @@ function ConclusionStep({ step, title, description, riders, addresses, tone }: {
         <div><div className="text-sm font-semibold">{title}</div><div className="mt-1 text-xs leading-5 text-muted-foreground">{description}</div></div>
       </div>
       <div className="flex items-baseline gap-4 lg:justify-end">
-        <div><span className="text-2xl font-semibold">{formatNumber(riders)}</span><span className="ml-1 text-xs text-muted-foreground">{t("students")}</span></div>
+        <div><span className="text-2xl font-semibold">{formatNumber(riders)}</span><span className="ml-1 text-xs text-muted-foreground">{t("out of")} {formatNumber(totalRiders)} {t("students")}</span></div>
         <div><span className="text-lg font-semibold">{formatNumber(addresses)}</span><span className="ml-1 text-xs text-muted-foreground">{t("addresses")}</span></div>
       </div>
     </div>

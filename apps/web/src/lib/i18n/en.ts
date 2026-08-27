@@ -1010,6 +1010,7 @@ const en: Translations = {
     "stops compared": "stops compared",
     "Straight": "Straight",
     "students": "students",
+    "out of": "out of",
     "Submitted by {owner}": "Submitted by {owner}",
     "Template": "Template",
     "The current plan average route distance is": "The current plan average route distance is",

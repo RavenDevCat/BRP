@@ -931,6 +931,7 @@ const zh: Translations = {
     "stop(s)": "个站点",
     "Straight": "直线",
     "students": "学生",
+    "out of": "/",
     "Submitted audit runs will appear here after workbook validation and queue submission.": "Workbook 验证并提交队列后，审计任务会显示在这里。",
     "Submitted by": "提交人",
     "Submitted by {owner}": "提交人 {owner}",

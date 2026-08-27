@@ -1133,6 +1133,7 @@ const ko: Translations = {
     "stop(s)": "정류장",
     "Straight": "직선",
     "students": "학생",
+    "out of": "/",
     "Submitted by {owner}": "제출자 {owner}",
     "Time Window": "Time Window",
     "TIME WINDOW": "TIME WINDOW",

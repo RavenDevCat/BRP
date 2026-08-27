@@ -1195,6 +1195,7 @@ const zh: Translations = {
     "This address is an additional removal candidate because its route still exceeds the time window.": "摘出前两类学生后该路线仍超出时间窗，因此此地址被列为补充摘站候选。",
     "Direct and current shared-route travel times are within the configured limit.": "直达时间和当前共享路线乘车时间均未超过设定上限。",
     "Download Excel": "下载 Excel",
+    "Export statistics": "导出统计结果",
 };
 
 export default zh;

@@ -509,7 +509,7 @@ export function DirectSchoolAnalysisPage({
                     {result ? (
                       <a className={cn(buttonClassName("secondary"), "w-full")} href={getDirectSchoolAnalysisExportUrl(selectedRecord.job_id)}>
                         <Download className="h-4 w-4" aria-hidden="true" />
-                        {t("Download Excel")}
+                        {t("Export statistics")}
                       </a>
                     ) : null}
                     {(cancelMutation.error || retryMutation.error) ? <InlineError message={String((cancelMutation.error || retryMutation.error) as Error)} /> : null}
@@ -552,7 +552,16 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
             <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{t("Operational conclusion")}</h2>
           </div>
-          <Badge tone={result.status === "complete" ? "success" : "warning"}>{t(result.status === "complete" ? "Complete" : "Partial")}</Badge>
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <a
+              className={cn(buttonClassName("secondary"), "h-8 px-3")}
+              href={getDirectSchoolAnalysisExportUrl(record.job_id)}
+            >
+              <Download className="h-4 w-4" aria-hidden="true" />
+              {t("Export statistics")}
+            </a>
+            <Badge tone={result.status === "complete" ? "success" : "warning"}>{t(result.status === "complete" ? "Complete" : "Partial")}</Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">

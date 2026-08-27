@@ -1369,6 +1369,7 @@ const ko: Translations = {
     "This address is an additional removal candidate because its route still exceeds the time window.": "앞의 두 그룹을 제외한 뒤에도 노선이 시간 창을 초과하여 이 주소가 추가 분리 후보로 선정되었습니다.",
     "Direct and current shared-route travel times are within the configured limit.": "직행 시간과 현재 공동 노선 탑승 시간이 모두 설정된 제한 이내입니다.",
     "Download Excel": "Excel 다운로드",
+    "Export statistics": "통계 결과 내보내기",
 };
 
 export default ko;

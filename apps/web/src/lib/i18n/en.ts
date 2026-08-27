@@ -1284,6 +1284,7 @@ const en: Translations = {
     "This address is an additional removal candidate because its route still exceeds the time window.": "This address is an additional removal candidate because its route still exceeds the time window.",
     "Direct and current shared-route travel times are within the configured limit.": "Direct and current shared-route travel times are within the configured limit.",
     "Download Excel": "Download Excel",
+    "Export statistics": "Export statistics",
 };
 
 export default en;

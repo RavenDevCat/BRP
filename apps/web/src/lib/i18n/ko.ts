@@ -1316,6 +1316,8 @@ const ko: Translations = {
     "Distance and time distribution": "거리 및 시간 분포",
     "Direct distance km": "직행 거리(km)",
     "Direct duration min": "직행 시간(분)",
+    "Reset chart view": "차트 보기 재설정",
+    "Scroll to zoom and drag to pan.": "스크롤하여 확대/축소하고 드래그하여 이동합니다.",
     "Bubble size represents riders at the address.": "원 크기는 해당 주소의 탑승자 수를 나타냅니다.",
     "Address evidence": "주소별 근거",
     "Recommendation": "권장 사항",

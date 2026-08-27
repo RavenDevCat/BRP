@@ -1142,6 +1142,8 @@ const zh: Translations = {
     "Distance and time distribution": "距离与时间分布",
     "Direct distance km": "直达距离（公里）",
     "Direct duration min": "直达耗时（分钟）",
+    "Reset chart view": "重置图表视图",
+    "Scroll to zoom and drag to pan.": "滚轮缩放，按住拖拽平移。",
     "Bubble size represents riders at the address.": "气泡大小表示该地址的乘客人数。",
     "Address evidence": "地址测算明细",
     "Recommendation": "建议",

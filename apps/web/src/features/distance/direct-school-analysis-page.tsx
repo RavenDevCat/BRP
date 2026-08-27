@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -15,6 +15,7 @@ import {
   Play,
   RefreshCw,
   Route,
+  RotateCcw,
   Search,
   Upload,
 } from "lucide-react";
@@ -747,36 +748,93 @@ function DirectSchoolMap({ result, selectedStop, onSelect }: { result: NonNullab
 
 function DistanceScatter({ rows, selectedStopKey, onSelect }: { rows: DirectSchoolStopResult[]; selectedStopKey: string; onSelect: (key: string) => void }) {
   const t = useT();
+  const baseView = { x: 0, y: 0, width: 640, height: 360 };
+  const [view, setView] = useState(baseView);
+  const dragRef = useRef<{ clientX: number; clientY: number; viewX: number; viewY: number; moved: boolean } | null>(null);
+  const suppressClickRef = useRef(false);
   const plotted = rows.filter((row) => Number.isFinite(row.direct_distance_km) && Number.isFinite(row.direct_duration_min));
   const maxX = Math.max(1, ...plotted.map((row) => Number(row.direct_distance_km)));
   const maxY = Math.max(1, ...plotted.map((row) => Number(row.direct_duration_min)));
+  const clampView = (next: typeof baseView) => ({
+    ...next,
+    x: Math.min(baseView.width - next.width, Math.max(0, next.x)),
+    y: Math.min(baseView.height - next.height, Math.max(0, next.y)),
+  });
+  const zoomAt = (factor: number, anchorX: number, anchorY: number) => {
+    setView((current) => {
+      const width = Math.min(baseView.width, Math.max(baseView.width / 8, current.width * factor));
+      const height = width * (baseView.height / baseView.width);
+      const ratioX = (anchorX - current.x) / current.width;
+      const ratioY = (anchorY - current.y) / current.height;
+      return clampView({ x: anchorX - ratioX * width, y: anchorY - ratioY * height, width, height });
+    });
+  };
+  const handleWheel = (event: ReactWheelEvent<SVGSVGElement>) => {
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const anchorX = view.x + ((event.clientX - bounds.left) / bounds.width) * view.width;
+    const anchorY = view.y + ((event.clientY - bounds.top) / bounds.height) * view.height;
+    zoomAt(event.deltaY < 0 ? 0.82 : 1.22, anchorX, anchorY);
+  };
+  const handlePointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    suppressClickRef.current = false;
+    dragRef.current = { clientX: event.clientX, clientY: event.clientY, viewX: view.x, viewY: view.y, moved: false };
+  };
+  const handlePointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const dx = ((event.clientX - drag.clientX) / bounds.width) * view.width;
+    const dy = ((event.clientY - drag.clientY) / bounds.height) * view.height;
+    if (Math.abs(dx) > 1 || Math.abs(dy) > 1) drag.moved = true;
+    setView((current) => clampView({ ...current, x: drag.viewX - dx, y: drag.viewY - dy }));
+  };
   return (
     <Card>
-      <CardHeader><div className="flex items-center gap-2"><Clock3 className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold">{t("Distance and time distribution")}</h2></div></CardHeader>
+      <CardHeader>
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2"><Clock3 className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold">{t("Distance and time distribution")}</h2></div>
+          <Button variant="secondary" className="h-9 w-9 p-0" title={t("Reset chart view")} aria-label={t("Reset chart view")} onClick={() => setView(baseView)} disabled={view.width === baseView.width}>
+            <RotateCcw className="h-4 w-4" />
+          </Button>
+        </div>
+      </CardHeader>
       <CardContent>
-        <div className="aspect-square min-h-[360px] w-full">
-          <svg viewBox="0 0 420 420" className="h-full w-full" role="img" aria-label={t("Distance and time distribution")}>
-            <line x1="48" y1="372" x2="400" y2="372" stroke="#94a3b8" strokeWidth="1" />
-            <line x1="48" y1="20" x2="48" y2="372" stroke="#94a3b8" strokeWidth="1" />
-            {[0.25, 0.5, 0.75, 1].map((ratio) => <line key={ratio} x1="48" y1={372 - ratio * 352} x2="400" y2={372 - ratio * 352} stroke="#e2e8f0" strokeWidth="1" />)}
+        <div className="aspect-video min-h-[300px] w-full overflow-hidden rounded-md border border-border bg-surface">
+          <svg
+            viewBox={`${view.x} ${view.y} ${view.width} ${view.height}`}
+            className="h-full w-full cursor-grab touch-none select-none active:cursor-grabbing"
+            role="img"
+            aria-label={t("Distance and time distribution")}
+            onWheel={handleWheel}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={(event) => { suppressClickRef.current = Boolean(dragRef.current?.moved); event.currentTarget.releasePointerCapture(event.pointerId); dragRef.current = null; }}
+            onPointerCancel={() => { dragRef.current = null; }}
+          >
+            <rect width="640" height="360" fill="white" />
+            <line x1="64" y1="310" x2="616" y2="310" stroke="#94a3b8" strokeWidth="1" />
+            <line x1="64" y1="20" x2="64" y2="310" stroke="#94a3b8" strokeWidth="1" />
+            {[0.25, 0.5, 0.75, 1].map((ratio) => <line key={ratio} x1="64" y1={310 - ratio * 290} x2="616" y2={310 - ratio * 290} stroke="#e2e8f0" strokeWidth="1" />)}
             {plotted.map((row) => {
-              const x = 48 + (Number(row.direct_distance_km) / maxX) * 352;
-              const y = 372 - (Number(row.direct_duration_min) / maxY) * 352;
+              const x = 64 + (Number(row.direct_distance_km) / maxX) * 552;
+              const y = 310 - (Number(row.direct_duration_min) / maxY) * 290;
               const radius = Math.min(14, 5 + Math.sqrt(Math.max(0, row.riders || 0)));
               return (
-                <circle key={row.stop_key} cx={x} cy={y} r={selectedStopKey === row.stop_key ? radius + 3 : radius} fill={recommendationColor(row.recommendation)} fillOpacity="0.82" stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"} strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5} className="cursor-pointer" onClick={() => onSelect(row.stop_key)}>
+                <circle key={row.stop_key} cx={x} cy={y} r={selectedStopKey === row.stop_key ? radius + 3 : radius} fill={recommendationColor(row.recommendation)} fillOpacity="0.82" stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"} strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5} className="cursor-pointer" onClick={() => { if (!suppressClickRef.current) onSelect(row.stop_key); suppressClickRef.current = false; }}>
                   <title>{`${row.address}: ${row.direct_distance_km} km / ${row.direct_duration_min} min`}</title>
                 </circle>
               );
             })}
-            <text x="224" y="410" textAnchor="middle" fontSize="12" fill="#64748b">{t("Direct distance km")}</text>
-            <text x="14" y="196" textAnchor="middle" fontSize="12" fill="#64748b" transform="rotate(-90 14 196)">{t("Direct duration min")}</text>
-            <text x="48" y="391" fontSize="11" fill="#64748b">0</text>
-            <text x="400" y="391" textAnchor="end" fontSize="11" fill="#64748b">{formatNumber(maxX)}</text>
-            <text x="40" y="24" textAnchor="end" fontSize="11" fill="#64748b">{formatNumber(maxY)}</text>
+            <text x="340" y="347" textAnchor="middle" fontSize="12" fill="#64748b">{t("Direct distance km")}</text>
+            <text x="18" y="165" textAnchor="middle" fontSize="12" fill="#64748b" transform="rotate(-90 18 165)">{t("Direct duration min")}</text>
+            <text x="64" y="329" fontSize="11" fill="#64748b">0</text>
+            <text x="616" y="329" textAnchor="end" fontSize="11" fill="#64748b">{formatNumber(maxX)}</text>
+            <text x="56" y="24" textAnchor="end" fontSize="11" fill="#64748b">{formatNumber(maxY)}</text>
           </svg>
         </div>
-        <div className="mt-2 text-xs text-muted-foreground">{t("Bubble size represents riders at the address.")}</div>
+        <div className="mt-2 text-xs text-muted-foreground">{t("Bubble size represents riders at the address.")} {t("Scroll to zoom and drag to pan.")}</div>
       </CardContent>
     </Card>
   );

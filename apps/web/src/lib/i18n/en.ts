@@ -1231,6 +1231,8 @@ const en: Translations = {
     "Distance and time distribution": "Distance and time distribution",
     "Direct distance km": "Direct distance km",
     "Direct duration min": "Direct duration min",
+    "Reset chart view": "Reset chart view",
+    "Scroll to zoom and drag to pan.": "Scroll to zoom and drag to pan.",
     "Bubble size represents riders at the address.": "Bubble size represents riders at the address.",
     "Address evidence": "Address evidence",
     "Recommendation": "Recommendation",

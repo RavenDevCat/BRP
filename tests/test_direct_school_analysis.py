@@ -105,14 +105,65 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
 
     assert result["status"] == "complete"
     assert result["summary"]["address_count"] == 2
-    assert result["summary"]["provider_api_calls"] == 5
+    assert result["summary"]["provider_api_calls"] == 6
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
     near = next(row for row in result["stops"] if row["address"] == "Near stop")
     assert far["recommendation"] == "dedicated_candidate"
     assert far["marginal_route_burden_min"] > 15
     assert near["direct_duration_min"] == 15
+    assert result["operational_conclusion"]["direct_over_limit"]["rider_count"] == 2
+    assert result["operational_conclusion"]["route_only_over_limit"]["rider_count"] == 0
+    assert result["operational_conclusion"]["final"]["all_measured_routes_within_window"] is True
+    assert result["route_window_analysis"][0]["post_primary_duration_min"] == 16
     assert checkpoints
     assert checkpoints[0]["analysis_type"] == "direct_school"
+
+
+def test_analysis_counts_route_only_students_by_occurrence(monkeypatch) -> None:
+    monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+
+    result = analysis.run_direct_school_analysis(
+        prepared_payload(),
+        {
+            "service_direction": "To School",
+            "far_duration_minutes": 16,
+            "bypass_candidate_limit": 0,
+        },
+        run_seed="occurrence-test",
+    )
+
+    conclusion = result["operational_conclusion"]
+    assert conclusion["direct_over_limit"] == {"address_count": 1, "rider_count": 2}
+    assert conclusion["route_only_over_limit"] == {"address_count": 1, "rider_count": 3}
+    near = next(row for row in result["stops"] if row["address"] == "Near stop")
+    assert near["route_contexts"][0]["operational_category"] == "route_only_over_limit"
+
+
+def test_analysis_recommends_additional_removal_until_route_fits(monkeypatch) -> None:
+    monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+
+    result = analysis.run_direct_school_analysis(
+        prepared_payload(),
+        {
+            "service_direction": "To School",
+            "far_duration_minutes": 120,
+            "time_window_start": "06:30",
+            "time_window_end": "07:00",
+            "bypass_candidate_limit": 0,
+        },
+        run_seed="recovery-test",
+    )
+
+    conclusion = result["operational_conclusion"]
+    route = result["route_window_analysis"][0]
+    assert conclusion["primary_removal"]["rider_count"] == 0
+    assert conclusion["post_primary"]["over_window_count"] == 1
+    assert conclusion["additional_removal"]["rider_count"] == 2
+    assert route["additional_removals"][0]["address"] == "Far stop"
+    assert route["final_duration_min"] == 16
+    assert route["status"] == "within_window"
 
 
 def test_multi_day_aggregation_requires_repeated_evidence() -> None:
@@ -173,15 +224,23 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
         record,
         {"samples": [{"job_id": "job-1", "stop_key": "far", "address": "Far stop"}]},
     )
-    workbook = load_workbook(BytesIO(body), read_only=True)
+    workbook = load_workbook(BytesIO(body))
 
     assert workbook.sheetnames == [
-        "Summary",
-        "Stop Results",
-        "Dedicated Candidates",
-        "Errors",
-        "Daily Samples",
+        "Operational Summary",
+        "Student Classification",
+        "Route Outcomes",
+        "Address Measurements",
+        "Data Quality",
+        "Daily History",
     ]
+    assert "Operational Conclusion" in workbook["Operational Summary"]["A1"].value
+    assert workbook["Student Classification"]["A4"].value == "Category / 分类"
+    assert workbook["Route Outcomes"]["J4"].value == "Final status / 最终状态"
+    assert workbook["Operational Summary"].freeze_panes == "A6"
+    assert workbook["Student Classification"].freeze_panes == "A5"
+    assert workbook["Student Classification"].column_dimensions["B"].width >= 40
+    assert workbook["Address Measurements"].auto_filter.ref.startswith("A4:")
 
 
 def test_audit_template_is_the_direct_school_input_contract() -> None:

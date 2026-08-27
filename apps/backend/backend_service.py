@@ -2396,7 +2396,9 @@ def _direct_school_preview_from_prepared(
     analysis_config: dict[str, Any],
 ) -> dict[str, Any]:
     unique_stop_count = _direct_school_unique_stop_count(current_plan)
-    route_count = int(dict(current_plan.get("summary") or {}).get("route_count", 0) or 0)
+    plan_summary = dict(current_plan.get("summary") or {})
+    route_count = int(plan_summary.get("route_count", 0) or 0)
+    service_stop_count = int(plan_summary.get("service_stop_count", 0) or 0)
     bypass_count = min(unique_stop_count, max(0, int(analysis_config.get("bypass_candidate_limit", 0) or 0)))
     school = _direct_school_school_point(current_plan, prepared_payload)
     school_record = dict(list(current_plan.get("input_records") or [{}])[0])
@@ -2408,8 +2410,9 @@ def _direct_school_preview_from_prepared(
             **dict(current_plan.get("summary") or {}),
             "unique_address_count": unique_stop_count,
             "route_count": route_count,
-            "estimated_logical_provider_calls": unique_stop_count + route_count + bypass_count,
+            "estimated_logical_provider_calls": unique_stop_count + route_count + bypass_count + route_count + service_stop_count,
             "bypass_candidate_count": bypass_count,
+            "route_recovery_call_budget": route_count + service_stop_count,
         },
         "school": {
             "country": school.get("country"),

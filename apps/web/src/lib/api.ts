@@ -686,6 +686,9 @@ export type DirectSchoolStopResult = {
     provider_status: string;
     quality_status?: string;
     recommendation: string;
+    operational_category?: string;
+    additional_window_candidate?: boolean;
+    additional_window_routes?: string[];
     reasons?: string[];
     risk_score?: number;
     direct_distance_km?: number;
@@ -705,6 +708,40 @@ export type DirectSchoolStopResult = {
     estimated_direct_arrival?: string;
     provider_called_at?: string;
     direct_geometry?: number[][];
+    route_contexts?: Array<{
+        route_id?: string;
+        stop_sequence?: number;
+        riders?: number;
+        estimated_current_ride_min?: number;
+        route_total_min?: number;
+        operational_category?: string;
+        over_limit_min?: number;
+    }>;
+};
+
+export type DirectSchoolOperationalConclusion = {
+    duration_limit_min: number;
+    route_window_min: number;
+    direct_over_limit: { address_count: number; rider_count: number };
+    route_only_over_limit: { address_count: number; rider_count: number };
+    primary_removal: { address_count: number; rider_count: number };
+    post_primary: { route_count: number; over_window_count: number; within_window_count: number; data_review_count: number };
+    additional_removal: { address_count: number; rider_count: number };
+    final: { over_window_count: number; within_window_count: number; data_review_count: number; all_measured_routes_within_window: boolean };
+};
+
+export type DirectSchoolRouteWindowResult = {
+    route_id: string;
+    status: string;
+    window_limit_min?: number;
+    original_duration_min?: number;
+    primary_removed_addresses?: number;
+    primary_removed_riders?: number;
+    post_primary_duration_min?: number;
+    additional_removed_addresses?: number;
+    additional_removed_riders?: number;
+    final_duration_min?: number;
+    error?: string;
 };
 
 export type DirectSchoolAnalysisResult = {
@@ -727,6 +764,8 @@ export type DirectSchoolAnalysisResult = {
     };
     stops: DirectSchoolStopResult[];
     routes: Array<Record<string, unknown>>;
+    operational_conclusion?: DirectSchoolOperationalConclusion;
+    route_window_analysis?: DirectSchoolRouteWindowResult[];
     candidate_clusters: Array<Record<string, unknown>>;
     errors: Array<Record<string, unknown>>;
 };

@@ -536,7 +536,8 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   const t = useT();
   const result = record.result;
   if (!result) return null;
-  const summary = result.summary;
+  const conclusion = result.operational_conclusion;
+  const routeRows = result.route_window_analysis || [];
   return (
     <Card>
       <CardHeader>
@@ -549,18 +550,102 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <Metric label="Addresses" value={summary.address_count} />
-          <Metric label="Dedicated candidates" value={summary.dedicated_candidate_count} accent />
-          <Metric label="Route adjustments" value={summary.route_adjustment_count} />
-          <Metric label="Longest direct time" value={`${formatNumber(summary.max_direct_duration_min)} min`} />
-          <Metric label="Provider API calls" value={summary.provider_api_calls} />
-        </div>
-        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs leading-5 text-muted-foreground">
-          {t("Times are live map estimates captured at the recorded provider call time, not vehicle GPS observations. OSRM is shown only as a free-flow baseline.")}
-        </div>
+        {conclusion ? (
+          <>
+            <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <span>{t("Student trip limit")}: <strong className="text-foreground">{formatNumber(conclusion.duration_limit_min)} min</strong></span>
+              <span>{t("Route time window")}: <strong className="text-foreground">{formatNumber(conclusion.route_window_min)} min</strong></span>
+              <span>{t("Times use the live map provider captured for this run.")}</span>
+            </div>
+            <div className="divide-y divide-border rounded-md border border-border">
+              <ConclusionStep
+                step="1"
+                title={t("Direct trip already exceeds the student trip limit")}
+                description={t("These students exceed the configured limit even when travelling directly to school.")}
+                riders={conclusion.direct_over_limit.rider_count}
+                addresses={conclusion.direct_over_limit.address_count}
+                tone="warning"
+              />
+              <ConclusionStep
+                step="2"
+                title={t("Direct trip fits, but the current route ride exceeds the limit")}
+                description={t("Their excess time is caused by the shared route rather than the direct trip itself.")}
+                riders={conclusion.route_only_over_limit.rider_count}
+                addresses={conclusion.route_only_over_limit.address_count}
+                tone="info"
+              />
+              <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+                <div className="flex min-w-0 gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">3</span>
+                  <div>
+                    <div className="text-sm font-semibold">{t("Route-window recovery after removing the first two groups")}</div>
+                    <div className="mt-1 text-xs leading-5 text-muted-foreground">
+                      {formatNumber(conclusion.post_primary.over_window_count)} {t("routes still exceed the window after the first removal")}
+                      {conclusion.additional_removal.rider_count > 0 ? ` · ${formatNumber(conclusion.additional_removal.rider_count)} ${t("additional students at")} ${formatNumber(conclusion.additional_removal.address_count)} ${t("addresses are suggested for removal")}` : ""}
+                    </div>
+                  </div>
+                </div>
+                <Badge tone={conclusion.final.all_measured_routes_within_window ? "success" : conclusion.final.data_review_count > 0 ? "warning" : "danger"}>
+                  {conclusion.final.all_measured_routes_within_window
+                    ? t("All measured routes fit the window")
+                    : conclusion.final.data_review_count > 0
+                      ? `${formatNumber(conclusion.final.data_review_count)} ${t("routes need data review")}`
+                      : `${formatNumber(conclusion.final.over_window_count)} ${t("routes still exceed the window")}`}
+                </Badge>
+              </div>
+            </div>
+            <RouteRecoveryTable rows={routeRows} />
+          </>
+        ) : (
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-900">
+            <div className="font-medium">{t("This legacy result does not contain route-window recovery evidence.")}</div>
+            <div className="mt-1 text-xs leading-5">{t("Run the analysis again to generate the new student classification and route-removal conclusion.")}</div>
+          </div>
+        )}
       </CardContent>
     </Card>
+  );
+}
+
+function ConclusionStep({ step, title, description, riders, addresses, tone }: { step: string; title: string; description: string; riders: number; addresses: number; tone: "warning" | "info" }) {
+  const t = useT();
+  return (
+    <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+      <div className="flex min-w-0 gap-3">
+        <span className={cn("flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold", tone === "warning" ? "bg-amber-100 text-amber-900" : "bg-cyan-100 text-cyan-900")}>{step}</span>
+        <div><div className="text-sm font-semibold">{title}</div><div className="mt-1 text-xs leading-5 text-muted-foreground">{description}</div></div>
+      </div>
+      <div className="flex items-baseline gap-4 lg:justify-end">
+        <div><span className="text-2xl font-semibold">{formatNumber(riders)}</span><span className="ml-1 text-xs text-muted-foreground">{t("students")}</span></div>
+        <div><span className="text-lg font-semibold">{formatNumber(addresses)}</span><span className="ml-1 text-xs text-muted-foreground">{t("addresses")}</span></div>
+      </div>
+    </div>
+  );
+}
+
+function RouteRecoveryTable({ rows }: { rows: NonNullable<DirectSchoolJobRecord["result"]>["route_window_analysis"] }) {
+  const t = useT();
+  const reviewed = (rows || []).filter((row) => row.primary_removed_riders || row.additional_removed_riders || row.status !== "within_window");
+  if (!reviewed.length) return <div className="text-xs text-muted-foreground">{t("No route requires a removal review.")}</div>;
+  return (
+    <div className="overflow-auto rounded-md border border-border">
+      <table className="min-w-[850px] w-full divide-y divide-border text-left text-sm">
+        <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
+        <tbody className="divide-y divide-border">
+          {reviewed.map((row) => (
+            <tr key={row.route_id}>
+              <td className="px-3 py-2 font-medium">{row.route_id}</td>
+              <td className="px-3 py-2">{minutes(row.original_duration_min)}</td>
+              <td className="px-3 py-2">{formatNumber(row.primary_removed_riders || 0)} {t("students")}</td>
+              <td className="px-3 py-2">{minutes(row.post_primary_duration_min)}</td>
+              <td className="px-3 py-2">{formatNumber(row.additional_removed_riders || 0)} {t("students")}</td>
+              <td className="px-3 py-2">{minutes(row.final_duration_min)}</td>
+              <td className="px-3 py-2"><Badge tone={row.status === "within_window" ? "success" : row.status === "data_review" ? "warning" : "danger"}>{t(row.status === "within_window" ? "Within window" : row.status === "data_review" ? "Data review" : "Still over window")}</Badge></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   );
 }
 

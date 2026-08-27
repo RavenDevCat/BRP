@@ -1135,6 +1135,8 @@ const zh: Translations = {
     "Rider detour": "乘客绕行耗时",
     "Route burden": "路线新增负担",
     "No addresses match the current filters.": "没有地址符合当前筛选条件。",
+    "Previous page": "上一页",
+    "Next page": "下一页",
     "Direct route map": "直达路线地图",
     "Select an address": "选择一个地址",
     "Distance and time distribution": "距离与时间分布",

@@ -1309,6 +1309,8 @@ const ko: Translations = {
     "Rider detour": "탑승자 우회 시간",
     "Route burden": "노선 추가 부담",
     "No addresses match the current filters.": "현재 필터에 맞는 주소가 없습니다.",
+    "Previous page": "이전 페이지",
+    "Next page": "다음 페이지",
     "Direct route map": "직행 경로 지도",
     "Select an address": "주소 선택",
     "Distance and time distribution": "거리 및 시간 분포",

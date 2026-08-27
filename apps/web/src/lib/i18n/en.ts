@@ -1224,6 +1224,8 @@ const en: Translations = {
     "Rider detour": "Rider detour",
     "Route burden": "Route burden",
     "No addresses match the current filters.": "No addresses match the current filters.",
+    "Previous page": "Previous page",
+    "Next page": "Next page",
     "Direct route map": "Direct route map",
     "Select an address": "Select an address",
     "Distance and time distribution": "Distance and time distribution",

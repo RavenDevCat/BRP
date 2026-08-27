@@ -584,6 +584,17 @@ function CandidateBoard({
 }) {
   const t = useT();
   const filters: RecommendationFilter[] = ["all", "dedicated_candidate", "route_adjustment", "far_not_main_cause", "data_review"];
+  const pageSize = 8;
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, pageCount - 1);
+  const firstVisibleIndex = currentPage * pageSize;
+  const visibleRows = rows.slice(firstVisibleIndex, firstVisibleIndex + pageSize);
+
+  useEffect(() => {
+    setPage(0);
+  }, [allRows, filter, search]);
+
   return (
     <Card>
       <CardHeader>
@@ -591,7 +602,7 @@ function CandidateBoard({
           <div className="flex items-center gap-2">
             <BusFront className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{t("Priority candidates")}</h2>
-            <Badge tone="info">{formatNumber(rows.length)} {t("shown")}</Badge>
+            <Badge tone="info">{formatNumber(rows.length)} {t("addresses")}</Badge>
           </div>
           <div className="flex flex-wrap gap-2">
             {filters.map((item) => (
@@ -608,7 +619,7 @@ function CandidateBoard({
           <input className={cn(fieldClassName, "pl-9")} value={search} placeholder={t("Search address or route")} onChange={(event) => onSearch(event.target.value)} />
         </label>
         <div className="grid gap-3 lg:grid-cols-2">
-          {rows.slice(0, 8).map((row) => (
+          {visibleRows.map((row) => (
             <button key={row.stop_key} type="button" className={cn("min-h-36 rounded-md border p-3 text-left transition", selectedStopKey === row.stop_key ? "border-primary bg-primary/5" : "border-border bg-surface hover:bg-muted/40")} onClick={() => onSelect(row.stop_key)}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -626,6 +637,35 @@ function CandidateBoard({
             </button>
           ))}
         </div>
+        {rows.length > pageSize ? (
+          <div className="flex h-10 items-center justify-between border-t border-border pt-3">
+            <span className="text-xs text-muted-foreground">
+              {formatNumber(firstVisibleIndex + 1)}-{formatNumber(Math.min(firstVisibleIndex + pageSize, rows.length))} / {formatNumber(rows.length)}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={t("Previous page")}
+                title={t("Previous page")}
+                disabled={currentPage === 0}
+                onClick={() => setPage((value) => Math.max(0, value - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface transition hover:bg-muted disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label={t("Next page")}
+                title={t("Next page")}
+                disabled={currentPage >= pageCount - 1}
+                onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}
+              >
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        ) : null}
         {!rows.length ? <div className="rounded-md border border-border bg-muted/40 px-3 py-6 text-center text-sm text-muted-foreground">{t("No addresses match the current filters.")}</div> : null}
       </CardContent>
     </Card>

@@ -640,9 +640,6 @@ export type DirectSchoolAnalysisConfig = {
     time_window_end: string;
     from_school_departure_time: string;
     far_duration_minutes: number;
-    burden_minutes: number;
-    bypass_candidate_limit: number;
-    candidate_cluster_radius_km: number;
 };
 
 export type DirectSchoolPreview = {
@@ -653,7 +650,6 @@ export type DirectSchoolPreview = {
         unique_address_count: number;
         route_count: number;
         estimated_logical_provider_calls: number;
-        bypass_candidate_count: number;
         service_stop_count?: number;
         assignment_count?: number;
     };
@@ -684,12 +680,11 @@ export type DirectSchoolStopResult = {
     lng?: number | null;
     provider_status: string;
     quality_status?: string;
-    recommendation: string;
+    recommendation?: string;
     operational_category?: string;
     additional_window_candidate?: boolean;
     additional_window_routes?: string[];
     reasons?: string[];
-    risk_score?: number;
     direct_distance_km?: number;
     direct_duration_min?: number;
     direct_service_duration_min?: number;
@@ -701,8 +696,6 @@ export type DirectSchoolStopResult = {
     road_to_straight_ratio?: number | null;
     estimated_current_ride_min?: number;
     rider_detour_min?: number;
-    marginal_route_burden_min?: number;
-    marginal_route_burden_km?: number;
     latest_direct_departure?: string;
     estimated_direct_arrival?: string;
     provider_called_at?: string;
@@ -765,7 +758,6 @@ export type DirectSchoolAnalysisResult = {
     routes: Array<Record<string, unknown>>;
     operational_conclusion?: DirectSchoolOperationalConclusion;
     route_window_analysis?: DirectSchoolRouteWindowResult[];
-    candidate_clusters: Array<Record<string, unknown>>;
     errors: Array<Record<string, unknown>>;
 };
 

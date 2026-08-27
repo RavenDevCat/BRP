@@ -2320,9 +2320,28 @@ def _direct_school_analysis_config(
 ) -> dict[str, Any]:
     requested = dict(payload.get("analysis_config") or {})
     config = {**DIRECT_SCHOOL_DEFAULTS, **requested}
+    for legacy_key in (
+        "far_distance_km",
+        "burden_minutes",
+        "bypass_candidate_limit",
+        "candidate_cluster_radius_km",
+    ):
+        config.pop(legacy_key, None)
     config["service_direction"] = str(
         current_plan.get("service_direction") or config.get("service_direction") or "To School"
     )
+    if config["service_direction"] == "From School" and (
+        str(config.get("time_window_start") or ""),
+        str(config.get("time_window_end") or ""),
+    ) == ("06:30", "08:00"):
+        departure_label, departure_minutes = _parse_clock_payload(
+            config.get("from_school_departure_time"),
+            "from_school_departure_time",
+            "15:40",
+        )
+        window_end_minutes = departure_minutes + 120
+        config["time_window_start"] = departure_label
+        config["time_window_end"] = f"{(window_end_minutes // 60) % 24:02d}:{window_end_minutes % 60:02d}"
     return config
 
 
@@ -2399,7 +2418,6 @@ def _direct_school_preview_from_prepared(
     plan_summary = dict(current_plan.get("summary") or {})
     route_count = int(plan_summary.get("route_count", 0) or 0)
     service_stop_count = int(plan_summary.get("service_stop_count", 0) or 0)
-    bypass_count = min(unique_stop_count, max(0, int(analysis_config.get("bypass_candidate_limit", 0) or 0)))
     school = _direct_school_school_point(current_plan, prepared_payload)
     school_record = dict(list(current_plan.get("input_records") or [{}])[0])
     return {
@@ -2410,8 +2428,7 @@ def _direct_school_preview_from_prepared(
             **dict(current_plan.get("summary") or {}),
             "unique_address_count": unique_stop_count,
             "route_count": route_count,
-            "estimated_logical_provider_calls": unique_stop_count + route_count + bypass_count + route_count + service_stop_count,
-            "bypass_candidate_count": bypass_count,
+            "estimated_logical_provider_calls": unique_stop_count + route_count + route_count + service_stop_count,
             "route_recovery_call_budget": route_count + service_stop_count,
         },
         "school": {

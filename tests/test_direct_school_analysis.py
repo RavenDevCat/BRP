@@ -85,7 +85,7 @@ def fake_osrm(origin: dict, destination: dict, _cache: dict) -> dict:
     }
 
 
-def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) -> None:
+def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
     monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
     checkpoints: list[dict] = []
@@ -95,8 +95,6 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
         {
             "service_direction": "To School",
             "far_duration_minutes": 45,
-            "burden_minutes": 15,
-            "bypass_candidate_limit": 2,
         },
         run_seed="test",
         checkpoint=lambda payload: checkpoints.append(payload),
@@ -104,11 +102,10 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
 
     assert result["status"] == "complete"
     assert result["summary"]["address_count"] == 2
-    assert result["summary"]["provider_api_calls"] == 6
+    assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
     near = next(row for row in result["stops"] if row["address"] == "Near stop")
-    assert far["recommendation"] == "dedicated_candidate"
-    assert far["marginal_route_burden_min"] > 15
+    assert far["operational_category"] == "direct_over_limit"
     assert near["direct_duration_min"] == 15
     assert result["operational_conclusion"]["direct_over_limit"]["rider_count"] == 2
     assert result["operational_conclusion"]["route_only_over_limit"]["rider_count"] == 0
@@ -118,7 +115,7 @@ def test_analysis_combines_direct_distance_route_burden_and_bypass(monkeypatch) 
     assert checkpoints[0]["analysis_type"] == "direct_school"
 
 
-def test_distance_is_reported_but_never_triggers_a_recommendation(monkeypatch) -> None:
+def test_distance_and_retired_parameters_never_trigger_classification(monkeypatch) -> None:
     monkeypatch.setattr(analysis, "FreshRouteProvider", FakeProvider)
     monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
 
@@ -129,9 +126,10 @@ def test_distance_is_reported_but_never_triggers_a_recommendation(monkeypatch) -
             "far_distance_km": 1,
             "far_duration_minutes": 120,
             "burden_minutes": 200,
+            "bypass_candidate_limit": 50,
+            "candidate_cluster_radius_km": 100,
             "time_window_start": "06:30",
             "time_window_end": "09:30",
-            "bypass_candidate_limit": 0,
         },
         run_seed="time-only-threshold-test",
     )
@@ -139,8 +137,39 @@ def test_distance_is_reported_but_never_triggers_a_recommendation(monkeypatch) -
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
     assert far["direct_distance_km"] == 30
     assert far["direct_duration_min"] == 60
-    assert far["recommendation"] == "within_range"
-    assert "far_distance_km" not in result["parameters"]
+    assert far["operational_category"] == "within_limit"
+    for retired_key in (
+        "far_distance_km",
+        "burden_minutes",
+        "bypass_candidate_limit",
+        "candidate_cluster_radius_km",
+    ):
+        assert retired_key not in result["parameters"]
+
+
+def test_submit_config_drops_retired_candidate_scoring_parameters() -> None:
+    config = backend_service._direct_school_analysis_config(
+        {
+            "analysis_config": {
+                "far_duration_minutes": 60,
+                "burden_minutes": 20,
+                "bypass_candidate_limit": 25,
+                "candidate_cluster_radius_km": 5,
+            }
+        },
+        {"service_direction": "To School"},
+    )
+
+    assert config["far_duration_minutes"] == 60
+    assert config["service_direction"] == "To School"
+    assert not {"burden_minutes", "bypass_candidate_limit", "candidate_cluster_radius_km"} & config.keys()
+
+    afternoon = backend_service._direct_school_analysis_config(
+        {"analysis_config": {"time_window_start": "06:30", "time_window_end": "08:00"}},
+        {"service_direction": "From School"},
+    )
+    assert afternoon["time_window_start"] == "15:40"
+    assert afternoon["time_window_end"] == "17:40"
 
 
 def test_analysis_counts_route_only_students_by_occurrence(monkeypatch) -> None:
@@ -152,7 +181,6 @@ def test_analysis_counts_route_only_students_by_occurrence(monkeypatch) -> None:
         {
             "service_direction": "To School",
             "far_duration_minutes": 16,
-            "bypass_candidate_limit": 0,
         },
         run_seed="occurrence-test",
     )
@@ -175,7 +203,6 @@ def test_analysis_recommends_additional_removal_until_route_fits(monkeypatch) ->
             "far_duration_minutes": 120,
             "time_window_start": "06:30",
             "time_window_end": "07:00",
-            "bypass_candidate_limit": 0,
         },
         run_seed="recovery-test",
     )
@@ -206,7 +233,6 @@ def test_multi_day_aggregation_requires_repeated_evidence() -> None:
                             "provider_status": "resolved",
                             "direct_duration_min": duration,
                             "direct_distance_km": 30,
-                            "recommendation": "dedicated_candidate" if index < 3 else "far_not_main_cause",
                         }
                     ]
                 },
@@ -217,8 +243,8 @@ def test_multi_day_aggregation_requires_repeated_evidence() -> None:
 
     assert aggregate["run_count"] == 3
     assert aggregate["stops"][0]["duration_median_min"] == 50
-    assert aggregate["stops"][0]["persistent_candidate"] is True
-    assert aggregate["stops"][0]["dedicated_candidate_rate"] == 0.667
+    assert aggregate["stops"][0]["persistent_direct_over_limit"] is True
+    assert aggregate["stops"][0]["direct_over_limit_rate"] == 0.667
 
 
 def test_excel_export_contains_required_analysis_sheets() -> None:
@@ -236,7 +262,7 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
                 {
                     "stop_key": "far",
                     "address": "Far stop",
-                    "recommendation": "dedicated_candidate",
+                    "operational_category": "direct_over_limit",
                     "provider_status": "resolved",
                 }
             ],

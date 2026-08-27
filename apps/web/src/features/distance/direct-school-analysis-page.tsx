@@ -48,7 +48,7 @@ import { formatDateTime, formatNumber } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 
 type DistancePageMode = "reference" | "route_cost" | "direct_school";
-type RecommendationFilter = "all" | "dedicated_candidate" | "route_adjustment" | "far_not_main_cause" | "data_review";
+type ClassificationFilter = "all" | "direct_over_limit" | "route_only_over_limit" | "additional_window_candidate" | "within_limit" | "data_review";
 
 const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
   service_direction: "To School",
@@ -57,9 +57,6 @@ const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
   time_window_end: "08:00",
   from_school_departure_time: "15:40",
   far_duration_minutes: 45,
-  burden_minutes: 15,
-  bypass_candidate_limit: 10,
-  candidate_cluster_radius_km: 3,
 };
 
 const fieldClassName =
@@ -100,7 +97,7 @@ export function DirectSchoolAnalysisPage({
   const [selectedJobId, setSelectedJobId] = useState("");
   const [deletingJobId, setDeletingJobId] = useState("");
   const [selectedStopKey, setSelectedStopKey] = useState("");
-  const [recommendationFilter, setRecommendationFilter] = useState<RecommendationFilter>("all");
+  const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>("all");
   const [searchText, setSearchText] = useState("");
 
   const featuresQuery = useQuery({
@@ -250,14 +247,14 @@ export function DirectSchoolAnalysisPage({
     const rows = result?.stops || [];
     const search = searchText.trim().toLowerCase();
     return rows.filter((row) => {
-      if (recommendationFilter !== "all" && row.recommendation !== recommendationFilter) return false;
+      if (classificationFilter !== "all" && operationalCategory(row) !== classificationFilter) return false;
       if (!search) return true;
       return [row.address, row.city, row.primary_route_id, ...(row.route_ids || [])]
         .join(" ")
         .toLowerCase()
         .includes(search);
     });
-  }, [recommendationFilter, result?.stops, searchText]);
+  }, [classificationFilter, result?.stops, searchText]);
   const selectedStop = result?.stops.find((row) => row.stop_key === selectedStopKey) || filteredStops[0] || null;
   const scheduledEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
 
@@ -298,7 +295,7 @@ export function DirectSchoolAnalysisPage({
                   <p className="text-sm font-medium text-primary">{t("Planning tools")}</p>
                   <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{t("Distance & Cost")}</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                    {t("Measure each service address against the school with fresh provider traffic, then separate remoteness from route burden.")}
+                    {t("Measure direct and current-route travel times, then identify which students must be separated for every route to meet the time window.")}
                   </p>
                 </div>
                 <div className="grid w-full grid-cols-3 rounded-md border border-border bg-muted p-1 2xl:w-auto">
@@ -359,13 +356,13 @@ export function DirectSchoolAnalysisPage({
               {result ? (
                 <>
                   <ResultSummary record={selectedRecord!} />
-                  <CandidateBoard
+                  <AddressClassificationBoard
                     rows={filteredStops}
                     allRows={result.stops}
                     selectedStopKey={selectedStop?.stop_key || ""}
-                    filter={recommendationFilter}
+                    filter={classificationFilter}
                     search={searchText}
-                    onFilter={setRecommendationFilter}
+                    onFilter={setClassificationFilter}
                     onSearch={setSearchText}
                     onSelect={setSelectedStopKey}
                   />
@@ -375,7 +372,6 @@ export function DirectSchoolAnalysisPage({
                   </div>
                   <StopDetailTable rows={filteredStops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={setSelectedStopKey} />
                   <MultiDayPanel record={selectedRecord!} />
-                  <ClusterPanel clusters={result.candidate_clusters || []} />
                 </>
               ) : selectedRecord ? (
                 <PendingResult record={selectedRecord} />
@@ -391,25 +387,36 @@ export function DirectSchoolAnalysisPage({
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  <Field label="Service Direction">
+                  <Field label="Analysis direction">
                     <select
                       className={fieldClassName}
                       value={config.service_direction}
-                      onChange={(event) => updateConfig({ service_direction: event.target.value as DirectSchoolAnalysisConfig["service_direction"] })}
+                      onChange={(event) => {
+                        const direction = event.target.value as DirectSchoolAnalysisConfig["service_direction"];
+                        updateConfig(direction === "To School"
+                          ? { service_direction: direction, time_window_start: "06:30", time_window_end: "08:00" }
+                          : { service_direction: direction, from_school_departure_time: "15:40", time_window_start: "15:40", time_window_end: "17:40" });
+                      }}
                     >
                       <option value="To School">{t("To School")}</option>
                       <option value="From School">{t("From School")}</option>
                     </select>
                   </Field>
                   <div className="grid grid-cols-2 gap-3">
-                    <NumberField label="Far duration min" value={config.far_duration_minutes} min={1} step={5} onChange={(value) => updateConfig({ far_duration_minutes: value })} />
-                    <NumberField label="Burden threshold min" value={config.burden_minutes} min={1} step={1} onChange={(value) => updateConfig({ burden_minutes: value })} />
-                    <NumberField label="Bypass checks" value={config.bypass_candidate_limit} min={0} max={50} step={1} onChange={(value) => updateConfig({ bypass_candidate_limit: value })} />
-                    <NumberField label="Cluster radius km" value={config.candidate_cluster_radius_km} min={0.1} step={0.5} onChange={(value) => updateConfig({ candidate_cluster_radius_km: value })} />
-                    <NumberField label="Stop dwell min" value={config.stop_service_minutes} min={0} step={0.5} onChange={(value) => updateConfig({ stop_service_minutes: value })} />
+                    <NumberField label="Student trip time limit (min)" value={config.far_duration_minutes} min={1} step={5} onChange={(value) => updateConfig({ far_duration_minutes: value })} />
+                    <NumberField label="Per-stop dwell time (min)" value={config.stop_service_minutes} min={0} step={0.5} onChange={(value) => updateConfig({ stop_service_minutes: value })} />
+                    <Field label="Route operating window start">
+                      <input type="time" className={fieldClassName} value={config.time_window_start} onChange={(event) => updateConfig({
+                        time_window_start: event.target.value,
+                        ...(config.service_direction === "From School" ? { from_school_departure_time: event.target.value } : {}),
+                      })} />
+                    </Field>
+                    <Field label="Route operating window end">
+                      <input type="time" className={fieldClassName} value={config.time_window_end} onChange={(event) => updateConfig({ time_window_end: event.target.value })} />
+                    </Field>
                   </div>
                   <p className="text-xs leading-5 text-muted-foreground">
-                    {t("Dedicated service is suggested only when direct travel time exceeds the limit and measured route burden is material. Distance remains a reported measurement only.")}
+                    {t("The student trip time limit applies to both direct and current-route travel. Route recovery uses the operating window below, while distance is reported only.")}
                   </p>
                 </CardContent>
               </Card>
@@ -466,7 +473,7 @@ export function DirectSchoolAnalysisPage({
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <Field label="Custom Job Name">
-                    <input className={fieldClassName} value={customName} placeholder={t("Remote-stop review")} onChange={(event) => setCustomName(event.target.value)} />
+                    <input className={fieldClassName} value={customName} placeholder={t("Student travel-time review")} onChange={(event) => setCustomName(event.target.value)} />
                   </Field>
                   {previewMutation.data ? (
                     <div className="rounded-md border border-border bg-muted/50 p-3">
@@ -647,7 +654,7 @@ function RouteRecoveryTable({ rows }: { rows: NonNullable<DirectSchoolJobRecord[
   );
 }
 
-function CandidateBoard({
+function AddressClassificationBoard({
   rows,
   allRows,
   selectedStopKey,
@@ -660,14 +667,14 @@ function CandidateBoard({
   rows: DirectSchoolStopResult[];
   allRows: DirectSchoolStopResult[];
   selectedStopKey: string;
-  filter: RecommendationFilter;
+  filter: ClassificationFilter;
   search: string;
-  onFilter: (filter: RecommendationFilter) => void;
+  onFilter: (filter: ClassificationFilter) => void;
   onSearch: (value: string) => void;
   onSelect: (stopKey: string) => void;
 }) {
   const t = useT();
-  const filters: RecommendationFilter[] = ["all", "dedicated_candidate", "route_adjustment", "far_not_main_cause", "data_review"];
+  const filters: ClassificationFilter[] = ["all", "direct_over_limit", "route_only_over_limit", "additional_window_candidate", "within_limit", "data_review"];
   const pageSize = 8;
   const [page, setPage] = useState(0);
   const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
@@ -685,13 +692,13 @@ function CandidateBoard({
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <div className="flex items-center gap-2">
             <BusFront className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{t("Priority candidates")}</h2>
+            <h2 className="text-sm font-semibold">{t("Address classification")}</h2>
             <Badge tone="info">{formatNumber(rows.length)} {t("addresses")}</Badge>
           </div>
           <div className="flex flex-wrap gap-2">
             {filters.map((item) => (
               <button key={item} type="button" className={cn("h-8 rounded-md border px-3 text-xs font-medium", filter === item ? "border-primary bg-primary text-primary-foreground" : "border-border bg-surface")} onClick={() => onFilter(item)}>
-                {t(recommendationLabel(item))} {item === "all" ? allRows.length : allRows.filter((row) => row.recommendation === item).length}
+                {t(classificationLabel(item))} {item === "all" ? allRows.length : allRows.filter((row) => operationalCategory(row) === item).length}
               </button>
             ))}
           </div>
@@ -710,12 +717,12 @@ function CandidateBoard({
                   <div className="truncate text-sm font-semibold">{row.address}</div>
                   <div className="mt-1 text-xs text-muted-foreground">{row.primary_route_id || row.route_ids?.join(", ")} · {formatNumber(row.riders)} {t("riders")}</div>
                 </div>
-                <RecommendationBadge value={row.recommendation} />
+                <ClassificationBadge value={operationalCategory(row)} />
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} />
-                <MiniMetric label="Rider detour" value={minutes(row.rider_detour_min)} />
-                <MiniMetric label="Route burden" value={minutes(row.marginal_route_burden_min)} />
+                <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} />
+                <MiniMetric label="Over limit" value={minutes(largestOverLimit(row))} />
               </div>
               <div className="mt-3 line-clamp-2 text-xs leading-5 text-muted-foreground">{(row.reasons || []).map((reason) => t(reason)).join(" ")}</div>
             </button>
@@ -773,7 +780,7 @@ function DirectSchoolMap({ result, selectedStop, onSelect }: { result: NonNullab
       ...visibleStops.map((row) => ({
         type: "Feature" as const,
         id: row.stop_key,
-        properties: { stop_key: row.stop_key, category: row.recommendation, color: recommendationColor(row.recommendation) },
+        properties: { stop_key: row.stop_key, category: operationalCategory(row), color: classificationColor(operationalCategory(row)) },
         geometry: { type: "Point" as const, coordinates: [Number(row.lng), Number(row.lat)] },
       })),
     ],
@@ -905,7 +912,7 @@ function DistanceScatter({ rows, selectedStopKey, onSelect }: { rows: DirectScho
               const y = 310 - (Number(row.direct_duration_min) / maxY) * 290;
               const radius = Math.min(14, 5 + Math.sqrt(Math.max(0, row.riders || 0)));
               return (
-                <circle key={row.stop_key} cx={x} cy={y} r={selectedStopKey === row.stop_key ? radius + 3 : radius} fill={recommendationColor(row.recommendation)} fillOpacity="0.82" stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"} strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5} className="cursor-pointer" onClick={() => { if (!suppressClickRef.current) onSelect(row.stop_key); suppressClickRef.current = false; }}>
+                <circle key={row.stop_key} cx={x} cy={y} r={selectedStopKey === row.stop_key ? radius + 3 : radius} fill={classificationColor(operationalCategory(row))} fillOpacity="0.82" stroke={selectedStopKey === row.stop_key ? "#111827" : "#ffffff"} strokeWidth={selectedStopKey === row.stop_key ? 3 : 1.5} className="cursor-pointer" onClick={() => { if (!suppressClickRef.current) onSelect(row.stop_key); suppressClickRef.current = false; }}>
                   <title>{`${row.address}: ${row.direct_distance_km} km / ${row.direct_duration_min} min`}</title>
                 </circle>
               );
@@ -932,20 +939,20 @@ function StopDetailTable({ rows, selectedStopKey, onSelect }: { rows: DirectScho
         <div className="max-h-[560px] overflow-auto">
           <table className="min-w-[1100px] w-full divide-y divide-border text-left text-sm">
             <thead className="sticky top-0 bg-muted text-xs text-muted-foreground">
-              <tr>{["Recommendation", "Address", "Riders", "Route", "Direct", "OSRM baseline", "Current ride", "Rider detour", "Route burden", "Captured"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr>
+              <tr>{["Classification", "Address", "Students", "Route", "Direct", "Current route ride", "Over limit", "OSRM free-flow reference", "Additional removal routes", "Captured"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map((row) => (
                 <tr key={row.stop_key} className={cn("cursor-pointer hover:bg-muted/40", selectedStopKey === row.stop_key && "bg-primary/5")} onClick={() => onSelect(row.stop_key)}>
-                  <td className="px-3 py-2"><RecommendationBadge value={row.recommendation} /></td>
+                  <td className="px-3 py-2"><ClassificationBadge value={operationalCategory(row)} /></td>
                   <td className="max-w-80 px-3 py-2"><div className="truncate font-medium">{row.address}</div><div className="mt-1 text-xs text-muted-foreground">{row.city}</div></td>
                   <td className="px-3 py-2">{formatNumber(row.riders)}</td>
                   <td className="px-3 py-2">{row.primary_route_id || row.route_ids?.join(", ")}</td>
                   <td className="whitespace-nowrap px-3 py-2">{metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{metricPair(row.osrm_duration_min, "min", row.osrm_distance_km, "km")}</td>
                   <td className="whitespace-nowrap px-3 py-2">{minutes(row.estimated_current_ride_min)}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{minutes(row.rider_detour_min)}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{minutes(row.marginal_route_burden_min)}</td>
+                  <td className="whitespace-nowrap px-3 py-2">{minutes(largestOverLimit(row))}</td>
+                  <td className="whitespace-nowrap px-3 py-2">{metricPair(row.osrm_duration_min, "min", row.osrm_distance_km, "km")}</td>
+                  <td className="px-3 py-2">{row.additional_window_routes?.join(", ") || "-"}</td>
                   <td className="whitespace-nowrap px-3 py-2 text-xs text-muted-foreground">{formatDateTime(row.provider_called_at)}</td>
                 </tr>
               ))}
@@ -961,7 +968,7 @@ function MultiDayPanel({ record }: { record: DirectSchoolJobRecord }) {
   const t = useT();
   const multiDay = record.multi_day;
   if (!multiDay || multiDay.run_count < 2) return null;
-  const persistent = multiDay.stops.filter((row) => Boolean(row.persistent_candidate));
+  const persistent = multiDay.stops.filter((row) => Boolean(row.persistent_direct_over_limit ?? row.persistent_candidate));
   return (
     <Card>
       <CardHeader><div className="flex items-center justify-between gap-3"><h2 className="text-sm font-semibold">{t("Multi-day evidence")}</h2><Badge tone="info">{multiDay.run_count} {t("snapshots")}</Badge></div></CardHeader>
@@ -969,27 +976,14 @@ function MultiDayPanel({ record }: { record: DirectSchoolJobRecord }) {
         <div className="grid gap-3 sm:grid-cols-3">
           <Metric label="Compatible snapshots" value={multiDay.run_count} />
           <Metric label="Addresses sampled" value={multiDay.stop_count} />
-          <Metric label="Persistent candidates" value={persistent.length} accent />
+          <Metric label="Persistent direct over-limit" value={persistent.length} accent />
         </div>
         <div className="overflow-auto rounded-md border border-border">
           <table className="min-w-full divide-y divide-border text-left text-sm">
-            <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Address", "Samples", "Median", "P90", "Max", "Variability", "Candidate rate"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
-            <tbody className="divide-y divide-border">{multiDay.stops.slice(0, 20).map((row) => <tr key={String(row.stop_key)}><td className="max-w-80 truncate px-3 py-2 font-medium">{String(row.address || "")}</td><td className="px-3 py-2">{formatNumber(row.sample_count)}</td><td className="px-3 py-2">{minutes(Number(row.duration_median_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_p90_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_max_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_variability_min))}</td><td className="px-3 py-2">{formatNumber(Number(row.dedicated_candidate_rate) * 100)}%</td></tr>)}</tbody>
+            <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Address", "Samples", "Median", "P90", "Max", "Variability", "Direct over-limit rate"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
+            <tbody className="divide-y divide-border">{multiDay.stops.slice(0, 20).map((row) => <tr key={String(row.stop_key)}><td className="max-w-80 truncate px-3 py-2 font-medium">{String(row.address || "")}</td><td className="px-3 py-2">{formatNumber(row.sample_count)}</td><td className="px-3 py-2">{minutes(Number(row.duration_median_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_p90_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_max_min))}</td><td className="px-3 py-2">{minutes(Number(row.duration_variability_min))}</td><td className="px-3 py-2">{formatNumber(Number(row.direct_over_limit_rate ?? row.dedicated_candidate_rate) * 100)}%</td></tr>)}</tbody>
           </table>
         </div>
-      </CardContent>
-    </Card>
-  );
-}
-
-function ClusterPanel({ clusters }: { clusters: Array<Record<string, unknown>> }) {
-  const t = useT();
-  if (!clusters.length) return null;
-  return (
-    <Card>
-      <CardHeader><h2 className="text-sm font-semibold">{t("Dedicated service clusters")}</h2></CardHeader>
-      <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-        {clusters.map((cluster) => <div key={String(cluster.cluster_id)} className="rounded-md border border-border bg-muted/40 p-3"><div className="flex items-center justify-between gap-3"><div className="font-semibold">{String(cluster.cluster_id)}</div><Badge tone="warning">{formatNumber(cluster.stop_count)} {t("stops")}</Badge></div><div className="mt-2 text-sm">{formatNumber(cluster.riders)} {t("riders")}</div><div className="mt-2 text-xs leading-5 text-muted-foreground">{Array.isArray(cluster.addresses) ? cluster.addresses.join(" · ") : ""}</div></div>)}
       </CardContent>
     </Card>
   );
@@ -1013,12 +1007,13 @@ function PendingResult({ record }: { record: DirectSchoolJobRecord }) {
 function DirectSchoolHistoryItem({ job, active }: { job: DirectSchoolJobSummary; active: boolean }) {
   const t = useT();
   const summary = job.result_summary || {};
+  const overLimitCount = Number(summary.direct_over_limit_address_count || 0) + Number(summary.route_only_over_limit_address_count || 0);
   return (
     <div className="min-w-0 px-1 py-1">
       <Badge tone={statusTone(job.status)}>{t(statusLabel(job.status))}</Badge>
       <div className={cn("mt-2 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{formatDateTime(job.created_at)}</div>
       {job.scheduled_start_at ? <div className={cn("mt-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{t("Scheduled for")} {formatDateTime(job.scheduled_start_at)}</div> : null}
-      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}><span>{formatNumber(summary.address_count)} {t("addresses")}</span><span>{formatNumber(summary.dedicated_candidate_count)} {t("candidates")}</span></div>
+      <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}><span>{formatNumber(summary.address_count)} {t("addresses")}</span><span>{formatNumber(overLimitCount || summary.dedicated_candidate_count || 0)} {t("over limit")}</span></div>
     </div>
   );
 }
@@ -1063,10 +1058,10 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
   return <div className="rounded-md border border-border bg-muted/40 p-2"><div className="text-muted-foreground">{t(label)}</div><div className="mt-1 font-semibold text-foreground">{value}</div></div>;
 }
 
-function RecommendationBadge({ value }: { value: string }) {
+function ClassificationBadge({ value }: { value: string }) {
   const t = useT();
-  const tone = value === "dedicated_candidate" ? "warning" : value === "route_adjustment" ? "info" : value === "data_review" ? "danger" : "neutral";
-  return <Badge tone={tone}>{t(recommendationLabel(value))}</Badge>;
+  const tone = value === "direct_over_limit" || value === "additional_window_candidate" ? "warning" : value === "route_only_over_limit" ? "info" : value === "data_review" ? "danger" : "success";
+  return <Badge tone={tone}>{t(classificationLabel(value))}</Badge>;
 }
 
 function LoadingLine({ text }: { text: string }) {
@@ -1077,25 +1072,41 @@ function InlineError({ message }: { message: string }) {
   return <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{message}</div>;
 }
 
-function recommendationLabel(value: string) {
+function classificationLabel(value: string) {
   const labels: Record<string, string> = {
     all: "All",
-    dedicated_candidate: "Dedicated candidate",
-    route_adjustment: "Route adjustment",
-    far_not_main_cause: "Direct over limit, not route cause",
+    direct_over_limit: "Direct trip over limit",
+    route_only_over_limit: "Current route only over limit",
+    additional_window_candidate: "Additional removal candidate",
     data_review: "Data review",
-    within_range: "Within range",
+    within_limit: "Within limit",
     pending: "Pending",
   };
   return labels[value] || value;
 }
 
-function recommendationColor(value: string) {
-  if (value === "dedicated_candidate") return "#c2410c";
-  if (value === "route_adjustment") return "#2563eb";
-  if (value === "far_not_main_cause") return "#a16207";
+function classificationColor(value: string) {
+  if (value === "direct_over_limit") return "#c2410c";
+  if (value === "route_only_over_limit") return "#2563eb";
+  if (value === "additional_window_candidate") return "#7c3aed";
   if (value === "data_review") return "#dc2626";
   return "#0f766e";
+}
+
+function operationalCategory(row: DirectSchoolStopResult): Exclude<ClassificationFilter, "all"> {
+  if (row.additional_window_candidate) return "additional_window_candidate";
+  const value = String(row.operational_category || "");
+  if (["direct_over_limit", "route_only_over_limit", "additional_window_candidate", "within_limit", "data_review"].includes(value)) {
+    return value as Exclude<ClassificationFilter, "all">;
+  }
+  if (row.recommendation === "dedicated_candidate" || row.recommendation === "far_not_main_cause") return "direct_over_limit";
+  if (row.recommendation === "route_adjustment") return "route_only_over_limit";
+  if (row.recommendation === "within_range") return "within_limit";
+  return "data_review";
+}
+
+function largestOverLimit(row: DirectSchoolStopResult) {
+  return Math.max(0, ...(row.route_contexts || []).map((item) => Number(item.over_limit_min || 0)));
 }
 
 function statusLabel(status: string) {

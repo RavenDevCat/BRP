@@ -35,9 +35,6 @@ DEFAULT_ANALYSIS_CONFIG: dict[str, Any] = {
     "time_window_end": "08:00",
     "from_school_departure_time": "15:40",
     "far_duration_minutes": 45.0,
-    "burden_minutes": 15.0,
-    "bypass_candidate_limit": 10,
-    "candidate_cluster_radius_km": 3.0,
     "provider_call_limit": 500,
 }
 
@@ -190,18 +187,21 @@ def _percentile(values: list[float], quantile: float) -> float | None:
 
 def _analysis_config(value: dict[str, Any] | None) -> dict[str, Any]:
     config = {**DEFAULT_ANALYSIS_CONFIG, **dict(value or {})}
-    config.pop("far_distance_km", None)
+    for legacy_key in (
+        "far_distance_km",
+        "burden_minutes",
+        "bypass_candidate_limit",
+        "candidate_cluster_radius_km",
+    ):
+        config.pop(legacy_key, None)
     config["service_direction"] = (
         "To School" if str(config.get("service_direction")) == "To School" else "From School"
     )
     for key in (
         "stop_service_minutes",
         "far_duration_minutes",
-        "burden_minutes",
-        "candidate_cluster_radius_km",
     ):
         config[key] = max(0.0, _safe_float(config.get(key), _safe_float(DEFAULT_ANALYSIS_CONFIG[key])))
-    config["bypass_candidate_limit"] = max(0, min(50, _safe_int(config.get("bypass_candidate_limit"), 10)))
     config["provider_call_limit"] = max(1, min(2000, _safe_int(config.get("provider_call_limit"), 500)))
     return config
 
@@ -341,7 +341,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 1,
+        "analysis_version": 2,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -359,7 +359,6 @@ def _base_result(
         "progress": progress,
         "stops": rows,
         "routes": [],
-        "candidate_clusters": [],
         "errors": errors,
     }
 
@@ -456,7 +455,7 @@ def run_direct_school_analysis(
             "lng": coords[1] if coords else None,
             "provider_status": "pending" if coords else "failed",
             "quality_status": "ready" if coords else "geocode_failed",
-            "recommendation": "data_review" if not coords else "pending",
+            "operational_category": "data_review" if not coords else "pending",
             "reasons": ["Address could not be geocoded."] if not coords else [],
         }
         previous = prior_rows.get(str(row["stop_key"]))
@@ -465,7 +464,6 @@ def run_direct_school_analysis(
         row["_point"] = point
         rows.append(row)
 
-    bypass_limit = min(int(config["bypass_candidate_limit"]), len(rows))
     service_occurrence_count = sum(
         1
         for route_stops in route_groups.values()
@@ -475,7 +473,6 @@ def run_direct_school_analysis(
     logical_call_estimate = (
         len(rows)
         + len(route_groups)
-        + bypass_limit
         + len(route_groups)
         + service_occurrence_count
     )
@@ -555,7 +552,7 @@ def run_direct_school_analysis(
         except Exception as exc:
             row["provider_status"] = "failed"
             row["quality_status"] = "provider_failed"
-            row["recommendation"] = "data_review"
+            row["operational_category"] = "data_review"
             row["reasons"] = [str(exc)]
             errors.append({"scope": "direct_route", "stop_key": row["stop_key"], "address": row["address"], "error": str(exc)})
         progress["completed"] += 1
@@ -705,85 +702,6 @@ def run_direct_school_analysis(
         else:
             row["operational_category"] = "data_review"
 
-    progress["phase"] = "bypass_checks"
-    bypass_candidates: list[tuple[float, dict[str, Any], dict[str, Any]]] = []
-    for row in rows:
-        for context in list(row.get("route_contexts") or []):
-            score = _safe_float(row.get("direct_duration_min")) + max(0.0, _safe_float(row.get("rider_detour_min"))) * 1.5
-            bypass_candidates.append((score, row, context))
-    bypass_candidates.sort(key=lambda item: item[0], reverse=True)
-    for _score, row, context in bypass_candidates[:bypass_limit]:
-        route_id = str(context.get("route_id") or "")
-        runtime = route_runtime.get(route_id)
-        if not runtime:
-            progress["completed"] += 1
-            continue
-        ordered = list(runtime["ordered"])
-        sequence = _safe_int(context.get("stop_sequence"))
-        remove_index = next(
-            (index for index, stop in enumerate(ordered) if _safe_int(stop.get("stop_sequence")) == sequence),
-            -1,
-        )
-        if remove_index < 0 or len(ordered) <= 2:
-            progress["completed"] += 1
-            continue
-        bypass_points = [point for index, point in enumerate(runtime["points"]) if index != remove_index]
-        try:
-            live = provider.route(bypass_points)
-            bypass_total_s = _safe_float(live.get("duration_s")) + max(
-                0,
-                sum(1 for stop in ordered if not bool(stop.get("is_depot"))) - 1,
-            ) * float(config["stop_service_minutes"]) * 60.0
-            burden_min = max(0.0, (_safe_float(runtime["full_total_s"]) - bypass_total_s) / 60.0)
-            burden_km = max(0.0, (_safe_float(runtime["full_distance_m"]) - _safe_float(live.get("distance_m"))) / 1000.0)
-            context["marginal_route_burden_min"] = round(burden_min, 2)
-            context["marginal_route_burden_km"] = round(burden_km, 3)
-            row["marginal_route_burden_min"] = round(max(_safe_float(row.get("marginal_route_burden_min")), burden_min), 2)
-            row["marginal_route_burden_km"] = round(max(_safe_float(row.get("marginal_route_burden_km")), burden_km), 3)
-        except Exception as exc:
-            errors.append({"scope": "bypass_check", "route_id": route_id, "stop_key": row["stop_key"], "error": str(exc)})
-        progress["completed"] += 1
-        progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
-        progress["in_run_reuse_count"] = int(provider.state.get("cache_hits", 0))
-        save_checkpoint()
-
-    far_duration = float(config["far_duration_minutes"])
-    burden_threshold = float(config["burden_minutes"])
-    for row in rows:
-        if row.get("provider_status") != "resolved":
-            row["recommendation"] = "data_review"
-            continue
-        direct_over_time = _safe_float(row.get("direct_duration_min")) >= far_duration
-        route_burden = max(
-            _safe_float(row.get("rider_detour_min")),
-            _safe_float(row.get("marginal_route_burden_min")),
-        )
-        reasons: list[str] = []
-        if direct_over_time:
-            reasons.append("Direct trip exceeds the configured time threshold.")
-        if _safe_float(row.get("rider_detour_min")) >= burden_threshold:
-            reasons.append("The rider's current in-vehicle detour exceeds the configured burden threshold.")
-        if _safe_float(row.get("marginal_route_burden_min")) >= burden_threshold:
-            reasons.append("Removing this stop materially reduces its current route duration.")
-        if direct_over_time and route_burden >= burden_threshold:
-            recommendation = "dedicated_candidate"
-        elif route_burden >= burden_threshold:
-            recommendation = "route_adjustment"
-        elif direct_over_time:
-            recommendation = "far_not_main_cause"
-            reasons.append("The direct trip exceeds the time limit, but measured route burden is below the configured threshold.")
-        else:
-            recommendation = "within_range"
-            reasons.append("Direct travel time and current-route burden are both below the configured thresholds.")
-        row["recommendation"] = recommendation
-        row["reasons"] = reasons
-        row["risk_score"] = round(
-            (_safe_float(row.get("direct_duration_min")) / max(1.0, far_duration)) * 55
-            + (max(0.0, _safe_float(row.get("rider_detour_min"))) / max(1.0, burden_threshold)) * 25
-            + (_safe_float(row.get("marginal_route_burden_min")) / max(1.0, burden_threshold)) * 20,
-            1,
-        )
-
     progress["phase"] = "route_window_recovery"
     route_window_min = _window_duration_minutes(config)
     route_window_analysis: list[dict[str, Any]] = []
@@ -919,6 +837,16 @@ def run_direct_school_analysis(
         if matches:
             row["additional_window_candidate"] = True
             row["additional_window_routes"] = sorted({str(item.get("route_id") or "") for item in matches})
+            row["operational_category"] = "additional_window_candidate"
+        category = str(row.get("operational_category") or "data_review")
+        if category == "direct_over_limit":
+            row["reasons"] = ["Direct travel time exceeds the configured limit."]
+        elif category == "route_only_over_limit":
+            row["reasons"] = ["Direct travel time fits the limit, but current shared-route ride time exceeds it."]
+        elif category == "additional_window_candidate":
+            row["reasons"] = ["This address is an additional removal candidate because its route still exceeds the time window."]
+        elif category == "within_limit":
+            row["reasons"] = ["Direct and current shared-route travel times are within the configured limit."]
 
     def occurrence_totals(category: str) -> tuple[int, int]:
         matching = [item for item in occurrence_lookup.values() if item.get("operational_category") == category]
@@ -970,8 +898,23 @@ def run_direct_school_analysis(
         },
     }
 
-    rows.sort(key=lambda row: (_safe_float(row.get("risk_score")), _safe_float(row.get("direct_duration_min"))), reverse=True)
-    clusters = _cluster_candidates(rows, float(config["candidate_cluster_radius_km"]))
+    category_priority = {
+        "direct_over_limit": 0,
+        "route_only_over_limit": 1,
+        "additional_window_candidate": 2,
+        "data_review": 3,
+        "within_limit": 4,
+    }
+    rows.sort(
+        key=lambda row: (
+            category_priority.get(str(row.get("operational_category") or ""), 9),
+            -max(
+                (_safe_float(item.get("over_limit_min")) for item in list(row.get("route_contexts") or [])),
+                default=0.0,
+            ),
+            -_safe_float(row.get("direct_duration_min")),
+        )
+    )
     resolved_rows = [row for row in rows if row.get("provider_status") == "resolved"]
     result = _base_result(
         config=config,
@@ -994,15 +937,10 @@ def run_direct_school_analysis(
     result["routes"] = sorted(route_results, key=lambda row: str(row.get("route_id") or ""))
     result["route_window_analysis"] = route_window_analysis
     result["operational_conclusion"] = operational_conclusion
-    result["candidate_clusters"] = clusters
     result["summary"].update(
         {
             "resolved_count": len(resolved_rows),
             "failed_count": len(rows) - len(resolved_rows),
-            "dedicated_candidate_count": sum(1 for row in rows if row.get("recommendation") == "dedicated_candidate"),
-            "route_adjustment_count": sum(1 for row in rows if row.get("recommendation") == "route_adjustment"),
-            "far_not_main_cause_count": sum(1 for row in rows if row.get("recommendation") == "far_not_main_cause"),
-            "candidate_cluster_count": len(clusters),
             "max_direct_duration_min": round(max((_safe_float(row.get("direct_duration_min")) for row in resolved_rows), default=0.0), 2),
             "max_direct_distance_km": round(max((_safe_float(row.get("direct_distance_km")) for row in resolved_rows), default=0.0), 3),
             "direct_over_limit_address_count": direct_address_count,
@@ -1022,49 +960,6 @@ def run_direct_school_analysis(
     return result
 
 
-def _cluster_candidates(rows: list[dict[str, Any]], radius_km: float) -> list[dict[str, Any]]:
-    candidates = [
-        row
-        for row in rows
-        if row.get("recommendation") == "dedicated_candidate"
-        and row.get("lat") is not None
-        and row.get("lng") is not None
-    ]
-    unvisited = set(range(len(candidates)))
-    clusters: list[dict[str, Any]] = []
-    while unvisited:
-        seed = unvisited.pop()
-        members = {seed}
-        frontier = [seed]
-        while frontier:
-            current = frontier.pop()
-            current_coords = (_safe_float(candidates[current]["lat"]), _safe_float(candidates[current]["lng"]))
-            nearby = {
-                index
-                for index in list(unvisited)
-                if _haversine_km(
-                    current_coords,
-                    (_safe_float(candidates[index]["lat"]), _safe_float(candidates[index]["lng"])),
-                ) <= radius_km
-            }
-            unvisited -= nearby
-            members |= nearby
-            frontier.extend(nearby)
-        member_rows = [candidates[index] for index in sorted(members)]
-        clusters.append(
-            {
-                "cluster_id": f"C{len(clusters) + 1}",
-                "stop_keys": [row["stop_key"] for row in member_rows],
-                "addresses": [row["address"] for row in member_rows],
-                "stop_count": len(member_rows),
-                "riders": sum(_safe_int(row.get("riders")) for row in member_rows),
-                "max_direct_duration_min": round(max(_safe_float(row.get("direct_duration_min")) for row in member_rows), 2),
-                "max_direct_distance_km": round(max(_safe_float(row.get("direct_distance_km")) for row in member_rows), 3),
-            }
-        )
-    return clusters
-
-
 def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, Any]:
     samples_by_stop: dict[str, list[dict[str, Any]]] = defaultdict(list)
     run_ids: list[str] = []
@@ -1075,9 +970,21 @@ def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, 
         run_id = str(record.get("job_id") or "")
         run_ids.append(run_id)
         sample_at = result.get("completed_at") or record.get("finished_at") or record.get("scheduled_start_at")
+        parameters = dict(result.get("parameters") or {})
+        duration_limit = _safe_float(parameters.get("far_duration_minutes"), 45.0)
         for row in list(result.get("stops") or []):
             if row.get("provider_status") != "resolved":
                 continue
+            category = str(row.get("operational_category") or "")
+            if row.get("additional_window_candidate"):
+                category = "additional_window_candidate"
+            elif category not in {"direct_over_limit", "route_only_over_limit", "within_limit"}:
+                if _safe_float(row.get("direct_duration_min")) >= duration_limit:
+                    category = "direct_over_limit"
+                elif _safe_float(row.get("estimated_current_ride_min")) >= duration_limit:
+                    category = "route_only_over_limit"
+                else:
+                    category = "within_limit"
             samples_by_stop[str(row.get("stop_key") or "")].append(
                 {
                     "job_id": run_id,
@@ -1087,8 +994,7 @@ def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, 
                     "direct_duration_min": row.get("direct_duration_min"),
                     "direct_distance_km": row.get("direct_distance_km"),
                     "rider_detour_min": row.get("rider_detour_min"),
-                    "marginal_route_burden_min": row.get("marginal_route_burden_min"),
-                    "recommendation": row.get("recommendation"),
+                    "operational_category": category,
                 }
             )
     rows: list[dict[str, Any]] = []
@@ -1097,7 +1003,7 @@ def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, 
         all_samples.extend(samples)
         durations = [_safe_float(sample.get("direct_duration_min")) for sample in samples]
         distances = [_safe_float(sample.get("direct_distance_km")) for sample in samples]
-        dedicated_count = sum(1 for sample in samples if sample.get("recommendation") == "dedicated_candidate")
+        direct_over_count = sum(1 for sample in samples if sample.get("operational_category") == "direct_over_limit")
         rows.append(
             {
                 "stop_key": stop_key,
@@ -1108,11 +1014,11 @@ def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, 
                 "duration_max_min": round(max(durations), 2),
                 "duration_variability_min": round(statistics.pstdev(durations), 2) if len(durations) > 1 else 0.0,
                 "distance_median_km": round(statistics.median(distances), 3),
-                "dedicated_candidate_rate": round(dedicated_count / len(samples), 3),
-                "persistent_candidate": len(samples) >= 2 and dedicated_count / len(samples) >= 0.6,
+                "direct_over_limit_rate": round(direct_over_count / len(samples), 3),
+                "persistent_direct_over_limit": len(samples) >= 2 and direct_over_count / len(samples) >= 0.6,
             }
         )
-    rows.sort(key=lambda row: (_safe_float(row.get("dedicated_candidate_rate")), _safe_float(row.get("duration_p90_min"))), reverse=True)
+    rows.sort(key=lambda row: (_safe_float(row.get("direct_over_limit_rate")), _safe_float(row.get("duration_p90_min"))), reverse=True)
     return {
         "run_count": len(set(run_ids)),
         "run_ids": list(dict.fromkeys(run_ids)),
@@ -1185,10 +1091,10 @@ def build_direct_school_workbook(
     summary_sheet.append([])
     summary_sheet.append(["Parameter / 参数", "Value / 数值", "Meaning / 含义"])
     parameter_rows = [
-        ("far_duration_minutes", parameters.get("far_duration_minutes"), "Student one-way trip threshold / 学生单程通行阈值"),
-        ("time_window_start", parameters.get("time_window_start"), "Route window start / 路线窗口开始"),
-        ("time_window_end", parameters.get("time_window_end"), "Route window end / 路线窗口结束"),
-        ("stop_service_minutes", parameters.get("stop_service_minutes"), "Dwell per stop / 每站停靠时间"),
+        ("Trip direction / 测算方向", result.get("service_direction"), "Direction used for live map measurements / 实时地图测算方向"),
+        ("Student trip time limit (min) / 学生单程时间上限（分钟）", parameters.get("far_duration_minutes"), "Applied to both direct-trip and current-route rider classification / 用于直达及当前路线乘车分类"),
+        ("Route operating window / 路线运行时间窗", f"{parameters.get('time_window_start')} - {parameters.get('time_window_end')}", "Configured route operating interval / 运行时配置的路线运行时间窗"),
+        ("Per-stop dwell time (min) / 每站停靠时间（分钟）", parameters.get("stop_service_minutes"), "Added for each service stop / 每个服务站点计入"),
     ]
     for row in parameter_rows:
         summary_sheet.append(list(row))
@@ -1230,7 +1136,7 @@ def build_direct_school_workbook(
         [
             "Address / 地址", "Students / 学生", "Routes / 路线", "Operational class / 运营分类",
             "Direct min / 直达分钟", "Direct km / 直达公里", "Current ride min / 当前乘车分钟",
-            "Route detour min / 绕行分钟", "Route burden min / 路线负担分钟", "Captured / 测算时间",
+            "Over limit min / 超限分钟", "Additional removal routes / 补充摘站路线", "Captured / 测算时间",
         ],
         measurement_rows,
         [42, 12, 18, 28, 16, 16, 20, 20, 22, 24],
@@ -1252,7 +1158,7 @@ def build_direct_school_workbook(
     daily_rows = [
         [
             item.get("sample_at"), item.get("address"), item.get("direct_duration_min"),
-            item.get("direct_distance_km"), item.get("rider_detour_min"), item.get("recommendation"),
+            item.get("direct_distance_km"), item.get("rider_detour_min"), _operational_category_label(item.get("operational_category")),
         ]
         for item in list(dict(multi_day or {}).get("samples") or [])
     ]
@@ -1260,7 +1166,7 @@ def build_direct_school_workbook(
         workbook.create_sheet("Daily History"),
         "Daily Measurement History / 多日测算历史",
         "Repeated scheduled measurements for the same address. / 同一地址的多次定时测算记录。",
-        ["Captured / 测算时间", "Address / 地址", "Direct min / 直达分钟", "Direct km / 直达公里", "Detour min / 绕行分钟", "Legacy recommendation / 原候选分类"],
+        ["Captured / 测算时间", "Address / 地址", "Direct min / 直达分钟", "Direct km / 直达公里", "Current minus direct min / 当前减直达分钟", "Operational class / 运营分类"],
         daily_rows,
         [24, 42, 18, 18, 18, 30],
     )
@@ -1355,15 +1261,30 @@ def _route_outcome_rows(result: dict[str, Any]) -> list[list[Any]]:
 
 
 def _address_measurement_rows(result: dict[str, Any]) -> list[list[Any]]:
-    return [
-        [
+    duration_limit = _safe_float(dict(result.get("parameters") or {}).get("far_duration_minutes"), 45.0)
+    rows: list[list[Any]] = []
+    for row in list(result.get("stops") or []):
+        category = str(row.get("operational_category") or "data_review")
+        direct_duration = _safe_float(row.get("direct_duration_min"))
+        current_ride = _safe_float(row.get("estimated_current_ride_min"))
+        over_limit = max(0.0, max(direct_duration, current_ride) - duration_limit)
+        rows.append([
             row.get("address"), row.get("riders"), ", ".join(str(item) for item in list(row.get("route_ids") or [])),
-            row.get("operational_category") or "Legacy result / 旧结果", row.get("direct_duration_min"),
-            row.get("direct_distance_km"), row.get("estimated_current_ride_min"), row.get("rider_detour_min"),
-            row.get("marginal_route_burden_min"), row.get("provider_called_at"),
-        ]
-        for row in list(result.get("stops") or [])
-    ]
+            _operational_category_label(category), row.get("direct_duration_min"), row.get("direct_distance_km"),
+            row.get("estimated_current_ride_min"), round(over_limit, 2),
+            ", ".join(str(item) for item in list(row.get("additional_window_routes") or [])), row.get("provider_called_at"),
+        ])
+    return rows
+
+
+def _operational_category_label(value: Any) -> str:
+    return {
+        "direct_over_limit": "Direct trip over limit / 直达超时",
+        "route_only_over_limit": "Current route only over limit / 仅当前路线超时",
+        "additional_window_candidate": "Additional removal candidate / 补充摘站候选",
+        "within_limit": "Within limit / 未超时",
+        "data_review": "Data review / 数据复核",
+    }.get(str(value or ""), "Legacy result / 旧结果")
 
 
 def _style_summary_sheet(sheet: Any) -> None:

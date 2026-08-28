@@ -334,8 +334,32 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
                 {
                     "stop_key": "far",
                     "address": "Far stop",
+                    "riders": 3,
                     "operational_category": "direct_over_limit",
                     "provider_status": "resolved",
+                    "route_contexts": [
+                        {
+                            "route_id": "R8",
+                            "stop_sequence": 1,
+                            "riders": 3,
+                            "operational_category": "direct_over_limit",
+                        }
+                    ],
+                }
+            ],
+            "route_window_analysis": [
+                {
+                    "route_id": "R8",
+                    "status": "within_window",
+                    "window_limit_min": 60,
+                    "original_duration_min": 65,
+                    "original_riders": 3,
+                    "primary_removed_riders": 2,
+                    "post_primary_duration_min": 39.9,
+                    "additional_removed_riders": 0,
+                    "additional_removals": [],
+                    "final_riders": 1,
+                    "final_duration_min": 39.9,
                 }
             ],
             "errors": [],
@@ -358,7 +382,24 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
     ]
     assert "Operational Conclusion" in workbook["Operational Summary"]["A1"].value
     assert workbook["Student Classification"]["A4"].value == "Category / 分类"
-    assert workbook["Route Outcomes"]["J4"].value == "Final status / 最终状态"
+    assert workbook["Operational Summary"]["D7"].value == 3
+    attention_row = next(
+        row
+        for row in workbook["Operational Summary"].iter_rows()
+        if row[0].value == "Attention / 注意"
+    )
+    assert attention_row[2].value == 1
+    assert attention_row[5].value == 1
+    assert attention_row[0].fill.fill_type == "solid"
+    assert str(attention_row[0].fill.fgColor.rgb).endswith("FEF3C7")
+    assert workbook["Route Outcomes"]["B4"].value == "Original students / 原始学生"
+    assert workbook["Route Outcomes"]["J4"].value == "Final students / 最终学生"
+    assert workbook["Route Outcomes"]["M4"].value == "Attention / 注意"
+    assert workbook["Route Outcomes"]["B5"].value == 3
+    assert workbook["Route Outcomes"]["J5"].value == 1
+    assert workbook["Route Outcomes"]["M5"].value == "Low ridership after removals / 摘出后乘客过少"
+    assert workbook["Route Outcomes"]["M5"].fill.fill_type == "solid"
+    assert str(workbook["Route Outcomes"]["M5"].fill.fgColor.rgb).endswith("FEF3C7")
     assert workbook["Operational Summary"].freeze_panes == "A6"
     assert workbook["Student Classification"].freeze_panes == "A5"
     assert workbook["Student Classification"].column_dimensions["B"].width >= 40

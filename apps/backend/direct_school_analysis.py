@@ -1115,10 +1115,16 @@ def build_direct_school_workbook(
     conclusion = dict(result.get("operational_conclusion") or _legacy_operational_conclusion(result))
     parameters = dict(result.get("parameters") or {})
     metadata = dict(record.get("metadata") or {})
+    total_riders = sum(max(0, _safe_int(row.get("riders"))) for row in list(result.get("stops") or []))
+    low_ridership_routes = [
+        route
+        for route in list(result.get("route_window_analysis") or [])
+        if route.get("final_riders") is not None and _safe_int(route.get("final_riders")) == 1
+    ]
     workbook = Workbook()
     summary_sheet = workbook.active
     summary_sheet.title = "Operational Summary"
-    summary_sheet.merge_cells("A1:F1")
+    summary_sheet.merge_cells("A1:G1")
     summary_sheet["A1"] = "Direct-to-School Operational Conclusion / 点到校运营结论"
     summary_sheet["A1"].font = Font(size=16, bold=True, color="FFFFFF")
     summary_sheet["A1"].fill = PatternFill("solid", fgColor="0F766E")
@@ -1142,7 +1148,7 @@ def build_direct_school_workbook(
     summary_sheet.append([])
     summary_sheet.append([
         "Step / 步骤", "Operational question / 运营问题", "Students / 学生",
-        "Addresses / 地址", "Routes over window / 超窗路线", "Conclusion / 结论",
+        "Student base / 学生基数", "Addresses / 地址", "Routes / 路线", "Conclusion / 结论",
     ])
     direct = dict(conclusion.get("direct_over_limit") or {})
     route_only = dict(conclusion.get("route_only_over_limit") or {})
@@ -1151,25 +1157,32 @@ def build_direct_school_workbook(
     final = dict(conclusion.get("final") or {})
     summary_sheet.append([
         "1", "Direct trip already exceeds the student trip limit / 直达学校已超过学生单程阈值",
-        direct.get("rider_count", 0), direct.get("address_count", 0), "-",
+        direct.get("rider_count", 0), total_riders, direct.get("address_count", 0), "-",
         "Dedicated transport candidate / 优先评估专车",
     ])
     summary_sheet.append([
         "2", "Direct trip is within limit, but current route ride exceeds it / 直达未超限但随路线乘车超限",
-        route_only.get("rider_count", 0), route_only.get("address_count", 0), "-",
+        route_only.get("rider_count", 0), total_riders, route_only.get("address_count", 0), "-",
         "Remove from shared route or redesign route / 摘出或调整路线",
     ])
     summary_sheet.append([
         "3", "After steps 1-2 are removed, do routes still exceed the route window? / 摘出前两类后路线是否仍超窗",
-        additional.get("rider_count", 0), additional.get("address_count", 0),
+        additional.get("rider_count", 0), total_riders, additional.get("address_count", 0),
         post_primary.get("over_window_count"),
         _final_conclusion_label(final),
     ])
     summary_sheet.append([
         "Selection rule / 补充摘除顺序",
         "Longest direct trip first; route saving breaks ties / 按直达时间从长到短；同分时优先路线节省更大的站点",
-        "-", "-", "-", ADDITIONAL_REMOVAL_STRATEGY,
+        "-", "-", "-", "-", ADDITIONAL_REMOVAL_STRATEGY,
     ])
+    if low_ridership_routes:
+        summary_sheet.append([
+            "Attention / 注意",
+            "Routes with only one student remaining after removals / 摘出后仅剩 1 名学生的路线",
+            len(low_ridership_routes), total_riders, "-", len(low_ridership_routes),
+            "Review vehicle utilization; no automatic route change / 请复核车辆利用率；系统不自动改线",
+        ])
     summary_sheet.append([])
     summary_sheet.append(["Parameter / 参数", "Value / 数值", "Meaning / 含义"])
     parameter_rows = [
@@ -1197,18 +1210,21 @@ def build_direct_school_workbook(
     )
 
     route_rows = _route_outcome_rows(result)
+    route_sheet = workbook.create_sheet("Route Outcomes")
     _write_readable_table(
-        workbook.create_sheet("Route Outcomes"),
+        route_sheet,
         "Route Window Outcomes / 路线时间窗复测",
-        "Routes are remeasured after the first two student groups are removed. Additional removals are tested from longest to shortest direct trip until the route fits or cannot be resolved. / 摘出前两类学生后实时复测，仍超窗则按直达时间从长到短验证补充摘除。",
+        "Routes are remeasured after the first two student groups are removed. Additional removals are tested from longest to shortest direct trip. Yellow rows retain only one student after removals. / 摘出前两类学生后实时复测，仍超窗则按直达时间从长到短验证补充摘除；黄色行表示摘出后仅剩 1 名学生。",
         [
-            "Route / 路线", "Window min / 窗口", "Original min / 原始", "Primary removed students / 首轮摘出学生",
-            "After primary min / 首轮后", "Still over? / 是否仍超", "Additional students / 补充摘出学生",
-            "Additional addresses / 补充地址", "Final min / 最终", "Final status / 最终状态",
+            "Route / 路线", "Original students / 原始学生", "Window min / 窗口", "Original min / 原始",
+            "Primary removed students / 首轮摘出学生", "After primary min / 首轮后", "Still over after primary? / 首轮后是否仍超",
+            "Additional students / 补充摘出学生", "Additional addresses / 补充地址", "Final students / 最终学生",
+            "Final min / 最终", "Final status / 最终状态", "Attention / 注意",
         ],
         route_rows,
-        [12, 14, 16, 22, 18, 16, 22, 48, 14, 24],
+        [12, 18, 14, 16, 22, 18, 20, 22, 48, 16, 14, 24, 34],
     )
+    _style_route_outcome_attention(route_sheet)
 
     measurement_rows = _address_measurement_rows(result)
     _write_readable_table(
@@ -1339,17 +1355,27 @@ def _route_outcome_rows(result: dict[str, Any]) -> list[list[Any]]:
     )
     for route in route_results:
         additional = list(route.get("additional_removals") or [])
+        low_ridership = route.get("final_riders") is not None and _safe_int(route.get("final_riders")) == 1
         rows.append([
-            route.get("route_id"), route.get("window_limit_min"), route.get("original_duration_min"),
-            route.get("primary_removed_riders"), route.get("post_primary_duration_min"),
+            route.get("route_id"), route.get("original_riders"), route.get("window_limit_min"),
+            route.get("original_duration_min"), route.get("primary_removed_riders"), route.get("post_primary_duration_min"),
             "Yes / 是" if _safe_float(route.get("post_primary_duration_min")) > _safe_float(route.get("window_limit_min")) else "No / 否",
             route.get("additional_removed_riders"),
             "; ".join(str(item.get("address") or "") for item in additional),
-            route.get("final_duration_min"), route.get("status"),
+            route.get("final_riders"), route.get("final_duration_min"), _route_window_status_label(route.get("status")),
+            "Low ridership after removals / 摘出后乘客过少" if low_ridership else "",
         ])
     if not rows:
-        rows.append(["Legacy result / 旧结果", None, None, None, None, None, None, None, None, "Rerun required / 需重跑"])
+        rows.append(["Legacy result / 旧结果", None, None, None, None, None, None, None, None, None, None, "Rerun required / 需重跑", ""])
     return rows
+
+
+def _route_window_status_label(value: Any) -> str:
+    return {
+        "within_window": "Within window / 符合时间窗",
+        "still_over_window": "Still over window / 仍超时间窗",
+        "data_review": "Data review / 数据复核",
+    }.get(str(value or ""), str(value or ""))
 
 
 def _address_measurement_rows(result: dict[str, Any]) -> list[list[Any]]:
@@ -1381,18 +1407,35 @@ def _operational_category_label(value: Any) -> str:
 
 def _style_summary_sheet(sheet: Any) -> None:
     header_fill = PatternFill("solid", fgColor="DDE9E8")
-    for row_index in (6, 12):
-        for cell in sheet[row_index]:
-            if cell.value is not None:
-                cell.font = Font(bold=True, color="164E63")
-                cell.fill = header_fill
-                cell.alignment = Alignment(wrap_text=True, vertical="center")
+    attention_fill = PatternFill("solid", fgColor="FEF3C7")
+    for row in sheet.iter_rows():
+        first_value = str(row[0].value or "")
+        if first_value in {"Step / 步骤", "Parameter / 参数"}:
+            for cell in row:
+                if cell.value is not None:
+                    cell.font = Font(bold=True, color="164E63")
+                    cell.fill = header_fill
+                    cell.alignment = Alignment(wrap_text=True, vertical="center")
+        elif first_value == "Attention / 注意":
+            for cell in row:
+                cell.fill = attention_fill
+                cell.font = Font(bold=True, color="92400E")
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(wrap_text=True, vertical="top")
-    for column, width in enumerate((18, 58, 18, 22, 22, 42), start=1):
+    for column, width in enumerate((18, 58, 18, 18, 18, 22, 42), start=1):
         sheet.column_dimensions[get_column_letter(column)].width = width
     sheet.freeze_panes = "A6"
+
+
+def _style_route_outcome_attention(sheet: Any) -> None:
+    attention_fill = PatternFill("solid", fgColor="FEF3C7")
+    for row in sheet.iter_rows(min_row=5):
+        if not row[-1].value:
+            continue
+        for cell in row:
+            cell.fill = attention_fill
+        row[-1].font = Font(bold=True, color="92400E")
 
 
 def _write_readable_table(

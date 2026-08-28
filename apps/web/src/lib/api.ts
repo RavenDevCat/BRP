@@ -751,6 +751,7 @@ export type DirectSchoolRouteWindowResult = {
         selection_basis?: string;
     }>;
     final_duration_min?: number;
+    final_riders?: number;
     error?: string;
 };
 

@@ -650,6 +650,7 @@ function RouteRecoveryPanel({ rows }: { rows: NonNullable<DirectSchoolJobRecord[
     .filter((row) => row.primary_removed_riders || row.additional_removed_riders || row.status !== "within_window")
     .sort((left, right) => routeRecoveryPriority(left) - routeRecoveryPriority(right) || String(left.route_id).localeCompare(String(right.route_id), undefined, { numeric: true }));
   if (!reviewed.length) return null;
+  const hasLowRidership = reviewed.some((row) => Number(row.final_riders) === 1);
   return (
     <Card>
       <CardHeader>
@@ -658,7 +659,15 @@ function RouteRecoveryPanel({ rows }: { rows: NonNullable<DirectSchoolJobRecord[
             <h2 className="text-sm font-semibold">{t("Route recovery details")}</h2>
             <p className="mt-1 text-xs text-muted-foreground">{t("Additional-removal candidates are tested from longest to shortest direct trip.")}</p>
           </div>
-          <Badge tone="neutral">{formatNumber(reviewed.length)} {t("routes")}</Badge>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            {hasLowRidership ? (
+              <div className="flex items-center gap-1.5 text-xs font-medium text-amber-800">
+                <span className="h-3 w-3 rounded-sm border border-amber-300 bg-amber-100" aria-hidden="true" />
+                {t("Yellow rows indicate routes with only one student remaining after removals.")}
+              </div>
+            ) : null}
+            <Badge tone="neutral">{formatNumber(reviewed.length)} {t("routes")}</Badge>
+          </div>
         </div>
       </CardHeader>
       <CardContent className="p-0">
@@ -667,7 +676,7 @@ function RouteRecoveryPanel({ rows }: { rows: NonNullable<DirectSchoolJobRecord[
             <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original riders", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
             <tbody className="divide-y divide-border">
               {reviewed.map((row) => (
-                <tr key={row.route_id} className={cn(row.status === "within_window" && "text-muted-foreground")}>
+                <tr key={row.route_id} className={cn(row.status === "within_window" && "text-muted-foreground", Number(row.final_riders) === 1 && "bg-amber-50 text-amber-950")}>
                   <td className="px-3 py-2 font-medium text-foreground">{row.route_id}</td>
                   <td className="px-3 py-2">{row.original_riders == null ? "-" : `${formatNumber(row.original_riders)} ${t("students")}`}</td>
                   <td className="px-3 py-2">{minutes(row.original_duration_min)}</td>

@@ -1340,6 +1340,7 @@ const ko: Translations = {
     "No route requires a removal review.": "추가 제외 검토가 필요한 노선이 없습니다.",
     "Route recovery details": "노선 시간 창 복구 상세",
     "Additional-removal candidates are tested from longest to shortest direct trip.": "추가 제외 후보는 직행 시간이 긴 순서부터 검증합니다.",
+    "Yellow rows indicate routes with only one student remaining after removals.": "노란색 행은 학생 제외 후 탑승자가 1명만 남은 노선을 표시합니다.",
     "Original riders": "기존 탑승자 수",
     "Original": "기존 시간",
     "First removal": "1차 제외",

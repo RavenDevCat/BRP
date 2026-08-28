@@ -1166,6 +1166,7 @@ const zh: Translations = {
     "No route requires a removal review.": "没有路线需要进一步摘除复核。",
     "Route recovery details": "路线时间窗恢复明细",
     "Additional-removal candidates are tested from longest to shortest direct trip.": "补充摘除候选按直达时间从长到短依次验证。",
+    "Yellow rows indicate routes with only one student remaining after removals.": "黄色行表示摘出学生后该车辆仅剩 1 名乘客，请注意载客量过低。",
     "Original riders": "原始乘客数",
     "Original": "原始耗时",
     "First removal": "首轮摘出",

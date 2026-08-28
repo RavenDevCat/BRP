@@ -5,6 +5,22 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-08-28
+
+### Direct-to-School Report Alignment
+
+- Student totals now show the measured population as a denominator instead of
+  presenting an isolated affected-student count.
+- Route recovery review and the statistics workbook show original and final
+  student counts alongside removed-student counts and route durations.
+- A route that would retain only one student after the proposed removals is
+  highlighted in yellow with an explicit vehicle-utilization review note. This
+  is an operator warning only and does not alter classification, removal order,
+  route measurement, or any Route Audit solver behavior.
+- The six-sheet workbook keeps the same Operational Summary, Student
+  Classification, Route Outcomes, Address Measurements, Data Quality, and
+  Daily History structure while using the final UI terminology and conclusions.
+
 ## 2026-08-27
 
 ### Direct-to-School Travel Analysis

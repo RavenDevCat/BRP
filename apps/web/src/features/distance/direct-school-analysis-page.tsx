@@ -663,12 +663,13 @@ function RouteRecoveryPanel({ rows }: { rows: NonNullable<DirectSchoolJobRecord[
       </CardHeader>
       <CardContent className="p-0">
         <div className="overflow-auto">
-          <table className="min-w-[850px] w-full divide-y divide-border text-left text-sm">
-            <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
+          <table className="min-w-[960px] w-full divide-y divide-border text-left text-sm">
+            <thead className="bg-muted text-xs text-muted-foreground"><tr>{["Route", "Original riders", "Original", "First removal", "After first removal", "Additional removal", "Final", "Status"].map((label) => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{t(label)}</th>)}</tr></thead>
             <tbody className="divide-y divide-border">
               {reviewed.map((row) => (
                 <tr key={row.route_id} className={cn(row.status === "within_window" && "text-muted-foreground")}>
                   <td className="px-3 py-2 font-medium text-foreground">{row.route_id}</td>
+                  <td className="px-3 py-2">{row.original_riders == null ? "-" : `${formatNumber(row.original_riders)} ${t("students")}`}</td>
                   <td className="px-3 py-2">{minutes(row.original_duration_min)}</td>
                   <td className="px-3 py-2">{formatNumber(row.primary_removed_riders || 0)} {t("students")}</td>
                   <td className="px-3 py-2">{minutes(row.post_primary_duration_min)}</td>

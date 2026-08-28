@@ -733,6 +733,7 @@ export type DirectSchoolRouteWindowResult = {
     status: string;
     window_limit_min?: number;
     original_duration_min?: number;
+    original_riders?: number;
     primary_removed_addresses?: number;
     primary_removed_riders?: number;
     post_primary_duration_min?: number;

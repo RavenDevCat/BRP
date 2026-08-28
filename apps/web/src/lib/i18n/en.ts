@@ -1255,6 +1255,7 @@ const en: Translations = {
     "No route requires a removal review.": "No route requires a removal review.",
     "Route recovery details": "Route recovery details",
     "Additional-removal candidates are tested from longest to shortest direct trip.": "Additional-removal candidates are tested from longest to shortest direct trip.",
+    "Original riders": "Original riders",
     "Original": "Original",
     "First removal": "First removal",
     "After first removal": "After first removal",

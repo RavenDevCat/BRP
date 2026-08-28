@@ -771,6 +771,7 @@ def run_direct_school_analysis(
                     "route_id": route_id,
                     "status": "data_review",
                     "window_limit_min": route_window_min,
+                    "original_riders": original.get("riders"),
                     "error": original.get("error") or "Current route could not be measured.",
                 }
             )
@@ -895,6 +896,7 @@ def run_direct_school_analysis(
                     "status": "data_review",
                     "window_limit_min": route_window_min,
                     "original_duration_min": original.get("total_duration_min"),
+                    "original_riders": original.get("riders"),
                     "primary_removals": primary_entries,
                     "error": str(exc),
                 }

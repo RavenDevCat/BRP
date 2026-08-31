@@ -53,7 +53,6 @@ import { cn } from "@/lib/cn";
 import { formatDateTime, formatNumber } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 
-type DistancePageMode = "reference" | "route_cost" | "direct_school";
 type ClassificationFilter = "all" | "direct_over_limit" | "route_only_over_limit" | "additional_window_candidate" | "within_limit" | "data_review";
 
 const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
@@ -68,11 +67,7 @@ const DEFAULT_CONFIG: DirectSchoolAnalysisConfig = {
 const fieldClassName =
   "h-9 w-full rounded-md border border-border bg-surface px-3 text-sm outline-none transition focus:border-primary";
 
-export function DirectSchoolAnalysisPage({
-  onToolChange,
-}: {
-  onToolChange: (mode: DistancePageMode) => void;
-}) {
+export function DirectSchoolAnalysisPage() {
   const t = useT();
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
@@ -290,18 +285,13 @@ export function DirectSchoolAnalysisPage({
         <div className="min-w-0 space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex flex-col justify-between gap-3 2xl:flex-row 2xl:items-start">
+              <div>
                 <div>
                   <p className="text-sm font-medium text-primary">{t("Planning tools")}</p>
                   <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{t("Distance & Cost")}</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                     {t("Measure direct and current-route travel times, then identify which students must be separated for every route to meet the time window.")}
                   </p>
-                </div>
-                <div className="grid w-full grid-cols-3 rounded-md border border-border bg-muted p-1 2xl:w-auto">
-                  <ToolTab active={false} onClick={() => onToolChange("reference")}>{t("Reference Distance")}</ToolTab>
-                  <ToolTab active={false} onClick={() => onToolChange("route_cost")}>{t("Route Cost")}</ToolTab>
-                  <ToolTab active onClick={() => undefined}>{t("Direct-to-School")}</ToolTab>
                 </div>
               </div>
             </CardHeader>
@@ -1387,10 +1377,6 @@ function ScheduleCalendar({ month, selectedDates, onMonthChange, onToggle, onCan
       </div>
     </div>
   );
-}
-
-function ToolTab({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
-  return <button type="button" className={cn("min-h-11 rounded px-2 text-xs font-medium leading-4 transition sm:h-9 sm:min-h-0 sm:whitespace-nowrap sm:px-3 sm:text-sm", active ? "bg-surface text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground")} onClick={onClick}>{children}</button>;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

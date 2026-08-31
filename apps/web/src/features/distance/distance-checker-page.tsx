@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calculator, FileSpreadsheet, Fuel, Loader2, MapPinned, Ruler, Upload } from "lucide-react";
 import { DirectSchoolAnalysisPage } from "@/features/distance/direct-school-analysis-page";
@@ -51,9 +52,13 @@ const routeCostProfiles = {
 };
 
 export function DistanceCheckerPage() {
-  const [activeTool, setActiveTool] = useState<DistancePageMode>("reference");
+  const { tool: activeTool } = useSearch({ from: "/distance" });
+  const navigate = useNavigate();
+  const setActiveTool = (tool: DistancePageMode) => {
+    void navigate({ to: "/distance", search: { tool } });
+  };
   if (activeTool === "direct_school") {
-    return <DirectSchoolAnalysisPage onToolChange={setActiveTool} />;
+    return <DirectSchoolAnalysisPage />;
   }
   return <LegacyDistanceCheckerPage activeTool={activeTool} setActiveTool={setActiveTool} />;
 }
@@ -307,20 +312,6 @@ function LegacyDistanceCheckerPage({
     }
   }
 
-  function handleToolChange(nextTool: DistanceCheckerToolMode) {
-    if (nextTool === activeTool) {
-      return;
-    }
-    setActiveTool(nextTool);
-    setLoadedHistoryRecord(null);
-    if (nextTool === "reference") {
-      setRouteCostResult(null);
-    } else {
-      setResult(null);
-    }
-    saveHistoryMutation.reset();
-  }
-
   function buildScenario(toolMode: DistanceCheckerToolMode) {
     return {
       tool_mode: toolMode,
@@ -498,24 +489,13 @@ function LegacyDistanceCheckerPage({
         <div className="min-w-0 space-y-4">
           <Card>
             <CardHeader>
-              <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-start">
+              <div>
                 <div>
                   <p className="text-sm font-medium text-primary">{t("Side tools")}</p>
                   <h1 className="mt-1 text-2xl font-semibold tracking-normal text-foreground">{t("Distance & Cost")}</h1>
                   <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
                     {t("Measure reference-stop distance or estimate current-plan route distance and one-way diesel cost.")}
                   </p>
-                </div>
-                <div className="inline-grid shrink-0 grid-cols-2 rounded-md border border-border bg-muted p-1">
-                  <ToolTab active={activeTool === "reference"} onClick={() => handleToolChange("reference")}>
-                    {t("Reference Distance")}
-                  </ToolTab>
-                  <ToolTab active={activeTool === "route_cost"} onClick={() => handleToolChange("route_cost")}>
-                    {t("Route Cost")}
-                  </ToolTab>
-                  <ToolTab active={false} onClick={() => setActiveTool("direct_school")}>
-                    {t("Direct-to-School")}
-                  </ToolTab>
                 </div>
               </div>
             </CardHeader>
@@ -885,21 +865,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span className="text-xs font-medium text-muted-foreground">{t(label)}</span>
       {children}
     </label>
-  );
-}
-
-function ToolTab({ active, children, onClick }: { active: boolean; children: ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      className={cn(
-        "h-9 rounded px-3 text-sm font-medium transition",
-        active ? "bg-surface text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
-      )}
-      onClick={onClick}
-    >
-      {children}
-    </button>
   );
 }
 

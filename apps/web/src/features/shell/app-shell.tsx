@@ -1,8 +1,9 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
     Bus,
+    ChevronDown,
     Gauge,
     History,
     LayoutDashboard,
@@ -32,10 +33,22 @@ const primaryNavItems = [
     { to: "/jobs", labelKey: "Audit History", icon: History },
 ];
 
-const sideToolNavItems = [
-    { to: "/fleet", labelKey: "Fleet Planner", icon: Bus },
-    { to: "/distance", labelKey: "Distance & Cost", icon: Ruler },
-    { to: "/insert-advisor", labelKey: "Route Insert Advisor", icon: MapPin },
+const fleetPlannerNavItem = {
+    to: "/fleet",
+    labelKey: "Fleet Planner",
+    icon: Bus,
+};
+
+const routeInsertAdvisorNavItem = {
+    to: "/insert-advisor",
+    labelKey: "Route Insert Advisor",
+    icon: MapPin,
+};
+
+const distanceToolNavItems = [
+    { tool: "reference" as const, labelKey: "Reference Distance" },
+    { tool: "route_cost" as const, labelKey: "Route Cost" },
+    { tool: "direct_school" as const, labelKey: "Direct-to-School" },
 ];
 
 const adminNavItems = [
@@ -56,6 +69,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     const t = useT();
     const pathname = useRouterState({
         select: (state) => state.location.pathname,
+    });
+    const distanceTool = useRouterState({
+        select: (state) =>
+            normalizeDistanceTool(
+                (state.location.search as Record<string, unknown>).tool,
+            ),
     });
     const healthQuery = useQuery({ queryKey: ["health"], queryFn: getHealth });
     const userQuery = useQuery({ queryKey: ["me"], queryFn: getCurrentUser });
@@ -116,10 +135,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                         items={primaryNavItems}
                         pathname={pathname}
                     />
-                    <NavGroup
-                        title={t("Planning Tools")}
-                        items={sideToolNavItems}
+                    <PlanningToolsNav
                         pathname={pathname}
+                        distanceTool={distanceTool}
                     />
                     {isAdmin ? (
                         <NavGroup
@@ -263,6 +281,94 @@ export function AppShell({ children }: { children: ReactNode }) {
     );
 }
 
+type DistanceToolMode = "reference" | "route_cost" | "direct_school";
+
+function normalizeDistanceTool(value: unknown): DistanceToolMode {
+    if (value === "route_cost" || value === "direct_school") {
+        return value;
+    }
+    return "reference";
+}
+
+function PlanningToolsNav({
+    pathname,
+    distanceTool,
+}: {
+    pathname: string;
+    distanceTool: DistanceToolMode;
+}) {
+    const t = useT();
+    const distanceActive = pathname.startsWith("/distance");
+    const [distanceOpen, setDistanceOpen] = useState(distanceActive);
+
+    useEffect(() => {
+        if (distanceActive) {
+            setDistanceOpen(true);
+        }
+    }, [distanceActive]);
+
+    return (
+        <div className="space-y-1">
+            <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
+                {t("Planning Tools")}
+            </div>
+            <NavItem item={fleetPlannerNavItem} pathname={pathname} />
+            <button
+                type="button"
+                className={cn(
+                    "flex h-10 w-full items-center gap-3 rounded-md px-3 text-left text-sm font-medium text-muted-foreground transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                    distanceActive && "bg-muted text-foreground",
+                    !distanceActive &&
+                        "hover:bg-muted/70 hover:text-foreground",
+                )}
+                aria-expanded={distanceOpen}
+                aria-controls="distance-cost-navigation"
+                onClick={() => setDistanceOpen((open) => !open)}
+            >
+                <Ruler className="h-4 w-4 flex-none" aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">
+                    {t("Distance & Cost")}
+                </span>
+                <ChevronDown
+                    className={cn(
+                        "h-4 w-4 flex-none transition-transform",
+                        distanceOpen && "rotate-180",
+                    )}
+                    aria-hidden="true"
+                />
+            </button>
+            {distanceOpen ? (
+                <div
+                    id="distance-cost-navigation"
+                    className="ml-5 space-y-1 border-l border-border py-1 pl-3"
+                >
+                    {distanceToolNavItems.map((item) => {
+                        const active =
+                            distanceActive && distanceTool === item.tool;
+                        return (
+                            <Link
+                                key={item.tool}
+                                to="/distance"
+                                search={{ tool: item.tool }}
+                                aria-current={active ? "page" : undefined}
+                                className={cn(
+                                    "flex min-h-9 items-center rounded-md px-3 py-2 text-sm font-medium text-muted-foreground transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
+                                    active && "bg-primary/10 text-primary",
+                                    !active &&
+                                        "hover:bg-muted/70 hover:text-foreground",
+                                )}
+                            >
+                                {t(item.labelKey)}
+                            </Link>
+                        );
+                    })}
+                </div>
+            ) : null}
+            <NavItem item={routeInsertAdvisorNavItem} pathname={pathname} />
+        </div>
+    );
+}
+
 function formatUserLabel(
     email?: string,
     isAdmin?: boolean,
@@ -325,34 +431,46 @@ function NavGroup({
     }>;
     pathname: string;
 }) {
-    const t = useT();
     return (
         <div className="space-y-1">
             <div className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-normal text-muted-foreground">
                 {title}
             </div>
             {items.map((item) => {
-                const Icon = item.icon;
-                const active =
-                    pathname === item.to ||
-                    (item.to !== "/" && pathname.startsWith(item.to));
-                return (
-                    <Link
-                        key={item.to}
-                        to={item.to}
-                        className={cn(
-                            "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition",
-                            active && "bg-muted text-foreground",
-                            !active &&
-                                "hover:bg-muted/70 hover:text-foreground",
-                        )}
-                    >
-                        <Icon className="h-4 w-4" aria-hidden="true" />
-                        {t(item.labelKey)}
-                    </Link>
-                );
+                return <NavItem key={item.to} item={item} pathname={pathname} />;
             })}
         </div>
+    );
+}
+
+function NavItem({
+    item,
+    pathname,
+}: {
+    item: {
+        to: string;
+        labelKey: string;
+        icon: typeof LayoutDashboard;
+    };
+    pathname: string;
+}) {
+    const t = useT();
+    const Icon = item.icon;
+    const active =
+        pathname === item.to ||
+        (item.to !== "/" && pathname.startsWith(item.to));
+    return (
+        <Link
+            to={item.to}
+            className={cn(
+                "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition",
+                active && "bg-muted text-foreground",
+                !active && "hover:bg-muted/70 hover:text-foreground",
+            )}
+        >
+            <Icon className="h-4 w-4" aria-hidden="true" />
+            {t(item.labelKey)}
+        </Link>
     );
 }
 

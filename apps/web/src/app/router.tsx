@@ -56,8 +56,18 @@ const newJobRoute = createRoute({
 const distanceCheckerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/distance",
+  validateSearch: (search: Record<string, unknown>) => ({
+    tool: normalizeDistanceTool(search.tool),
+  }),
   component: lazyRoutePage(() => <DistanceCheckerPage />),
 });
+
+function normalizeDistanceTool(value: unknown): "reference" | "route_cost" | "direct_school" {
+  if (value === "route_cost" || value === "direct_school") {
+    return value;
+  }
+  return "reference";
+}
 
 const fleetPlannerRoute = createRoute({
   getParentRoute: () => rootRoute,

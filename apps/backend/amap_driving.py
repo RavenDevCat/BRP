@@ -5,7 +5,7 @@ from typing import Any
 
 AMAP_DRIVING_ENDPOINT = "/v5/direction/driving"
 AMAP_DRIVING_STRATEGY = "32"
-AMAP_DRIVING_VERSION = "amap-v5-strategy32-v1"
+AMAP_DRIVING_VERSION = "amap-v5-strategy32-v2"
 
 
 def build_amap_driving_params(
@@ -21,7 +21,7 @@ def build_amap_driving_params(
         "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
         "destination": f"{destination_lng:.6f},{destination_lat:.6f}",
         "strategy": AMAP_DRIVING_STRATEGY,
-        "show_fields": "cost,navi" if include_geometry else "cost",
+        "show_fields": "cost,navi,polyline" if include_geometry else "cost",
     }
     waypoints = [
         f"{lng:.6f},{lat:.6f}" for lat, lng in request_points[1:-1]

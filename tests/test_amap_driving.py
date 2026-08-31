@@ -20,7 +20,7 @@ def test_v5_driving_params_match_amap_app_recommended_strategy():
     )
 
     assert params["strategy"] == AMAP_DRIVING_STRATEGY == "32"
-    assert params["show_fields"] == "cost,navi"
+    assert params["show_fields"] == "cost,navi,polyline"
     assert params["waypoints"] == "121.200000,31.200000"
 
 

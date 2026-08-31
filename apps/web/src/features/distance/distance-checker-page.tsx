@@ -52,15 +52,35 @@ const routeCostProfiles = {
 };
 
 export function DistanceCheckerPage() {
+  const t = useT();
   const { tool: activeTool } = useSearch({ from: "/distance" });
   const navigate = useNavigate();
   const setActiveTool = (tool: DistancePageMode) => {
     void navigate({ to: "/distance", search: { tool } });
   };
-  if (activeTool === "direct_school") {
-    return <DirectSchoolAnalysisPage />;
-  }
-  return <LegacyDistanceCheckerPage activeTool={activeTool} setActiveTool={setActiveTool} />;
+  return (
+    <>
+      <label className="mb-4 block lg:hidden">
+        <span className="mb-1.5 block text-xs font-medium text-muted-foreground">
+          {t("Distance & Cost")}
+        </span>
+        <select
+          className={fieldClassName}
+          value={activeTool}
+          onChange={(event) => setActiveTool(event.target.value as DistancePageMode)}
+        >
+          <option value="reference">{t("Reference Distance")}</option>
+          <option value="route_cost">{t("Route Cost")}</option>
+          <option value="direct_school">{t("Direct-to-School")}</option>
+        </select>
+      </label>
+      {activeTool === "direct_school" ? (
+        <DirectSchoolAnalysisPage />
+      ) : (
+        <LegacyDistanceCheckerPage activeTool={activeTool} setActiveTool={setActiveTool} />
+      )}
+    </>
+  );
 }
 
 type DistancePageMode = DistanceCheckerToolMode | "direct_school";

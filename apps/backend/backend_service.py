@@ -26,6 +26,15 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from .amap_driving import (
+        AMAP_DRIVING_ENDPOINT,
+        AMAP_DRIVING_VERSION,
+        amap_distance_is_anomalous,
+        amap_driving_path_polylines,
+        amap_driving_path_stats,
+        build_amap_driving_params,
+        first_amap_driving_path,
+    )
     from .direct_school_analysis import (
         aggregate_direct_school_results,
         build_direct_school_workbook,
@@ -67,6 +76,15 @@ try:
         run_backend_planner_with_prepared_data,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from amap_driving import (
+        AMAP_DRIVING_ENDPOINT,
+        AMAP_DRIVING_VERSION,
+        amap_distance_is_anomalous,
+        amap_driving_path_polylines,
+        amap_driving_path_stats,
+        build_amap_driving_params,
+        first_amap_driving_path,
+    )
     from direct_school_analysis import (
         aggregate_direct_school_results,
         build_direct_school_workbook,
@@ -296,7 +314,19 @@ try:
     )
 except ValueError:
     AMAP_DISPLAY_GEOMETRY_REQUEST_INTERVAL_S = 0.36
-AMAP_DISPLAY_GEOMETRY_VERSION = "amap-cn-display-v1"
+AMAP_DISPLAY_GEOMETRY_VERSION = f"amap-cn-display-v2|{AMAP_DRIVING_VERSION}"
+AMAP_DISPLAY_ANOMALY_DISTANCE_RATIO = max(
+    1.0,
+    float(os.environ.get("BRP_AMAP_ROUTE_ANOMALY_DISTANCE_RATIO", "1.45") or 1.45),
+)
+AMAP_DISPLAY_ANOMALY_MIN_EXCESS_M = max(
+    0.0,
+    float(os.environ.get("BRP_AMAP_ROUTE_ANOMALY_MIN_EXCESS_M", "3000") or 3000),
+)
+AMAP_DISPLAY_ANOMALY_MAX_LEGS = max(
+    2,
+    int(os.environ.get("BRP_AMAP_DISPLAY_ANOMALY_MAX_LEGS", "16") or 16),
+)
 _AMAP_DISPLAY_CACHE_LOCK = threading.Lock()
 _AMAP_DISPLAY_REQUEST_LOCK = threading.Lock()
 _AMAP_DISPLAY_LAST_REQUEST_AT = 0.0
@@ -4426,23 +4456,13 @@ def _fetch_amap_display_segment(
     amap_key = _amap_display_api_key()
     if not amap_key:
         return {"geometry": [], "duration_s": None, "distance_m": None}
-    origin_lat, origin_lng = request_points[0]
-    dest_lat, dest_lng = request_points[-1]
-    params: dict[str, str] = {
+    params = {
+        **build_amap_driving_params(request_points, include_geometry=True),
         "key": amap_key,
-        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
-        "destination": f"{dest_lng:.6f},{dest_lat:.6f}",
-        "extensions": "base",
-        "output": "json",
     }
-    waypoint_values = [
-        f"{lng:.6f},{lat:.6f}" for lat, lng in request_points[1:-1]
-    ]
-    if waypoint_values:
-        params["waypoints"] = ";".join(waypoint_values)
 
     _throttle_amap_display_request()
-    url = f"https://restapi.amap.com/v3/direction/driving?{urlencode(params)}"
+    url = f"https://restapi.amap.com{AMAP_DRIVING_ENDPOINT}?{urlencode(params)}"
     request = Request(
         url,
         headers={
@@ -4455,21 +4475,18 @@ def _fetch_amap_display_segment(
     if str(payload.get("status") or "") != "1":
         message = str(payload.get("info") or payload.get("infocode") or "unknown error")
         raise RuntimeError(f"AMap display route failed: {message}")
-    paths = list(dict(payload.get("route") or {}).get("paths") or [])
-    if not paths:
+    path = first_amap_driving_path(payload)
+    if path is None:
         return {"geometry": [], "duration_s": None, "distance_m": None}
-    path = dict(paths[0] or {})
     coordinates: list[list[float]] = []
-    for step in list(path.get("steps") or []):
-        coordinates.extend(_decode_amap_polyline(str(dict(step or {}).get("polyline") or "")))
-    if not coordinates:
-        coordinates = _decode_amap_polyline(str(path.get("polyline") or ""))
-    duration_s = _float_or_none(path.get("duration"))
-    distance_m = _float_or_none(path.get("distance"))
+    for polyline in amap_driving_path_polylines(path):
+        coordinates.extend(_decode_amap_polyline(polyline))
+    stats = amap_driving_path_stats(path)
     return {
         "geometry": _dedupe_line_coordinates(coordinates),
-        "duration_s": duration_s,
-        "distance_m": distance_m,
+        "duration_s": stats["duration_s"],
+        "distance_m": stats["distance_m"],
+        "source": "amap_cn_v5_strategy32",
     }
 
 
@@ -4501,6 +4518,31 @@ def _fetch_amap_display_geometry(
         "geometry": _dedupe_line_coordinates(geometry),
         "duration_s": duration_s if has_duration else None,
         "distance_m": distance_m if has_distance else None,
+        "source": "amap_cn_v5_strategy32",
+    }
+
+
+def _fetch_amap_display_geometry_by_leg(
+    request_points: list[tuple[float, float]],
+) -> dict[str, Any]:
+    geometry: list[list[float]] = []
+    duration_s = 0.0
+    distance_m = 0.0
+    for point_index in range(len(request_points) - 1):
+        segment = _fetch_amap_display_segment(
+            request_points[point_index : point_index + 2]
+        )
+        segment_geometry = list(segment.get("geometry") or [])
+        if len(segment_geometry) < 2:
+            return {"geometry": [], "duration_s": None, "distance_m": None}
+        geometry.extend(segment_geometry)
+        duration_s += float(segment.get("duration_s") or 0.0)
+        distance_m += float(segment.get("distance_m") or 0.0)
+    return {
+        "geometry": _dedupe_line_coordinates(geometry),
+        "duration_s": duration_s,
+        "distance_m": distance_m,
+        "source": "amap_cn_v5_strategy32_leg_fallback",
     }
 
 
@@ -4510,6 +4552,7 @@ def _amap_display_geometry_for_route(
     *,
     cache: dict[str, Any] | None = None,
     cache_updates: dict[str, Any] | None = None,
+    expected_distance_m: float | None = None,
 ) -> tuple[list[list[float]] | None, str, str, float | None, float | None]:
     route_points: list[dict[str, Any]] = []
     for node in nodes:
@@ -4558,6 +4601,23 @@ def _amap_display_geometry_for_route(
 
     try:
         response = _fetch_amap_display_geometry(request_points)
+        if (
+            len(request_points) - 1 <= AMAP_DISPLAY_ANOMALY_MAX_LEGS
+            and amap_distance_is_anomalous(
+                response.get("distance_m"),
+                expected_distance_m,
+                ratio=AMAP_DISPLAY_ANOMALY_DISTANCE_RATIO,
+                minimum_excess_m=AMAP_DISPLAY_ANOMALY_MIN_EXCESS_M,
+            )
+        ):
+            leg_response = _fetch_amap_display_geometry_by_leg(request_points)
+            if (
+                len(list(leg_response.get("geometry") or [])) >= 2
+                and float(leg_response.get("distance_m") or 0.0) > 0.0
+                and float(leg_response.get("distance_m") or 0.0)
+                < float(response.get("distance_m") or 0.0)
+            ):
+                response = leg_response
     except (HTTPError, URLError, TimeoutError, OSError, RuntimeError, json.JSONDecodeError) as exc:
         fallback = stale_cache_result(str(exc))
         if fallback:
@@ -4576,6 +4636,7 @@ def _amap_display_geometry_for_route(
         "geometry": geometry,
         "duration_s": response.get("duration_s"),
         "distance_m": response.get("distance_m"),
+        "source": response.get("source"),
     }
     cache[cache_key] = cache_entry
     if owns_cache:
@@ -4587,7 +4648,7 @@ def _amap_display_geometry_for_route(
         cache_updates[cache_key] = cache_entry
     return (
         geometry,
-        "amap_cn",
+        str(response.get("source") or "amap_cn_v5_strategy32"),
         "",
         _float_or_none(response.get("duration_s")),
         _float_or_none(response.get("distance_m")),
@@ -5322,6 +5383,7 @@ def _build_job_map_payload(
                 nodes,
                 cache=amap_display_cache,
                 cache_updates=amap_display_cache_updates,
+                expected_distance_m=float(route.get("distance_m", 0.0) or 0.0),
             )
 
         visible_geometry = display_geometry if display_geometry else geometry
@@ -5342,6 +5404,9 @@ def _build_job_map_payload(
         verified_total_duration_s = _float_or_none(arrival_check.get("verified_total_duration_s"))
         if verified_total_duration_s is None:
             verified_total_duration_s = _float_or_none(traffic_gate.get("verified_total_duration_s"))
+        verified_distance_m = _float_or_none(arrival_check.get("verified_distance_m"))
+        if verified_distance_m is None:
+            verified_distance_m = _float_or_none(traffic_gate.get("verified_distance_m"))
         route_duration_s = (
             verified_drive_duration_s
             if verified_drive_duration_s is not None
@@ -5413,7 +5478,16 @@ def _build_job_map_payload(
                 "stop_count": _int_or_none(route.get("stop_count"))
                 or max(0, len(nodes) - 1),
                 "max_stops": _int_or_none(route.get("max_stops")),
-                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "distance_m": float(
+                    verified_distance_m
+                    if verified_distance_m is not None
+                    else display_distance_m
+                    if display_distance_m is not None
+                    else route.get("distance_m", 0.0)
+                    or 0.0
+                ),
+                "raw_distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "verified_distance_m": verified_distance_m,
                 "duration_s": float(route_duration_s),
                 "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
                 "stop_service_time_s": float(route.get("stop_service_time_s", 0.0) or 0.0),

@@ -159,6 +159,31 @@ class ChinaGeocodeValidationTests(unittest.TestCase):
             )
         )
 
+    def test_china_intersection_rejects_candidate_on_different_road(self) -> None:
+        requested = "北京市通州区乔庄南路与运河西大街交叉路口"
+        self.assertFalse(
+            runtime.is_plausible_geocode_result(
+                "China",
+                "Beijing",
+                39.88,
+                116.68,
+                "北京市通州区玉桥东一路/运河西大街",
+                "110112",
+                requested_address=requested,
+            )
+        )
+        self.assertTrue(
+            runtime.is_plausible_geocode_result(
+                "China",
+                "Beijing",
+                39.88,
+                116.68,
+                "北京市通州区乔庄南路/运河西大街",
+                "110112",
+                requested_address=requested,
+            )
+        )
+
     def test_amap_place_search_skips_wrong_branch_when_token_missing(self) -> None:
         original_request_json = runtime.amap_request_json
 

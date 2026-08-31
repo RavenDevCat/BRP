@@ -74,13 +74,53 @@ class AMapDisplayCacheTests(unittest.TestCase):
             saved_cache = json.loads(cache_path.read_text(encoding="utf-8"))
 
             self.assertEqual(calls, [request_points])
-            self.assertEqual(source, "amap_cn")
+            self.assertEqual(source, "amap_cn_v5_strategy32")
             self.assertEqual(message, "")
             self.assertEqual(geometry, [[121.4001, 31.2001], [121.4101, 31.2101]])
             self.assertEqual(duration_s, 321)
             self.assertEqual(distance_m, 654)
             self.assertEqual(saved_cache[cache_key]["duration_s"], 321)
             self.assertEqual(saved_cache[cache_key]["distance_m"], 654)
+
+    def test_anomalous_whole_route_uses_adjacent_leg_geometry(self) -> None:
+        old_fetch = self.service._fetch_amap_display_geometry
+        old_leg_fetch = self.service._fetch_amap_display_geometry_by_leg
+        points = [
+            {"lat": 31.2, "lng": 121.4, "provider": "amap", "adcode": "310000"},
+            {"lat": 31.21, "lng": 121.41, "provider": "amap", "adcode": "310000"},
+            {"lat": 31.22, "lng": 121.42, "provider": "amap", "adcode": "310000"},
+        ]
+
+        self.service._fetch_amap_display_geometry = lambda _points: {
+            "geometry": [[121.4, 31.2], [121.6, 31.4]],
+            "duration_s": 1800,
+            "distance_m": 5000,
+            "source": "whole",
+        }
+        self.service._fetch_amap_display_geometry_by_leg = lambda _points: {
+            "geometry": [[121.4, 31.2], [121.41, 31.21], [121.42, 31.22]],
+            "duration_s": 600,
+            "distance_m": 1200,
+            "source": "amap_cn_v5_strategy32_leg_fallback",
+        }
+        try:
+            geometry, source, _, duration_s, distance_m = (
+                self.service._amap_display_geometry_for_route(
+                    points,
+                    [0, 1, 2],
+                    cache={},
+                    cache_updates={},
+                    expected_distance_m=1000,
+                )
+            )
+        finally:
+            self.service._fetch_amap_display_geometry = old_fetch
+            self.service._fetch_amap_display_geometry_by_leg = old_leg_fetch
+
+        self.assertEqual(geometry[-1], [121.42, 31.22])
+        self.assertEqual(source, "amap_cn_v5_strategy32_leg_fallback")
+        self.assertEqual(duration_s, 600)
+        self.assertEqual(distance_m, 1200)
 
     def test_map_payload_loads_and_saves_display_cache_once(self) -> None:
         old_load = self.service._load_amap_display_cache_unlocked

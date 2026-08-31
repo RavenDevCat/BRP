@@ -1118,6 +1118,39 @@ def test_amap_final_route_retries_once_and_counts_attempts(monkeypatch):
     assert state["api_calls"] == 2
 
 
+def test_amap_final_route_rechecks_anomalous_whole_route_by_adjacent_leg(monkeypatch):
+    calls: list[int] = []
+
+    def fake_segment(_planner, request_points):
+        calls.append(len(request_points))
+        if len(request_points) == 3:
+            return {"duration_s": 1800, "distance_m": 5000}
+        return {"duration_s": 300, "distance_m": 600}
+
+    monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_segment)
+    state = {
+        "api_calls": 0,
+        "api_call_limit": 40,
+        "cache_hits": 0,
+        "cache_changed": 0,
+        "expected_distance_m": 1000,
+    }
+
+    stats = planner_core._amap_route_stats(
+        object(),
+        [(31.1, 121.1), (31.2, 121.2), (31.3, 121.3)],
+        {},
+        state,
+    )
+
+    assert calls == [3, 2, 2]
+    assert stats["duration_s"] == 600
+    assert stats["distance_m"] == 1200
+    assert stats["source"] == "amap_final_route_leg_fallback"
+    assert stats["anomaly_fallback_used"] is True
+    assert stats["whole_route_distance_m"] == 5000
+
+
 def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
     monkeypatch.setattr(planner_core, "infer_traffic_location", lambda _records: ("CHINA", "Shanghai"))
     monkeypatch.setattr(planner_core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)

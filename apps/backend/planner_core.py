@@ -23,10 +23,26 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 try:
+    from .amap_driving import (
+        AMAP_DRIVING_ENDPOINT,
+        AMAP_DRIVING_VERSION,
+        amap_distance_is_anomalous,
+        amap_driving_path_stats,
+        build_amap_driving_params,
+        first_amap_driving_path,
+    )
     from .api_rate_limit import CrossProcessRateLimiter
     from .BusingProblem import transpose_matrix
     from .json_cache_store import clear_json_object, load_json_object, save_json_object
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from amap_driving import (
+        AMAP_DRIVING_ENDPOINT,
+        AMAP_DRIVING_VERSION,
+        amap_distance_is_anomalous,
+        amap_driving_path_stats,
+        build_amap_driving_params,
+        first_amap_driving_path,
+    )
     from api_rate_limit import CrossProcessRateLimiter
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
@@ -105,6 +121,14 @@ FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET = max(
 FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS", "16") or 16),
+)
+AMAP_ROUTE_ANOMALY_DISTANCE_RATIO = max(
+    1.0,
+    float(os.environ.get("BRP_AMAP_ROUTE_ANOMALY_DISTANCE_RATIO", "1.45") or 1.45),
+)
+AMAP_ROUTE_ANOMALY_MIN_EXCESS_M = max(
+    0.0,
+    float(os.environ.get("BRP_AMAP_ROUTE_ANOMALY_MIN_EXCESS_M", "3000") or 3000),
 )
 AM_ARRIVAL_GATE_GRACE_MINUTES = max(
     0.0,
@@ -724,34 +748,25 @@ def _final_route_traffic_cache_key(
 ) -> str:
     rounded = [[round(lat, 6), round(lng, 6)] for lat, lng in points]
     departure_key = departure_time.isoformat(timespec="minutes") if departure_time else ""
-    payload = {"provider": provider, "departure_time": departure_key, "points": rounded}
+    payload = {
+        "provider": provider,
+        "routing_version": AMAP_DRIVING_VERSION if provider == "amap" else "",
+        "departure_time": departure_key,
+        "points": rounded,
+    }
     digest = hashlib.sha1(json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
-    return f"{provider}-final-route-v2|{digest}"
+    return f"{provider}-final-route-v3|{digest}"
 
 
 def _amap_route_segment_stats(planner: Any, request_points: list[tuple[float, float]]) -> dict[str, float]:
     if len(request_points) < 2:
         return {"duration_s": 0.0, "distance_m": 0.0}
-    origin_lat, origin_lng = request_points[0]
-    dest_lat, dest_lng = request_points[-1]
-    params: dict[str, str] = {
-        "origin": f"{origin_lng:.6f},{origin_lat:.6f}",
-        "destination": f"{dest_lng:.6f},{dest_lat:.6f}",
-        "extensions": "base",
-        "output": "json",
-    }
-    waypoint_values = [f"{lng:.6f},{lat:.6f}" for lat, lng in request_points[1:-1]]
-    if waypoint_values:
-        params["waypoints"] = ";".join(waypoint_values)
-    payload = planner.amap_request_json("/v3/direction/driving", params, planner.AMAP_ROUTING_LIMITER)
-    paths = list(dict(payload.get("route") or {}).get("paths") or [])
-    if not paths:
+    params = build_amap_driving_params(request_points, include_geometry=False)
+    payload = planner.amap_request_json(AMAP_DRIVING_ENDPOINT, params, planner.AMAP_ROUTING_LIMITER)
+    path = first_amap_driving_path(payload)
+    if path is None:
         return {"duration_s": 0.0, "distance_m": 0.0}
-    path = dict(paths[0] or {})
-    return {
-        "duration_s": float(path.get("duration", 0.0) or 0.0),
-        "distance_m": float(path.get("distance", 0.0) or 0.0),
-    }
+    return amap_driving_path_stats(path)
 
 
 def _amap_route_stats(
@@ -769,8 +784,11 @@ def _amap_route_stats(
         return {
             "duration_s": float(cached.get("duration_s", 0.0) or 0.0),
             "distance_m": float(cached.get("distance_m", 0.0) or 0.0),
-            "source": "amap_final_route_cache",
+            "source": str(cached.get("source") or "amap_final_route") + "_cache",
             "cache_key": cache_key,
+            "anomaly_fallback_used": bool(cached.get("anomaly_fallback_used")),
+            "whole_route_duration_s": cached.get("whole_route_duration_s"),
+            "whole_route_distance_m": cached.get("whole_route_distance_m"),
         }
     max_points = max(2, FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS + 2)
     duration_s = 0.0
@@ -797,18 +815,73 @@ def _amap_route_stats(
         duration_s += float(stats.get("duration_s", 0.0) or 0.0)
         distance_m += float(stats.get("distance_m", 0.0) or 0.0)
         start = end - 1
+    whole_route_duration_s = duration_s
+    whole_route_distance_m = distance_m
+    source = "amap_final_route"
+    anomaly_fallback_used = False
+    expected_distance_m = float(state.get("expected_distance_m", 0.0) or 0.0)
+    anomalous = amap_distance_is_anomalous(
+        distance_m,
+        expected_distance_m,
+        ratio=AMAP_ROUTE_ANOMALY_DISTANCE_RATIO,
+        minimum_excess_m=AMAP_ROUTE_ANOMALY_MIN_EXCESS_M,
+    )
+    required_leg_calls = max(0, len(request_points) - 1)
+    remaining_calls = max(
+        0,
+        int(state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS))
+        - int(state.get("api_calls", 0)),
+    )
+    if anomalous and required_leg_calls > 1 and remaining_calls >= required_leg_calls:
+        leg_duration_s = 0.0
+        leg_distance_m = 0.0
+        leg_fallback_complete = True
+        for point_index in range(required_leg_calls):
+            if int(state.get("api_calls", 0)) >= int(
+                state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS)
+            ):
+                leg_fallback_complete = False
+                break
+            state["api_calls"] = int(state.get("api_calls", 0)) + 1
+            try:
+                leg_stats = _amap_route_segment_stats(
+                    planner,
+                    request_points[point_index : point_index + 2],
+                )
+            except Exception:
+                leg_fallback_complete = False
+                break
+            leg_duration_s += float(leg_stats.get("duration_s", 0.0) or 0.0)
+            leg_distance_m += float(leg_stats.get("distance_m", 0.0) or 0.0)
+        if (
+            leg_fallback_complete
+            and leg_duration_s > 0.0
+            and leg_distance_m > 0.0
+            and leg_distance_m < whole_route_distance_m
+        ):
+            duration_s = leg_duration_s
+            distance_m = leg_distance_m
+            source = "amap_final_route_leg_fallback"
+            anomaly_fallback_used = True
     cache[cache_key] = {
         "created_at": datetime.now(DIRECT_PROVIDER_CACHE_TZ).isoformat(timespec="seconds"),
         "duration_s": duration_s,
         "distance_m": distance_m,
         "point_count": len(request_points),
+        "source": source,
+        "anomaly_fallback_used": anomaly_fallback_used,
+        "whole_route_duration_s": whole_route_duration_s,
+        "whole_route_distance_m": whole_route_distance_m,
     }
     state["cache_changed"] = 1
     return {
         "duration_s": duration_s,
         "distance_m": distance_m,
-        "source": "amap_final_route",
+        "source": source,
         "cache_key": cache_key,
+        "anomaly_fallback_used": anomaly_fallback_used,
+        "whole_route_duration_s": whole_route_duration_s,
+        "whole_route_distance_m": whole_route_distance_m,
     }
 
 
@@ -1186,6 +1259,7 @@ def _attach_final_route_traffic_gate_impl(
             latest_arrival_minutes=latest_arrival_minutes,
             departure_minutes=departure_minutes,
         )
+        state["expected_distance_m"] = float(route.get("distance_m", 0.0) or 0.0)
         try:
             stats = _final_route_stats(
                 planner,
@@ -1255,6 +1329,9 @@ def _attach_final_route_traffic_gate_impl(
                 "provider_departure_time": stats.get("departure_time")
                 or (provider_departure_time.isoformat(timespec="seconds") if provider_departure_time else None),
                 "provider_segment_count": stats.get("segment_count"),
+                "provider_anomaly_fallback_used": bool(stats.get("anomaly_fallback_used")),
+                "provider_whole_route_duration_s": stats.get("whole_route_duration_s"),
+                "provider_whole_route_distance_m": stats.get("whole_route_distance_m"),
                 "verified_drive_duration_s": verified_drive_s,
                 "verified_total_duration_s": verified_total_s,
                 "verified_distance_m": float(stats.get("distance_m", 0.0) or 0.0),

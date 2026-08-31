@@ -504,6 +504,38 @@ def _preserves_distinctive_address_tokens(requested_address: str, candidate_text
     return all(token in normalized_candidate for token in tokens)
 
 
+def _china_intersection_road_tokens(requested_address: str) -> list[str]:
+    compact = _compact_china_location_text(requested_address)
+    if not re.search(r"(?:交叉|交汇|路口|与|和|及|/|、)", compact):
+        return []
+    parts = re.split(r"(?:交叉口?|交汇处?|路口|与|和|及|/|、)", compact)
+    suffixes = r"(?:大道|大街|公路|胡同|路|街|道|巷)"
+    tokens: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        cleaned = re.sub(
+            r"^(?:[\u4e00-\u9fff]{2,}(?:省|自治区|市|区|县))+",
+            "",
+            part,
+        )
+        match = re.search(rf"([\u4e00-\u9fff]{{2,20}}?{suffixes})$", cleaned)
+        if match and match.group(1) not in tokens:
+            tokens.append(match.group(1))
+    return tokens if len(tokens) >= 2 else []
+
+
+def _preserves_china_intersection_roads(
+    requested_address: str,
+    candidate_text: str,
+) -> bool:
+    road_tokens = _china_intersection_road_tokens(requested_address)
+    if not road_tokens:
+        return True
+    normalized_candidate = _compact_china_location_text(candidate_text)
+    return all(token in normalized_candidate for token in road_tokens)
+
+
 def is_plausible_china_geocode_result(
     country: str,
     city: str,
@@ -523,6 +555,9 @@ def is_plausible_china_geocode_result(
         return False
 
     if not _preserves_distinctive_address_tokens(requested_address, formatted_address):
+        return False
+
+    if not _preserves_china_intersection_roads(requested_address, formatted_address):
         return False
 
     adcode_text = str(adcode).strip()
@@ -1117,6 +1152,7 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                         "plot_lng": plot_lng,
                         "formatted_address": formatted_address,
                         "adcode": adcode,
+                        "geocode_level": str(candidate.get("level") or "").strip(),
                     },
                     country=country,
                     city=city,
@@ -1171,6 +1207,10 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
                     "plot_lng": plot_lng,
                     "formatted_address": formatted_address,
                     "adcode": adcode,
+                    "geocode_level": "poi",
+                    "amap_poi_id": str(candidate.get("id") or "").strip(),
+                    "amap_poi_name": candidate_name,
+                    "amap_poi_type": str(candidate.get("type") or "").strip(),
                 },
                 country=country,
                 city=city,

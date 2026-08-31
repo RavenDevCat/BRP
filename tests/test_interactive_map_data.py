@@ -416,7 +416,8 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(route["display_distance_m"], 1300)
         self.assertEqual(route["duration_s"], 700)
         self.assertEqual(route["raw_duration_s"], 600)
-        self.assertEqual(route["distance_m"], 1200)
+        self.assertEqual(route["distance_m"], 1300)
+        self.assertEqual(route["raw_distance_m"], 1200)
         self.assertEqual(payload["bounds"]["max_lng"], 121.4101)
 
     def test_non_china_map_payload_does_not_request_amap_display_geometry(self) -> None:

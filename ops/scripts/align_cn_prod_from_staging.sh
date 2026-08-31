@@ -4,7 +4,41 @@ set -euo pipefail
 STAGING_ROOT="${STAGING_ROOT:-/opt/brp/staging/app}"
 PROD_ROOT="${PROD_ROOT:-/opt/brp/prod/app}"
 PROD_BACKEND_SERVICE="${PROD_BACKEND_SERVICE:-brp-prod-backend.service}"
+PROD_BACKEND_HEALTH_URL="${PROD_BACKEND_HEALTH_URL:-http://127.0.0.1:8000/health}"
+PROD_BACKEND_HEALTH_ATTEMPTS="${PROD_BACKEND_HEALTH_ATTEMPTS:-15}"
+PROD_BACKEND_HEALTH_DELAY_SECONDS="${PROD_BACKEND_HEALTH_DELAY_SECONDS:-2}"
 TARGET_HEAD="${1:-}"
+
+wait_for_backend_health() {
+  local attempt
+
+  case "$PROD_BACKEND_HEALTH_ATTEMPTS" in
+    ''|*[!0-9]*|0)
+      echo "PROD_BACKEND_HEALTH_ATTEMPTS must be a positive integer." >&2
+      return 1
+      ;;
+  esac
+  case "$PROD_BACKEND_HEALTH_DELAY_SECONDS" in
+    ''|*[!0-9]*)
+      echo "PROD_BACKEND_HEALTH_DELAY_SECONDS must be a non-negative integer." >&2
+      return 1
+      ;;
+  esac
+
+  for ((attempt = 1; attempt <= PROD_BACKEND_HEALTH_ATTEMPTS; attempt++)); do
+    if curl -fsS "$PROD_BACKEND_HEALTH_URL" >/dev/null 2>&1; then
+      echo "CN_PROD_BACKEND_READY_ATTEMPT=$attempt"
+      return 0
+    fi
+    if [ "$attempt" -lt "$PROD_BACKEND_HEALTH_ATTEMPTS" ]; then
+      sleep "$PROD_BACKEND_HEALTH_DELAY_SECONDS"
+    fi
+  done
+
+  echo "CN production backend did not become healthy after $PROD_BACKEND_HEALTH_ATTEMPTS attempts." >&2
+  sudo systemctl status "$PROD_BACKEND_SERVICE" --no-pager -l >&2 || true
+  return 1
+}
 
 if [ -z "$TARGET_HEAD" ]; then
   TARGET_HEAD="$(git -C "$STAGING_ROOT" rev-parse --short HEAD)"
@@ -54,8 +88,7 @@ mv "$new_dist" "$dist"
 grep -R "$TARGET_HEAD" -n "$dist/assets"/index-*.js >/dev/null
 
 sudo systemctl restart "$PROD_BACKEND_SERVICE"
-sleep 5
-curl -fsS http://127.0.0.1:8000/health >/dev/null
+wait_for_backend_health
 
 echo "CN_PROD_HEAD=$prod_head"
 echo "CN_PROD_DIST=ok"

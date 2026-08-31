@@ -5,6 +5,43 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-08-31
+
+### Planning-Tool Navigation
+
+- Distance & Cost is now an expandable Planning Tools entry in the left
+  sidebar. Reference Distance, Route Cost, and Direct-to-School each have a
+  direct navigation target instead of relying on tabs inside the page.
+- Mobile navigation keeps the same three tool destinations and preserves the
+  active Distance & Cost workflow when switching layouts.
+
+### China Route Evidence Alignment
+
+- CN final route validation and displayed route geometry now share AMap v5
+  driving strategy 32. The result metrics and the line shown on the map are
+  therefore derived from the same provider routing policy.
+- When a whole-route AMap response is materially longer than the candidate
+  route, BRP rechecks the route as adjacent stop-to-stop legs and uses the
+  shorter complete evidence when that resolves the anomaly. This guard is
+  generic across CN routes and is not tied to a route ID or city.
+- Chinese intersection inputs receive stricter geocode validation so a
+  candidate must preserve both named roads. POI fallback evidence keeps the
+  provider identity and location metadata needed for review.
+- New jobs and re-prepared schedules receive the full routing and geocode
+  correction. Completed history remains immutable; a saved schedule prepared
+  with an old coordinate must be prepared again to receive corrected location
+  evidence.
+- A representative CN replay used fresh AMap calls and matched the comparable
+  manually checked AMap segment while retaining the additional stops required
+  by the complete route.
+
+### Production Readiness
+
+- CN production alignment now waits for backend health with a bounded retry
+  loop instead of assuming the service will always become ready within five
+  seconds. A slow but healthy restart no longer reports a false deployment
+  failure, while a genuinely unhealthy backend still stops the release.
+
 ## 2026-08-28
 
 ### Direct-to-School Report Alignment

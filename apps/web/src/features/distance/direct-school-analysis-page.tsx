@@ -1352,7 +1352,10 @@ function DirectSchoolHistoryItem({ job, active }: { job: DirectSchoolJobSummary;
   return (
     <div className="min-w-0 px-1 py-1">
       <Badge tone={statusTone(job.status)}>{t(statusLabel(job.status))}</Badge>
-      <div className={cn("mt-2 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{formatDateTime(job.created_at)}</div>
+      <div className={cn("mt-2 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>
+        {job.started_at ? t("Started") : job.finished_at ? t("Finished") : t("Created")}{" "}
+        {formatDateTime(job.started_at || job.finished_at || job.created_at)}
+      </div>
       {job.scheduled_start_at ? <div className={cn("mt-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>{t("Scheduled for")} {formatDateTime(job.scheduled_start_at)}</div> : null}
       <div className={cn("mt-2 grid grid-cols-2 gap-1 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>
         <span>{formatNumber(summary.address_count)} {t("addresses")}</span>

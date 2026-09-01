@@ -127,7 +127,7 @@ def _measure_active_route(
     active_points = [points[index] for index in active_indexes]
     service_indexes = [index for index in active_indexes if not bool(ordered[index].get("is_depot"))]
     if len(active_points) >= 2:
-        live = provider.route(active_points)
+        live = _route_with_stop_boundaries(provider, active_points)
         drive_s = _safe_float(live.get("duration_s"))
         distance_m = _safe_float(live.get("distance_m"))
         called_at = live.get("called_at")
@@ -286,7 +286,14 @@ class FreshRouteProvider:
             raise RuntimeError("No live route provider is configured for this workbook market.")
 
     def route(self, points: list[dict[str, Any]]) -> dict[str, Any]:
-        request_points = [coords for point in points if (coords := _point_coordinates(point))]
+        coordinate_reader = (
+            planner_core._amap_route_point
+            if self.provider == "amap"
+            else _point_coordinates
+        )
+        request_points = [
+            coords for point in points if (coords := coordinate_reader(point))
+        ]
         if len(request_points) != len(points) or len(request_points) < 2:
             raise RuntimeError("Route contains unresolved coordinates.")
         before_calls = int(self.state.get("api_calls", 0))
@@ -312,6 +319,45 @@ class FreshRouteProvider:
             "api_calls": int(self.state.get("api_calls", 0)) - before_calls,
             "in_run_reuse": int(self.state.get("api_calls", 0)) == before_calls,
         }
+
+    def route_via_adjacent_legs(
+        self,
+        points: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        if self.provider != "amap" or len(points) <= 2:
+            return self.route(points)
+
+        before_calls = int(self.state.get("api_calls", 0))
+        leg_results = [
+            self.route([origin, destination])
+            for origin, destination in zip(points[:-1], points[1:])
+        ]
+        return {
+            "duration_s": sum(_safe_float(item.get("duration_s")) for item in leg_results),
+            "distance_m": sum(_safe_float(item.get("distance_m")) for item in leg_results),
+            "provider": self.provider,
+            "called_at": utc_now_iso(),
+            "api_calls": int(self.state.get("api_calls", 0)) - before_calls,
+            "in_run_reuse": int(self.state.get("api_calls", 0)) == before_calls,
+            "source": "amap_adjacent_legs",
+            "leg_durations_s": [
+                _safe_float(item.get("duration_s")) for item in leg_results
+            ],
+            "leg_distances_m": [
+                _safe_float(item.get("distance_m")) for item in leg_results
+            ],
+            "leg_sources": [str(item.get("source") or "amap") for item in leg_results],
+        }
+
+
+def _route_with_stop_boundaries(
+    provider: FreshRouteProvider,
+    points: list[dict[str, Any]],
+) -> dict[str, Any]:
+    adjacent_route = getattr(provider, "route_via_adjacent_legs", None)
+    if callable(adjacent_route):
+        return dict(adjacent_route(points))
+    return dict(provider.route(points))
 
 
 def _osrm_leg(
@@ -394,7 +440,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 4,
+        "analysis_version": 5,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -638,12 +684,21 @@ def run_direct_school_analysis(
             ]
             osrm_drive_s = sum(_safe_float(leg.get("duration_s")) for leg in leg_details)
             osrm_distance_m = sum(_safe_float(leg.get("distance_m")) for leg in leg_details)
-            live = provider.route(resolved_points)
+            live = _route_with_stop_boundaries(provider, resolved_points)
             live_drive_s = _safe_float(live.get("duration_s"))
             live_distance_m = _safe_float(live.get("distance_m"))
             service_stop_count = sum(1 for stop in ordered if not bool(stop.get("is_depot")))
             dwell_s = service_stop_count * float(config["stop_service_minutes"]) * 60.0
             scale = live_drive_s / osrm_drive_s if osrm_drive_s > 0 else 1.0
+            live_leg_durations_s = [
+                _safe_float(value)
+                for value in list(live.get("leg_durations_s") or [])
+            ]
+            if len(live_leg_durations_s) != len(leg_details):
+                live_leg_durations_s = [
+                    _safe_float(leg.get("duration_s")) * scale
+                    for leg in leg_details
+                ]
             geometry = [coord for leg in leg_details for coord in list(leg.get("geometry") or [])]
             route_result = {
                 "route_id": route_id,
@@ -657,6 +712,8 @@ def run_direct_school_analysis(
                 "osrm_distance_km": round(osrm_distance_m / 1000.0, 3),
                 "congestion_ratio": round(scale, 3),
                 "provider_called_at": live.get("called_at"),
+                "provider_route_source": live.get("source") or provider_name,
+                "provider_leg_count": len(live_leg_durations_s),
                 "geometry": geometry,
             }
             route_results.append(route_result)
@@ -667,6 +724,7 @@ def run_direct_school_analysis(
                 "live_drive_s": live_drive_s,
                 "dwell_s": dwell_s,
                 "scale": scale,
+                "live_leg_durations_s": live_leg_durations_s,
                 "full_total_s": live_drive_s + dwell_s,
                 "full_distance_m": live_distance_m,
             }
@@ -675,12 +733,12 @@ def run_direct_school_analysis(
                 stop = ordered[index]
                 key = _address_key(stop)
                 if config["service_direction"] == "To School":
-                    relevant_legs = leg_details[index:]
+                    relevant_leg_durations_s = live_leg_durations_s[index:]
                     dwell_count = sum(1 for service_index in service_indexes if service_index >= index)
                 else:
-                    relevant_legs = leg_details[:index]
+                    relevant_leg_durations_s = live_leg_durations_s[:index]
                     dwell_count = sum(1 for service_index in service_indexes if service_index <= index)
-                ride_s = sum(_safe_float(leg.get("duration_s")) for leg in relevant_legs) * scale
+                ride_s = sum(relevant_leg_durations_s)
                 ride_s += dwell_count * float(config["stop_service_minutes"]) * 60.0
                 route_contexts_by_stop[key].append(
                     {

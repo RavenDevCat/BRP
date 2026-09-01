@@ -152,7 +152,7 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     )
 
     assert result["status"] == "complete"
-    assert result["analysis_version"] == 4
+    assert result["analysis_version"] == 5
     assert result["summary"]["address_count"] == 2
     assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
@@ -287,6 +287,76 @@ def test_additional_removal_ranking_prefers_longest_direct_trip() -> None:
     )
 
     assert long_trip_rank > short_trip_rank
+
+
+def test_amap_provider_uses_raw_gcj_coordinates(monkeypatch) -> None:
+    provider = analysis.FreshRouteProvider.__new__(analysis.FreshRouteProvider)
+    provider.provider = "amap"
+    provider.planner = object()
+    provider.cache = {}
+    provider.state = {"api_calls": 0, "api_call_limit": 10, "cache_hits": 0}
+    captured: list[list[tuple[float, float]]] = []
+
+    def fake_stats(_planner, request_points, _cache, _state):
+        captured.append(request_points)
+        return {"duration_s": 600.0, "distance_m": 5000.0, "source": "amap_test"}
+
+    monkeypatch.setattr(analysis.planner_core, "_amap_route_stats", fake_stats)
+    provider.route(
+        [
+            {
+                "lat": 31.231190,
+                "lng": 121.507049,
+                "plot_lat": 31.2332296,
+                "plot_lng": 121.5026431,
+                "provider": "amap",
+                "adcode": "310115",
+            },
+            {
+                "lat": 31.242702,
+                "lng": 121.516513,
+                "plot_lat": 31.2447643,
+                "plot_lng": 121.5121398,
+                "provider": "amap",
+                "adcode": "310115",
+            },
+        ]
+    )
+
+    assert captured == [[(31.231190, 121.507049), (31.242702, 121.516513)]]
+
+
+def test_amap_stopping_route_sums_adjacent_legs_and_reuses_pair_cache() -> None:
+    provider = analysis.FreshRouteProvider.__new__(analysis.FreshRouteProvider)
+    provider.provider = "amap"
+    provider.state = {"api_calls": 0, "cache_hits": 0}
+    calls: list[tuple[str, str]] = []
+
+    def fake_route(points: list[dict]) -> dict:
+        origin = str(points[0]["address"])
+        destination = str(points[1]["address"])
+        calls.append((origin, destination))
+        provider.state["api_calls"] += 1
+        duration_s = 300.0 if origin == "A" else 420.0
+        distance_m = 1200.0 if origin == "A" else 1800.0
+        return {
+            "duration_s": duration_s,
+            "distance_m": distance_m,
+            "source": "amap_test",
+        }
+
+    provider.route = fake_route  # type: ignore[method-assign]
+    result = provider.route_via_adjacent_legs(
+        [{"address": "A"}, {"address": "B"}, {"address": "C"}]
+    )
+
+    assert calls == [("A", "B"), ("B", "C")]
+    assert result["duration_s"] == 720
+    assert result["distance_m"] == 3000
+    assert result["leg_durations_s"] == [300, 420]
+    assert result["leg_distances_m"] == [1200, 1800]
+    assert result["source"] == "amap_adjacent_legs"
+    assert result["api_calls"] == 2
 
 
 def test_multi_day_aggregation_requires_repeated_evidence() -> None:

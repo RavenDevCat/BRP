@@ -4409,6 +4409,92 @@ def _dedupe_line_coordinates(coordinates: list[list[float]]) -> list[list[float]
     return deduped
 
 
+def _coordinate_distance_m(
+    first: tuple[float, float],
+    second: tuple[float, float],
+) -> float:
+    first_lat, first_lng = map(math.radians, first)
+    second_lat, second_lng = map(math.radians, second)
+    delta_lat = second_lat - first_lat
+    delta_lng = second_lng - first_lng
+    haversine = (
+        math.sin(delta_lat / 2.0) ** 2
+        + math.cos(first_lat)
+        * math.cos(second_lat)
+        * math.sin(delta_lng / 2.0) ** 2
+    )
+    return 6_371_000.0 * 2.0 * math.atan2(
+        math.sqrt(haversine),
+        math.sqrt(max(0.0, 1.0 - haversine)),
+    )
+
+
+def _amap_geometry_has_anomalous_leg(
+    geometry: list[list[float]],
+    route_points: list[dict[str, Any]],
+    expected_leg_distances_m: list[float] | None,
+) -> bool:
+    expected_distances = list(expected_leg_distances_m or [])
+    if (
+        len(geometry) < 2
+        or len(route_points) < 3
+        or len(expected_distances) != len(route_points) - 1
+    ):
+        return False
+
+    anchors = [_map_point_coordinates(point) for point in route_points]
+    if any(anchor is None for anchor in anchors):
+        return False
+    geometry_points: list[tuple[float, float]] = []
+    for coordinate in geometry:
+        if not isinstance(coordinate, (list, tuple)) or len(coordinate) < 2:
+            return False
+        lng = _float_or_none(coordinate[0])
+        lat = _float_or_none(coordinate[1])
+        if lat is None or lng is None:
+            return False
+        geometry_points.append((lat, lng))
+
+    anchor_indexes: list[int] = []
+    start_index = 0
+    for anchor_index, raw_anchor in enumerate(anchors):
+        anchor = raw_anchor
+        if anchor is None:
+            return False
+        remaining_anchors = len(anchors) - anchor_index - 1
+        search_end = max(start_index + 1, len(geometry_points) - remaining_anchors)
+        nearest_index = min(
+            range(start_index, search_end),
+            key=lambda index: _coordinate_distance_m(anchor, geometry_points[index]),
+        )
+        if _coordinate_distance_m(anchor, geometry_points[nearest_index]) > 500.0:
+            return False
+        anchor_indexes.append(nearest_index)
+        start_index = nearest_index
+
+    for leg_index, expected_distance_m in enumerate(expected_distances):
+        expected_distance = float(expected_distance_m or 0.0)
+        if expected_distance <= 0.0:
+            continue
+        geometry_distance = 0.0
+        for coordinate_index in range(
+            anchor_indexes[leg_index],
+            anchor_indexes[leg_index + 1],
+        ):
+            geometry_distance += _coordinate_distance_m(
+                geometry_points[coordinate_index],
+                geometry_points[coordinate_index + 1],
+            )
+        if amap_distance_is_anomalous(
+            geometry_distance,
+            expected_distance,
+            ratio=AMAP_DISPLAY_ANOMALY_DISTANCE_RATIO,
+            minimum_excess_m=AMAP_DISPLAY_ANOMALY_MIN_EXCESS_M,
+        ):
+            return True
+    return False
+
+
 def _amap_display_cache_key(
     request_points: list[tuple[float, float]]
 ) -> str:
@@ -4553,6 +4639,7 @@ def _amap_display_geometry_for_route(
     cache: dict[str, Any] | None = None,
     cache_updates: dict[str, Any] | None = None,
     expected_distance_m: float | None = None,
+    expected_leg_distances_m: list[float] | None = None,
 ) -> tuple[list[list[float]] | None, str, str, float | None, float | None]:
     route_points: list[dict[str, Any]] = []
     for node in nodes:
@@ -4578,12 +4665,18 @@ def _amap_display_geometry_for_route(
             cache = _load_amap_display_cache_unlocked()
     cached = dict(cache.get(cache_key) or {})
     cached_geometry = cached.get("geometry")
+    cached_leg_anomaly = False
     if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
         cached_duration_s = _float_or_none(cached.get("duration_s"))
         cached_distance_m = _float_or_none(cached.get("distance_m"))
-        if cached_duration_s is None:
+        cached_leg_anomaly = _amap_geometry_has_anomalous_leg(
+            cached_geometry,
+            route_points,
+            expected_leg_distances_m,
+        )
+        if cached_duration_s is None and not cached_leg_anomaly:
             stale_cached_geometry = cached_geometry
-        else:
+        elif not cached_leg_anomaly:
             return (
                 cached_geometry,
                 "amap_cn_cache",
@@ -4600,14 +4693,26 @@ def _amap_display_geometry_for_route(
         return stale_cached_geometry, "amap_cn_cache_stale", message, None, None
 
     try:
-        response = _fetch_amap_display_geometry(request_points)
+        response = (
+            _fetch_amap_display_geometry_by_leg(request_points)
+            if cached_leg_anomaly
+            else _fetch_amap_display_geometry(request_points)
+        )
         if (
-            len(request_points) - 1 <= AMAP_DISPLAY_ANOMALY_MAX_LEGS
-            and amap_distance_is_anomalous(
-                response.get("distance_m"),
-                expected_distance_m,
-                ratio=AMAP_DISPLAY_ANOMALY_DISTANCE_RATIO,
-                minimum_excess_m=AMAP_DISPLAY_ANOMALY_MIN_EXCESS_M,
+            not cached_leg_anomaly
+            and len(request_points) - 1 <= AMAP_DISPLAY_ANOMALY_MAX_LEGS
+            and (
+                amap_distance_is_anomalous(
+                    response.get("distance_m"),
+                    expected_distance_m,
+                    ratio=AMAP_DISPLAY_ANOMALY_DISTANCE_RATIO,
+                    minimum_excess_m=AMAP_DISPLAY_ANOMALY_MIN_EXCESS_M,
+                )
+                or _amap_geometry_has_anomalous_leg(
+                    list(response.get("geometry") or []),
+                    route_points,
+                    expected_leg_distances_m,
+                )
             )
         ):
             leg_response = _fetch_amap_display_geometry_by_leg(request_points)
@@ -5366,6 +5471,7 @@ def _build_job_map_payload(
         source_route_id = str(route.get("source_route_id") or route_id)
         geometry = _route_geometry_coordinates(dict(route))
         nodes = list(route.get("nodes") or [])
+        leg_details = list(route.get("leg_details") or [])
         display_geometry: list[list[float]] | None = None
         display_geometry_source = "osrm"
         display_geometry_message = ""
@@ -5384,6 +5490,10 @@ def _build_job_map_payload(
                 cache=amap_display_cache,
                 cache_updates=amap_display_cache_updates,
                 expected_distance_m=float(route.get("distance_m", 0.0) or 0.0),
+                expected_leg_distances_m=[
+                    float(dict(leg or {}).get("distance_m", 0.0) or 0.0)
+                    for leg in leg_details
+                ],
             )
 
         visible_geometry = display_geometry if display_geometry else geometry
@@ -5419,7 +5529,6 @@ def _build_job_map_payload(
                 or _float_or_none(route.get("time_s"))
                 or 0.0
             )
-        leg_details = list(route.get("leg_details") or [])
         cumulative_duration_s = 0.0
         cumulative_distance_m = 0.0
         route_stop_ids: list[str] = []

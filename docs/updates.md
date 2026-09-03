@@ -5,6 +5,27 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-03
+
+### Direct-to-School Route-Time Consistency
+
+- CN Direct-to-School current-route measurement now sends provider-native
+  coordinates to AMap and measures multi-stop routes as adjacent AMap v5 legs.
+  Each student's current-route ride is the sum of only the remaining legs and
+  configured stop dwell through the school, so it cannot exceed that route's
+  measured total duration.
+- Display-route validation detects materially anomalous individual legs in a
+  whole-route AMap response, refreshes affected legacy cache entries, and uses
+  complete adjacent-leg geometry when that resolves the anomaly. The guard is
+  generic across CN routes and is not tied to a route ID or reported example.
+- Direct-to-School history cards show the actual execution time for manual and
+  scheduled results so a measured traffic sample can be associated with when
+  it ran.
+- Completed Direct-to-School results remain immutable. Rerun version 4 or older
+  results to receive corrected version 5 route timing. Future scheduled jobs
+  execute the currently deployed analysis implementation when their trigger is
+  released; they do not retain an old algorithm copy.
+
 ## 2026-08-31
 
 ### Planning-Tool Navigation

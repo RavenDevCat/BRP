@@ -137,6 +137,7 @@ class FullReviewProvider(analysis.FreshRouteProvider):
             raise RuntimeError("Full correction requires verified adjacent-leg measurements.")
         if not self.write_snapshot(key, value):
             raise reviews.ReviewClaimLost("Review stopped before its measurement snapshot was saved.")
+        self.state["last_route_evidence"] = deepcopy(value)
         return value
 
 

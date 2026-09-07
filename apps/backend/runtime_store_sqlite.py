@@ -464,6 +464,12 @@ class SqliteRuntimeStore:
             if not row:
                 return False
             request = json_loads(row["request_json"], {})
+            if request.get("mode") == "full_audit":
+                try:
+                    from .audit_measurement_review import validate_audit_result
+                except ImportError:
+                    from audit_measurement_review import validate_audit_result
+                validate_audit_result(request, result, terminal=terminal)
             if request.get("mode") == "full_direct_school":
                 try:
                     from .full_measurement_review import validate_full_result

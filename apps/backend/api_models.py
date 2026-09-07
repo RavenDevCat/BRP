@@ -34,7 +34,7 @@ class AiAuditRequest(BaseModel):
 class MeasurementReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    mode: Literal["selected_routes", "full_direct_school"] = "selected_routes"
+    mode: Literal["selected_routes", "full_direct_school", "full_audit"] = "selected_routes"
     route_keys: list[str] = Field(default_factory=list, max_length=20)
     request_key: str = Field(min_length=1, max_length=80)
     provider_call_limit: int = Field(ge=1, le=500)
@@ -44,7 +44,7 @@ class MeasurementReviewRequest(BaseModel):
     def check_scope(self):
         if self.mode == "selected_routes" and not self.route_keys:
             raise ValueError("Select the routes to remeasure.")
-        if self.mode == "full_direct_school" and self.route_keys:
+        if self.mode != "selected_routes" and self.route_keys:
             raise ValueError("Full correction includes every saved route; do not supply a partial selection.")
         return self
 

@@ -105,13 +105,17 @@ def source_route_scopes(record: dict[str, Any]) -> list[dict[str, Any]]:
         return scopes
     if kind != "route_audit":
         raise ValueError("This saved-result type does not have a registered review adapter.")
+    try:
+        from .planner_core import _route_display_id
+    except ImportError:
+        from planner_core import _route_display_id
     config = dict(record.get("config") or {})
     scenarios = dict(result.get("structured_results") or {})
     for scenario_key in ("current_plan", "time_constrained", "exception_preserving"):
         scenario = dict(scenarios.get(scenario_key) or {})
         pool = list(scenario.get("points") or [])
         policy = dict(dict(scenario.get("traffic_gate") or {}).get("traffic_policy") or {})
-        for route in scenario.get("routes") or []:
+        for index, route in enumerate(scenario.get("routes") or [], start=1):
             points = []
             for node in route.get("nodes") or []:
                 if isinstance(node, int) and not isinstance(node, bool) and 0 <= node < len(pool):
@@ -132,7 +136,8 @@ def source_route_scopes(record: dict[str, Any]) -> list[dict[str, Any]]:
             # OSRM planning values remain labelled references, not historical live measurements.
             before["planned_total_duration_s"] = _number(route.get("time_s"))
             before["planned_distance_m"] = _number(route.get("distance_m"))
-            scopes.append(_scope(f"{scenario_key}:{route.get('route_id', '')}", route, points,
+            route_id = _route_display_id(route, index)
+            scopes.append(_scope(f"{scenario_key}:{route_id}", {**route, "route_id": route_id}, points,
                                   str(config.get("service_direction") or ""),
                                   route.get("stop_service_time_s"), gate.get("target_duration_s"), before,
                                   list(route.get("leg_details") or [])))
@@ -293,6 +298,12 @@ def rebuild_review_request(source: dict[str, Any], request: dict[str, Any]) -> d
     arguments = dict(requested_by=str(request.get("requested_by") or ""),
                      request_key=str(request.get("request_key") or ""),
                      provider_call_limit=request.get("provider_call_limit"))
+    if request.get("mode") == "full_audit":
+        try:
+            from .audit_measurement_review import build_audit_review_request
+        except ImportError:
+            from audit_measurement_review import build_audit_review_request
+        return build_audit_review_request(source, **arguments)
     if request.get("mode") == "full_direct_school":
         try:
             from .full_measurement_review import build_full_review_request
@@ -338,7 +349,13 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
             raise ReviewClaimLost("Review was stopped before its checkpoint could be saved.")
 
     try:
-        if request.get("mode") == "full_direct_school":
+        if request.get("mode") == "full_audit":
+            try:
+                from .audit_measurement_review import run_audit_review
+            except ImportError:
+                from audit_measurement_review import run_audit_review
+            result = run_audit_review(store, record, worker_token, provider_factory=provider_factory, checkpoint=checkpoint)
+        elif request.get("mode") == "full_direct_school":
             try:
                 from .full_measurement_review import run_full_review
             except ImportError:

@@ -1038,6 +1038,9 @@ def _attach_final_route_traffic_gate_impl(
     config: PlannerConfig,
     input_records: list[dict[str, Any]],
     scenario_label: str,
+    *,
+    measurement_provider: Any | None = None,
+    check_canceled: Any | None = None,
 ) -> dict[str, Any]:
     service_direction = normalize_service_direction(config.service_direction)
     is_to_school = service_direction == "To School"
@@ -1139,7 +1142,11 @@ def _attach_final_route_traffic_gate_impl(
     departure_minutes = from_school_departure_minutes
     grace_s = (AM_ARRIVAL_GATE_GRACE_MINUTES if is_to_school else PM_ROUTE_GATE_GRACE_MINUTES) * 60.0
     reverse_check_routes: list[dict[str, Any]] = []
+    provider_calls_before = int(measurement_provider.state.get("api_calls", 0)) if measurement_provider else 0
+    provider_hits_before = int(measurement_provider.state.get("cache_hits", 0)) if measurement_provider else 0
     for route_index, route in enumerate(routes, start=1):
+        if check_canceled:
+            check_canceled()
         planned_total_s = float(route.get("time_s", 0.0) or 0.0)
         stop_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
         target_duration_s = (
@@ -1184,20 +1191,34 @@ def _attach_final_route_traffic_gate_impl(
         ]
         state.pop("last_route_evidence", None)
         try:
-            stats = _final_route_stats(
-                planner,
-                traffic_policy.provider,
-                _route_amap_points(points, route, state) if traffic_policy.provider == "amap" else [
-                    _traffic_point_coordinates(dict(points[int(node)] or {}))
-                    for node in list(route.get("nodes") or [])
-                ],
-                cache,
-                state,
-                departure_time=provider_departure_time,
-            )
+            if measurement_provider is not None:
+                if traffic_policy.provider != "amap" or measurement_provider.provider != "amap":
+                    raise ValueError("Injected road measurement currently requires the AMap policy.")
+                stats = measurement_provider.route(
+                    [dict(points[int(node)]) for node in route.get("nodes") or []],
+                    reference_legs=list(route.get("leg_details") or []),
+                )
+            else:
+                stats = _final_route_stats(
+                    planner,
+                    traffic_policy.provider,
+                    _route_amap_points(points, route, state) if traffic_policy.provider == "amap" else [
+                        _traffic_point_coordinates(dict(points[int(node)] or {}))
+                        for node in list(route.get("nodes") or [])
+                    ],
+                    cache,
+                    state,
+                    departure_time=provider_departure_time,
+                )
         except Exception as exc:
             stats = None
             verification["error"] = str(exc)
+        if measurement_provider is not None:
+            state["last_route_evidence"] = deepcopy(measurement_provider.state.get("last_route_evidence"))
+            state["api_calls"] = int(measurement_provider.state.get("api_calls", 0)) - provider_calls_before
+            state["cache_hits"] = int(measurement_provider.state.get("cache_hits", 0)) - provider_hits_before
+        if check_canceled:
+            check_canceled()
         evidence = state.get("last_route_evidence")
         if isinstance(evidence, dict):
             route["route_evidence"] = deepcopy(evidence)
@@ -1370,12 +1391,20 @@ def attach_final_route_traffic_gate(
     config: PlannerConfig,
     input_records: list[dict[str, Any]],
     scenario_label: str,
+    *,
+    measurement_provider: Any | None = None,
+    check_canceled: Any | None = None,
 ) -> dict[str, Any]:
     started_at = time.perf_counter()
     profile = getattr(planner, "_BRP_RUNTIME_PROFILE", None)
     if isinstance(profile, dict):
         profile["traffic_gate_calls"] = int(profile.get("traffic_gate_calls", 0)) + 1
     try:
+        options = {}
+        if measurement_provider is not None:
+            options["measurement_provider"] = measurement_provider
+        if check_canceled is not None:
+            options["check_canceled"] = check_canceled
         gate = _attach_final_route_traffic_gate_impl(
             planner,
             scenario,
@@ -1383,6 +1412,7 @@ def attach_final_route_traffic_gate(
             config,
             input_records,
             scenario_label,
+            **options,
         )
         if isinstance(profile, dict):
             profile["traffic_api_calls"] = int(profile.get("traffic_api_calls", 0)) + int(

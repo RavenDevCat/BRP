@@ -6,8 +6,8 @@
 entry point. It is not a route solver. A selected-route review captures an
 explicit selection of saved routes, measures those same directed stops through
 `FreshRouteProvider`, and records a new comparison without updating the source
-job or its result. Full Direct-to-School correction has its own explicit scope
-and reuses the existing analysis pipeline, as described below.
+job or its result. Full Direct-to-School and Audit corrections have explicit
+scopes and reuse their existing domain pipelines, as described below.
 
 The saved-source adapters cover Route Audit current, Strict and Protected
 scenarios, and Direct-to-School current-route measurements. Unsupported result
@@ -147,6 +147,67 @@ the three student groups in business order. These are fresh traffic samples,
 not a controlled proof that code changes alone improved the result. Reading or
 exporting never requests new map measurements and never changes the original.
 
+## Full Audit Corrections
+
+`mode: full_audit` includes all three saved scenarios: Current, Strict and
+Protected. It requires the original Current Plan baseline, point pools, ordered
+route nodes, leg references, physical capacities and acceptance settings. The
+bound is 1-200 routes across the scenarios and 1-500 explicitly confirmed
+provider attempts. Missing whole scenarios are rejected. A saved empty candidate
+remains unresolved, not a new infeasibility proof. Legacy Strict routes without
+an explicit route ID use the native Audit display identity and fixed saved
+sequence; collisions are rejected and the original route object is unchanged.
+
+`audit_measurement_review.py` injects the shared bounded provider into
+`attach_final_route_traffic_gate`. It then reuses the existing final time-impact
+validator against the freshly measured Current Plan, capacity/stop-count/vehicle
+saving feasibility report and Protected exception rules. Original points,
+vehicles, student counts, route order and frozen roles are retained. This does
+not invoke the assignment/order solver or prove a new minimum fleet count.
+The native effective duration-limit helper supplies the original operating
+buffer; afternoon acceptance still uses the configured departure/end window.
+
+Audit's original dwell convention is preserved: dwell is charged on arrival at
+a non-school node. The morning route's first pickup is its origin, so its dwell
+is not included in the route total; afternoon service destinations count.
+Direct-to-School retains its own existing dwell convention. Review adapters
+must validate and reuse their source convention rather than harmonizing it by
+silently adding or removing a stop's dwell.
+
+Full Audit uses the same active-token snapshots, freshness, persistent budget,
+pause/cancel and queue rules as full Direct-to-School. Disabled measurement is
+unavailable in a correction, not permission to certify an old result. Missing
+measurements clear old gates and expose unknown totals. Old search, acceptance
+and ancillary recommendations are retained only as source-reference context.
+Protected output reports both all-route failures and non-frozen acceptance;
+an unchanged frozen exception cannot disappear from the comparison report.
+
+The appended `scope: full_audit_result` contains a native `audit_result`, route
+comparisons and scenario acceptance changes. Its primary and legacy aliases
+share the corrected result. Current assessment totals and scenario averages
+use verified road measurements. Raw solver route/financial metrics remain
+planning references, explicitly marked by `measurement_summary`; consumers
+must not display these as corrected live measurements. Final integrity checks
+retain every scenario and original route/point identity. `complete` indicates
+evidence and gate coverage, not that all plans passed. Partial coverage is
+`needs_review`; minimum-fleet and old search-completeness claims are not renewed.
+
+Authorized source readers can obtain corrected Audit map payloads at
+`GET /jobs/{job_id}/measurement-reviews/{review_id}/map-data/{scenario_key}`
+and the workbook at the shared review `/export` endpoint. Only finalized reviews
+are eligible. Map payloads reuse the existing Audit map builder and saved
+geometry/time-impact evidence. The selected scenario and Current baseline must
+have complete measurements or the map endpoint returns unavailable. Corrected
+map headline duration/distance use verified total route measurements, not the
+legacy drive-time or planning fallback. Exports show original/corrected acceptance and
+road measurements, followed by the native Strict/Protected student time-impact
+worksheets. Comparison route labels reuse Audit's existing lineage/display
+rules; stable review keys remain separate. Unknowns remain unavailable. Viewing or exporting never requests
+new road measurements or changes the source result.
+If a candidate or its Current baseline lacks complete measurements, its native
+student detail sheets are replaced by an availability explanation; the measured
+route comparison remains available. Old planning values are not student evidence.
+
 ## Queue And Recovery
 
 `MeasurementReviewQueue` runs under the existing job scheduler, not a second
@@ -182,17 +243,19 @@ cooperatively; the new backend does not forcibly preempt it using a saved PID.
 
 Selected-route APIs return measurement comparisons, not fully corrected source
 results. Consumers must show the applicable scope, measurement times,
-request budget and outstanding input clarification. Complete Audit scenario
-and time-impact revalidation, other tool-history adapters, and the administrator
-and result UI require their own integration. Full Direct-to-School correction
-does not imply that those workflows are covered. No consumer may treat
+request budget and outstanding input clarification. Other tool-history adapters
+and the administrator/result UI require their own integration. This includes
+selecting appended corrected results and replacing legacy UI reads of raw
+solver metrics with saved measurement evidence. Full backend correction does
+not establish browser, mobile or exported HTML acceptance. No consumer may treat
 prepared coordinates as automatically re-geocoded or move an entrance to obtain
 a shorter route.
 
 ## Verification
 
 Run `tests/test_measurement_reviews.py`, `tests/test_measurement_review_api.py`
-and `tests/test_measurement_review_queue.py`, plus `tests/test_full_measurement_review.py`,
+and `tests/test_measurement_review_queue.py`, plus `tests/test_full_measurement_review.py`
+and `tests/test_audit_measurement_review.py`,
 with runtime-store, API-shell,
 shared route evidence, Direct-to-School and queue regression tests. The review
 tests use synthetic routes and temporary SQLite files, including concurrent
@@ -208,3 +271,8 @@ groups, zero-rider waypoints, one remaining rider, equality with the existing
 analysis pipeline, bounded partial results, pause recovery, immutable source,
 snapshot expiry/ownership/cascade, strict input validation and the real workbook
 exporter using only synthetic inputs and substituted map I/O.
+
+Audit tests cover native AM/PM dwell, empty and legacy-ID candidates, unchanged
+pickup identities, physical capacity and vehicle-saving failures, student-impact
+rejection despite passing road windows, Protected frozen/all-route distinction,
+missing evidence, pause/resume, saved-map reads and native workbook parity.

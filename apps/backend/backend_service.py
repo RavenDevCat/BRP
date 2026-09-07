@@ -27,6 +27,7 @@ from openpyxl import Workbook
 
 try:
     from .amap_driving import (
+        amap_request_point,
         AMAP_DRIVING_ENDPOINT,
         AMAP_DRIVING_VERSION,
         amap_distance_is_anomalous,
@@ -36,6 +37,7 @@ try:
         first_amap_driving_path,
     )
     from .direct_school_analysis import (
+        FreshRouteProvider,
         aggregate_direct_school_results,
         build_direct_school_workbook,
         DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
@@ -57,6 +59,7 @@ try:
     from .quota_store_sqlite import SqliteQuotaStore
     from .runtime_store_sqlite import SqliteRuntimeStore
     from .planner_core import (
+        AMAP_FINAL_ROUTE_MAX_CALLS,
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
         _build_assessment_metric_matrices,
@@ -77,6 +80,7 @@ try:
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from amap_driving import (
+        amap_request_point,
         AMAP_DRIVING_ENDPOINT,
         AMAP_DRIVING_VERSION,
         amap_distance_is_anomalous,
@@ -86,6 +90,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         first_amap_driving_path,
     )
     from direct_school_analysis import (
+        FreshRouteProvider,
         aggregate_direct_school_results,
         build_direct_school_workbook,
         DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
@@ -107,6 +112,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from quota_store_sqlite import SqliteQuotaStore
     from runtime_store_sqlite import SqliteRuntimeStore
     from planner_core import (
+        AMAP_FINAL_ROUTE_MAX_CALLS,
         FINAL_ROUTE_TRAFFIC_CACHE_PATH,
         PlannerConfig,
         _build_assessment_metric_matrices,
@@ -1203,6 +1209,7 @@ def _route_plan_response(
     route_preview: dict[str, Any], *, workbook_file_name: str
 ) -> dict[str, Any]:
     demand_routing = _client_module("demand_routing")
+    _attach_fleet_route_measurements(route_preview, demand_routing)
     workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
     map_data = demand_routing.build_route_preview_map_data(
         route_preview,
@@ -1225,6 +1232,78 @@ def _route_plan_response(
         "workbook_file_name": workbook_file_name,
         "workbook_base64": base64.b64encode(workbook_bytes).decode("ascii"),
     }
+
+
+def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routing: Any) -> None:
+    school = dict(route_preview.get("school") or {})
+    country = str(school.get("country") or "").strip().upper()
+    if country not in {"CN", "CHINA", "中国", "中华人民共和国"}:
+        return
+    summary = route_preview.setdefault("summary", {})
+    routes = list(route_preview.get("routes") or [])
+    rows = {str(row.get("cluster_id")): row for row in route_preview.get("route_rows") or []}
+    provider = None
+    unavailable = "AMap measurement unavailable"
+    try:
+        provider = FreshRouteProvider("amap", departure_time=None, api_call_limit=AMAP_FINAL_ROUTE_MAX_CALLS)
+    except RuntimeError as exc:
+        unavailable = str(exc)
+    review_count = 0
+    for route in routes:
+        ordered = list(route.get("ordered_points") or [])
+        evidence: dict[str, Any] = {}
+        try:
+            if provider is None:
+                raise RuntimeError(unavailable)
+            evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []))
+        except RuntimeError as exc:
+            if provider:
+                evidence = deepcopy(provider.state.get("last_route_evidence") or {})
+            route.setdefault("warnings", []).append(str(exc))
+        route["route_evidence"] = evidence
+        route["evidence_status"] = evidence.get("status") or "unavailable"
+        if evidence.get("status") != "verified":
+            review_count += 1
+        if evidence.get("complete"):
+            route["raw_osrm_duration_s"] = route.get("duration_s")
+            route["raw_osrm_distance_m"] = route.get("distance_m")
+            route["duration_s"] = evidence["duration_s"]
+            route["distance_m"] = evidence["distance_m"]
+            route["ordered_points"] = demand_routing._annotate_ordered_points_with_schedule(
+                ordered, evidence["legs"], route_duration_s=evidence["duration_s"],
+                service_direction=str(summary.get("service_direction") or "to_school"),
+            )
+            if evidence.get("status") != "verified":
+                for point in route["ordered_points"]:
+                    for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
+                        point.pop(key, None)
+            target = float(summary.get("max_route_duration_minutes") or 0)
+            total_s = evidence["duration_s"] + max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
+            route["final_route_traffic_gate"] = {
+                "status": "unavailable" if evidence.get("status") != "verified" else "failed" if target and total_s > target * 60 else "passed",
+                "verified_drive_duration_s": evidence["duration_s"],
+                "verified_total_duration_s": total_s,
+                "verified_distance_m": evidence["distance_m"],
+                "provider_called_at": evidence.get("called_at"),
+                "passes": None if evidence.get("status") != "verified" else not (target and total_s > target * 60),
+            }
+            if target and total_s > target * 60:
+                route.setdefault("warnings", []).append(f"Live travel and stops exceed {target:g} min target")
+        else:
+            route["final_route_traffic_gate"] = {"status": "unavailable"}
+            route["ordered_points"] = deepcopy(ordered)
+            for point in route["ordered_points"]:
+                for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
+                    point.pop(key, None)
+        row = rows.get(str(route.get("cluster_id")))
+        if row is not None:
+            row["duration_min"] = round(float(route.get("duration_s") or 0) / 60, 1)
+            row["distance_km"] = round(float(route.get("distance_m") or 0) / 1000, 2)
+            row["warnings"] = "; ".join(route.get("warnings") or [])
+    summary["route_measurement_review_count"] = review_count
+    summary["traffic_profile_context"] = "AMap measurements captured for this plan"
+    summary["total_duration_min"] = round(sum(float(route.get("duration_s") or 0) for route in routes) / 60, 1)
+    summary["total_distance_km"] = round(sum(float(route.get("distance_m") or 0) for route in routes) / 1000, 2)
 
 
 def _ensure_fleet_planner_map_data(
@@ -2064,8 +2143,8 @@ def _attach_current_plan_amap_budget_details(
         return
 
     try:
-        cache = load_json_object(FINAL_ROUTE_TRAFFIC_CACHE_PATH)
-        state = {"api_calls": 0, "cache_hits": 0, "cache_changed": 0}
+        cache: dict[str, Any] = {}
+        state = {"api_calls": 0, "cache_hits": 0, "api_call_limit": AMAP_FINAL_ROUTE_MAX_CALLS}
         max_route_id = ""
         max_duration_s = 0.0
         max_drive_duration_s = 0.0
@@ -2448,6 +2527,7 @@ def _direct_school_preview_from_prepared(
     plan_summary = dict(current_plan.get("summary") or {})
     route_count = int(plan_summary.get("route_count", 0) or 0)
     service_stop_count = int(plan_summary.get("service_stop_count", 0) or 0)
+    route_legs = sum(max(0, len(route.get("nodes") or []) - 1) for route in current_plan.get("routes") or [])
     school = _direct_school_school_point(current_plan, prepared_payload)
     school_record = dict(list(current_plan.get("input_records") or [{}])[0])
     return {
@@ -2458,7 +2538,7 @@ def _direct_school_preview_from_prepared(
             **dict(current_plan.get("summary") or {}),
             "unique_address_count": unique_stop_count,
             "route_count": route_count,
-            "estimated_logical_provider_calls": unique_stop_count + route_count + route_count + service_stop_count,
+            "estimated_logical_provider_calls": unique_stop_count + (route_legs or service_stop_count) + service_stop_count * 2,
             "route_recovery_call_budget": route_count + service_stop_count,
         },
         "school": {
@@ -4334,8 +4414,12 @@ def _should_use_amap_display_geometry(
 ) -> bool:
     if not AMAP_DISPLAY_GEOMETRY_ENABLED:
         return False
-    if not _amap_display_api_key():
-        return False
+    return _is_cn_route_map(job_record, result, structured, points)
+
+
+def _is_cn_route_map(
+    job_record: dict[str, Any], result: dict[str, Any], structured: dict[str, Any], points: list[Any],
+) -> bool:
 
     config = _job_planner_config_payload(job_record)
     country_keys = (
@@ -4372,18 +4456,7 @@ def _should_use_amap_display_geometry(
 
 
 def _amap_request_coordinates_for_point(point: dict[str, Any]) -> tuple[float, float] | None:
-    provider = str(point.get("provider") or point.get("geocode_provider") or "").strip().lower()
-    raw_lat = _float_or_none(point.get("lat"))
-    raw_lng = _float_or_none(point.get("lng"))
-    if raw_lat is not None and raw_lng is not None:
-        if provider == "amap" or str(point.get("adcode") or "").strip():
-            return raw_lat, raw_lng
-    plot_coords = _map_point_coordinates(point)
-    if plot_coords:
-        return _wgs84_to_gcj02(plot_coords[0], plot_coords[1])
-    if raw_lat is not None and raw_lng is not None:
-        return _wgs84_to_gcj02(raw_lat, raw_lng)
-    return None
+    return amap_request_point(point)
 
 
 def _load_amap_display_cache_unlocked() -> dict[str, Any]:
@@ -4640,6 +4713,7 @@ def _amap_display_geometry_for_route(
     cache_updates: dict[str, Any] | None = None,
     expected_distance_m: float | None = None,
     expected_leg_distances_m: list[float] | None = None,
+    allow_fetch: bool = True,
 ) -> tuple[list[list[float]] | None, str, str, float | None, float | None]:
     route_points: list[dict[str, Any]] = []
     for node in nodes:
@@ -4665,6 +4739,13 @@ def _amap_display_geometry_for_route(
             cache = _load_amap_display_cache_unlocked()
     cached = dict(cache.get(cache_key) or {})
     cached_geometry = cached.get("geometry")
+    if not allow_fetch:
+        return (
+            cached_geometry if isinstance(cached_geometry, list) and len(cached_geometry) >= 2 else None,
+            "amap_legacy_cache" if cached_geometry else "osrm_legacy",
+            "Historical result: map and timing were not saved as one measurement. Rerun to verify.",
+            None, None,
+        )
     cached_leg_anomaly = False
     if isinstance(cached_geometry, list) and len(cached_geometry) >= 2:
         cached_duration_s = _float_or_none(cached.get("duration_s"))
@@ -4838,6 +4919,9 @@ def _to_school_time_window_minutes(job_record: dict[str, Any]) -> tuple[int, int
 
 
 def _map_route_duration_scale(route: dict[str, Any], stops: list[dict[str, Any]]) -> tuple[float, float]:
+    evidence = dict(route.get("route_evidence") or {})
+    if evidence.get("complete"):
+        return float(evidence.get("duration_s") or 0.0), 1.0
     raw_duration_s = float(route.get("raw_duration_s", 0.0) or 0.0)
     display_duration_s = float(route.get("duration_s", 0.0) or 0.0)
     max_cumulative_s = max(
@@ -4874,6 +4958,18 @@ def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -
     for route_id, route_stops in stops_by_route.items():
         route_stops.sort(key=lambda item: int(item.get("order", 0) or 0))
         route = routes_by_id.get(route_id, {})
+        evidence = dict(route.get("route_evidence") or {})
+        if evidence and evidence.get("status") != "verified":
+            for stop in route_stops:
+                stop["scheduled_time_label"] = ""
+                stop["scheduled_time_minutes"] = None
+                stop["scheduled_offset_s"] = None
+            continue
+        saved_gate = dict(route.get("final_route_traffic_gate") or {})
+        saved_anchor = _float_or_none(saved_gate.get(
+            "verified_arrival_minutes" if service_direction == "To School" else "verified_departure_minutes"
+        ))
+        route_anchor_minutes = saved_anchor if saved_anchor is not None else anchor_minutes
         route_duration_s, scale = _map_route_duration_scale(route, route_stops)
         service_orders = sorted(
             int(stop.get("order", 0) or 0)
@@ -4896,7 +4992,7 @@ def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -
                 if service_order_count == 0 or bool(stop.get("is_depot")):
                     prior_dwell_count = 0
                 offset_s = drive_elapsed_s + prior_dwell_count * dwell_seconds
-            scheduled_minutes = anchor_minutes + (offset_s / 60.0)
+            scheduled_minutes = route_anchor_minutes + (offset_s / 60.0)
             stop["schedule_anchor_label"] = anchor_label
             stop["schedule_anchor_kind"] = anchor_kind
             stop["scheduled_offset_s"] = offset_s
@@ -4915,6 +5011,16 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
     unavailable = 0
     max_overrun_s = 0.0
     for route in list(payload.get("routes") or []):
+        saved_gate = dict(route.get("final_route_traffic_gate") or {})
+        if saved_gate:
+            route["am_arrival_gate"] = deepcopy(saved_gate)
+            if saved_gate.get("status") in {"passed", "failed"}:
+                checked += 1
+                failed += int(saved_gate.get("status") == "failed")
+                max_overrun_s = max(max_overrun_s, float(saved_gate.get("time_window_overrun_s") or 0))
+            else:
+                unavailable += 1
+            continue
         planned_drive_s = _float_or_none(route.get("duration_s"))
         verified_drive_s = planned_drive_s
         stop_service_s = _float_or_none(route.get("stop_service_time_s")) or 0.0
@@ -4932,7 +5038,8 @@ def _attach_am_arrival_gate(payload: dict[str, Any], job_record: dict[str, Any])
             "verified_source": source,
             "grace_minutes": AM_ARRIVAL_GATE_GRACE_MINUTES,
         }
-        if planned_drive_s is None or verified_drive_s is None:
+        if (planned_drive_s is None or verified_drive_s is None
+                or route.get("evidence_status") in {"needs_review", "unavailable"}):
             unavailable += 1
             gate.update({"status": "unavailable", "passes": None})
         else:
@@ -5456,6 +5563,7 @@ def _build_job_map_payload(
     use_amap_display_geometry = _should_use_amap_display_geometry(
         job_record, result, structured, points
     )
+    is_cn_route_map = use_amap_display_geometry or _is_cn_route_map(job_record, result, structured, points)
     amap_display_cache: dict[str, Any] | None = None
     amap_display_cache_updates: dict[str, Any] = {}
     if use_amap_display_geometry:
@@ -5477,7 +5585,19 @@ def _build_job_map_payload(
         display_geometry_message = ""
         display_duration_s: float | None = None
         display_distance_m: float | None = None
-        if use_amap_display_geometry:
+        evidence = dict(route.get("route_evidence") or {})
+        evidence_legs = list(evidence.get("legs") or [])
+        if evidence.get("evidence_version"):
+            display_geometry = list(evidence.get("geometry") or [])
+            geometry = display_geometry
+            display_geometry_source = str(evidence.get("source") or "amap_adjacent_legs")
+            display_geometry_message = (
+                "Route measurement needs review; time-window compliance is not verified."
+                if evidence.get("status") != "verified" else ""
+            )
+            display_duration_s = _float_or_none(evidence.get("duration_s"))
+            display_distance_m = _float_or_none(evidence.get("distance_m"))
+        elif use_amap_display_geometry:
             (
                 display_geometry,
                 display_geometry_source,
@@ -5494,13 +5614,17 @@ def _build_job_map_payload(
                     float(dict(leg or {}).get("distance_m", 0.0) or 0.0)
                     for leg in leg_details
                 ],
+                allow_fetch=False,
             )
+        elif is_cn_route_map:
+            display_geometry_source = "osrm_legacy"
+            display_geometry_message = "Historical result: map and timing were not saved as one measurement. Rerun to verify."
 
         visible_geometry = display_geometry if display_geometry else geometry
         for lng, lat in visible_geometry:
             all_coordinates.append((lat, lng))
 
-        if not display_geometry:
+        if not display_geometry and not evidence:
             connectors = _route_connector_coordinates(dict(route), route_id, route_index)
             route_connectors.extend(connectors)
             for connector in connectors:
@@ -5542,7 +5666,7 @@ def _build_job_map_payload(
                 continue
             lat, lng = coords
             if order > 0 and order - 1 < len(leg_details):
-                leg = dict(leg_details[order - 1] or {})
+                leg = dict((evidence_legs if evidence.get("complete") else leg_details)[order - 1] or {})
                 cumulative_duration_s += float(leg.get("duration_s", 0.0) or 0.0)
                 cumulative_distance_m += float(leg.get("distance_m", 0.0) or 0.0)
             stop_id = f"{route_id}:{order}:{node_index}"
@@ -5611,6 +5735,10 @@ def _build_job_map_payload(
                 "display_geometry_message": display_geometry_message,
                 "display_duration_s": display_duration_s,
                 "display_distance_m": display_distance_m,
+                "route_evidence": evidence or None,
+                "final_route_traffic_gate": traffic_gate or None,
+                "evidence_status": evidence.get("status") or ("legacy" if is_cn_route_map else "not_applicable"),
+                "geometry_segments": evidence.get("geometry_segments") or [],
                 "stop_ids": route_stop_ids,
             }
         )
@@ -5705,10 +5833,10 @@ def _build_job_map_payload(
             ),
             "passenger_count": sum(int(route.get("load", 0) or 0) for route in routes),
             "distance_m": sum(
-                float(route.get("distance_m", 0.0) or 0.0) for route in routes
+                float(route.get("distance_m", 0.0) or 0.0) for route in route_payloads
             ),
             "duration_s": max(
-                [float(route.get("time_s", 0.0) or 0.0) for route in routes] or [0.0]
+                [float(route.get("verified_total_duration_s") or route.get("duration_s") or 0.0) for route in route_payloads] or [0.0]
             ),
         },
     }

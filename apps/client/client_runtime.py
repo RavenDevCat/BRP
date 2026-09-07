@@ -1465,7 +1465,10 @@ def build_map_summary_html(
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
     private_access_mode: str = "private_drive_stop",
 ) -> str:
-    traffic_note = f"{traffic_profile_name} profile using unscaled OSRM candidate time"
+    from route_measurement_view import measured_route_views, measurement_note
+
+    routes = measured_route_views(routes)
+    traffic_note = "saved route measurement where available, otherwise an OSRM estimate"
     palette = list(route_palette or route_colors(len(routes)))
     normalized_direction = "To School" if str(service_direction).strip() == "To School" else "From School"
     endpoint_note = (
@@ -1509,6 +1512,7 @@ def build_map_summary_html(
                 f"<div>Passengers: {route['load']} / {route['bus_capacity']} seats</div>",
                 f"<div>Estimated time: {seconds_to_human(route['time_s'])}</div>",
                 f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
+                f"<div><strong>{html.escape(measurement_note(route))}</strong></div>",
             ]
         )
         if route.get("limit_stop_order") is not None:
@@ -1577,6 +1581,9 @@ def render_map(
     service_direction: str = "From School",
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
 ) -> None:
+    from route_measurement_view import measured_route_views, measurement_note
+
+    routes = measured_route_views(routes)
     output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not points:
@@ -1637,24 +1644,15 @@ def render_map(
     for route_index, route in enumerate(routes):
         color = colors[route_index % len(colors)]
         route_label = str(route.get("route_id", "")).strip() or f"Bus {route['vehicle_id']}"
-        geometry: list[tuple[float, float]] = []
-        for leg_detail in route.get("leg_details", []):
-            leg = leg_detail["geometry"]
-            geometry.extend(leg if not geometry else leg[1:])
-        if len(geometry) < 2:
-            geometry = [
-                (points[node]["plot_lat"], points[node]["plot_lng"])
-                for node in list(route.get("nodes") or [])
-                if 0 <= int(node) < len(points)
-            ]
-        if len(geometry) >= 2:
+        segments = [leg["geometry"] for leg in route.get("leg_details", []) if len(leg.get("geometry") or []) >= 2]
+        for geometry in segments:
             folium.PolyLine(geometry, color="#ffffff", weight=9, opacity=0.9).add_to(fmap)
             folium.PolyLine(
                 geometry,
                 color=color,
                 weight=6,
                 opacity=0.9,
-                tooltip=f"{route_label} | {route['bus_type_name']} | {route['load']}/{route['bus_capacity']}",
+                tooltip=f"{route_label} | {route['bus_type_name']} | {route['load']}/{route['bus_capacity']} | {html.escape(measurement_note(route))}",
             ).add_to(fmap)
         for order, node in enumerate(route["nodes"]):
             point = points[node]

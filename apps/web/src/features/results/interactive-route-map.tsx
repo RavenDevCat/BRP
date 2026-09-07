@@ -26,6 +26,7 @@ import {
     formatDistanceKmFromMeters,
     formatDurationMinFromSeconds,
     formatNumber,
+    formatDateTime,
 } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 
@@ -332,10 +333,9 @@ export function InteractiveRouteMap({
                             duration_s: route.duration_s,
                             distance_m: route.distance_m,
                         },
-                        geometry: {
-                            type: "LineString",
-                            coordinates: geometry,
-                        },
+                        geometry: route.geometry_segments?.length
+                            ? { type: "MultiLineString", coordinates: route.geometry_segments }
+                            : { type: "LineString", coordinates: geometry },
                     }];
                 }),
         }),
@@ -1533,10 +1533,17 @@ export function InteractiveRouteMap({
                                     />
                                 </div>
                                 <div className="mt-2 text-xs text-muted-foreground">
-                                    {selectedRoute.traffic_time_source
+                                    {selectedRoute.route_evidence?.called_at
+                                        ? `${t("Measured at")}: ${formatDateTime(selectedRoute.route_evidence.called_at)}`
+                                        : selectedRoute.traffic_time_source
                                         ? `${selectedRoute.traffic_time_source} timing`
                                         : "Planned route timing"}
                                 </div>
+                                {selectedRoute.display_geometry_message ? (
+                                    <div role="status" className="mt-2 border-l-2 border-amber-500 pl-2 text-xs text-amber-800">
+                                        {t(selectedRoute.display_geometry_message)}
+                                    </div>
+                                ) : null}
                             </div>
                             <Button
                                 className={cn(
@@ -1697,6 +1704,10 @@ function routeVehicleLabel(route: JobMapRoute) {
 }
 
 function routeStatusLabel(route: JobMapRoute) {
+    if (route.evidence_status === "needs_review" || route.evidence_status === "unavailable") return "Needs review";
+    if (route.evidence_status === "legacy") return "Historical result";
+    if (route.final_route_traffic_gate?.status === "unavailable") return "Needs review";
+    if (route.final_route_traffic_gate?.status === "failed") return "Time window exceeded";
     const loadRatio = routeLoadRatio(route);
     if (loadRatio >= 1) {
         return "Capacity";
@@ -1722,7 +1733,7 @@ function routeListAccentClass(route: JobMapRoute) {
         return "border-l-slate-300";
     }
     const status = routeStatusLabel(route);
-    if (status === "Capacity") {
+    if (status === "Capacity" || status === "Time window exceeded") {
         return "border-l-rose-300";
     }
     if (status === "High load") {
@@ -1744,9 +1755,9 @@ function RouteStatusBadge({ route }: { route: JobMapRoute }) {
         <span
             className={cn(
                 "shrink-0 rounded-sm border px-1.5 py-0.5 text-[10px] font-semibold uppercase",
-                label === "Capacity"
+                label === "Capacity" || label === "Time window exceeded"
                     ? "border-rose-200 bg-rose-50 text-rose-700"
-                    : label === "High load"
+                    : label === "High load" || label === "Needs review" || label === "Historical result"
                       ? "border-amber-200 bg-amber-50 text-amber-700"
                       : "border-sky-200 bg-sky-50 text-sky-700",
             )}

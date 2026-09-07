@@ -5,6 +5,31 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-07
+
+### Shared Route Measurement Snapshots
+
+- CN Audit, Fleet Planner, Direct-to-School and Route Insert Advisor share
+  adjacent AMap measurements that save driving time, distance and geometry
+  together. Map reads no longer refresh AMap geometry independently of saved
+  statistics. Fleet preserves geocoder provenance and converts coordinates only
+  at the OSRM/display boundary.
+- Missing data, suspicious detours and questionable road junctions are marked
+  for review instead of treated as certified time-window results. Continuous
+  waypoint comparisons are retained as diagnostics; a shorter OSRM route does
+  not automatically replace the provider result.
+- Interactive and legacy exported maps use saved segments, show measurement
+  status and avoid drawing synthetic roads across segment gaps. CN historical
+  results without unified snapshots carry a rerun notice.
+- Direct-to-School version 6 adds a Route Evidence worksheet and keeps per-stop
+  ride calculations tied to the same saved segments. Earlier results remain
+  immutable and need a new run for this measurement contract. Future scheduled
+  executions use the implementation deployed at their start time; stale
+  prepared coordinates still require re-preparation.
+- Core vehicle assignment and stop-order search algorithms are unchanged.
+  Corrected coordinates and traffic checks can change which plans pass and
+  which students or routes are reported over the time limit.
+
 ## 2026-09-03
 
 ### Direct-to-School Route-Time Consistency

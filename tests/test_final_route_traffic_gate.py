@@ -9,6 +9,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend")
 planner_core = importlib.import_module("planner_core")
 
 
+def _amap_test_geometry(points):
+    convert = importlib.import_module("amap_driving").gcj02_to_wgs84
+    return [list(reversed(convert(*point))) for point in points]
+
+
 def test_final_time_impact_gate_uses_provider_scaled_stop_times():
     config = planner_core.PlannerConfig(
         service_direction="To School",
@@ -1100,7 +1105,7 @@ def test_amap_final_route_retries_once_and_counts_attempts(monkeypatch):
         calls["count"] += 1
         if calls["count"] == 1:
             raise RuntimeError("temporary failure")
-        return {"duration_s": 1200, "distance_m": 1234}
+        return {"duration_s": 1200, "distance_m": 20000, "geometry": _amap_test_geometry(_points)}
 
     monkeypatch.setattr(planner_core, "_amap_route_segment_stats", flaky_segment)
     monkeypatch.setattr(planner_core.time, "sleep", lambda _seconds: None)
@@ -1118,14 +1123,13 @@ def test_amap_final_route_retries_once_and_counts_attempts(monkeypatch):
     assert state["api_calls"] == 2
 
 
-def test_amap_final_route_rechecks_anomalous_whole_route_by_adjacent_leg(monkeypatch):
+def test_amap_final_route_always_measures_adjacent_legs(monkeypatch):
     calls: list[int] = []
 
     def fake_segment(_planner, request_points):
         calls.append(len(request_points))
-        if len(request_points) == 3:
-            return {"duration_s": 1800, "distance_m": 5000}
-        return {"duration_s": 300, "distance_m": 600}
+        assert len(request_points) == 2
+        return {"duration_s": 300, "distance_m": 600, "geometry": _amap_test_geometry(request_points)}
 
     monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_segment)
     state = {
@@ -1138,17 +1142,16 @@ def test_amap_final_route_rechecks_anomalous_whole_route_by_adjacent_leg(monkeyp
 
     stats = planner_core._amap_route_stats(
         object(),
-        [(31.1, 121.1), (31.2, 121.2), (31.3, 121.3)],
+        [(31.1, 121.1), (31.102, 121.102), (31.104, 121.104)],
         {},
         state,
     )
 
-    assert calls == [3, 2, 2]
+    assert calls == [2, 2]
     assert stats["duration_s"] == 600
     assert stats["distance_m"] == 1200
-    assert stats["source"] == "amap_final_route_leg_fallback"
-    assert stats["anomaly_fallback_used"] is True
-    assert stats["whole_route_distance_m"] == 5000
+    assert stats["source"] == "amap_adjacent_legs"
+    assert stats["leg_durations_s"] == [300, 300]
 
 
 def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
@@ -1165,7 +1168,7 @@ def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
 
     def fake_amap_segment_stats(_planner, _points):
         calls["count"] += 1
-        return {"duration_s": 20 * 60, "distance_m": 1234}
+        return {"duration_s": 20 * 60, "distance_m": 20000, "geometry": _amap_test_geometry(_points)}
 
     monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_amap_segment_stats)
 
@@ -1219,7 +1222,7 @@ def test_deep_verification_provider_budget_is_shared_across_gates(monkeypatch):
 
     def fake_amap_segment_stats(_planner, _points):
         calls["count"] += 1
-        return {"duration_s": 20 * 60, "distance_m": 1234}
+        return {"duration_s": 20 * 60, "distance_m": 20000, "geometry": _amap_test_geometry(_points)}
 
     monkeypatch.setattr(planner_core, "_amap_route_segment_stats", fake_amap_segment_stats)
 

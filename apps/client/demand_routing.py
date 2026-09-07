@@ -64,7 +64,7 @@ def _annotate_ordered_points_with_schedule(
     service_orders = [
         index
         for index, point in enumerate(ordered_points)
-        if int(point.get("student_count", 0) or 0) > 0
+        if index != (len(ordered_points) - 1 if service_label == "To School" else 0)
     ]
     annotated: list[dict[str, Any]] = []
     for order, point in enumerate(ordered_points):
@@ -94,6 +94,8 @@ def _annotate_ordered_points_with_schedule(
 
 def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
     return {
+        "provider": str(point.get("provider") or ""),
+        "coordinate_system": str(point.get("coordinate_system") or ""),
         "lat": float(point["lat"]),
         "lng": float(point["lng"]),
         "country": str(point.get("country", "")).strip(),
@@ -104,14 +106,23 @@ def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _osrm_point_payload(point: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(point)
+    if (str(point.get("provider") or "").lower() == "amap"
+            and str(point.get("coordinate_system") or "").upper() != "WGS84"):
+        payload["lat"], payload["lng"] = runtime.gcj02_to_wgs84(float(point["lat"]), float(point["lng"]))
+    payload["coordinate_system"] = "WGS84"
+    return payload
+
+
 def _build_osrm_matrix(
     points: list[dict[str, Any]],
 ) -> tuple[list[list[float]], list[list[float]]]:
     duration_matrix: list[list[float]] = []
     distance_matrix: list[list[float]] = []
     for origin_index, origin in enumerate(points):
-        destinations = [point for index, point in enumerate(points) if index != origin_index]
-        metrics = compute_osrm_metrics_from_origin(origin, destinations)
+        destinations = [_osrm_point_payload(point) for index, point in enumerate(points) if index != origin_index]
+        metrics = compute_osrm_metrics_from_origin(_osrm_point_payload(origin), destinations)
         duration_row: list[float] = []
         distance_row: list[float] = []
         metric_index = 0
@@ -245,7 +256,7 @@ def _route_leg_details_for_order(
     points: list[dict[str, Any]],
     order: list[int],
 ) -> list[dict[str, Any]]:
-    ordered_points = [points[index] for index in order]
+    ordered_points = [_osrm_point_payload(points[index]) for index in order]
     return compute_osrm_route_leg_details(ordered_points)
 
 
@@ -513,6 +524,10 @@ def build_route_preview_map_data(
         route_id = str(route.get("cluster_id") or f"Route {route_index + 1}")
         ordered_points = list(route.get("ordered_points") or [])
         leg_details = list(route.get("leg_details") or [])
+        evidence = dict(route.get("route_evidence") or {})
+        if evidence.get("complete"):
+            leg_details = [{**leg, "geometry": [list(reversed(pair)) for pair in leg.get("geometry") or []]}
+                           for leg in evidence.get("legs") or []]
         geometry = _route_geometry_from_leg_details(leg_details)
         for lng, lat in geometry:
             all_coordinates.append((lat, lng))
@@ -538,6 +553,8 @@ def build_route_preview_map_data(
                 cumulative_distance_m += float(leg.get("distance_m", 0.0) or 0.0)
             lat = float(point["lat"])
             lng = float(point["lng"])
+            if str(point.get("provider") or "").lower() == "amap" and str(point.get("coordinate_system") or "").upper() != "WGS84":
+                lat, lng = runtime.gcj02_to_wgs84(lat, lng)
             passenger_count = int(point.get("student_count", 0) or 0)
             load += passenger_count
             stop_id = f"{route_id}:{order}"
@@ -553,7 +570,7 @@ def build_route_preview_map_data(
                     "address": str(point.get("formatted_address") or point.get("address") or "").strip(),
                     "requested_address": str(point.get("address") or "").strip(),
                     "passenger_count": passenger_count,
-                    "is_depot": passenger_count == 0,
+                    "is_depot": order == (len(ordered_points) - 1 if service_direction_label == "To School" else 0),
                     "lat": lat,
                     "lng": lng,
                     "cumulative_duration_s": cumulative_duration_s,
@@ -575,13 +592,26 @@ def build_route_preview_map_data(
                 "load": load,
                 "bus_capacity": int(vehicle.get("student_capacity", vehicle.get("capacity", 0)) or 0),
                 "comfort_capacity": None,
-                "stop_count": len([point for point in ordered_points if int(point.get("student_count", 0) or 0) > 0]),
+                "stop_count": max(0, len(ordered_points) - 1),
                 "max_stops": None,
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
                 "duration_s": float(route.get("duration_s", 0.0) or 0.0),
                 "raw_duration_s": float(route.get("duration_s", 0.0) or 0.0),
                 "traffic_time_source": str(summary.get("traffic_profile_context") or ""),
                 "geometry": geometry,
+                "geometry_segments": evidence.get("geometry_segments") or [],
+                "route_evidence": evidence or None,
+                "final_route_traffic_gate": route.get("final_route_traffic_gate"),
+                "evidence_status": evidence.get("status") or route.get("evidence_status") or (
+                    "legacy" if any(str(point.get("country") or "").upper() in {"CN", "CHINA"} for point in ordered_points) else "not_applicable"
+                ),
+                "display_geometry_message": (
+                    "Route measurement needs review; time-window compliance is not verified."
+                    if route.get("evidence_status") == "unavailable" or evidence.get("status") in {"needs_review", "unavailable"}
+                    else "Historical result: map and timing were not saved as one measurement. Rerun to verify."
+                    if not evidence and any(str(point.get("country") or "").upper() in {"CN", "CHINA"} for point in ordered_points)
+                    else ""
+                ),
                 "stop_ids": stop_ids,
             }
         )
@@ -623,18 +653,15 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
     for route_index, route in enumerate(routes):
         node_indexes: list[int] = []
         ordered_points = list(route.get("ordered_points") or [])
-        for point in ordered_points:
+        for point_order, point in enumerate(ordered_points):
             if point.get("lat") is None or point.get("lng") is None:
                 continue
             lat = float(point["lat"])
             lng = float(point["lng"])
             node_indexes.append(len(map_points))
-            is_school = (
-                school_lat is not None
-                and school_lng is not None
-                and abs(lat - school_lat) < 0.000001
-                and abs(lng - school_lng) < 0.000001
-            )
+            is_school = point_order == (len(ordered_points) - 1 if service_direction_label == "To School" else 0)
+            if str(point.get("provider") or "").lower() == "amap" and str(point.get("coordinate_system") or "").upper() != "WGS84":
+                lat, lng = runtime.gcj02_to_wgs84(lat, lng)
             map_points.append(
                 {
                     "address": str(point.get("formatted_address") or point.get("address") or "School").strip(),
@@ -654,7 +681,10 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
             if point.get("student_count") is not None
         )
         leg_details = []
-        for leg_index, detail in enumerate(list(route.get("leg_details") or [])):
+        evidence = dict(route.get("route_evidence") or {})
+        measured_legs = [{**leg, "geometry": [list(reversed(pair)) for pair in leg.get("geometry") or []]}
+                         for leg in evidence.get("legs") or []] if evidence.get("complete") else list(route.get("leg_details") or [])
+        for leg_index, detail in enumerate(measured_legs):
             if leg_index + 1 >= len(node_indexes):
                 break
             leg_details.append(
@@ -675,6 +705,8 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
                 "nodes": node_indexes,
                 "leg_details": leg_details,
+                "route_evidence": evidence,
+                "final_route_traffic_gate": route.get("final_route_traffic_gate"),
             }
         )
 

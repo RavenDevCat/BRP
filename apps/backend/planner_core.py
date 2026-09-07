@@ -32,6 +32,8 @@ try:
         first_amap_driving_path,
     )
     from .api_rate_limit import CrossProcessRateLimiter
+    from .amap_driving import amap_request_point
+    from .route_evidence import EVIDENCE_VERSION, fetch_amap_leg, measure_amap_route
     from .BusingProblem import transpose_matrix
     from .json_cache_store import clear_json_object, load_json_object, save_json_object
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
@@ -44,6 +46,8 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         first_amap_driving_path,
     )
     from api_rate_limit import CrossProcessRateLimiter
+    from amap_driving import amap_request_point
+    from route_evidence import EVIDENCE_VERSION, fetch_amap_leg, measure_amap_route
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
@@ -113,6 +117,9 @@ FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED = os.environ.get(
 FINAL_ROUTE_TRAFFIC_MAX_CALLS = max(
     0,
     int(os.environ.get("BRP_FINAL_ROUTE_TRAFFIC_MAX_CALLS", "40") or 40),
+)
+AMAP_FINAL_ROUTE_MAX_CALLS = max(
+    0, int(os.environ.get("BRP_AMAP_FINAL_ROUTE_MAX_CALLS", "500") or 500),
 )
 FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET = max(
     0,
@@ -716,13 +723,7 @@ def _effective_route_stop_limit(config: PlannerConfig) -> int:
 
 
 def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
-    provider = str(point.get("provider") or point.get("geocode_provider") or "").lower()
-    if provider == "amap" or str(point.get("adcode") or "").strip():
-        lat = _traffic_float(point.get("lat"))
-        lng = _traffic_float(point.get("lng"))
-        if lat is not None and lng is not None:
-            return lat, lng
-    return _traffic_point_coordinates(point)
+    return amap_request_point(point)
 
 
 def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> list[tuple[float, float]]:
@@ -737,6 +738,8 @@ def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> l
         coords = _amap_route_point(dict(points[node_index] or {}))
         if coords:
             request_points.append(coords)
+    if len(request_points) != len(list(route.get("nodes") or [])):
+        raise ValueError("Route contains unresolved coordinates; stop cannot be skipped")
     return request_points
 
 
@@ -758,15 +761,8 @@ def _final_route_traffic_cache_key(
     return f"{provider}-final-route-v3|{digest}"
 
 
-def _amap_route_segment_stats(planner: Any, request_points: list[tuple[float, float]]) -> dict[str, float]:
-    if len(request_points) < 2:
-        return {"duration_s": 0.0, "distance_m": 0.0}
-    params = build_amap_driving_params(request_points, include_geometry=False)
-    payload = planner.amap_request_json(AMAP_DRIVING_ENDPOINT, params, planner.AMAP_ROUTING_LIMITER)
-    path = first_amap_driving_path(payload)
-    if path is None:
-        return {"duration_s": 0.0, "distance_m": 0.0}
-    return amap_driving_path_stats(path)
+def _amap_route_segment_stats(planner: Any, request_points: list[tuple[float, float]]) -> dict[str, Any]:
+    return fetch_amap_leg(planner, request_points)
 
 
 def _amap_route_stats(
@@ -775,114 +771,11 @@ def _amap_route_stats(
     cache: dict[str, Any],
     state: dict[str, int],
 ) -> dict[str, Any] | None:
-    if len(request_points) < 2:
-        return None
-    cache_key = _final_route_traffic_cache_key(request_points, provider="amap")
-    cached = dict(cache.get(cache_key) or {})
-    if cached:
-        state["cache_hits"] = int(state.get("cache_hits", 0)) + 1
-        return {
-            "duration_s": float(cached.get("duration_s", 0.0) or 0.0),
-            "distance_m": float(cached.get("distance_m", 0.0) or 0.0),
-            "source": str(cached.get("source") or "amap_final_route") + "_cache",
-            "cache_key": cache_key,
-            "anomaly_fallback_used": bool(cached.get("anomaly_fallback_used")),
-            "whole_route_duration_s": cached.get("whole_route_duration_s"),
-            "whole_route_distance_m": cached.get("whole_route_distance_m"),
-        }
-    max_points = max(2, FINAL_ROUTE_TRAFFIC_MAX_WAYPOINTS + 2)
-    duration_s = 0.0
-    distance_m = 0.0
-    start = 0
-    while start < len(request_points) - 1:
-        end = min(len(request_points), start + max_points)
-        stats = None
-        for attempt in range(2):
-            if int(state.get("api_calls", 0)) >= int(
-                state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS)
-            ):
-                return None
-            state["api_calls"] = int(state.get("api_calls", 0)) + 1
-            try:
-                stats = _amap_route_segment_stats(planner, request_points[start:end])
-                break
-            except Exception:
-                if attempt:
-                    raise
-                time.sleep(0.25)
-        if stats is None:
-            return None
-        duration_s += float(stats.get("duration_s", 0.0) or 0.0)
-        distance_m += float(stats.get("distance_m", 0.0) or 0.0)
-        start = end - 1
-    whole_route_duration_s = duration_s
-    whole_route_distance_m = distance_m
-    source = "amap_final_route"
-    anomaly_fallback_used = False
-    expected_distance_m = float(state.get("expected_distance_m", 0.0) or 0.0)
-    anomalous = amap_distance_is_anomalous(
-        distance_m,
-        expected_distance_m,
-        ratio=AMAP_ROUTE_ANOMALY_DISTANCE_RATIO,
-        minimum_excess_m=AMAP_ROUTE_ANOMALY_MIN_EXCESS_M,
+    state.setdefault("api_call_limit", AMAP_FINAL_ROUTE_MAX_CALLS)
+    evidence = measure_amap_route(
+        planner, request_points, cache, state, fetch_leg=_amap_route_segment_stats,
     )
-    required_leg_calls = max(0, len(request_points) - 1)
-    remaining_calls = max(
-        0,
-        int(state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS))
-        - int(state.get("api_calls", 0)),
-    )
-    if anomalous and required_leg_calls > 1 and remaining_calls >= required_leg_calls:
-        leg_duration_s = 0.0
-        leg_distance_m = 0.0
-        leg_fallback_complete = True
-        for point_index in range(required_leg_calls):
-            if int(state.get("api_calls", 0)) >= int(
-                state.get("api_call_limit", FINAL_ROUTE_TRAFFIC_MAX_CALLS)
-            ):
-                leg_fallback_complete = False
-                break
-            state["api_calls"] = int(state.get("api_calls", 0)) + 1
-            try:
-                leg_stats = _amap_route_segment_stats(
-                    planner,
-                    request_points[point_index : point_index + 2],
-                )
-            except Exception:
-                leg_fallback_complete = False
-                break
-            leg_duration_s += float(leg_stats.get("duration_s", 0.0) or 0.0)
-            leg_distance_m += float(leg_stats.get("distance_m", 0.0) or 0.0)
-        if (
-            leg_fallback_complete
-            and leg_duration_s > 0.0
-            and leg_distance_m > 0.0
-            and leg_distance_m < whole_route_distance_m
-        ):
-            duration_s = leg_duration_s
-            distance_m = leg_distance_m
-            source = "amap_final_route_leg_fallback"
-            anomaly_fallback_used = True
-    cache[cache_key] = {
-        "created_at": datetime.now(DIRECT_PROVIDER_CACHE_TZ).isoformat(timespec="seconds"),
-        "duration_s": duration_s,
-        "distance_m": distance_m,
-        "point_count": len(request_points),
-        "source": source,
-        "anomaly_fallback_used": anomaly_fallback_used,
-        "whole_route_duration_s": whole_route_duration_s,
-        "whole_route_distance_m": whole_route_distance_m,
-    }
-    state["cache_changed"] = 1
-    return {
-        "duration_s": duration_s,
-        "distance_m": distance_m,
-        "source": source,
-        "cache_key": cache_key,
-        "anomaly_fallback_used": anomaly_fallback_used,
-        "whole_route_duration_s": whole_route_duration_s,
-        "whole_route_distance_m": whole_route_distance_m,
-    }
+    return evidence if evidence["status"] == "verified" else None
 
 
 def _kakao_navi_coord(point: tuple[float, float]) -> str:
@@ -1207,7 +1100,10 @@ def _attach_final_route_traffic_gate_impl(
         if cache is None:
             cache = {}
             setattr(config, cache_attribute, cache)
-    api_call_limit = FINAL_ROUTE_TRAFFIC_MAX_CALLS
+    api_call_limit = (
+        AMAP_FINAL_ROUTE_MAX_CALLS if traffic_policy.provider == "amap"
+        else FINAL_ROUTE_TRAFFIC_MAX_CALLS
+    )
     runtime_profile = getattr(planner, "_BRP_RUNTIME_PROFILE", None)
     if FINAL_ROUTE_TRAFFIC_TOTAL_CALL_BUDGET > 0 and isinstance(runtime_profile, dict):
         consumed_calls = max(0, int(runtime_profile.get("traffic_api_calls", 0) or 0))
@@ -1260,11 +1156,23 @@ def _attach_final_route_traffic_gate_impl(
             departure_minutes=departure_minutes,
         )
         state["expected_distance_m"] = float(route.get("distance_m", 0.0) or 0.0)
+        state["expected_leg_distances_m"] = [
+            float(dict(leg or {}).get("distance_m", 0.0) or 0.0)
+            for leg in list(route.get("leg_details") or [])
+        ]
+        state["expected_leg_durations_s"] = [
+            float(dict(leg or {}).get("duration_s", 0.0) or 0.0)
+            for leg in list(route.get("leg_details") or [])
+        ]
+        state.pop("last_route_evidence", None)
         try:
             stats = _final_route_stats(
                 planner,
                 traffic_policy.provider,
-                _route_amap_points(points, route),
+                _route_amap_points(points, route) if traffic_policy.provider == "amap" else [
+                    _traffic_point_coordinates(dict(points[int(node)] or {}))
+                    for node in list(route.get("nodes") or [])
+                ],
                 cache,
                 state,
                 departure_time=provider_departure_time,
@@ -1272,6 +1180,17 @@ def _attach_final_route_traffic_gate_impl(
         except Exception as exc:
             stats = None
             verification["error"] = str(exc)
+        evidence = state.get("last_route_evidence")
+        if isinstance(evidence, dict):
+            route["route_evidence"] = deepcopy(evidence)
+            verification["evidence_version"] = evidence.get("evidence_version")
+            verification["evidence_status"] = evidence.get("status")
+            verification["evidence_issues"] = deepcopy(evidence.get("issues") or [])
+            verification["provider_called_at"] = evidence.get("called_at")
+            if not stats:
+                verification["error"] = "Route measurement needs review: " + ", ".join(
+                    sorted({str(item.get("code")) for item in evidence.get("issues") or []})
+                )
         if not stats:
             gate["unavailable_route_count"] += 1
             verification.update({"status": "unavailable", "passes": None})
@@ -7243,6 +7162,11 @@ def _scenario_time_impact_rows(
         legs = list(route.get("leg_details") or [])
         route_id = _route_display_id(route, route_index)
         gate = dict(route.get("final_route_traffic_gate") or {})
+        evidence = dict(route.get("route_evidence") or {})
+        evidence_legs = list(evidence.get("legs") or [])
+        if evidence and (evidence.get("status") != "verified" or len(evidence_legs) != len(nodes) - 1):
+            unavailable_route_count += 1
+            continue
         verified_drive_s = float(gate.get("verified_drive_duration_s", 0.0) or 0.0)
         raw_duration_s = float(route.get("time_s", 0.0) or 0.0)
         max_cumulative_s = sum(float(dict(leg or {}).get("duration_s", 0.0) or 0.0) for leg in legs)
@@ -7260,15 +7184,16 @@ def _scenario_time_impact_rows(
         if verified_drive_s <= 0 or base_duration_s <= 0 or modeled_route_drive_s <= 0:
             unavailable_route_count += 1
             continue
-        scale = verified_drive_s / base_duration_s
-        route_duration_s = max(verified_drive_s, max_cumulative_s * scale)
+        scale = 1.0 if evidence_legs else verified_drive_s / base_duration_s
+        route_duration_s = verified_drive_s if evidence_legs else max(verified_drive_s, max_cumulative_s * scale)
         service_orders = [order for order, node in enumerate(nodes) if int(node) != 0]
         cumulative_s = 0.0
         modeled_cumulative_s = 0.0
         for order, node in enumerate(nodes):
             if order > 0 and order - 1 < len(legs):
                 leg = dict(legs[order - 1] or {})
-                cumulative_s += float(leg.get("duration_s", 0.0) or 0.0)
+                measured_leg = dict(evidence_legs[order - 1]) if evidence_legs else leg
+                cumulative_s += float(measured_leg.get("duration_s", 0.0) or 0.0)
                 modeled_cumulative_s += float(
                     leg.get("raw_osrm_duration_s", leg.get("duration_s", 0.0)) or 0.0
                 )

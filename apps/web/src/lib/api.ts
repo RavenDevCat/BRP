@@ -252,6 +252,14 @@ export type JobMapBounds = {
     max_lat: number;
 };
 
+export type RouteEvidence = {
+    evidence_version: string;
+    status: "verified" | "needs_review" | "unavailable";
+    called_at?: string | null;
+    complete: boolean;
+    issues?: Array<{ leg_index: number; code: string }>;
+};
+
 export type JobMapRoute = {
     id: string;
     source_route_id?: string;
@@ -273,6 +281,10 @@ export type JobMapRoute = {
     display_geometry?: number[][] | null;
     display_geometry_source?: string;
     display_geometry_message?: string;
+    geometry_segments?: number[][][];
+    route_evidence?: RouteEvidence | null;
+    evidence_status?: string;
+    final_route_traffic_gate?: { status?: string; verified_total_duration_s?: number } | null;
     stop_ids: string[];
     time_impact?: JobMapTimeImpactSummary;
 };
@@ -701,6 +713,7 @@ export type DirectSchoolStopResult = {
     provider_called_at?: string;
     direct_geometry?: number[][];
     direct_geometry_source?: string;
+    route_evidence?: RouteEvidence | null;
     direct_snap_connectors?: Array<{
         type?: string;
         distance_m?: number;

@@ -470,7 +470,7 @@ export function DirectSchoolAnalysisPage() {
                     <div className="rounded-md border border-border bg-muted/50 p-3">
                       <div className="text-xs text-muted-foreground">{t("Estimated provider requests")}</div>
                       <div className="mt-1 text-xl font-semibold">{formatNumber(previewMutation.data.summary.estimated_logical_provider_calls)}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">{t("Actual API calls may be higher when long routes require provider waypoint chunks.")}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">{t("Estimate includes direct trips, route segments and removal checks. Retries and junction checks may add requests; shared fresh segments are reused.")}</div>
                     </div>
                   ) : null}
                   {createMutation.error ? <InlineError message={(createMutation.error as Error).message} /> : null}
@@ -555,6 +555,11 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {result.provider === "amap" && result.analysis_version < 6 ? (
+          <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-800">
+            {t("Historical result: map and timing were not saved as one measurement. Rerun to verify.")}
+          </div>
+        ) : null}
         {conclusion ? (
           <>
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
@@ -965,6 +970,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
                 <MiniMetric label="Direct duration min" value={minutes(selectedStop.direct_duration_min)} tone={selectedCategory === "direct_over_limit" ? "danger" : "neutral"} />
                 <MiniMetric label="Current route ride" value={minutes(selectedStop.estimated_current_ride_min)} tone={selectedCategory === "route_only_over_limit" ? "warning" : "neutral"} />
               </div>
+              {selectedStop.route_evidence?.called_at ? <div className="mt-2 text-xs text-muted-foreground">{t("Measured at")}: {formatDateTime(selectedStop.route_evidence.called_at)}</div> : null}
             </div>
           ) : null}
         </div>
@@ -996,6 +1002,7 @@ function downloadDirectSchoolMapHtml(
       currentRideMin: row.estimated_current_ride_min,
       geometry: row.direct_geometry || [],
       connectors: row.direct_snap_connectors || [],
+      measuredAt: row.route_evidence?.called_at || row.provider_called_at || "",
     }));
   const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? stops.filter((row) => row.category === "direct_over_limit").reduce((total, row) => total + row.riders, 0));
   const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? stops.filter((row) => row.category === "route_only_over_limit").reduce((total, row) => total + row.riders, 0));
@@ -1004,6 +1011,7 @@ function downloadDirectSchoolMapHtml(
     stops,
     selectedStopKey: selectedStop?.stop_key || stops[0]?.stopKey || "",
     summary: { directOverRiders, routeOnlyOverRiders },
+    evidenceVersion: result.analysis_version,
   }).replace(/</g, "\\u003c");
   const labels = JSON.stringify({
     title: t("Direct route map"),
@@ -1054,6 +1062,7 @@ function downloadDirectSchoolMapHtml(
     <div class="title-row"><h1 id="summaryTitle"></h1><button id="fitAll" type="button"></button></div>
     <div class="metric danger"><span id="directLabel"></span><strong id="directValue"></strong></div>
     <div class="metric warning"><span id="routeLabel"></span><strong id="routeValue"></strong></div>
+    ${result.provider === "amap" && result.analysis_version < 6 ? `<p class="meta">${htmlEscape(t("Historical result: map and timing were not saved as one measurement. Rerun to verify."))}</p>` : ""}
   </section>
   <section class="panel detail">
     <h2 id="detailTitle"></h2>
@@ -1126,7 +1135,7 @@ function downloadDirectSchoolMapHtml(
       map.getSource("selected-connectors").setData(connectorGeojson());
       map.getSource("selected-line").setData(lineGeojson());
       document.getElementById("address").textContent = stop.address;
-      document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students;
+      document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students + (stop.measuredAt ? " · " + new Date(stop.measuredAt).toLocaleString() : "");
       document.getElementById("distanceValue").textContent = Number.isFinite(stop.directDistanceKm) ? stop.directDistanceKm + " km" : "-";
       document.getElementById("durationValue").textContent = Number.isFinite(stop.directDurationMin) ? stop.directDurationMin + " min" : "-";
       document.getElementById("rideValue").textContent = Number.isFinite(stop.currentRideMin) ? stop.currentRideMin + " min" : "-";

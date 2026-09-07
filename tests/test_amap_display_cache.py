@@ -200,7 +200,7 @@ class AMapDisplayCacheTests(unittest.TestCase):
             "amap_cn_v5_strategy32_leg_fallback",
         )
 
-    def test_map_payload_loads_and_saves_display_cache_once(self) -> None:
+    def test_historical_map_reads_cache_without_new_measurement_or_cache_write(self) -> None:
         old_load = self.service._load_amap_display_cache_unlocked
         old_save = self.service._save_amap_display_cache_unlocked
         old_fetch = self.service._fetch_amap_display_geometry
@@ -261,7 +261,8 @@ class AMapDisplayCacheTests(unittest.TestCase):
 
         self.assertIsNone(error)
         self.assertEqual(len(payload["routes"]), 2)
-        self.assertEqual(calls, {"load": 2, "save": 1, "fetch": 2})
+        self.assertEqual(calls, {"load": 1, "save": 0, "fetch": 0})
+        self.assertTrue(all(route["evidence_status"] == "legacy" for route in payload["routes"]))
 
 
 if __name__ == "__main__":

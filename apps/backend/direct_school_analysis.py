@@ -126,8 +126,13 @@ def _measure_active_route(
     points = list(runtime["points"])
     active_points = [points[index] for index in active_indexes]
     service_indexes = [index for index in active_indexes if not bool(ordered[index].get("is_depot"))]
+    live: dict[str, Any] = {}
     if len(active_points) >= 2:
-        live = _route_with_stop_boundaries(provider, active_points)
+        references = [
+            _osrm_leg(origin, destination, runtime["osrm_cache"])
+            for origin, destination in zip(active_points[:-1], active_points[1:])
+        ] if "osrm_cache" in runtime else None
+        live = _route_with_stop_boundaries(provider, active_points, reference_legs=references)
         drive_s = _safe_float(live.get("duration_s"))
         distance_m = _safe_float(live.get("distance_m"))
         called_at = live.get("called_at")
@@ -143,6 +148,7 @@ def _measure_active_route(
         "stop_count": len(service_indexes),
         "riders": sum(max(0, _safe_int(ordered[index].get("passenger_count"))) for index in service_indexes),
         "provider_called_at": called_at,
+        "route_evidence": live if live.get("evidence_version") else None,
     }
 
 
@@ -273,7 +279,7 @@ class FreshRouteProvider:
         self.departure_time = departure_time
         self.planner = planner_core.load_legacy_planner()
         self.cache: dict[str, Any] = {}
-        self.state: dict[str, int] = {
+        self.state: dict[str, Any] = {
             "api_calls": 0,
             "api_call_limit": api_call_limit,
             "cache_hits": 0,
@@ -285,7 +291,8 @@ class FreshRouteProvider:
         if provider == "none":
             raise RuntimeError("No live route provider is configured for this workbook market.")
 
-    def route(self, points: list[dict[str, Any]]) -> dict[str, Any]:
+    def route(self, points: list[dict[str, Any]], *, reference_legs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+        self.state.pop("last_route_evidence", None)
         coordinate_reader = (
             planner_core._amap_route_point
             if self.provider == "amap"
@@ -298,6 +305,13 @@ class FreshRouteProvider:
             raise RuntimeError("Route contains unresolved coordinates.")
         before_calls = int(self.state.get("api_calls", 0))
         called_at = utc_now_iso()
+        self.state.pop("last_route_evidence", None)
+        self.state["expected_leg_distances_m"] = [
+            _safe_float(leg.get("distance_m")) for leg in reference_legs or []
+        ]
+        self.state["expected_leg_durations_s"] = [
+            _safe_float(leg.get("duration_s")) for leg in reference_legs or []
+        ]
         if self.provider == "amap":
             result = planner_core._amap_route_stats(
                 self.planner, request_points, self.cache, self.state
@@ -311,11 +325,13 @@ class FreshRouteProvider:
                 departure_time=departure,
             )
         if not result:
-            raise RuntimeError("Live route provider returned no usable route.")
+            evidence = dict(self.state.get("last_route_evidence") or {})
+            codes = sorted({str(item.get("code")) for item in evidence.get("issues") or []})
+            raise RuntimeError("Route measurement needs review: " + (", ".join(codes) or "provider unavailable"))
         return {
             **dict(result),
             "provider": self.provider,
-            "called_at": called_at,
+            "called_at": result.get("called_at") or called_at,
             "api_calls": int(self.state.get("api_calls", 0)) - before_calls,
             "in_run_reuse": int(self.state.get("api_calls", 0)) == before_calls,
         }
@@ -324,36 +340,17 @@ class FreshRouteProvider:
         self,
         points: list[dict[str, Any]],
     ) -> dict[str, Any]:
-        if self.provider != "amap" or len(points) <= 2:
-            return self.route(points)
-
-        before_calls = int(self.state.get("api_calls", 0))
-        leg_results = [
-            self.route([origin, destination])
-            for origin, destination in zip(points[:-1], points[1:])
-        ]
-        return {
-            "duration_s": sum(_safe_float(item.get("duration_s")) for item in leg_results),
-            "distance_m": sum(_safe_float(item.get("distance_m")) for item in leg_results),
-            "provider": self.provider,
-            "called_at": utc_now_iso(),
-            "api_calls": int(self.state.get("api_calls", 0)) - before_calls,
-            "in_run_reuse": int(self.state.get("api_calls", 0)) == before_calls,
-            "source": "amap_adjacent_legs",
-            "leg_durations_s": [
-                _safe_float(item.get("duration_s")) for item in leg_results
-            ],
-            "leg_distances_m": [
-                _safe_float(item.get("distance_m")) for item in leg_results
-            ],
-            "leg_sources": [str(item.get("source") or "amap") for item in leg_results],
-        }
+        return self.route(points)
 
 
 def _route_with_stop_boundaries(
     provider: FreshRouteProvider,
     points: list[dict[str, Any]],
+    *,
+    reference_legs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    if isinstance(provider, FreshRouteProvider):
+        return provider.route(points, reference_legs=reference_legs)
     adjacent_route = getattr(provider, "route_via_adjacent_legs", None)
     if callable(adjacent_route):
         return dict(adjacent_route(points))
@@ -440,7 +437,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 5,
+        "analysis_version": 6,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -558,7 +555,11 @@ def run_direct_school_analysis(
             "reasons": ["Address could not be geocoded."] if not coords else [],
         }
         previous = prior_rows.get(str(row["stop_key"]))
-        if previous and previous.get("provider_status") == "resolved":
+        previous_evidence = dict((previous or {}).get("route_evidence") or {})
+        previous_time = str(previous_evidence.get("called_at") or "")
+        if (previous and previous.get("provider_status") == "resolved"
+                and previous_evidence.get("evidence_version") == planner_core.EVIDENCE_VERSION
+                and previous_time >= (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()):
             row.update(previous)
         row["_point"] = point
         rows.append(row)
@@ -616,7 +617,7 @@ def run_direct_school_analysis(
             request_points.reverse()
         try:
             osrm = _osrm_leg(request_points[0], request_points[1], osrm_cache)
-            live = provider.route(request_points)
+            live = _route_with_stop_boundaries(provider, request_points, reference_legs=[osrm])
             straight_km = _haversine_km(_point_coordinates(point), school_coords)  # type: ignore[arg-type]
             direct_distance_m = _safe_float(live.get("distance_m"))
             direct_duration_s = _safe_float(live.get("duration_s"))
@@ -639,9 +640,10 @@ def run_direct_school_analysis(
                     "congestion_increment_min": round((direct_duration_s - osrm_duration_s) / 60.0, 2),
                     "live_to_osrm_ratio": round(direct_duration_s / osrm_duration_s, 3) if osrm_duration_s > 0 else None,
                     "road_to_straight_ratio": round((direct_distance_m / 1000.0) / straight_km, 3) if straight_km > 0 else None,
-                    "direct_geometry": osrm.get("geometry") or [],
-                    "direct_snap_connectors": osrm.get("snap_connectors") or [],
-                    "direct_geometry_source": osrm.get("coordinate_source") or "plot_wgs84",
+                    "direct_geometry": live.get("geometry") if live.get("evidence_version") else osrm.get("geometry") or [],
+                    "direct_snap_connectors": [] if live.get("evidence_version") else osrm.get("snap_connectors") or [],
+                    "direct_geometry_source": live.get("source") if live.get("evidence_version") else osrm.get("coordinate_source") or "plot_wgs84",
+                    "route_evidence": live if live.get("evidence_version") else None,
                 }
             )
             if config["service_direction"] == "To School":
@@ -652,6 +654,7 @@ def run_direct_school_analysis(
                 row["estimated_direct_arrival"] = _clock_label(departure + direct_duration_s / 60.0)
         except Exception as exc:
             row["provider_status"] = "failed"
+            row["route_evidence"] = deepcopy(provider.state.get("last_route_evidence"))
             row["quality_status"] = "provider_failed"
             row["operational_category"] = "data_review"
             row["reasons"] = [str(exc)]
@@ -684,7 +687,7 @@ def run_direct_school_analysis(
             ]
             osrm_drive_s = sum(_safe_float(leg.get("duration_s")) for leg in leg_details)
             osrm_distance_m = sum(_safe_float(leg.get("distance_m")) for leg in leg_details)
-            live = _route_with_stop_boundaries(provider, resolved_points)
+            live = _route_with_stop_boundaries(provider, resolved_points, reference_legs=leg_details)
             live_drive_s = _safe_float(live.get("duration_s"))
             live_distance_m = _safe_float(live.get("distance_m"))
             service_stop_count = sum(1 for stop in ordered if not bool(stop.get("is_depot")))
@@ -695,11 +698,15 @@ def run_direct_school_analysis(
                 for value in list(live.get("leg_durations_s") or [])
             ]
             if len(live_leg_durations_s) != len(leg_details):
+                if provider_name == "amap" and live.get("evidence_version"):
+                    raise RuntimeError("AMap route has incomplete stop measurements")
                 live_leg_durations_s = [
                     _safe_float(leg.get("duration_s")) * scale
                     for leg in leg_details
                 ]
             geometry = [coord for leg in leg_details for coord in list(leg.get("geometry") or [])]
+            if live.get("evidence_version"):
+                geometry = list(live.get("geometry") or [])
             route_result = {
                 "route_id": route_id,
                 "status": "resolved",
@@ -715,6 +722,7 @@ def run_direct_school_analysis(
                 "provider_route_source": live.get("source") or provider_name,
                 "provider_leg_count": len(live_leg_durations_s),
                 "geometry": geometry,
+                "route_evidence": live if live.get("evidence_version") else None,
             }
             route_results.append(route_result)
             route_runtime[route_id] = {
@@ -727,6 +735,7 @@ def run_direct_school_analysis(
                 "live_leg_durations_s": live_leg_durations_s,
                 "full_total_s": live_drive_s + dwell_s,
                 "full_distance_m": live_distance_m,
+                "osrm_cache": osrm_cache,
             }
             service_indexes = [index for index, stop in enumerate(ordered) if not bool(stop.get("is_depot"))]
             for index in service_indexes:
@@ -750,7 +759,8 @@ def run_direct_school_analysis(
                     }
                 )
         except Exception as exc:
-            route_results.append({"route_id": route_id, "status": "failed", "error": str(exc)})
+            route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
+                                  "route_evidence": deepcopy(provider.state.get("last_route_evidence"))})
             errors.append({"scope": "current_route", "route_id": route_id, "error": str(exc)})
         progress["completed"] += 1
         progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
@@ -810,7 +820,8 @@ def run_direct_school_analysis(
             row["operational_category"] = "direct_over_limit"
         elif "route_only_over_limit" in row_categories:
             row["operational_category"] = "route_only_over_limit"
-        elif row.get("provider_status") == "resolved":
+        elif (row.get("provider_status") == "resolved"
+              and set(row.get("route_ids") or []) <= {item.get("route_id") for item in row.get("route_contexts") or []}):
             row["operational_category"] = "within_limit"
         else:
             row["operational_category"] = "data_review"
@@ -863,6 +874,7 @@ def run_direct_school_analysis(
                     "stop_count": original.get("stop_count"),
                     "riders": original.get("riders"),
                     "provider_called_at": original.get("provider_called_at"),
+                    "route_evidence": original.get("route_evidence"),
                 }
             additional_entries: list[dict[str, Any]] = []
             final_measurement = dict(post_primary)
@@ -944,6 +956,8 @@ def run_direct_school_analysis(
                     "final_stop_count": final_measurement.get("stop_count"),
                     "final_riders": final_measurement.get("riders"),
                     "provider_called_at": final_measurement.get("provider_called_at"),
+                    "post_primary_evidence": post_primary.get("route_evidence"),
+                    "final_evidence": final_measurement.get("route_evidence"),
                 }
             )
             additional_occurrences.extend(additional_entries)
@@ -1309,6 +1323,38 @@ def build_direct_school_workbook(
         ["Scope / 环节", "Route / 路线", "Address / 地址", "Issue / 问题"],
         quality_rows,
         [24, 14, 42, 70],
+    )
+
+    evidence_rows = []
+    snapshots = [("Direct", ", ".join(row.get("route_ids") or []), row.get("address"), row.get("route_evidence"))
+                 for row in result.get("stops") or []]
+    snapshots.extend(("Current route", route.get("route_id"), "", route.get("route_evidence"))
+                     for route in result.get("routes") or [])
+    for route in result.get("route_window_analysis") or []:
+        snapshots.extend((stage, route.get("route_id"), "", route.get(key)) for stage, key in (
+            ("After first removal", "post_primary_evidence"), ("Final", "final_evidence")))
+    for stage, route_id, address, snapshot in snapshots:
+        snapshot = dict(snapshot or {})
+        for leg in snapshot.get("legs") or []:
+            leg_index = _safe_int(leg.get("leg_index"))
+            issues = ", ".join(str(item.get("code")) for item in snapshot.get("issues") or []
+                               if item.get("leg_index") == leg_index)
+            evidence_rows.append([
+                stage, route_id, address, leg_index + 1, snapshot.get("status"),
+                _safe_float(leg.get("duration_s")) / 60, _safe_float(leg.get("distance_m")) / 1000,
+                _safe_float(leg.get("straight_distance_m")) / 1000,
+                leg.get("osrm_reference_distance_m"), leg.get("called_at"),
+                ", ".join(str(value) for value in leg.get("origin") or []),
+                ", ".join(str(value) for value in leg.get("destination") or []), issues,
+            ])
+    _write_readable_table(
+        workbook.create_sheet("Route Evidence"),
+        "Route Measurement Evidence / 路段测算依据",
+        "Saved AMap segments. Review flags are unresolved checks, not proof of an invalid road. / 高德逐段原始测算；复核标记不代表已证明道路错误。",
+        ["Stage / 阶段", "Route / 路线", "Address / 地址", "Leg / 路段", "Status / 状态",
+         "Drive min / 行车分钟", "Distance km / 公里", "Straight km / 直线公里",
+         "OSRM metres / 参考米", "Captured / 测算时间", "Origin GCJ02 lat,lng", "Destination GCJ02 lat,lng", "Review / 复核"],
+        evidence_rows, [24, 18, 42, 12, 20, 18, 18, 18, 18, 26, 30, 30, 50],
     )
 
     daily_rows = [

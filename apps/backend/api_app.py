@@ -2538,19 +2538,34 @@ def _insert_route_measurement(
     display_message = ""
     display_duration_s: float | None = None
     display_distance_m: float | None = None
+    route_evidence: dict[str, Any] = {}
     country_key = str(country or "").strip().upper()
     if country_key in {"CHINA", "CN", "中国", "中华人民共和国"}:
-        (
-            display_geometry,
-            display_source,
-            display_message,
-            display_duration_s,
-            display_distance_m,
-        ) = backend_service._amap_display_geometry_for_route(
-            route_points, list(range(len(route_points)))
-        )
-        if not str(display_source).startswith("amap") or display_duration_s is None:
+        context_key = ("amap_evidence_context", country_key)
+        context = {"cache": {}, "state": {"api_call_limit": backend_service.AMAP_FINAL_ROUTE_MAX_CALLS}}
+        if cache is not None:
+            context = cache.setdefault(context_key, context)
+        state = context["state"]
+        state["expected_leg_distances_m"] = leg_distances_m
+        state["expected_leg_durations_s"] = leg_durations_s
+        state.pop("last_route_evidence", None)
+        try:
+            backend_service._amap_route_stats(
+                planner,
+                backend_service._route_amap_points(route_points, {"nodes": list(range(len(route_points)))}),
+                context["cache"], state,
+            )
+            route_evidence = dict(state.get("last_route_evidence") or {})
+            display_geometry = list(route_evidence.get("geometry") or [])
+            display_source = "amap_adjacent_legs"
+            if route_evidence.get("complete"):
+                display_duration_s = route_evidence.get("duration_s")
+                display_distance_m = route_evidence.get("distance_m")
+        except Exception as exc:
+            display_message = f"AMap measurement unavailable: {exc.__class__.__name__}"
+        if route_evidence.get("status") != "verified":
             warnings.append("amap_final_validation_unavailable")
+            display_message = "Route measurement needs review; time-window compliance is not verified."
 
     duration_s = display_duration_s if display_duration_s is not None else osrm_duration_s
     distance_m = display_distance_m if display_distance_m is not None else osrm_distance_m
@@ -2563,9 +2578,10 @@ def _insert_route_measurement(
         "display_geometry_message": display_message,
         "duration_s": duration_s,
         "distance_m": distance_m,
-        "leg_durations_s": [value * duration_scale for value in leg_durations_s],
-        "leg_distances_m": [value * distance_scale for value in leg_distances_m],
-        "provider_verified": str(display_source).startswith("amap") and display_duration_s is not None,
+        "leg_durations_s": route_evidence.get("leg_durations_s") if route_evidence.get("complete") else [value * duration_scale for value in leg_durations_s],
+        "leg_distances_m": route_evidence.get("leg_distances_m") if route_evidence.get("complete") else [value * distance_scale for value in leg_distances_m],
+        "provider_verified": route_evidence.get("status") == "verified",
+        "route_evidence": route_evidence or None,
         "warnings": warnings,
     }
     if cache is not None:
@@ -2659,9 +2675,16 @@ def _insert_build_selected_plan(
                 "display_geometry_message": str(route.get("display_geometry_message") or ""),
                 "duration_s": float(route.get("duration_s", 0.0) or 0.0),
                 "distance_m": float(route.get("distance_m", 0.0) or 0.0),
-                "leg_durations_s": [],
-                "leg_distances_m": [],
-                "provider_verified": bool(original_geometry),
+                "route_evidence": deepcopy(route.get("route_evidence")),
+                "leg_durations_s": [
+                    float(route_stops[index].get("cumulative_duration_s") or 0) - float(route_stops[index - 1].get("cumulative_duration_s") or 0)
+                    for index in range(1, len(route_stops))
+                ],
+                "leg_distances_m": [
+                    float(route_stops[index].get("cumulative_distance_m") or 0) - float(route_stops[index - 1].get("cumulative_distance_m") or 0)
+                    for index in range(1, len(route_stops))
+                ],
+                "provider_verified": dict(route.get("route_evidence") or {}).get("status") == "verified",
                 "warnings": [],
             }
             selected_measurement = dict(base_measurement)
@@ -2680,7 +2703,7 @@ def _insert_build_selected_plan(
             "中国",
             "中华人民共和国",
         }
-        provider_ok = not provider_required or bool(selected_measurement.get("provider_verified"))
+        provider_ok = not provider_required or bool(selected_measurement.get("provider_verified") and base_measurement.get("provider_verified"))
         route_feasible = action_ok and time_window_ok and provider_ok
         load_after = _insert_int(route.get("load"), 0) + sum(
             max(1, _insert_int(dict(item.get("new_stop") or {}).get("passenger_count"), 1))
@@ -2707,7 +2730,9 @@ def _insert_build_selected_plan(
                 "affected_riders": _insert_int(route.get("load"), 0),
                 "time_window_ok": time_window_ok,
                 "provider_required": provider_required,
-                "provider_verified": bool(selected_measurement.get("provider_verified")),
+                "provider_verified": bool(selected_measurement.get("provider_verified") and base_measurement.get("provider_verified")),
+                "base_route_evidence": base_measurement.get("route_evidence"),
+                "route_evidence": selected_measurement.get("route_evidence"),
                 "provider_source": selected_measurement.get("display_geometry_source") or "osrm",
                 "warnings": list(selected_measurement.get("warnings") or []),
             }
@@ -2757,6 +2782,10 @@ def _insert_build_selected_plan(
                 "display_geometry": selected_measurement.get("display_geometry"),
                 "display_geometry_source": selected_measurement.get("display_geometry_source") or "osrm",
                 "display_geometry_message": selected_measurement.get("display_geometry_message") or "",
+                "route_evidence": selected_measurement.get("route_evidence"),
+                "geometry_segments": dict(selected_measurement.get("route_evidence") or {}).get("geometry_segments") or [],
+                "evidence_status": dict(selected_measurement.get("route_evidence") or {}).get("status"),
+                "final_route_traffic_gate": {"status": "unavailable" if not provider_ok else "failed" if not time_window_ok else "passed"},
                 "stop_ids": stop_ids,
             }
         )
@@ -2764,17 +2793,20 @@ def _insert_build_selected_plan(
 
         if insert_actions:
             old_geometry = list(base_measurement.get("display_geometry") or base_measurement.get("geometry") or [])
-            if len(old_geometry) >= 2:
+            old_segments = dict(base_measurement.get("route_evidence") or {}).get("geometry_segments") or [old_geometry]
+            for segment_index, segment in enumerate(old_segments):
+                if len(segment) < 2:
+                    continue
                 private_links.append(
                     {
-                        "id": f"original-route-{route_id}",
+                        "id": f"original-route-{route_id}-{segment_index}",
                         "access_type": "original_route",
                         "address": "Original route",
                         "pickup_address": route_id,
                         "pickup_route_id": route_id,
                         "drive_time_s": float(base_measurement.get("duration_s", 0.0) or 0.0),
                         "drive_distance_m": float(base_measurement.get("distance_m", 0.0) or 0.0),
-                        "geometry": old_geometry,
+                        "geometry": segment,
                     }
                 )
 

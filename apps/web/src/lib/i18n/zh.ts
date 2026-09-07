@@ -1,6 +1,12 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Historical result": "历史结果",
+    "Measured at": "测算时间",
+    "Time window exceeded": "超出时间窗",
+    "Route measurement needs review; time-window compliance is not verified.": "道路测算需复核，尚不能确认是否符合时间窗。",
+    "Historical result: map and timing were not saved as one measurement. Rerun to verify.": "此历史结果的地图与时间未作为同一份测算记录保存，需重新运行以验证。",
+    "Estimate includes direct trips, route segments and removal checks. Retries and junction checks may add requests; shared fresh segments are reused.": "预估包含直达、路线分段和摘站检查；重试及道路衔接检查可能增加请求，相同的有效分段会复用。",
     // Shell / navigation
     "BRP: Bus Route Planner": "BRP: 校车路线规划",
     "Planning console": "规划控制台",

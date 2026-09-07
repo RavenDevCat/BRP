@@ -57,7 +57,7 @@ class FakeProvider:
         self.provider = provider
         self.state = {"api_calls": 0, "cache_hits": 0}
 
-    def route(self, points: list[dict]) -> dict:
+    def route(self, points: list[dict], **_kwargs) -> dict:
         self.state["api_calls"] += 1
         addresses = [str(item.get("address") or item.get("display_address")) for item in points]
         if len(points) == 3:
@@ -152,7 +152,7 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     )
 
     assert result["status"] == "complete"
-    assert result["analysis_version"] == 5
+    assert result["analysis_version"] == 6
     assert result["summary"]["address_count"] == 2
     assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
@@ -326,23 +326,21 @@ def test_amap_provider_uses_raw_gcj_coordinates(monkeypatch) -> None:
     assert captured == [[(31.231190, 121.507049), (31.242702, 121.516513)]]
 
 
-def test_amap_stopping_route_sums_adjacent_legs_and_reuses_pair_cache() -> None:
+def test_amap_stopping_route_uses_shared_measurement_interface() -> None:
     provider = analysis.FreshRouteProvider.__new__(analysis.FreshRouteProvider)
     provider.provider = "amap"
     provider.state = {"api_calls": 0, "cache_hits": 0}
-    calls: list[tuple[str, str]] = []
+    calls: list[list[str]] = []
 
     def fake_route(points: list[dict]) -> dict:
-        origin = str(points[0]["address"])
-        destination = str(points[1]["address"])
-        calls.append((origin, destination))
-        provider.state["api_calls"] += 1
-        duration_s = 300.0 if origin == "A" else 420.0
-        distance_m = 1200.0 if origin == "A" else 1800.0
+        calls.append([str(point["address"]) for point in points])
         return {
-            "duration_s": duration_s,
-            "distance_m": distance_m,
-            "source": "amap_test",
+            "duration_s": 720,
+            "distance_m": 3000,
+            "leg_durations_s": [300, 420],
+            "leg_distances_m": [1200, 1800],
+            "source": "amap_adjacent_legs",
+            "api_calls": 2,
         }
 
     provider.route = fake_route  # type: ignore[method-assign]
@@ -350,7 +348,7 @@ def test_amap_stopping_route_sums_adjacent_legs_and_reuses_pair_cache() -> None:
         [{"address": "A"}, {"address": "B"}, {"address": "C"}]
     )
 
-    assert calls == [("A", "B"), ("B", "C")]
+    assert calls == [["A", "B", "C"]]
     assert result["duration_s"] == 720
     assert result["distance_m"] == 3000
     assert result["leg_durations_s"] == [300, 420]
@@ -448,6 +446,7 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
         "Route Outcomes",
         "Address Measurements",
         "Data Quality",
+        "Route Evidence",
         "Daily History",
     ]
     assert "Operational Conclusion" in workbook["Operational Summary"]["A1"].value

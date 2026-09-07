@@ -1,6 +1,12 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Historical result": "이전 결과",
+    "Measured at": "측정 시각",
+    "Time window exceeded": "운행 시간 범위 초과",
+    "Route measurement needs review; time-window compliance is not verified.": "경로 측정 검토가 필요하며 운행 시간 범위 충족 여부는 확인되지 않았습니다.",
+    "Historical result: map and timing were not saved as one measurement. Rerun to verify.": "이전 결과의 지도와 시간이 동일한 측정 기록으로 저장되지 않았습니다. 확인하려면 다시 실행하세요.",
+    "Estimate includes direct trips, route segments and removal checks. Retries and junction checks may add requests; shared fresh segments are reused.": "직행, 경로 구간 및 정류장 제외 검사를 포함한 예상치입니다. 재시도와 경로 연결 검사로 요청이 늘 수 있으며 최신 동일 구간은 재사용합니다.",
     // Shell / navigation
     "BRP: Bus Route Planner": "BRP: 버스 노선 플래너",
     "Planning console": "운영 콘솔",

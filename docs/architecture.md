@@ -111,6 +111,15 @@ the generated plan, map, and review data in separate `Plan`, `Map`, and
 structured map data from saved route details; records without enough route data
 must be rebuilt to use the interactive map.
 
+### Saved Route Measurements
+
+CN final measurement is shared by Audit, Fleet Planner, Direct-to-School and
+Route Insert Advisor. Ordered segment timing and geometry are saved together;
+completed maps do not remeasure traffic. Quality-review states remain distinct
+from time-window pass/fail. See [Saved Route Measurement Contract](route-measurement-contract.md)
+for coordinate ownership, cache lifetime, request budgets, historical-result
+handling, and offline/live acceptance requirements.
+
 ## Backend
 
 Location: `apps/backend`

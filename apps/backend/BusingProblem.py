@@ -2525,6 +2525,9 @@ def build_map_summary_html(
     routes: list[dict[str, Any]],
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
 ) -> str:
+    from route_measurement_view import measured_route_views, measurement_note
+
+    routes = measured_route_views(routes)
     traffic_note = f"{TRAFFIC_PROFILE_NAME} direct-provider validation policy"
     if str(TRAFFIC_PROFILE_CONTEXT).strip():
         traffic_note = f"{traffic_note}, {TRAFFIC_PROFILE_CONTEXT}"
@@ -2582,7 +2585,7 @@ def build_map_summary_html(
                 f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
             ]
         )
-        lines.append("<div>Time source: unscaled OSRM candidate time</div>")
+        lines.append(f"<div><strong>{html.escape(measurement_note(route))}</strong></div>")
         if raw_osrm_time_s:
             lines.append(f"<div>OSRM drive time: {seconds_to_human(raw_osrm_time_s)}</div>")
         if route.get("limit_stop_order") is not None:
@@ -2648,6 +2651,9 @@ def render_map(
     output_html: str,
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
 ) -> None:
+    from route_measurement_view import measured_route_views, measurement_note
+
+    routes = measured_route_views(routes)
     output_path = Path(output_html)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if not points:
@@ -2707,11 +2713,8 @@ def render_map(
 
     for route_index, route in enumerate(routes):
         color = colors[route_index % len(colors)]
-        geometry: list[tuple[float, float]] = []
-        for leg_detail in route.get("leg_details", []):
-            leg = leg_detail["geometry"]
-            geometry.extend(leg if not geometry else leg[1:])
-        if len(geometry) >= 2:
+        segments = [leg["geometry"] for leg in route.get("leg_details", []) if len(leg.get("geometry") or []) >= 2]
+        for geometry in segments:
             folium.PolyLine(geometry, color="#ffffff", weight=9, opacity=0.9).add_to(fmap)
             folium.PolyLine(
                 geometry,
@@ -2722,7 +2725,8 @@ def render_map(
                     f"Bus {route['vehicle_id']} | {route['bus_type_name']} | "
                     f"{route['load']}/{route['bus_capacity']} seats | comfort target {route.get('comfort_capacity', route['bus_capacity'])} | "
                     f"{route.get('stop_count', max(0, len(route.get('nodes', [])) - 1))}/"
-                    f"{route.get('max_stops', route_stop_limit())} stops"
+                    f"{route.get('max_stops', route_stop_limit())} stops | "
+                    f"{html.escape(measurement_note(route))}"
                 ),
             ).add_to(fmap)
         for order, node in enumerate(route["nodes"]):

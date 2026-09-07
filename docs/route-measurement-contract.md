@@ -143,6 +143,12 @@ pickup point. Road, residential-area, or other coarse geocodes may still land
 on the wrong access road or road level. Do not move such points automatically
 just to obtain a shorter route; confirm the intended stop and re-prepare it.
 
+Bounded append-only review requests and their persistence contract are defined
+in [Historical Measurement Review](historical-measurement-review.md). A selected
+route comparison is not a replacement for the original full result, student
+classification or complete time-window validation. Reading a risk summary does
+not authorize or automatically start provider requests.
+
 ## Acceptance
 
 Offline tests cover coordinate provenance, directed cache freshness, request

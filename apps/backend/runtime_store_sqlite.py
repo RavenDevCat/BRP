@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -177,6 +177,22 @@ class SqliteRuntimeStore:
                 CREATE INDEX IF NOT EXISTS idx_jobs_created_at ON jobs(created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_jobs_owner_email ON jobs(owner_email);
                 CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+                CREATE TABLE IF NOT EXISTS route_measurement_reviews (
+                    review_id TEXT PRIMARY KEY,
+                    source_job_id TEXT NOT NULL,
+                    request_key TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    finished_at TEXT,
+                    worker_token TEXT,
+                    request_json TEXT NOT NULL,
+                    result_json TEXT,
+                    UNIQUE(source_job_id, request_key),
+                    FOREIGN KEY(source_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_route_measurement_reviews_queue
+                    ON route_measurement_reviews(status, created_at);
                 CREATE TABLE IF NOT EXISTS deep_verifications (
                     verification_id TEXT PRIMARY KEY,
                     parent_job_id TEXT NOT NULL,
@@ -328,6 +344,125 @@ class SqliteRuntimeStore:
                     (SCHEMA_VERSION, utc_now_iso()),
                 )
             self._initialized = True
+
+    def create_route_measurement_review(self, request: dict[str, Any]) -> dict[str, Any]:
+        """Append a bounded request; idempotent retries never overwrite a prior review."""
+        try:
+            from .measurement_reviews import build_review_request
+        except ImportError:
+            from measurement_reviews import build_review_request
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            source_row = conn.execute("SELECT record_json FROM jobs WHERE job_id = ?",
+                                      (request.get("source_job_id"),)).fetchone()
+            if not source_row:
+                raise ValueError("Source job no longer exists.")
+            source = json_loads(source_row["record_json"], {})
+            expected = build_review_request(
+                source, [scope["route_key"] for scope in request.get("routes") or []],
+                requested_by=str(request.get("requested_by") or ""),
+                request_key=str(request.get("request_key") or ""),
+                provider_call_limit=request.get("provider_call_limit"),
+            )
+            if request != expected:
+                raise ValueError("Source changed or review request was modified; refresh the selection.")
+            existing = conn.execute(
+                "SELECT * FROM route_measurement_reviews WHERE source_job_id = ? AND request_key = ?",
+                (expected["source_job_id"], expected["request_key"]),
+            ).fetchone()
+            if existing:
+                if json_loads(existing["request_json"], {}) != expected:
+                    raise ValueError("Request key already belongs to a different review selection.")
+                return self._route_measurement_review_from_row(existing)
+            review_id = uuid4().hex[:12]
+            conn.execute(
+                """INSERT INTO route_measurement_reviews
+                   (review_id, source_job_id, request_key, status, created_at, request_json)
+                   VALUES (?, ?, ?, 'queued', ?, ?)""",
+                (review_id, expected["source_job_id"], expected["request_key"], utc_now_iso(), json_dumps(expected)),
+            )
+            row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
+            return self._route_measurement_review_from_row(row)
+
+    @staticmethod
+    def _route_measurement_review_from_row(row: sqlite3.Row) -> dict[str, Any]:
+        return {"review_id": row["review_id"], "source_job_id": row["source_job_id"],
+                "status": row["status"], "created_at": row["created_at"], "started_at": row["started_at"],
+                "finished_at": row["finished_at"], "request": json_loads(row["request_json"], {}),
+                "result": json_loads(row["result_json"], None)}
+
+    def get_route_measurement_review(self, review_id: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
+        return self._route_measurement_review_from_row(row) if row else None
+
+    def list_route_measurement_reviews(self, source_job_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM route_measurement_reviews WHERE source_job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
+                (source_job_id, max(1, min(100, int(limit)))),
+            ).fetchall()
+        return [self._route_measurement_review_from_row(row) for row in rows]
+
+    def claim_route_measurement_review(self, review_id: str, worker_token: str) -> dict[str, Any] | None:
+        if not str(worker_token or "").strip():
+            raise ValueError("Worker token is required.")
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            changed = conn.execute(
+                """UPDATE route_measurement_reviews SET status = 'running', started_at = ?, worker_token = ?
+                   WHERE review_id = ? AND status = 'queued'""",
+                (utc_now_iso(), worker_token, review_id),
+            ).rowcount
+            row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
+        return self._route_measurement_review_from_row(row) if changed else None
+
+    def save_route_measurement_review(self, review_id: str, worker_token: str,
+                                     result: dict[str, Any], *, terminal: bool = False) -> bool:
+        """A canceled/finished request or a superseded worker cannot accept late writes."""
+        if terminal:
+            status = {"complete": "succeeded", "partial": "needs_review", "canceled": "canceled", "failed": "failed"}.get(result.get("status"))
+            if status is None:
+                raise ValueError("Terminal review result must be complete, partial, canceled or failed.")
+        else:
+            status = "running"
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute(
+                "SELECT request_json FROM route_measurement_reviews WHERE review_id = ? AND status = 'running' AND worker_token = ?",
+                (review_id, worker_token),
+            ).fetchone()
+            if not row:
+                return False
+            request = json_loads(row["request_json"], {})
+            requested_keys = [scope["route_key"] for scope in request["routes"]]
+            result_keys = [scope.get("route_key") for scope in result.get("routes") or []]
+            if (result.get("source_job_id") != request["source_job_id"]
+                    or result.get("source_result_digest") != request["source_result_digest"]
+                    or result.get("review_version") != request["review_version"]
+                    or result_keys != requested_keys[:len(result_keys)]
+                    or (terminal and status not in {"canceled", "failed"} and result_keys != requested_keys)
+                    or (status == "succeeded" and any(scope.get("status") != "verified" for scope in result.get("routes") or []))):
+                raise ValueError("Review result does not match its source and selected routes.")
+            return conn.execute(
+                """UPDATE route_measurement_reviews SET status = ?, result_json = ?, finished_at = ?
+                   WHERE review_id = ? AND status = 'running' AND worker_token = ?""",
+                (status, json_dumps(result), utc_now_iso() if terminal else None, review_id, worker_token),
+            ).rowcount == 1
+
+    def cancel_route_measurement_review(self, review_id: str) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """UPDATE route_measurement_reviews SET status = 'canceled', finished_at = ?
+                   WHERE review_id = ? AND status IN ('queued', 'running')""",
+                (utc_now_iso(), review_id),
+            ).rowcount == 1
 
     def upsert_job(self, record: dict[str, Any]) -> None:
         summary = job_summary(record)

@@ -3,9 +3,11 @@
 ## Scope And Ownership
 
 `measurement_reviews.py` defines bounded remeasurement requests and their worker
-entry point. It is not a route solver. A review captures an explicit selection
-of saved routes, measures those same directed stops through `FreshRouteProvider`,
-and records a new comparison without updating the source job or its result.
+entry point. It is not a route solver. A selected-route review captures an
+explicit selection of saved routes, measures those same directed stops through
+`FreshRouteProvider`, and records a new comparison without updating the source
+job or its result. Full Direct-to-School correction has its own explicit scope
+and reuses the existing analysis pipeline, as described below.
 
 The saved-source adapters cover Route Audit current, Strict and Protected
 scenarios, and Direct-to-School current-route measurements. Unsupported result
@@ -38,7 +40,7 @@ the existing review; a deliberate later sample gets a new request key and row.
 Source deletion cascades reviews through the existing job lifecycle rather than
 leaving orphaned private snapshots.
 
-## Execution And Results
+## Selected-Route Execution And Results
 
 Requests select 1-20 distinct routes and explicitly cap provider calls at 1-500.
 A worker owns one fresh provider/cache context. The shared AMap budget includes
@@ -61,7 +63,7 @@ changing the source convention; unknown dwell does not become zero.
 
 These comparisons are fresh traffic samples, not controlled before/after
 experiments or a claim that a smaller number proves a software improvement.
-The measurement review does not recalculate student classification, additional
+The selected-route review does not recalculate student classification, additional
 removal, solver feasibility or full AM/PM acceptance. Its result explicitly
 sets `student_classification_recomputed` and `time_window_revalidated` to false.
 Consumers must use the existing domain gates before presenting any such claim.
@@ -78,6 +80,7 @@ process IDs, filesystem paths and the private selected-point snapshot.
 `POST /jobs/{job_id}/measurement-reviews` requires an administrator and the
 existing backend service authorization. Its strict body supplies `route_keys`,
 `request_key`, `provider_call_limit`, and boolean `confirm_provider_calls: true`.
+The default `mode: selected_routes` requires 1-20 explicit `route_keys`.
 Unknown fields and implicit numeric/string conversions are rejected. Coordinates
 and ownership come from the saved source, never from a submitted override.
 Repeated identical submissions return the existing row rather than new work.
@@ -86,6 +89,63 @@ Repeated identical submissions return the existing row rather than new work.
 administrator-only `pause`, `resume` and `cancel` commands. Control stays in the
 environment that enqueued the review; sharing the runtime database does not
 authorize a different environment to adopt or terminate its process.
+
+## Full Direct-to-School Corrections
+
+An administrator can explicitly select `mode: full_direct_school` at the same
+creation endpoint, omitting `route_keys`. This is not a partial route selection:
+it includes every route and service address from the saved workbook, including
+routes absent from a partial previous result. The supported bound is 1-200 routes
+and the same explicitly confirmed 1-500 provider-attempt budget. A request does
+not extend that budget automatically to complete a large workbook.
+
+The source must be a finished China AMap Direct-to-School analysis with saved
+workbook inputs and original parameters. Missing student limits, dwell, clock
+windows or direction are rejected instead of receiving current defaults.
+Ambiguous order, inconsistent school placement and fractional/missing passenger
+counts are rejected. Zero-passenger waypoints remain service stops, not school
+terminals. Neither pickup coordinates nor stop ordering is replaced.
+
+The request captures immutable prepared inputs, normalized original settings,
+their digest and the previous conclusion. The only overridden parameter is the
+new administrator-approved provider budget. Full correction calls the existing
+`run_direct_school_analysis` pipeline with an injected bounded provider. It does
+not implement another classifier, removal ranking, time-window policy or solver.
+Direct trips, current per-student rides, primary-removal routes and additional
+removal routes all pass through the shared measurement provider. AM downstream
+and PM upstream ride calculations and longest-direct-trip-first removal order
+remain the existing analysis behavior.
+
+`route_measurement_review_snapshots` persists review-owned road snapshots under
+the active worker token. A route snapshot may be reused after a pause only if
+its full point/reference key and evidence version match, it remains fresh from
+the earliest measurement time, and its leg measurements reconcile with its
+total. Expired or uncertain snapshots are not accepted. Call reservations remain
+persisted, including interrupted calls. Derived student classifications are
+recomputed from the inputs; an old classification is not a measurement cache.
+Deleting the original job cascades these private snapshots with its review.
+
+The appended envelope has `scope: full_direct_school_result` and contains the
+native `analysis_result`, route comparisons, conclusion differences and changed
+address categories. Missing original numbers remain null, not zero. Final
+publication validates original route/address coverage, each route occurrence's
+student count, and unchanged parameters. Shared addresses retain their separate
+route-specific student counts rather than replacing them with an address total.
+`student_classification_recomputed` indicates the classification pipeline ran;
+`classification_complete` and `time_window_revalidated` separately report whether
+its evidence is complete. An exhausted budget or uncertain measurement produces
+a `needs_review` record and partial analysis with unknowns, not a fully verified
+or within-window conclusion. Complete measurement does not itself mean that
+every route satisfies the window.
+
+Authorized source readers can download a finished full correction at
+`GET /jobs/{job_id}/measurement-reviews/{review_id}/export`. It reuses the native
+Direct-to-School statistics workbook, retaining student bases, original/final
+ridership, unknown values and the one-passenger yellow warning. Additional
+comparison and classification-change worksheets describe what changed, with
+the three student groups in business order. These are fresh traffic samples,
+not a controlled proof that code changes alone improved the result. Reading or
+exporting never requests new map measurements and never changes the original.
 
 ## Queue And Recovery
 
@@ -103,7 +163,9 @@ available. Resume retains completed route checkpoints and the persisted number
 of provider calls. Each provider attempt reserves its budget atomically before
 outbound I/O; an interrupted attempt remains counted even if its response or
 route checkpoint was lost. Only unfinished routes are remeasured, with the
-remaining original budget and a new run-local cache. Partially measured routes
+remaining original budget and a new run-local cache. This completed-route
+checkpoint rule describes selected-route comparisons; full correction follows
+the review-owned snapshot freshness policy above. Partially measured routes
 may repeat already attempted legs; the persistent cap bounds that cost.
 
 Cancellation and pause prevent further reservations and late checkpoints, but
@@ -118,18 +180,20 @@ cooperatively; the new backend does not forcibly preempt it using a saved PID.
 
 ## Remaining Consumer Boundaries
 
-The APIs and queue return measurement comparisons, not fully corrected source
-results. Consumers must show the selected-route scope, measurement times,
-request budget and outstanding input clarification. Full domain-gate and
-student-classification recomputation, remaining tool-history adapters, and an
-administrator/result UI require their own integration. No consumer may treat
+Selected-route APIs return measurement comparisons, not fully corrected source
+results. Consumers must show the applicable scope, measurement times,
+request budget and outstanding input clarification. Complete Audit scenario
+and time-impact revalidation, other tool-history adapters, and the administrator
+and result UI require their own integration. Full Direct-to-School correction
+does not imply that those workflows are covered. No consumer may treat
 prepared coordinates as automatically re-geocoded or move an entrance to obtain
 a shorter route.
 
 ## Verification
 
 Run `tests/test_measurement_reviews.py`, `tests/test_measurement_review_api.py`
-and `tests/test_measurement_review_queue.py` with runtime-store, API-shell,
+and `tests/test_measurement_review_queue.py`, plus `tests/test_full_measurement_review.py`,
+with runtime-store, API-shell,
 shared route evidence, Direct-to-School and queue regression tests. The review
 tests use synthetic routes and temporary SQLite files, including concurrent
 create/claim, immutable source/result, cancellation races, budget exhaustion,
@@ -138,3 +202,9 @@ Queue/API tests additionally cover source access, strict confirmation, schema
 upgrade, interrupted-call budgets, pause/resume, ordinary-job priority, launch
 failure and process-death recovery. These tests do not establish live pickup
 correctness or browser acceptance.
+
+Full correction tests exercise both service directions, all three student
+groups, zero-rider waypoints, one remaining rider, equality with the existing
+analysis pipeline, bounded partial results, pause recovery, immutable source,
+snapshot expiry/ownership/cascade, strict input validation and the real workbook
+exporter using only synthetic inputs and substituted map I/O.

@@ -24,6 +24,7 @@ try:
     from . import backend_service
     from .operations_review import build_operations_review
     from .measurement_reviews import build_review_request, historical_risk_summary
+    from .full_measurement_review import build_full_review_request, build_full_review_workbook
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from api_models import (  # type: ignore
         AiAuditRequest,
@@ -36,6 +37,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     import backend_service  # type: ignore
     from operations_review import build_operations_review  # type: ignore
     from measurement_reviews import build_review_request, historical_risk_summary
+    from full_measurement_review import build_full_review_request, build_full_review_workbook
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
@@ -1279,6 +1281,8 @@ def _public_measurement_review(record: dict[str, Any], *, include_result: bool =
     public["request"] = {key: request.get(key) for key in (
         "provider_call_limit", "evidence_version", "review_version", "requested_by")}
     public["request"]["route_keys"] = [route["route_key"] for route in request["routes"]]
+    public["request"]["mode"] = request.get("mode", "selected_routes")
+    public["request"]["scope_summary"] = request.get("scope_summary")
     if include_result:
         public["result"] = record.get("result")
     return public
@@ -1323,14 +1327,30 @@ def create_measurement_review(job_id: str, payload: MeasurementReviewRequest,
     if not source:
         raise BackendHttpError(404, {"error": "Source job no longer exists."})
     try:
-        request = build_review_request(source, payload.route_keys, requested_by=context.email,
-                                       request_key=payload.request_key, provider_call_limit=payload.provider_call_limit)
+        arguments = dict(requested_by=context.email, request_key=payload.request_key,
+                         provider_call_limit=payload.provider_call_limit)
+        request = (build_full_review_request(source, **arguments) if payload.mode == "full_direct_school"
+                   else build_review_request(source, payload.route_keys, **arguments))
         row = backend_service._runtime_sqlite_store().create_route_measurement_review(
             request, queue_scope=backend_service.JOB_QUEUE_SCOPE)
     except ValueError as exc:
         raise BackendHttpError(409, {"error": str(exc)}) from exc
     backend_service.JOB_QUEUE.schedule_queued_jobs()
     return _json_response(200, _public_measurement_review(row))
+
+
+@_api_route("GET", "/jobs/{job_id}/measurement-reviews/{review_id}/export")
+def export_measurement_review(job_id: str, review_id: str,
+                               _authorized: None = Depends(require_authorized_request),
+                               context: UserContext = Depends(current_user_context)):
+    row = _measurement_review_for_job(job_id, review_id, context)
+    try:
+        workbook = build_full_review_workbook(row)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    return _bytes_response(200, workbook,
+        content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"measurement-correction-{row['review_id']}.xlsx", inline=False)
 
 
 @_api_route("POST", "/jobs/{job_id}/measurement-reviews/{review_id}/actions/{action}")

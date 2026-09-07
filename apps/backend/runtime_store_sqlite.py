@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -198,6 +198,13 @@ class SqliteRuntimeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_route_measurement_reviews_queue
                     ON route_measurement_reviews(status, created_at);
+                CREATE TABLE IF NOT EXISTS route_measurement_review_snapshots (
+                    review_id TEXT NOT NULL,
+                    measurement_key TEXT NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    PRIMARY KEY (review_id, measurement_key),
+                    FOREIGN KEY (review_id) REFERENCES route_measurement_reviews(review_id) ON DELETE CASCADE
+                );
                 CREATE TABLE IF NOT EXISTS deep_verifications (
                     verification_id TEXT PRIMARY KEY,
                     parent_job_id TEXT NOT NULL,
@@ -361,9 +368,9 @@ class SqliteRuntimeStore:
     def create_route_measurement_review(self, request: dict[str, Any], *, queue_scope: str = "") -> dict[str, Any]:
         """Append a bounded request; idempotent retries never overwrite a prior review."""
         try:
-            from .measurement_reviews import build_review_request
+            from .measurement_reviews import rebuild_review_request
         except ImportError:
-            from measurement_reviews import build_review_request
+            from measurement_reviews import rebuild_review_request
         self.initialize()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -372,12 +379,7 @@ class SqliteRuntimeStore:
             if not source_row:
                 raise ValueError("Source job no longer exists.")
             source = json_loads(source_row["record_json"], {})
-            expected = build_review_request(
-                source, [scope["route_key"] for scope in request.get("routes") or []],
-                requested_by=str(request.get("requested_by") or ""),
-                request_key=str(request.get("request_key") or ""),
-                provider_call_limit=request.get("provider_call_limit"),
-            )
+            expected = rebuild_review_request(source, request)
             if request != expected:
                 raise ValueError("Source changed or review request was modified; refresh the selection.")
             existing = conn.execute(
@@ -462,6 +464,12 @@ class SqliteRuntimeStore:
             if not row:
                 return False
             request = json_loads(row["request_json"], {})
+            if request.get("mode") == "full_direct_school":
+                try:
+                    from .full_measurement_review import validate_full_result
+                except ImportError:
+                    from full_measurement_review import validate_full_result
+                validate_full_result(request, result, terminal=terminal)
             requested_keys = [scope["route_key"] for scope in request["routes"]]
             result_keys = [scope.get("route_key") for scope in result.get("routes") or []]
             if (result.get("source_job_id") != request["source_job_id"]
@@ -485,6 +493,32 @@ class SqliteRuntimeStore:
                    WHERE review_id = ? AND status IN ('queued', 'running', 'yielding', 'pausing', 'paused')""",
                 (utc_now_iso(), review_id),
             ).rowcount == 1
+
+    def route_measurement_claim_active(self, review_id: str, worker_token: str) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute("SELECT 1 FROM route_measurement_reviews WHERE review_id = ? AND worker_token = ? AND status = 'running'",
+                                (review_id, worker_token)).fetchone() is not None
+
+    def get_review_measurement_snapshot(self, review_id: str, worker_token: str, key: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute(
+                """SELECT snapshot_json FROM route_measurement_review_snapshots s
+                   JOIN route_measurement_reviews r ON r.review_id = s.review_id
+                   WHERE s.review_id = ? AND s.measurement_key = ? AND r.worker_token = ? AND r.status = 'running'""",
+                (review_id, key, worker_token)).fetchone()
+        return json_loads(row["snapshot_json"], None) if row else None
+
+    def save_review_measurement_snapshot(self, review_id: str, worker_token: str, key: str, snapshot: dict[str, Any]) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """INSERT INTO route_measurement_review_snapshots (review_id, measurement_key, snapshot_json)
+                   SELECT review_id, ?, ? FROM route_measurement_reviews
+                   WHERE review_id = ? AND worker_token = ? AND status = 'running'
+                   ON CONFLICT(review_id, measurement_key) DO UPDATE SET snapshot_json = excluded.snapshot_json""",
+                (key, json_dumps(snapshot), review_id, worker_token)).rowcount == 1
 
     def queued_route_measurement_reviews(self, queue_scope: str) -> list[dict[str, Any]]:
         self.initialize()

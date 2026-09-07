@@ -469,6 +469,8 @@ def run_direct_school_analysis(
     run_seed: str = "",
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
     resume_result: dict[str, Any] | None = None,
+    provider_factory: Callable[..., FreshRouteProvider] | None = None,
+    check_canceled: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     config = _analysis_config(analysis_config)
     input_records = [dict(item) for item in list(prepared_payload.get("input_records") or [])]
@@ -485,7 +487,7 @@ def run_direct_school_analysis(
             departure_time = datetime.fromisoformat(str(scheduled_start_at).replace("Z", "+00:00"))
         except ValueError:
             departure_time = None
-    provider = FreshRouteProvider(
+    provider = (provider_factory or FreshRouteProvider)(
         provider_name,
         departure_time=departure_time,
         api_call_limit=int(config["provider_call_limit"]),
@@ -607,6 +609,8 @@ def run_direct_school_analysis(
 
     direct_order = _rotate(rows, run_seed or scheduled_start_at or utc_now_iso())
     for row in direct_order:
+        if check_canceled:
+            check_canceled()
         if row.get("provider_status") == "resolved":
             continue
         point = dict(row.get("_point") or {})
@@ -672,6 +676,8 @@ def run_direct_school_analysis(
     route_runtime: dict[str, dict[str, Any]] = {}
     route_order = _rotate(sorted(route_groups), f"route|{run_seed or scheduled_start_at or ''}")
     for route_id in route_order:
+        if check_canceled:
+            check_canceled()
         ordered = sorted(route_groups[route_id], key=lambda item: _safe_int(item.get("stop_sequence")))
         route_points = [_lookup_point(stop, lookup) for stop in ordered]
         if any(point is None for point in route_points):
@@ -847,6 +853,8 @@ def run_direct_school_analysis(
     additional_occurrences: list[dict[str, Any]] = []
     route_results_by_id = {str(item.get("route_id") or ""): item for item in route_results}
     for route_id in sorted(route_groups):
+        if check_canceled:
+            check_canceled()
         runtime = route_runtime.get(route_id)
         original = route_results_by_id.get(route_id, {})
         if not runtime or original.get("status") != "resolved":

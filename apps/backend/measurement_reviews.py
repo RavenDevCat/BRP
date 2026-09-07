@@ -289,6 +289,19 @@ def run_measurement_review(request: dict[str, Any], *,
     return result
 
 
+def rebuild_review_request(source: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    arguments = dict(requested_by=str(request.get("requested_by") or ""),
+                     request_key=str(request.get("request_key") or ""),
+                     provider_call_limit=request.get("provider_call_limit"))
+    if request.get("mode") == "full_direct_school":
+        try:
+            from .full_measurement_review import build_full_review_request
+        except ImportError:
+            from full_measurement_review import build_full_review_request
+        return build_full_review_request(source, **arguments)
+    return build_review_request(source, [scope["route_key"] for scope in request.get("routes") or []], **arguments)
+
+
 class ReviewClaimLost(RuntimeError):
     pass
 
@@ -325,10 +338,17 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
             raise ReviewClaimLost("Review was stopped before its checkpoint could be saved.")
 
     try:
-        result = run_measurement_review(request, provider_factory=provider_factory,
-                                        checkpoint=checkpoint, canceled=canceled,
-                                        resume_result=record.get("result"), api_calls_used=int(record.get("api_calls") or 0),
-                                        reserve_calls=lambda count: store.reserve_route_measurement_calls(review_id, worker_token, count))
+        if request.get("mode") == "full_direct_school":
+            try:
+                from .full_measurement_review import run_full_review
+            except ImportError:
+                from full_measurement_review import run_full_review
+            result = run_full_review(store, record, worker_token, provider_factory=provider_factory, checkpoint=checkpoint)
+        else:
+            result = run_measurement_review(request, provider_factory=provider_factory,
+                                            checkpoint=checkpoint, canceled=canceled,
+                                            resume_result=record.get("result"), api_calls_used=int(record.get("api_calls") or 0),
+                                            reserve_calls=lambda count: store.reserve_route_measurement_calls(review_id, worker_token, count))
         store.save_route_measurement_review(review_id, worker_token, result, terminal=True)
     except ReviewClaimLost:
         pass

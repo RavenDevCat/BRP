@@ -770,10 +770,20 @@ def run_direct_school_analysis(
         save_checkpoint()
 
     for row in rows:
-        contexts = route_contexts_by_stop.get(_address_key(row), [])
+        measured_contexts = route_contexts_by_stop.get(_address_key(row), [])
+        context_lookup = {(str(item.get("route_id") or ""), _safe_int(item.get("stop_sequence"))): item
+                          for item in measured_contexts}
+        contexts = [context_lookup.get(
+            (str(item.get("route_id") or ""), _safe_int(item.get("stop_sequence"))),
+            {"route_id": item.get("route_id"), "stop_sequence": item.get("stop_sequence"),
+             "riders": max(0, _safe_int(item.get("passenger_count"))),
+             "estimated_current_ride_min": None, "route_total_min": None},
+        ) for item in row.get("occurrences") or []]
         row["route_contexts"] = contexts
-        if contexts:
-            worst = max(contexts, key=lambda item: _safe_float(item.get("estimated_current_ride_min")))
+        for key in ("primary_route_id", "estimated_current_ride_min", "rider_detour_min"):
+            row.pop(key, None)
+        if measured_contexts:
+            worst = max(measured_contexts, key=lambda item: _safe_float(item.get("estimated_current_ride_min")))
             row["primary_route_id"] = worst.get("route_id")
             row["estimated_current_ride_min"] = worst.get("estimated_current_ride_min")
             if row.get("direct_duration_min") is not None:
@@ -791,6 +801,7 @@ def run_direct_school_analysis(
             and _safe_float(row.get("direct_duration_min")) >= duration_limit
         )
         row_categories: set[str] = set()
+        direct_available = row.get("provider_status") == "resolved" and row.get("direct_duration_min") is not None
         for context in list(row.get("route_contexts") or []):
             route_id = str(context.get("route_id") or "")
             sequence = _safe_int(context.get("stop_sequence"))
@@ -798,6 +809,9 @@ def run_direct_school_analysis(
             if direct_over:
                 category = "direct_over_limit"
                 excess = _safe_float(row.get("direct_duration_min")) - duration_limit
+            elif not direct_available or context.get("estimated_current_ride_min") is None:
+                category = "data_review"
+                excess = None
             elif current_ride >= duration_limit:
                 category = "route_only_over_limit"
                 excess = current_ride - duration_limit
@@ -805,7 +819,7 @@ def run_direct_school_analysis(
                 category = "within_limit"
                 excess = 0.0
             context["operational_category"] = category
-            context["over_limit_min"] = round(max(0.0, excess), 2)
+            context["over_limit_min"] = round(max(0.0, excess), 2) if excess is not None else None
             row_categories.add(category)
             occurrence_lookup[(route_id, sequence)] = {
                 "stop_key": row.get("stop_key"),
@@ -822,8 +836,7 @@ def run_direct_school_analysis(
             row["operational_category"] = "direct_over_limit"
         elif "route_only_over_limit" in row_categories:
             row["operational_category"] = "route_only_over_limit"
-        elif (row.get("provider_status") == "resolved"
-              and set(row.get("route_ids") or []) <= {item.get("route_id") for item in row.get("route_contexts") or []}):
+        elif direct_available and row_categories == {"within_limit"}:
             row["operational_category"] = "within_limit"
         else:
             row["operational_category"] = "data_review"
@@ -846,6 +859,14 @@ def run_direct_school_analysis(
                     "error": original.get("error") or "Current route could not be measured.",
                 }
             )
+            continue
+        if any(item.get("operational_category") == "data_review"
+               for (item_route, _sequence), item in occurrence_lookup.items() if item_route == route_id):
+            route_window_analysis.append({
+                "route_id": route_id, "status": "data_review", "window_limit_min": route_window_min,
+                "original_riders": original.get("riders"), "original_duration_min": original.get("total_duration_min"),
+                "error": "Student direct-trip or current-route measurements are incomplete; removal recommendations are not verified.",
+            })
             continue
         ordered = list(runtime["ordered"])
         active_indexes = list(range(len(ordered)))
@@ -1004,6 +1025,9 @@ def run_direct_school_analysis(
 
     direct_address_count, direct_rider_count = occurrence_totals("direct_over_limit")
     route_only_address_count, route_only_rider_count = occurrence_totals("route_only_over_limit")
+    review_address_count, review_rider_count = occurrence_totals("data_review")
+    review_route_ids = {route_id for (route_id, _sequence), item in occurrence_lookup.items()
+                        if item.get("operational_category") == "data_review"}
     primary_stop_keys = {
         str(item.get("stop_key") or "")
         for item in occurrence_lookup.values()
@@ -1026,6 +1050,8 @@ def run_direct_school_analysis(
             "address_count": route_only_address_count,
             "rider_count": route_only_rider_count,
         },
+        "data_review": {"address_count": review_address_count, "rider_count": review_rider_count,
+                        "route_count": len(review_route_ids)},
         "primary_removal": {
             "address_count": len(primary_stop_keys),
             "rider_count": primary_rider_count,
@@ -1245,6 +1271,13 @@ def build_direct_school_workbook(
         post_primary.get("over_window_count"),
         _final_conclusion_label(final),
     ])
+    review = dict(conclusion.get("data_review") or {})
+    if _safe_int(review.get("rider_count")):
+        summary_sheet.append([
+            "Data review / 数据复核", "Students awaiting classification / 尚无法分类的学生",
+            review.get("rider_count"), total_riders, review.get("address_count"), review.get("route_count"),
+            "Missing measurements are not counted as within limit / 测算缺失不代表符合时间上限",
+        ])
     summary_sheet.append([
         "Selection rule / 补充摘除顺序",
         "Longest direct trip first; route saving breaks ties / 按直达时间从长到短；同分时优先路线节省更大的站点",
@@ -1337,6 +1370,16 @@ def build_direct_school_workbook(
             ("After first removal", "post_primary_evidence"), ("Final", "final_evidence")))
     for stage, route_id, address, snapshot in snapshots:
         snapshot = dict(snapshot or {})
+        if not snapshot:
+            continue
+        route_issues = [item for item in snapshot.get("issues") or [] if item.get("leg_index") is None]
+        if route_issues or not snapshot.get("legs"):
+            evidence_rows.append([
+                stage, route_id, address, None, snapshot.get("status"),
+                None, None, None, None, snapshot.get("called_at"), None, None,
+                "; ".join(str(item.get("code") or "") + (": " + str(item["detail"]) if item.get("detail") else "")
+                          for item in route_issues) or "No saved segment measurements / 未保存路段测算",
+            ])
         for leg in snapshot.get("legs") or []:
             leg_index = _safe_int(leg.get("leg_index"))
             issues = ", ".join(str(item.get("code")) for item in snapshot.get("issues") or []
@@ -1349,6 +1392,10 @@ def build_direct_school_workbook(
                 ", ".join(str(value) for value in leg.get("origin") or []),
                 ", ".join(str(value) for value in leg.get("destination") or []), issues,
             ])
+    if not evidence_rows:
+        evidence_rows.append(["All stages / 所有阶段", None, None, None, "not_recorded",
+                              None, None, None, None, None, None, None,
+                              "No saved segment evidence in this result / 此结果未保存逐段测算依据"])
     _write_readable_table(
         workbook.create_sheet("Route Evidence"),
         "Route Measurement Evidence / 路段测算依据",
@@ -1465,6 +1512,7 @@ def _route_outcome_rows(result: dict[str, Any]) -> list[list[Any]]:
         rows.append([
             route.get("route_id"), route.get("original_riders"), route.get("window_limit_min"),
             route.get("original_duration_min"), route.get("primary_removed_riders"), route.get("post_primary_duration_min"),
+            None if route.get("post_primary_duration_min") is None else
             "Yes / 是" if _safe_float(route.get("post_primary_duration_min")) > _safe_float(route.get("window_limit_min")) else "No / 否",
             route.get("additional_removed_riders"),
             "; ".join(str(item.get("address") or "") for item in additional),
@@ -1495,7 +1543,7 @@ def _address_measurement_rows(result: dict[str, Any]) -> list[list[Any]]:
         rows.append([
             row.get("address"), row.get("riders"), ", ".join(str(item) for item in list(row.get("route_ids") or [])),
             _operational_category_label(category), row.get("direct_duration_min"), row.get("direct_distance_km"),
-            row.get("estimated_current_ride_min"), round(over_limit, 2),
+            row.get("estimated_current_ride_min"), None if category == "data_review" else round(over_limit, 2),
             ", ".join(str(item) for item in list(row.get("additional_window_routes") or [])), row.get("provider_called_at"),
         ])
     return rows
@@ -1522,7 +1570,7 @@ def _style_summary_sheet(sheet: Any) -> None:
                     cell.font = Font(bold=True, color="164E63")
                     cell.fill = header_fill
                     cell.alignment = Alignment(wrap_text=True, vertical="center")
-        elif first_value == "Attention / 注意":
+        elif first_value in {"Attention / 注意", "Data review / 数据复核"}:
             for cell in row:
                 cell.fill = attention_fill
                 cell.font = Font(bold=True, color="92400E")

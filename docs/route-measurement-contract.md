@@ -104,6 +104,21 @@ mathematically infeasible claim.
 
 ## Consumers And History
 
+Direct-to-School classification retains every original route occurrence even
+when that route cannot be measured. A known direct-trip excess still counts
+those students; a missing direct trip must not be inferred to fit the limit
+from a measured shared-route ride. Otherwise, either missing direct or current
+ride evidence leaves the occurrence in `data_review`. Recovery recommendations
+are not certified for a route with unclassified occurrences.
+
+`operational_conclusion.data_review` counts affected students, unique addresses
+and routes at occurrence level. Pages, map summaries and statistics workbooks
+expose this uncertainty; a missing excess or post-removal comparison is blank,
+not zero or "within limit". The Route Evidence worksheet retains route-level
+review reasons even if a pickup guard prevented any segment request. The job
+worker may finish successfully with a `partial` analysis; successful execution
+must not be interpreted as complete measurement or a certified route window.
+
 Workbook Pre-analysis measures its imported current routes through the same
 final traffic gate before building the preview. Its route-budget measurement
 summary reuses those snapshots, rather than issuing a separate AMap pass.
@@ -138,6 +153,10 @@ export geometry. Run `tests/test_route_evidence.py` together with final traffic,
 Direct-to-School, Fleet, Route Insert, scheduled-worker, and map/export tests.
 `tests/test_amap_geocode_quality.py` covers coarse geocodes, unrelated POIs,
 ambiguous matches, cache versioning, saved-input guards and school identity.
+Direct-to-School tests also exercise the real manual and scheduled worker
+branches with substituted provider I/O and persistence. They check unknown
+classification, preserved input, partial checkpoints and workbook blanks,
+without making live map requests or writing real jobs.
 
 Live acceptance additionally requires a scoped replay of the reported routes.
 Keep the same inputs, direction, stop order, vehicle and dwell configuration;

@@ -723,10 +723,10 @@ export type DirectSchoolStopResult = {
         route_id?: string;
         stop_sequence?: number;
         riders?: number;
-        estimated_current_ride_min?: number;
-        route_total_min?: number;
+        estimated_current_ride_min?: number | null;
+        route_total_min?: number | null;
         operational_category?: string;
-        over_limit_min?: number;
+        over_limit_min?: number | null;
     }>;
 };
 
@@ -735,6 +735,7 @@ export type DirectSchoolOperationalConclusion = {
     route_window_min: number;
     direct_over_limit: { address_count: number; rider_count: number };
     route_only_over_limit: { address_count: number; rider_count: number };
+    data_review?: { address_count: number; rider_count: number; route_count: number };
     primary_removal: { address_count: number; rider_count: number };
     post_primary: { route_count: number; over_window_count: number; within_window_count: number; data_review_count: number };
     additional_removal: { address_count: number; rider_count: number; selection_strategy?: string };

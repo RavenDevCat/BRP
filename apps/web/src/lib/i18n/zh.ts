@@ -1,6 +1,8 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Students awaiting classification": "尚待分类的学生",
+    "Missing measurements are not counted as within limit.": "测算缺失不代表符合时间上限。",
     "Historical result": "历史结果",
     "Measured at": "测算时间",
     "Time window exceeded": "超出时间窗",

@@ -1,6 +1,8 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Students awaiting classification": "분류 대기 중인 학생",
+    "Missing measurements are not counted as within limit.": "측정값이 없으면 시간 제한 충족으로 집계하지 않습니다.",
     "Historical result": "이전 결과",
     "Measured at": "측정 시각",
     "Time window exceeded": "운행 시간 범위 초과",

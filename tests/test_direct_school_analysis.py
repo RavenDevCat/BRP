@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from copy import deepcopy
 from io import BytesIO
 from pathlib import Path
 import sys
@@ -12,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import backend_service  # noqa: E402
+import backend_job_runner  # noqa: E402
 import direct_school_analysis as analysis  # noqa: E402
 from amap_geocode_quality import GEOCODE_QUALITY_VERSION
 
@@ -166,6 +168,91 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     assert result["route_window_analysis"][0]["post_primary_duration_min"] == 16
     assert checkpoints
     assert checkpoints[0]["analysis_type"] == "direct_school"
+
+
+def test_missing_direct_measurement_is_not_route_only_or_a_removal_candidate(monkeypatch) -> None:
+    class MissingDirect(FakeProvider):
+        def route(self, points, **kwargs):
+            if len(points) == 2 and points[0]["address"] == "Far stop":
+                raise RuntimeError("Direct measurement unavailable")
+            return super().route(points, **kwargs)
+    monkeypatch.setattr(analysis, "FreshRouteProvider", MissingDirect)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+    result = analysis.run_direct_school_analysis(
+        prepared_payload(), {"far_duration_minutes": 45}, run_seed="missing-direct",
+    )
+    far = next(row for row in result["stops"] if row["address"] == "Far stop")
+    assert far["operational_category"] == "data_review"
+    assert far["route_contexts"][0]["over_limit_min"] is None
+    assert result["operational_conclusion"]["route_only_over_limit"]["rider_count"] == 0
+    assert result["operational_conclusion"]["data_review"]["rider_count"] == 2
+    assert result["route_window_analysis"][0]["status"] == "data_review"
+    assert not result["route_window_analysis"][0].get("additional_removals")
+
+
+def test_direct_over_limit_counts_all_occurrences_even_when_one_route_fails(monkeypatch) -> None:
+    class PartialRoutes(FakeProvider):
+        route_requests = 0
+        def route(self, points, **kwargs):
+            if len(points) == 3:
+                self.route_requests += 1
+                if self.route_requests == 2:
+                    raise RuntimeError("One current route unavailable")
+            return super().route(points, **kwargs)
+    prepared = prepared_payload()
+    stops = prepared["current_plan"]["stops"]
+    stops.extend([{**stop, "route_id": "R2"} for stop in list(stops)])
+    monkeypatch.setattr(analysis, "FreshRouteProvider", PartialRoutes)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+    result = analysis.run_direct_school_analysis(prepared, {"far_duration_minutes": 45}, run_seed="partial-routes")
+    conclusion = result["operational_conclusion"]
+    assert conclusion["direct_over_limit"]["rider_count"] == 4
+    assert conclusion["data_review"] == {"address_count": 1, "rider_count": 3, "route_count": 1}
+    near = next(row for row in result["stops"] if row["address"] == "Near stop")
+    assert len(near["route_contexts"]) == 2
+    assert next(context for context in near["route_contexts"] if context["route_id"] == "R2")["estimated_current_ride_min"] is None
+
+
+@pytest.mark.parametrize("scheduled_at", [None, "2026-09-08T23:00:00+00:00"])
+def test_actual_job_runner_preserves_unknown_classification(monkeypatch, scheduled_at) -> None:
+    class MissingDirect(FakeProvider):
+        def route(self, points, **kwargs):
+            if len(points) == 2 and points[0]["address"] == "Far stop":
+                raise RuntimeError("Direct measurement unavailable")
+            return super().route(points, **kwargs)
+
+    original = prepared_payload()
+    state = {"record": {
+        "job_id": "classification-runner", "status": "queued",
+        "scheduled_start_at": scheduled_at, "prepared_payload": deepcopy(original),
+        "metadata": {"job_kind": "direct_school_analysis", "scheduled_job": bool(scheduled_at),
+                     "analysis_config": {"far_duration_minutes": 45}},
+    }}
+    snapshots = []
+
+    def save(record):
+        state["record"] = deepcopy(record)
+        snapshots.append(deepcopy(record))
+
+    monkeypatch.setattr(analysis, "FreshRouteProvider", MissingDirect)
+    monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
+    monkeypatch.setattr(backend_job_runner, "_load_job", lambda _id: deepcopy(state["record"]))
+    monkeypatch.setattr(backend_job_runner, "_save_job", save)
+    monkeypatch.setattr(backend_job_runner, "_release_concurrency_slot", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "classification-runner"])
+    # Exercise the real runner and analysis; only provider I/O and persistence are substituted.
+    assert backend_job_runner.main() == 0
+    saved = state["record"]
+    assert saved["status"] == "succeeded"
+    assert saved["result"]["status"] == "partial"
+    assert saved["prepared_payload"] == original
+    assert saved["result"]["operational_conclusion"]["data_review"]["rider_count"] == 2
+    assert saved["result"]["operational_conclusion"]["route_only_over_limit"]["rider_count"] == 0
+    assert saved["result"]["route_window_analysis"][0]["status"] == "data_review"
+    assert any(record["status"] == "running" and record.get("result") for record in snapshots)
+    workbook = load_workbook(BytesIO(analysis.build_direct_school_workbook(saved)))
+    assert workbook["Address Measurements"]["H5"].value is None
+    assert workbook["Route Outcomes"]["G5"].value is None
 
 
 def test_distance_and_retired_parameters_never_trigger_classification(monkeypatch) -> None:
@@ -495,6 +582,36 @@ def test_audit_template_is_the_direct_school_input_contract() -> None:
     assert current_plan["summary"]["service_stop_count"] == 3
     assert current_plan["fleet"]
     assert current_plan["input_records"][0]["passenger_count"] == 0
+
+
+def test_export_keeps_pre_request_review_evidence_and_missing_values():
+    snapshot = {"evidence_version": analysis.planner_core.EVIDENCE_VERSION, "status": "needs_review", "legs": [],
+                "issues": [{"code": "pickup_precision_needs_review", "detail": "Confirm the pickup entrance."}]}
+    conclusion = {"duration_limit_min": 60, "route_window_min": 90,
+                  "direct_over_limit": {"rider_count": 0, "address_count": 0},
+                  "route_only_over_limit": {"rider_count": 0, "address_count": 0},
+                  "data_review": {"rider_count": 2, "address_count": 1, "route_count": 1},
+                  "final": {"data_review_count": 1}}
+    record = {"job_id": "review-export", "result": {
+        "analysis_version": 6, "provider": "amap", "status": "partial", "service_direction": "To School",
+        "parameters": {"far_duration_minutes": 60}, "operational_conclusion": conclusion,
+        "stops": [{"address": "Unconfirmed pickup", "riders": 2, "route_ids": ["R1"],
+                   "operational_category": "data_review", "route_evidence": snapshot}],
+        "routes": [{"route_id": "R1", "route_evidence": snapshot}],
+        "route_window_analysis": [{"route_id": "R1", "status": "data_review", "original_riders": 2}],
+    }}
+    workbook = load_workbook(BytesIO(analysis.build_direct_school_workbook(record)))
+    review_row = next(row for row in workbook["Operational Summary"].iter_rows() if row[0].value == "Data review / 数据复核")
+    assert review_row[2].value == review_row[3].value == 2
+    assert "not counted as within limit" in review_row[6].value
+    assert workbook["Address Measurements"]["H5"].value is None
+    assert workbook["Route Outcomes"]["G5"].value is None
+    evidence = workbook["Route Evidence"]
+    assert evidence["D5"].value is None
+    assert evidence["E5"].value == "needs_review"
+    assert all(evidence.cell(5, column).value is None for column in range(6, 10))
+    assert "pickup_precision_needs_review" in evidence["M5"].value
+    assert "Confirm the pickup entrance." in evidence["M5"].value
 
 
 def test_missing_school_geocode_is_not_replaced_by_first_student_point() -> None:

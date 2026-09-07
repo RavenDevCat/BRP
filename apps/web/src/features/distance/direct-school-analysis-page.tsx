@@ -534,6 +534,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
   if (!result) return null;
   const conclusion = result.operational_conclusion;
   const totalRiders = result.stops.reduce((total, row) => total + Math.max(0, Number(row.riders || 0)), 0);
+  const reviewRiders = classificationReviewRiders(result);
   return (
     <Card>
       <CardHeader>
@@ -555,6 +556,12 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        {reviewRiders > 0 ? (
+          <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-900">
+            <strong>{t("Students awaiting classification")}: {formatNumber(reviewRiders)} {t("out of")} {formatNumber(totalRiders)}</strong>
+            <div className="mt-1 text-xs">{t("Missing measurements are not counted as within limit.")}</div>
+          </div>
+        ) : null}
         {result.provider === "amap" && result.analysis_version < 6 ? (
           <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-800">
             {t("Historical result: map and timing were not saved as one measurement. Rerun to verify.")}
@@ -839,6 +846,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
   const conclusion = result.operational_conclusion;
   const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? result.stops.filter((row) => operationalCategory(row) === "direct_over_limit").reduce((total, row) => total + Number(row.riders || 0), 0));
   const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? result.stops.filter((row) => operationalCategory(row) === "route_only_over_limit").reduce((total, row) => total + Number(row.riders || 0), 0));
+  const reviewRiders = classificationReviewRiders(result);
   const selectedCategory = selectedStop ? operationalCategory(selectedStop) : "within_limit";
   const pointData = useMemo<FeatureCollection<Point>>(() => ({
     type: "FeatureCollection",
@@ -957,6 +965,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
             <div className="mt-2 grid gap-1.5 text-xs">
               <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-muted-foreground"><span className="h-2.5 w-2.5 rounded-full bg-red-600" />{t("Direct-over-limit students")}</span><strong className="text-red-700">{formatNumber(directOverRiders)}</strong></div>
               <div className="flex items-center justify-between gap-3"><span className="flex items-center gap-2 text-muted-foreground"><span className="h-2.5 w-2.5 rounded-full bg-amber-600" />{t("Shared-route over-limit students")}</span><strong className="text-amber-800">{formatNumber(routeOnlyOverRiders)}</strong></div>
+              {reviewRiders > 0 ? <div className="flex items-center justify-between gap-3 border-t border-border pt-1.5"><span className="text-amber-900">{t("Students awaiting classification")}</span><strong>{formatNumber(reviewRiders)}</strong></div> : null}
             </div>
           </div>
           {selectedStop ? (
@@ -1006,11 +1015,12 @@ function downloadDirectSchoolMapHtml(
     }));
   const directOverRiders = Number(conclusion?.direct_over_limit.rider_count ?? stops.filter((row) => row.category === "direct_over_limit").reduce((total, row) => total + row.riders, 0));
   const routeOnlyOverRiders = Number(conclusion?.route_only_over_limit.rider_count ?? stops.filter((row) => row.category === "route_only_over_limit").reduce((total, row) => total + row.riders, 0));
+  const reviewRiders = classificationReviewRiders(result);
   const payload = JSON.stringify({
     school: { address: school.address || "", lat: Number(school.lat), lng: Number(school.lng) },
     stops,
     selectedStopKey: selectedStop?.stop_key || stops[0]?.stopKey || "",
-    summary: { directOverRiders, routeOnlyOverRiders },
+    summary: { directOverRiders, routeOnlyOverRiders, reviewRiders },
     evidenceVersion: result.analysis_version,
   }).replace(/</g, "\\u003c");
   const labels = JSON.stringify({
@@ -1062,6 +1072,7 @@ function downloadDirectSchoolMapHtml(
     <div class="title-row"><h1 id="summaryTitle"></h1><button id="fitAll" type="button"></button></div>
     <div class="metric danger"><span id="directLabel"></span><strong id="directValue"></strong></div>
     <div class="metric warning"><span id="routeLabel"></span><strong id="routeValue"></strong></div>
+    ${reviewRiders > 0 ? `<div class="metric warning"><span>${htmlEscape(t("Students awaiting classification"))}</span><strong>${reviewRiders}</strong></div><p class="meta">${htmlEscape(t("Missing measurements are not counted as within limit."))}</p>` : ""}
     ${result.provider === "amap" && result.analysis_version < 6 ? `<p class="meta">${htmlEscape(t("Historical result: map and timing were not saved as one measurement. Rerun to verify."))}</p>` : ""}
   </section>
   <section class="panel detail">
@@ -1481,7 +1492,15 @@ function operationalCategory(row: DirectSchoolStopResult): Exclude<Classificatio
 }
 
 function largestOverLimit(row: DirectSchoolStopResult) {
-  return Math.max(0, ...(row.route_contexts || []).map((item) => Number(item.over_limit_min || 0)));
+  if (operationalCategory(row) === "data_review") return undefined;
+  const known = (row.route_contexts || []).flatMap((item) => item.over_limit_min == null ? [] : [item.over_limit_min]);
+  return known.length ? Math.max(0, ...known) : undefined;
+}
+
+function classificationReviewRiders(result: NonNullable<DirectSchoolJobRecord["result"]>) {
+  return Number(result.operational_conclusion?.data_review?.rider_count ?? result.stops
+    .filter((row) => operationalCategory(row) === "data_review")
+    .reduce((total, row) => total + Math.max(0, Number(row.riders || 0)), 0));
 }
 
 function statusLabel(status: string) {

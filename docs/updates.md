@@ -9,6 +9,12 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Shared Route Measurement Snapshots
 
+- Direct-to-School retains students on routes with missing measurements and
+  no longer classifies a missing direct trip as fitting the limit. Unclassified
+  students are shown explicitly in pages, map summaries and Excel, and affected
+  routes do not receive verified removal recommendations. Unknown excess and
+  post-removal comparisons are left unavailable, not reported as zero or passed.
+  Exported route evidence includes review reasons even before any road request.
 - Both AMap geocoding clients now share pickup-precision checks. Road/area
   centroids and unrelated or ambiguous POIs require a more specific address;
   they are not selected automatically to shorten a route. Matching retains

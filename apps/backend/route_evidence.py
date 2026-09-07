@@ -23,7 +23,7 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-adjacent-evidence-v1"
+EVIDENCE_VERSION = "amap-adjacent-evidence-v2"
 CACHE_MAX_AGE_SECONDS = 600
 
 

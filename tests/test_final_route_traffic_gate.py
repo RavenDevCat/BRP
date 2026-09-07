@@ -7,6 +7,8 @@ from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
 planner_core = importlib.import_module("planner_core")
+PRECISE_PICKUP = {"geocode_quality_version": importlib.import_module("amap_geocode_quality").GEOCODE_QUALITY_VERSION,
+                  "geocode_level": "\u5174\u8da3\u70b9"}
 
 
 def _amap_test_geometry(points):
@@ -198,8 +200,8 @@ def test_am_arrival_gate_tightens_route_target_before_adding_vehicles(monkeypatc
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
     result = planner_core._compute_scenario_without_render(
         planner,
@@ -305,9 +307,9 @@ def test_amap_failure_forces_a_new_route_at_the_same_exact_vehicle_count(monkeyp
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
     ]
     result = planner_core._compute_scenario_without_render(
         planner,
@@ -402,8 +404,8 @@ def test_pm_route_duration_gate_tightens_route_target_before_saving(monkeypatch)
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
     result = planner_core._compute_scenario_without_render(planner, points, "pm-smoke")
 
@@ -491,8 +493,8 @@ def test_am_arrival_gate_stops_after_tighter_target_is_infeasible(monkeypatch):
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
     result = planner_core._compute_scenario_without_render(planner, points, "am-fallback-smoke")
 
@@ -576,11 +578,11 @@ def test_am_arrival_gate_recovers_after_combined_replan_is_infeasible(monkeypatc
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.4, "lng": 121.4, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.5, "lng": 121.5, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.4, "lng": 121.4, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.5, "lng": 121.5, "adcode": "310000"},
     ]
     result = planner_core._compute_scenario_without_render(
         planner,
@@ -664,8 +666,8 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
     result = planner_core._compute_scenario_without_render(
         planner,
         [
-            {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-            {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+            {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+            {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
         ],
         "15-minute smoke",
         reduced_vehicle_limit=20,
@@ -711,8 +713,8 @@ def test_am_arrival_gate_fails_routes_outside_default_six_thirty_to_eight_window
         ]
     }
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
 
     gate = planner_core.attach_final_route_traffic_gate(
@@ -800,9 +802,9 @@ def test_am_arrival_gate_does_not_pass_with_unchecked_routes(monkeypatch):
         ]
     }
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.3, "lng": 121.3, "adcode": "310000"},
     ]
 
     gate = planner_core.attach_final_route_traffic_gate(
@@ -987,8 +989,8 @@ def test_pm_final_route_gate_uses_explicit_time_window(monkeypatch):
         ]
     }
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
 
     gate = planner_core.attach_final_route_traffic_gate(
@@ -1032,8 +1034,8 @@ def test_current_plan_scenario_reuses_final_route_gate(monkeypatch):
         ],
     }
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
 
     gate = planner_core.attach_current_plan_traffic_gate(
@@ -1177,8 +1179,8 @@ def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):
         MAX_ROUTE_DURATION_SECONDS = 60 * 60
 
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
 
     def scenario():
@@ -1233,8 +1235,8 @@ def test_deep_verification_provider_budget_is_shared_across_gates(monkeypatch):
 
     planner = FakePlanner()
     points = [
-        {"is_depot": True, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
-        {"provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
+        {"is_depot": True, **PRECISE_PICKUP, "provider": "amap", "lat": 31.1, "lng": 121.1, "adcode": "310000"},
+        {**PRECISE_PICKUP, "provider": "amap", "lat": 31.2, "lng": 121.2, "adcode": "310000"},
     ]
     scenario = {
         "routes": [

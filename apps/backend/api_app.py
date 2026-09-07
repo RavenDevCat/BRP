@@ -34,6 +34,9 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from operations_review import build_operations_review  # type: ignore
 
 
+from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
+
+
 class BackendHttpError(Exception):
     def __init__(self, status_code: int, payload: dict[str, Any]):
         self.status_code = status_code
@@ -1801,6 +1804,7 @@ def _insert_geocode_stops(
     resolved: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     for index, stop in enumerate(stops):
+        point = dict(stop)
         lat = _insert_float(stop.get("lat"))
         lng = _insert_float(stop.get("lng"))
         address = str(stop.get("address") or "").strip()
@@ -1822,7 +1826,6 @@ def _insert_geocode_stops(
                 point = planner.geocode_query(country, city, address)
                 lat = _insert_float(point.get("plot_lat") or point.get("lat"))
                 lng = _insert_float(point.get("plot_lng") or point.get("lng"))
-                address = str(point.get("formatted_address") or address).strip()
             except Exception as exc:
                 warnings.append({"index": index, "address": address, "reason": str(exc)})
                 continue
@@ -1832,6 +1835,11 @@ def _insert_geocode_stops(
         resolved.append(
             {
                 "index": index,
+                **{field: point[field] for field in GEOCODE_PROVENANCE_FIELDS if field in point},
+                "provider": str(point.get("provider") or ""),
+                "coordinate_system": "WGS84",
+                "formatted_address": str(point.get("formatted_address") or ""),
+                "requested_address": address,
                 "address": address,
                 "country": country,
                 "city": city,
@@ -1893,6 +1901,11 @@ def _insert_coord_payload(point: dict[str, Any], country: str, city: str) -> dic
     lat = _insert_float(point.get("lat"))
     lng = _insert_float(point.get("lng"))
     return {
+        **{field: point[field] for field in GEOCODE_PROVENANCE_FIELDS if field in point},
+        "provider": str(point.get("provider") or ""),
+        "coordinate_system": "WGS84",
+        "formatted_address": str(point.get("formatted_address") or ""),
+        "requested_address": str(point.get("requested_address") or point.get("address") or ""),
         "address": str(point.get("address") or "").strip(),
         "country": str(point.get("country") or country).strip(),
         "city": str(point.get("city") or city).strip(),
@@ -2552,7 +2565,7 @@ def _insert_route_measurement(
         try:
             backend_service._amap_route_stats(
                 planner,
-                backend_service._route_amap_points(route_points, {"nodes": list(range(len(route_points)))}),
+                backend_service._route_amap_points(route_points, {"nodes": list(range(len(route_points)))}, state),
                 context["cache"], state,
             )
             route_evidence = dict(state.get("last_route_evidence") or {})
@@ -2562,6 +2575,7 @@ def _insert_route_measurement(
                 display_duration_s = route_evidence.get("duration_s")
                 display_distance_m = route_evidence.get("distance_m")
         except Exception as exc:
+            route_evidence = dict(state.get("last_route_evidence") or {})
             display_message = f"AMap measurement unavailable: {exc.__class__.__name__}"
         if route_evidence.get("status") != "verified":
             warnings.append("amap_final_validation_unavailable")

@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / "apps" / "backend"))
 
 import backend_service  # noqa: E402
 import direct_school_analysis as analysis  # noqa: E402
+from amap_geocode_quality import GEOCODE_QUALITY_VERSION
 
 
 def point(address: str, lat: float, lng: float, passengers: int = 0) -> dict:
@@ -309,7 +310,9 @@ def test_amap_provider_uses_raw_gcj_coordinates(monkeypatch) -> None:
                 "lng": 121.507049,
                 "plot_lat": 31.2332296,
                 "plot_lng": 121.5026431,
-                "provider": "amap",
+                    "provider": "amap",
+                    "geocode_quality_version": GEOCODE_QUALITY_VERSION,
+                    "geocode_level": "\u5174\u8da3\u70b9",
                 "adcode": "310115",
             },
             {
@@ -317,7 +320,9 @@ def test_amap_provider_uses_raw_gcj_coordinates(monkeypatch) -> None:
                 "lng": 121.516513,
                 "plot_lat": 31.2447643,
                 "plot_lng": 121.5121398,
-                "provider": "amap",
+                    "provider": "amap",
+                    "geocode_quality_version": GEOCODE_QUALITY_VERSION,
+                    "geocode_level": "\u5174\u8da3\u70b9",
                 "adcode": "310115",
             },
         ]

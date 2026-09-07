@@ -293,6 +293,8 @@ class FreshRouteProvider:
 
     def route(self, points: list[dict[str, Any]], *, reference_legs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
         self.state.pop("last_route_evidence", None)
+        if self.provider == "amap":
+            planner_core._check_amap_pickup_precision(points, self.state)
         coordinate_reader = (
             planner_core._amap_route_point
             if self.provider == "amap"

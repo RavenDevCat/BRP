@@ -26,6 +26,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import Workbook
 
 try:
+    from .route_evidence import EVIDENCE_VERSION
     from .amap_driving import (
         amap_request_point,
         AMAP_DRIVING_ENDPOINT,
@@ -67,6 +68,7 @@ try:
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
+        attach_current_plan_traffic_gate,
         attach_route_display_metadata,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
@@ -79,6 +81,7 @@ try:
         run_backend_planner_with_prepared_data,
     )
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
+    from route_evidence import EVIDENCE_VERSION
     from amap_driving import (
         amap_request_point,
         AMAP_DRIVING_ENDPOINT,
@@ -120,6 +123,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         _amap_route_stats,
         _route_amap_points,
         assess_current_plan,
+        attach_current_plan_traffic_gate,
         attach_route_display_metadata,
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
@@ -131,6 +135,9 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         rerender_html_from_structured_results,
         run_backend_planner_with_prepared_data,
     )
+
+
+from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -1959,6 +1966,7 @@ def _current_plan_preview_map(
     current_plan: dict[str, Any],
     prepared_payload: dict[str, Any],
     config_payload: dict[str, Any],
+    auto_route_budget: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
     points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
     if not points:
@@ -1994,8 +2002,33 @@ def _current_plan_preview_map(
             current_plan_assessment,
             points,
         )
+        country, _city = _auto_route_budget_location(current_plan, points)
+        if country == "CHINA":
+            for route in scenario.get("routes") or []:
+                route["stop_service_time_s"] = sum(
+                    int(node) != 0 for node in route.get("nodes") or []
+                ) * config.stop_service_minutes * 60
+            gate = attach_current_plan_traffic_gate(
+                planner, scenario, points, config,
+                [dict(item) for item in current_plan.get("input_records") or []],
+            ) or {}
+            # A new upload is not a legacy result, even if measurement failed.
+            for route in scenario.get("routes") or []:
+                if not route.get("route_evidence"):
+                    route["route_evidence"] = {
+                        "evidence_version": EVIDENCE_VERSION,
+                        "provider": "amap", "source": "amap_adjacent_legs",
+                        "status": "unavailable", "complete": False,
+                        "legs": [], "geometry": [], "geometry_segments": [],
+                        "duration_s": None, "distance_m": None,
+                        "issues": [{"code": gate.get("reason") or "preview_measurement_unavailable"}],
+                    }
+                    route["final_route_traffic_gate"] = {"status": "unavailable", "passes": None}
+            if auto_route_budget is not None:
+                _update_preview_amap_budget(auto_route_budget, scenario, gate)
         job_record = {
             "job_id": "workbook-preview",
+            "config": dict(config_payload),
             "result": {
                 "service_direction": str(
                     getattr(config, "service_direction", "") or ""
@@ -2014,6 +2047,40 @@ def _current_plan_preview_map(
         )
     except Exception as exc:
         return None, str(exc) or exc.__class__.__name__
+
+
+def _update_preview_amap_budget(
+    details: dict[str, Any], scenario: dict[str, Any], gate: dict[str, Any],
+) -> None:
+    routes = list(scenario.get("routes") or [])
+    measured = [route for route in routes if dict(route.get("route_evidence") or {}).get("status") == "verified"]
+    details.update({
+        "amap_route_country": gate.get("country"),
+        "amap_route_city": gate.get("city"),
+        "amap_route_api_calls": int(gate.get("api_calls") or 0),
+        "amap_route_cache_hits": int(gate.get("cache_hits") or 0),
+        "amap_route_measured_count": len(measured),
+        "amap_route_expected_count": len(routes),
+    })
+    if not routes or len(measured) != len(routes):
+        details.update({"amap_route_status": "unavailable", "amap_route_reason": "incomplete_route_evidence"})
+        return
+    longest = max(measured, key=lambda route: float(route["route_evidence"]["duration_s"]) + route["stop_service_time_s"])
+    evidence = longest["route_evidence"]
+    duration_s = float(evidence["duration_s"]) + longest["stop_service_time_s"]
+    minutes = max(5, min(240, int(math.ceil(duration_s / 60.0))))
+    if minutes > int(details.get("minutes") or 0):
+        details.update({"minutes": minutes, "source": "max_current_plan_amap_route"})
+    details.update({
+        "amap_route_status": "ready", "amap_route_source": evidence["source"],
+        "amap_route_id": longest.get("route_id"),
+        "amap_route_duration_minutes": round(duration_s / 60.0, 1),
+        "amap_route_drive_duration_minutes": round(float(evidence["duration_s"]) / 60.0, 1),
+        "amap_route_distance_km": round(float(evidence["distance_m"]) / 1000.0, 1),
+        "amap_route_point_count": evidence.get("point_count"),
+        "amap_route_called_at": evidence.get("called_at"),
+        "amap_budget_minutes": minutes,
+    })
 
 
 def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
@@ -2041,6 +2108,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
         auto_route_budget = _auto_current_plan_route_budget_details(
             current_plan,
             prepared_payload,
+            False,
         ) or {"status": "unavailable", "reason": "no_measurable_current_routes"}
         address_review = _build_address_review(
             client_core,
@@ -2052,6 +2120,7 @@ def _workbook_preview_response(payload: dict[str, Any]) -> dict[str, Any]:
             current_plan,
             prepared_payload,
             suggested_config,
+            auto_route_budget,
         )
     except Exception as exc:
         preparation_error = str(exc) or exc.__class__.__name__
@@ -2205,6 +2274,7 @@ def _attach_current_plan_amap_budget_details(
 def _auto_current_plan_route_budget_details(
     current_plan: dict[str, Any],
     prepared_payload: dict[str, Any],
+    measure_amap: bool = True,
 ) -> dict[str, Any] | None:
     points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
     if len(points) < 2:
@@ -2281,7 +2351,8 @@ def _auto_current_plan_route_budget_details(
         "route_count": len(route_groups),
         "osrm_budget_minutes": minutes,
     }
-    _attach_current_plan_amap_budget_details(planner, details, current_plan, points, route_nodes_by_id)
+    if measure_amap:
+        _attach_current_plan_amap_budget_details(planner, details, current_plan, points, route_nodes_by_id)
     return details
 
 
@@ -2698,6 +2769,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         auto_route_budget = _auto_current_plan_route_budget_details(
             current_plan,
             dict(client_prep["prepared_payload"]),
+            False,
         ) or {"status": "unavailable", "reason": "no_measurable_current_routes"}
         if auto_route_budget.get("minutes") is not None:
             auto_route_budget_minutes = int(auto_route_budget["minutes"])
@@ -2709,7 +2781,11 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         current_plan,
         dict(client_prep["prepared_payload"]),
         config_payload,
+        auto_route_budget,
     )
+    if auto_route_budget.get("minutes") is not None:
+        auto_route_budget_minutes = int(auto_route_budget["minutes"])
+        config_payload["max_route_duration_minutes"] = auto_route_budget_minutes
     readiness = _workbook_solver_readiness(
         address_review=address_review,
         acknowledged=bool(payload.get("address_review_acknowledged")),
@@ -5675,6 +5751,10 @@ def _build_job_map_payload(
             stop_payloads.append(
                 {
                     "id": stop_id,
+                    **{field: point[field] for field in GEOCODE_PROVENANCE_FIELDS if field in point},
+                    "provider": str(point.get("provider") or ""),
+                    "coordinate_system": "WGS84",
+                    "formatted_address": str(point.get("formatted_address") or ""),
                     "route_id": route_id,
                     "source_route_id": source_route_id,
                     "route_index": route_index,
@@ -5684,7 +5764,7 @@ def _build_job_map_payload(
                         point.get("display_address") or point.get("address") or ""
                     ).strip(),
                     "requested_address": str(
-                        point.get("requested_address") or ""
+                        point.get("requested_address") or point.get("address") or ""
                     ).strip(),
                     "passenger_count": int(point.get("passenger_count", 0) or 0),
                     "is_depot": bool(point.get("is_depot")),

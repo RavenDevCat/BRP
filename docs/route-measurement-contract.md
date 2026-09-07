@@ -2,7 +2,7 @@
 
 ## Ownership
 
-`apps/backend/route_evidence.py` owns China final-road measurement. Audit final
+`apps/backend/route_evidence.py` owns China final-road measurement. Pre-analysis, Audit final
 gates, Direct-to-School analysis (including route recovery), Fleet Planner final
 checks, and Route Insert Advisor use the same AMap interface through
 `planner_core._amap_route_stats` or `FreshRouteProvider.route`.
@@ -28,6 +28,31 @@ KR retains Kakao future-direction validation.
   segments may be reused for at most 600 seconds within that run. Persistent
   whole-route caches cannot satisfy a new final measurement.
 
+## Pickup Precision
+
+`apps/amap_geocode_quality.py` owns AMap address precision and matching for both
+geocoding clients. City plausibility alone is insufficient: road/area-level or
+unknown precision cannot certify a pickup. A single structured geocode request
+may be followed by one city-code-bounded POI query. Matching preserves requested
+roads, bus-stop identity, building numbers, named landmarks, branches and explicit
+entrances. Unrequested parking and tenant POIs cannot substitute for a pickup.
+Multiple eligible POIs require clarification; never select by first rank or
+shortest resulting route.
+
+Persist `geocode_quality_version`, precision level and POI provenance alongside
+the coordinates, including through Fleet point transformations. Older AMap cache
+entries are revalidated only when their addresses are prepared again; there is no
+bulk cache deletion or silent correction of saved coordinates. Failure to locate
+the school cannot promote the next passenger or zero-passenger waypoint to depot.
+
+Before new final measurements, the common guard checks saved AMap point precision,
+including inputs of scheduled runs. Missing/outdated evidence produces
+`pickup_precision_needs_review`, consumes no route API calls for that route and
+does not certify time windows or removal recommendations. Re-prepare the affected
+addresses before rerunning. This version boundary also invalidates resume reuse
+of measurements made before the pickup guard. It does not rewrite old results or
+prove that an accepted building/POI is the operator's intended pickup entrance.
+
 ## Snapshot
 
 Each measured route stores `route_evidence` with version, provider, status,
@@ -46,8 +71,8 @@ flattening for bounds and compatibility, not proof of junction continuity.
 Quality states are independent of time-window acceptance:
 
 - `verified`: complete data and no unresolved quality guard.
-- `needs_review`: complete returned metrics, but a detour, endpoint snap, or
-  junction guard remains unresolved. These are estimates, not certified input
+- `needs_review`: pickup precision is unverified, or returned metrics have an
+  unresolved detour, endpoint snap or junction guard. Available metrics are not certified input
   for acceptance or removal recommendations.
 - `unavailable`: missing/invalid data or request budget exhausted; route totals
   are not certified and must not be filled by scaled OSRM values.
@@ -79,6 +104,14 @@ mathematically infeasible claim.
 
 ## Consumers And History
 
+Workbook Pre-analysis measures its imported current routes through the same
+final traffic gate before building the preview. Its route-budget measurement
+summary reuses those snapshots, rather than issuing a separate AMap pass.
+Only a complete set of verified routes can claim a ready AMap budget; the
+OSRM planning-budget estimate remains separately identified. The preview uses
+the supplied stop dwell and service direction, including zero-passenger
+waypoints. Missing provider data is unavailable, not a legacy-result label.
+
 Interactive maps, legacy HTML maps, and statistics exports read saved evidence.
 Opening a completed map must not issue a new AMap request. Legacy cached map
 geometry may still be shown, but is labelled as historical and is not evidence
@@ -90,6 +123,10 @@ direct, current-route, first-removal and final measurements. Old version 5 and
 earlier results require a new run to obtain the unified snapshot. A scheduled
 run executes the deployed implementation when released; previously prepared
 coordinates are not automatically re-geocoded solely by deploying this change.
+Measurement quality is not proof that an address was geocoded to its intended
+pickup point. Road, residential-area, or other coarse geocodes may still land
+on the wrong access road or road level. Do not move such points automatically
+just to obtain a shorter route; confirm the intended stop and re-prepare it.
 
 ## Acceptance
 
@@ -97,7 +134,10 @@ Offline tests cover coordinate provenance, directed cache freshness, request
 limits, retries, co-located points, invalid data, junction comparison retention,
 exact stop timing, read-only history maps, shared Fleet measurement, and legacy
 export geometry. Run `tests/test_route_evidence.py` together with final traffic,
+`tests/test_preanalysis_route_evidence.py`, workbook upload/readiness,
 Direct-to-School, Fleet, Route Insert, scheduled-worker, and map/export tests.
+`tests/test_amap_geocode_quality.py` covers coarse geocodes, unrelated POIs,
+ambiguous matches, cache versioning, saved-input guards and school identity.
 
 Live acceptance additionally requires a scoped replay of the reported routes.
 Keep the same inputs, direction, stop order, vehicle and dwell configuration;

@@ -51,6 +51,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
+from amap_geocode_quality import GeocodePrecisionError, require_amap_pickup_precision
 
 try:
     from planning_contract_adapters import (
@@ -726,8 +727,22 @@ def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
     return amap_request_point(point)
 
 
-def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> list[tuple[float, float]]:
+def _check_amap_pickup_precision(points: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    try:
+        require_amap_pickup_precision(points)
+    except GeocodePrecisionError as exc:
+        state["last_route_evidence"] = {
+            "evidence_version": EVIDENCE_VERSION, "provider": "amap",
+            "status": "needs_review", "issues": [{"code": "pickup_precision_needs_review", "detail": str(exc)}],
+            "legs": [], "geometry": [], "duration_s": None, "distance_m": None,
+        }
+        raise
+
+
+def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any],
+                       state: dict[str, Any] | None = None) -> list[tuple[float, float]]:
     request_points: list[tuple[float, float]] = []
+    selected_points: list[dict[str, Any]] = []
     for node in list(route.get("nodes") or []):
         try:
             node_index = int(node)
@@ -735,11 +750,14 @@ def _route_amap_points(points: list[dict[str, Any]], route: dict[str, Any]) -> l
             continue
         if node_index < 0 or node_index >= len(points):
             continue
-        coords = _amap_route_point(dict(points[node_index] or {}))
+        point = dict(points[node_index] or {})
+        selected_points.append(point)
+        coords = _amap_route_point(point)
         if coords:
             request_points.append(coords)
     if len(request_points) != len(list(route.get("nodes") or [])):
         raise ValueError("Route contains unresolved coordinates; stop cannot be skipped")
+    _check_amap_pickup_precision(selected_points, state if state is not None else {})
     return request_points
 
 
@@ -1169,7 +1187,7 @@ def _attach_final_route_traffic_gate_impl(
             stats = _final_route_stats(
                 planner,
                 traffic_policy.provider,
-                _route_amap_points(points, route) if traffic_policy.provider == "amap" else [
+                _route_amap_points(points, route, state) if traffic_policy.provider == "amap" else [
                     _traffic_point_coordinates(dict(points[int(node)] or {}))
                     for node in list(route.get("nodes") or [])
                 ],

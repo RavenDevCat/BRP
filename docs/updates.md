@@ -9,6 +9,19 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Shared Route Measurement Snapshots
 
+- Both AMap geocoding clients now share pickup-precision checks. Road/area
+  centroids and unrelated or ambiguous POIs require a more specific address;
+  they are not selected automatically to shorten a route. Matching retains
+  requested bus-stop identity, roads, landmarks, building numbers and entrances.
+- Old AMap cache entries are selectively revalidated during preparation. New
+  measurements, including scheduled runs, mark saved inputs without current
+  pickup-precision evidence for review rather than certify time windows or
+  removals. Re-prepare affected addresses; deployment does not relocate old
+  stops. A failed school lookup never promotes a passenger stop to school.
+- Upload-time Pre-analysis now uses the same saved AMap measurement for its
+  map, segment timing, distance and AMap route-budget summary. It honors the
+  configured dwell and preserves zero-passenger waypoints. Partial measurement
+  coverage no longer claims a fully measured AMap budget.
 - CN Audit, Fleet Planner, Direct-to-School and Route Insert Advisor share
   adjacent AMap measurements that save driving time, distance and geometry
   together. Map reads no longer refresh AMap geometry independently of saved

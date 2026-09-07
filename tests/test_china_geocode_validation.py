@@ -49,11 +49,13 @@ class ChinaGeocodeValidationTests(unittest.TestCase):
                 "geocodes": [
                     {
                         "formatted_address": "江苏省苏州市昆山市长寿路898号",
+                        "level": "门牌号",
                         "location": "120.906297,31.175160",
                         "adcode": "320583",
                     },
                     {
                         "formatted_address": "上海市普陀区长寿路898号",
+                        "level": "门牌号",
                         "location": "121.429718,31.234415",
                         "adcode": "310107",
                     },

@@ -17,6 +17,7 @@ from ortools_route_core import (  # noqa: E402
     register_matrix_transit,
 )
 import client_runtime as runtime
+from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
 from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details
 
 
@@ -94,6 +95,7 @@ def _annotate_ordered_points_with_schedule(
 
 def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
     return {
+        **{field: point[field] for field in GEOCODE_PROVENANCE_FIELDS if field in point},
         "provider": str(point.get("provider") or ""),
         "coordinate_system": str(point.get("coordinate_system") or ""),
         "lat": float(point["lat"]),

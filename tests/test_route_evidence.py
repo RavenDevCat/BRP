@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend")
 evidence = importlib.import_module("route_evidence")
 amap = importlib.import_module("amap_driving")
 core = importlib.import_module("planner_core")
+PRECISE_PICKUP = {"geocode_quality_version": importlib.import_module("amap_geocode_quality").GEOCODE_QUALITY_VERSION,
+                  "geocode_level": "\u5174\u8da3\u70b9"}
 
 A, B, C = (31.20, 121.40), (31.202, 121.402), (31.204, 121.404)
 
@@ -166,7 +168,7 @@ def test_final_gate_and_student_timing_use_same_saved_segments(monkeypatch):
     class Planner:
         AMAP_KEY = "test"
         MAX_ROUTE_DURATION_SECONDS = 7200
-    points = [{"lat": p[0], "lng": p[1], "provider": "amap", "is_depot": i == 0,
+    points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "is_depot": i == 0,
                "passenger_count": 0 if i == 0 else 1} for i, p in enumerate([C, A, B])]
     route = {"route_id": "R1", "nodes": [1, 2, 0], "time_s": 420,
              "stop_service_time_s": 120, "distance_m": 800,
@@ -207,7 +209,7 @@ def test_map_reads_saved_geometry_and_per_stop_times_without_provider_requests(m
     monkeypatch.setattr(service, "_fetch_amap_display_geometry_by_leg", forbidden)
     monkeypatch.setattr(service, "_should_use_amap_display_geometry", lambda *args: True)
     monkeypatch.setattr(service, "_load_amap_display_cache_unlocked", lambda: {})
-    points = [{"lat": p[0], "lng": p[1], "provider": "amap", "is_depot": i == 2}
+    points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "is_depot": i == 2}
               for i, p in enumerate([A, B, C])]
     route = {"route_id": "R1", "nodes": [0, 1, 2], "time_s": 200, "distance_m": 200,
              "leg_details": [{"duration_s": 100, "distance_m": 100}] * 2,
@@ -225,6 +227,10 @@ def test_map_reads_saved_geometry_and_per_stop_times_without_provider_requests(m
     assert [stop["cumulative_duration_s"] for stop in payload["stops"]] == [0, 120, 720]
     assert [stop["cumulative_distance_m"] for stop in payload["stops"]] == [0, 400, 800]
     assert [stop["scheduled_offset_s"] for stop in payload["stops"]] == [-840, -660, 0]
+    for stop in payload["stops"]:
+        assert stop["provider"] == "amap"
+        assert stop["coordinate_system"] == "WGS84"
+        assert stop["geocode_quality_version"] == PRECISE_PICKUP["geocode_quality_version"]
     assert job == original
 
 
@@ -248,7 +254,7 @@ def test_fleet_keeps_order_and_vehicles_while_measuring_same_shared_edges(monkey
     class Planner:
         AMAP_KEY = "test"
     monkeypatch.setattr(core, "load_legacy_planner", lambda: Planner())
-    points = [{"lat": p[0], "lng": p[1], "provider": "amap", "country": "China",
+    points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "country": "China",
                "student_count": i + 1 if i < 2 else 0} for i, p in enumerate([A, B, C])]
     route = {"cluster_id": "G01", "order": [1, 2, 0], "selected_vehicle": {"capacity": 42},
              "duration_s": 200, "distance_m": 800, "ordered_points": points,
@@ -329,7 +335,7 @@ def test_review_evidence_is_not_certified_by_final_gate(monkeypatch):
     class Planner:
         AMAP_KEY = "test"
         MAX_ROUTE_DURATION_SECONDS = 7200
-    points = [{"lat": p[0], "lng": p[1], "provider": "amap"} for p in [A, B]]
+    points = [{"lat": p[0], "lng": p[1], "provider": "amap", **PRECISE_PICKUP} for p in [A, B]]
     route = {"nodes": [0, 1, 0], "time_s": 1000}
     scenario = {"routes": [route]}
     gate = core.attach_final_route_traffic_gate(Planner(), scenario, points, core.PlannerConfig(), [], "test")

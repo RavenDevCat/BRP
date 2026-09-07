@@ -272,6 +272,7 @@ class JobQueueManager:
         self._scheduler_lock = threading.Lock()
         self._worker_state_lock = threading.Lock()
         self._scheduler_started = False
+        self.measurement_reviews: Any | None = None
 
     def process_is_alive(self, pid: int | None) -> bool:
         return pid_is_alive(pid)
@@ -492,10 +493,15 @@ class JobQueueManager:
             return
         try:
             self.gate.cleanup_stale_slots()
+            if self.measurement_reviews:
+                self.measurement_reviews.reconcile()
             self.job_store.release_due_scheduled_jobs()
             normal_queue_blocked = False
             for job_record in self.job_store.list_queued_jobs():
                 spawned = self.spawn_job_worker(str(job_record.get("job_id", "")))
+                if spawned is None and self.gate.enabled and self.measurement_reviews:
+                    if self.measurement_reviews.preempt():
+                        spawned = self.spawn_job_worker(str(job_record.get("job_id", "")))
                 if spawned is None and self.gate.enabled:
                     if self._preempt_running_deep_verification():
                         spawned = self.spawn_job_worker(
@@ -506,6 +512,8 @@ class JobQueueManager:
                     break
             if normal_queue_blocked:
                 return
+            if self.measurement_reviews:
+                self.measurement_reviews.schedule()
             list_queued_verifications = getattr(
                 self.job_store, "list_queued_deep_verifications", lambda: []
             )

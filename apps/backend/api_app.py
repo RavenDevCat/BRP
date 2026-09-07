@@ -18,20 +18,24 @@ try:
         ComputeRequest,
         CreateJobRequest,
         FlexiblePayload,
+        MeasurementReviewRequest,
         payload_to_dict,
     )
     from . import backend_service
     from .operations_review import build_operations_review
+    from .measurement_reviews import build_review_request, historical_risk_summary
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from api_models import (  # type: ignore
         AiAuditRequest,
         ComputeRequest,
         CreateJobRequest,
         FlexiblePayload,
+        MeasurementReviewRequest,
         payload_to_dict,
     )
     import backend_service  # type: ignore
     from operations_review import build_operations_review  # type: ignore
+    from measurement_reviews import build_review_request, historical_risk_summary
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
@@ -1266,6 +1270,81 @@ def get_job(
     _authorized: None = Depends(require_authorized_request),
 ) -> JSONResponse:
     return _json_response(200, _job_for_context(job_id, context))
+
+
+def _public_measurement_review(record: dict[str, Any], *, include_result: bool = False) -> dict[str, Any]:
+    public = {key: record.get(key) for key in (
+        "review_id", "source_job_id", "status", "created_at", "started_at", "finished_at", "api_calls", "error_code")}
+    request = record["request"]
+    public["request"] = {key: request.get(key) for key in (
+        "provider_call_limit", "evidence_version", "review_version", "requested_by")}
+    public["request"]["route_keys"] = [route["route_key"] for route in request["routes"]]
+    if include_result:
+        public["result"] = record.get("result")
+    return public
+
+
+def _measurement_review_for_job(job_id: str, review_id: str, context: UserContext) -> dict[str, Any]:
+    source = _job_for_context(job_id, context)
+    row = backend_service._runtime_sqlite_store().get_route_measurement_review(review_id)
+    if not row or row["source_job_id"] != source["job_id"]:
+        raise BackendHttpError(404, {"error": "Measurement review not found for this job."})
+    return row
+
+
+@_api_route("GET", "/jobs/{job_id}/measurement-risk")
+def get_measurement_risk(job_id: str, _authorized: None = Depends(require_authorized_request),
+                         context: UserContext = Depends(current_user_context)):
+    return _json_response(200, historical_risk_summary(_job_for_context(job_id, context)))
+
+
+@_api_route("GET", "/jobs/{job_id}/measurement-reviews")
+def list_measurement_reviews(job_id: str, _authorized: None = Depends(require_authorized_request),
+                              context: UserContext = Depends(current_user_context)):
+    source = _job_for_context(job_id, context)
+    rows = backend_service._runtime_sqlite_store().list_route_measurement_reviews(source["job_id"], include_result=False)
+    return _json_response(200, {"reviews": [_public_measurement_review(row) for row in rows]})
+
+
+@_api_route("GET", "/jobs/{job_id}/measurement-reviews/{review_id}")
+def get_measurement_review(job_id: str, review_id: str,
+                            _authorized: None = Depends(require_authorized_request),
+                            context: UserContext = Depends(current_user_context)):
+    return _json_response(200, _public_measurement_review(
+        _measurement_review_for_job(job_id, review_id, context), include_result=True))
+
+
+@_api_route("POST", "/jobs/{job_id}/measurement-reviews")
+def create_measurement_review(job_id: str, payload: MeasurementReviewRequest,
+                               context: UserContext = Depends(require_admin_context)):
+    # Use the stored source, not its read-time legacy UI adaptation, for the immutable digest.
+    _job_for_context(job_id, context)
+    source = backend_service.JOB_STORE.get_job(job_id.strip())
+    if not source:
+        raise BackendHttpError(404, {"error": "Source job no longer exists."})
+    try:
+        request = build_review_request(source, payload.route_keys, requested_by=context.email,
+                                       request_key=payload.request_key, provider_call_limit=payload.provider_call_limit)
+        row = backend_service._runtime_sqlite_store().create_route_measurement_review(
+            request, queue_scope=backend_service.JOB_QUEUE_SCOPE)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(200, _public_measurement_review(row))
+
+
+@_api_route("POST", "/jobs/{job_id}/measurement-reviews/{review_id}/actions/{action}")
+def control_measurement_review(job_id: str, review_id: str, action: str,
+                                context: UserContext = Depends(require_admin_context)):
+    _measurement_review_for_job(job_id, review_id, context)
+    try:
+        row = backend_service.JOB_QUEUE.measurement_reviews.action(review_id, action)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    if not row:
+        raise BackendHttpError(404, {"error": "Measurement review no longer exists."})
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(200, _public_measurement_review(row))
 
 
 @_api_route("GET", "/jobs/{job_id}/deep-verification")

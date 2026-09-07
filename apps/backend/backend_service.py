@@ -4004,6 +4004,17 @@ JOB_QUEUE = JobQueueManager(
 )
 JOB_GATE = JOB_QUEUE.gate
 
+try:
+    from .measurement_review_queue import MeasurementReviewQueue
+except ImportError:
+    from measurement_review_queue import MeasurementReviewQueue
+
+JOB_QUEUE.measurement_reviews = MeasurementReviewQueue(
+    store=SqliteRuntimeStore(RUNTIME_DB_PATH), gate=JOB_GATE, queue_scope=JOB_QUEUE_SCOPE,
+    runner_path=BASE_DIR / "measurement_review_runner.py", base_dir=BASE_DIR,
+    python_executable=sys.executable, schedule_normal=JOB_QUEUE.schedule_queued_jobs,
+)
+
 
 def _normalize_distance_history_mode(value: Any) -> str:
     return (

@@ -66,26 +66,75 @@ removal, solver feasibility or full AM/PM acceptance. Its result explicitly
 sets `student_classification_recomputed` and `time_window_revalidated` to false.
 Consumers must use the existing domain gates before presenting any such claim.
 
-## Integration Boundaries
+## API Authorization
 
-The runtime primitives do not independently start a scheduler, scan a database,
-send provider requests on deployment, or expose a public API. A scheduler must
-acquire the existing host-wide concurrency slot before `execute_saved_review`
-and prioritize ordinary jobs. Process interruption requires explicit recovery;
-an unobserved worker must not trigger automatic repeated billed requests.
+The job API exposes `GET /jobs/{job_id}/measurement-risk` and
+`GET /jobs/{job_id}/measurement-reviews`, with a detail endpoint at
+`/jobs/{job_id}/measurement-reviews/{review_id}`. Every read authorizes the parent
+job through its existing owner/admin/workspace rules. A review ID under a
+different parent returns not found. Summary responses omit worker tokens,
+process IDs, filesystem paths and the private selected-point snapshot.
 
-Public adapters must require administrator authorization to enqueue or stop
-work, authorize the source job for every read, and preserve workspace access
-without copying private snapshots to broader audiences. They must also show the
-selected-route scope, measurement times, request budget and outstanding input
-clarification. No adapter may treat the source's prepared coordinates as
-automatically re-geocoded or move an entrance to obtain a shorter route.
+`POST /jobs/{job_id}/measurement-reviews` requires an administrator and the
+existing backend service authorization. Its strict body supplies `route_keys`,
+`request_key`, `provider_call_limit`, and boolean `confirm_provider_calls: true`.
+Unknown fields and implicit numeric/string conversions are rejected. Coordinates
+and ownership come from the saved source, never from a submitted override.
+Repeated identical submissions return the existing row rather than new work.
+
+`POST /jobs/{job_id}/measurement-reviews/{review_id}/actions/{action}` accepts
+administrator-only `pause`, `resume` and `cancel` commands. Control stays in the
+environment that enqueued the review; sharing the runtime database does not
+authorize a different environment to adopt or terminate its process.
+
+## Queue And Recovery
+
+`MeasurementReviewQueue` runs under the existing job scheduler, not a second
+independent scheduling loop. It acquires the shared host concurrency gate.
+Ordinary queued jobs, including released scheduled jobs, run first and can
+preempt an owned review process. At most one review worker lease is active in
+the runtime database. Terminal status alone does not prove that a process has
+exited, so its lease remains until reaped. No database-wide risk scan or automatic
+review creation occurs when deploying this code or reading a result.
+
+Manual pause becomes `paused` after process exit and requires explicit resume.
+Foreground preemption becomes `queued` after exit and resumes when capacity is
+available. Resume retains completed route checkpoints and the persisted number
+of provider calls. Each provider attempt reserves its budget atomically before
+outbound I/O; an interrupted attempt remains counted even if its response or
+route checkpoint was lost. Only unfinished routes are remeasured, with the
+remaining original budget and a new run-local cache. Partially measured routes
+may repeat already attempted legs; the persistent cap bounds that cost.
+
+Cancellation and pause prevent further reservations and late checkpoints, but
+cannot recall an already sent request. Capacity is released only after observed
+process death, never after a timeout waiting for termination. A unique per-claim
+slot owner prevents a stale reaper from releasing a replacement worker's slot.
+After backend restart, reconciliation waits for the attach grace period and
+does not kill a PID it does not own. A known dead worker without a terminal
+checkpoint becomes failed, keeping evidence and budget; it is not automatically
+retried. A still-live unowned worker can observe persisted cancellation/pause
+cooperatively; the new backend does not forcibly preempt it using a saved PID.
+
+## Remaining Consumer Boundaries
+
+The APIs and queue return measurement comparisons, not fully corrected source
+results. Consumers must show the selected-route scope, measurement times,
+request budget and outstanding input clarification. Full domain-gate and
+student-classification recomputation, remaining tool-history adapters, and an
+administrator/result UI require their own integration. No consumer may treat
+prepared coordinates as automatically re-geocoded or move an entrance to obtain
+a shorter route.
 
 ## Verification
 
-Run `tests/test_measurement_reviews.py` with `tests/test_runtime_store_sqlite.py`,
+Run `tests/test_measurement_reviews.py`, `tests/test_measurement_review_api.py`
+and `tests/test_measurement_review_queue.py` with runtime-store, API-shell,
 shared route evidence, Direct-to-School and queue regression tests. The review
 tests use synthetic routes and temporary SQLite files, including concurrent
 create/claim, immutable source/result, cancellation races, budget exhaustion,
 missing stops, stale inputs and the real shared provider with substituted I/O.
-These tests do not establish live pickup correctness or browser acceptance.
+Queue/API tests additionally cover source access, strict confirmation, schema
+upgrade, interrupted-call budgets, pause/resume, ordinary-job priority, launch
+failure and process-death recovery. These tests do not establish live pickup
+correctness or browser acceptance.

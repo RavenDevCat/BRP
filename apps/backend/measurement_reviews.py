@@ -205,7 +205,10 @@ def build_review_request(record: dict[str, Any], route_keys: list[str], *,
 def run_measurement_review(request: dict[str, Any], *,
                            provider_factory: Callable[..., Any] = analysis.FreshRouteProvider,
                            checkpoint: Callable[[dict[str, Any]], None] | None = None,
-                           canceled: Callable[[], bool] | None = None) -> dict[str, Any]:
+                           canceled: Callable[[], bool] | None = None,
+                           resume_result: dict[str, Any] | None = None,
+                           api_calls_used: int = 0,
+                           reserve_calls: Callable[[int], bool] | None = None) -> dict[str, Any]:
     routes = deepcopy(request.get("routes") or [])
     limit = request.get("provider_call_limit")
     if (request.get("review_version") != REVIEW_VERSION
@@ -214,14 +217,25 @@ def run_measurement_review(request: dict[str, Any], *,
             or not 1 <= len(routes) <= MAX_REVIEW_ROUTES
             or isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= MAX_REVIEW_CALLS):
         raise ValueError("The saved review request is invalid or no longer uses the current contract.")
+    previous = deepcopy(dict(resume_result or {}).get("routes") or [])
+    if previous and (
+        resume_result.get("source_result_digest") != request["source_result_digest"]
+        or resume_result.get("source_job_id") != request["source_job_id"]
+        or len(previous) > len(routes)
+        or any(old.get("route_key") != scope["route_key"] or old.get("points") != scope["points"]
+               for old, scope in zip(previous, routes))
+    ):
+        raise ValueError("The saved checkpoint does not match the selected routes.")
+    if isinstance(api_calls_used, bool) or not isinstance(api_calls_used, int) or not 0 <= api_calls_used <= limit:
+        raise ValueError("Invalid persisted provider usage.")
     result = {"review_version": REVIEW_VERSION, "source_job_id": request.get("source_job_id"),
-              "source_result_digest": request.get("source_result_digest"), "routes": [],
-              "status": "running", "provider_api_calls": 0,
+              "source_result_digest": request.get("source_result_digest"), "routes": previous,
+              "status": "running", "provider_api_calls": api_calls_used,
               "comparison_basis": "fresh_traffic_not_controlled_before_after",
               "scope": "selected_routes_only", "student_classification_recomputed": False,
               "time_window_revalidated": False}
     provider = None
-    for scope in routes:
+    for scope in routes[len(previous):]:
         if canceled and canceled():
             result["status"] = "canceled"
             break
@@ -234,8 +248,11 @@ def run_measurement_review(request: dict[str, Any], *,
                 raise ValueError("Unresolved source route inputs")
             if provider is None:
                 provider = provider_factory("amap", departure_time=None, api_call_limit=limit)
+                provider.state = ReviewCallState({**provider.state, "api_calls": api_calls_used}, reserve_calls)
             provider.state.pop("last_route_evidence", None)
             evidence = provider.route(scope["points"], reference_legs=scope["reference_legs"])
+        except ReviewClaimLost:
+            raise
         except Exception as exc:
             evidence = deepcopy(provider.state.get("last_route_evidence")) if provider else None
             # Provider exceptions may contain credential-bearing URLs. Persist only the type.
@@ -264,7 +281,7 @@ def run_measurement_review(request: dict[str, Any], *,
             "risk_reasons": scope["risk_reasons"], "input_issues": scope["input_issues"],
             "route_evidence": evidence or None, "error_type": error,
         })
-        result["provider_api_calls"] = int(provider.state.get("api_calls", 0)) if provider else 0
+        result["provider_api_calls"] = int(provider.state.get("api_calls", 0)) if provider else api_calls_used
         if checkpoint:
             checkpoint(deepcopy(result))
     if result["status"] != "canceled":
@@ -276,10 +293,25 @@ class ReviewClaimLost(RuntimeError):
     pass
 
 
+class ReviewCallState(dict):
+    def __init__(self, initial: dict[str, Any], reserve: Callable[[int], bool] | None):
+        super().__init__(initial)
+        self.reserve = reserve
+
+    def __setitem__(self, key, value):
+        if key == "api_calls":
+            amount = int(value) - int(self.get(key, 0))
+            if amount < 0 or (amount > 0 and self.reserve and not self.reserve(amount)):
+                raise ReviewClaimLost("Review stopped or provider budget unavailable.")
+        super().__setitem__(key, value)
+
+
 def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
-                         provider_factory: Callable[..., Any] = analysis.FreshRouteProvider) -> dict[str, Any] | None:
+                         provider_factory: Callable[..., Any] = analysis.FreshRouteProvider,
+                         preclaimed: bool = False) -> dict[str, Any] | None:
     """Worker entry point; the scheduler must acquire its shared concurrency slot first."""
-    record = store.claim_route_measurement_review(review_id, worker_token)
+    record = (store.claimed_route_measurement_review(review_id, worker_token) if preclaimed
+              else store.claim_route_measurement_review(review_id, worker_token))
     if not record:
         return store.get_route_measurement_review(review_id)
     request = record["request"]
@@ -294,7 +326,9 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
 
     try:
         result = run_measurement_review(request, provider_factory=provider_factory,
-                                        checkpoint=checkpoint, canceled=canceled)
+                                        checkpoint=checkpoint, canceled=canceled,
+                                        resume_result=record.get("result"), api_calls_used=int(record.get("api_calls") or 0),
+                                        reserve_calls=lambda count: store.reserve_route_measurement_calls(review_id, worker_token, count))
         store.save_route_measurement_review(review_id, worker_token, result, terminal=True)
     except ReviewClaimLost:
         pass
@@ -304,6 +338,7 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
             "review_version": request["review_version"], "source_job_id": request["source_job_id"],
             "source_result_digest": request["source_result_digest"], "routes": [],
         })
-        result.update(status="failed", error_type=type(exc).__name__)
+        result.update(status="failed", error_type=type(exc).__name__,
+                      provider_api_calls=int(current.get("api_calls") or 0))
         store.save_route_measurement_review(review_id, worker_token, result, terminal=True)
     return store.get_route_measurement_review(review_id)

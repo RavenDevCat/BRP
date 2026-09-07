@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -186,6 +186,11 @@ class SqliteRuntimeStore:
                     started_at TEXT,
                     finished_at TEXT,
                     worker_token TEXT,
+                    queue_scope TEXT NOT NULL DEFAULT '',
+                    worker_pid INTEGER,
+                    job_slot_path TEXT,
+                    api_calls INTEGER NOT NULL DEFAULT 0,
+                    error_code TEXT,
                     request_json TEXT NOT NULL,
                     result_json TEXT,
                     UNIQUE(source_job_id, request_key),
@@ -292,6 +297,14 @@ class SqliteRuntimeStore:
                     ON history_group_preferences(group_id);
                 """
                 )
+                conn.execute("BEGIN IMMEDIATE")
+                review_columns = {row["name"] for row in conn.execute("PRAGMA table_info(route_measurement_reviews)")}
+                for name, definition in (
+                    ("queue_scope", "TEXT NOT NULL DEFAULT ''"), ("worker_pid", "INTEGER"),
+                    ("job_slot_path", "TEXT"), ("api_calls", "INTEGER NOT NULL DEFAULT 0"), ("error_code", "TEXT"),
+                ):
+                    if name not in review_columns:
+                        conn.execute(f"ALTER TABLE route_measurement_reviews ADD COLUMN {name} {definition}")
                 duplicate_item = conn.execute(
                     """
                     SELECT scope, item_id
@@ -345,7 +358,7 @@ class SqliteRuntimeStore:
                 )
             self._initialized = True
 
-    def create_route_measurement_review(self, request: dict[str, Any]) -> dict[str, Any]:
+    def create_route_measurement_review(self, request: dict[str, Any], *, queue_scope: str = "") -> dict[str, Any]:
         """Append a bounded request; idempotent retries never overwrite a prior review."""
         try:
             from .measurement_reviews import build_review_request
@@ -372,15 +385,15 @@ class SqliteRuntimeStore:
                 (expected["source_job_id"], expected["request_key"]),
             ).fetchone()
             if existing:
-                if json_loads(existing["request_json"], {}) != expected:
+                if json_loads(existing["request_json"], {}) != expected or existing["queue_scope"] != queue_scope:
                     raise ValueError("Request key already belongs to a different review selection.")
                 return self._route_measurement_review_from_row(existing)
             review_id = uuid4().hex[:12]
             conn.execute(
                 """INSERT INTO route_measurement_reviews
-                   (review_id, source_job_id, request_key, status, created_at, request_json)
-                   VALUES (?, ?, ?, 'queued', ?, ?)""",
-                (review_id, expected["source_job_id"], expected["request_key"], utc_now_iso(), json_dumps(expected)),
+                   (review_id, source_job_id, request_key, status, created_at, request_json, queue_scope)
+                   VALUES (?, ?, ?, 'queued', ?, ?, ?)""",
+                (review_id, expected["source_job_id"], expected["request_key"], utc_now_iso(), json_dumps(expected), queue_scope),
             )
             row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
             return self._route_measurement_review_from_row(row)
@@ -390,6 +403,8 @@ class SqliteRuntimeStore:
         return {"review_id": row["review_id"], "source_job_id": row["source_job_id"],
                 "status": row["status"], "created_at": row["created_at"], "started_at": row["started_at"],
                 "finished_at": row["finished_at"], "request": json_loads(row["request_json"], {}),
+                "queue_scope": row["queue_scope"], "worker_pid": row["worker_pid"],
+                "job_slot_path": row["job_slot_path"], "api_calls": row["api_calls"], "error_code": row["error_code"],
                 "result": json_loads(row["result_json"], None)}
 
     def get_route_measurement_review(self, review_id: str) -> dict[str, Any] | None:
@@ -398,25 +413,32 @@ class SqliteRuntimeStore:
             row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
         return self._route_measurement_review_from_row(row) if row else None
 
-    def list_route_measurement_reviews(self, source_job_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    def list_route_measurement_reviews(self, source_job_id: str, *, limit: int = 100,
+                                       include_result: bool = True) -> list[dict[str, Any]]:
         self.initialize()
         with self.connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM route_measurement_reviews WHERE source_job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?",
-                (source_job_id, max(1, min(100, int(limit)))),
+                """SELECT review_id, source_job_id, status, created_at, started_at, finished_at,
+                          request_json, queue_scope, worker_pid, job_slot_path, api_calls, error_code,
+                          CASE WHEN ? THEN result_json ELSE NULL END AS result_json
+                   FROM route_measurement_reviews WHERE source_job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+                (include_result, source_job_id, max(1, min(100, int(limit)))),
             ).fetchall()
         return [self._route_measurement_review_from_row(row) for row in rows]
 
-    def claim_route_measurement_review(self, review_id: str, worker_token: str) -> dict[str, Any] | None:
+    def claim_route_measurement_review(self, review_id: str, worker_token: str, *,
+                                      queue_scope: str | None = None, job_slot_path: str | None = None) -> dict[str, Any] | None:
         if not str(worker_token or "").strip():
             raise ValueError("Worker token is required.")
         self.initialize()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("SELECT 1 FROM route_measurement_reviews WHERE worker_token IS NOT NULL LIMIT 1").fetchone():
+                return None
             changed = conn.execute(
-                """UPDATE route_measurement_reviews SET status = 'running', started_at = ?, worker_token = ?
-                   WHERE review_id = ? AND status = 'queued'""",
-                (utc_now_iso(), worker_token, review_id),
+                """UPDATE route_measurement_reviews SET status = 'running', started_at = ?, worker_token = ?, job_slot_path = ?, error_code = NULL
+                   WHERE review_id = ? AND status = 'queued' AND (? IS NULL OR queue_scope = ?)""",
+                (utc_now_iso(), worker_token, job_slot_path, review_id, queue_scope, queue_scope),
             ).rowcount
             row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
         return self._route_measurement_review_from_row(row) if changed else None
@@ -460,8 +482,74 @@ class SqliteRuntimeStore:
         with self.connect() as conn:
             return conn.execute(
                 """UPDATE route_measurement_reviews SET status = 'canceled', finished_at = ?
-                   WHERE review_id = ? AND status IN ('queued', 'running')""",
+                   WHERE review_id = ? AND status IN ('queued', 'running', 'yielding', 'pausing', 'paused')""",
                 (utc_now_iso(), review_id),
+            ).rowcount == 1
+
+    def queued_route_measurement_reviews(self, queue_scope: str) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM route_measurement_reviews WHERE status = 'queued' AND queue_scope = ? ORDER BY created_at, rowid LIMIT 20", (queue_scope,)).fetchall()
+        return [self._route_measurement_review_from_row(row) for row in rows]
+
+    def active_route_measurement_reviews(self, queue_scope: str) -> list[dict[str, Any]]:
+        self.initialize()
+        with self.connect() as conn:
+            rows = conn.execute("SELECT * FROM route_measurement_reviews WHERE queue_scope = ? AND worker_token IS NOT NULL", (queue_scope,)).fetchall()
+        return [{**self._route_measurement_review_from_row(row), "worker_token": row["worker_token"]} for row in rows]
+
+    def claimed_route_measurement_review(self, review_id: str, worker_token: str) -> dict[str, Any] | None:
+        self.initialize()
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ? AND worker_token = ? AND status = 'running'", (review_id, worker_token)).fetchone()
+        return self._route_measurement_review_from_row(row) if row else None
+
+    def attach_route_measurement_worker(self, review_id: str, worker_token: str, worker_pid: int) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute("UPDATE route_measurement_reviews SET worker_pid = ? WHERE review_id = ? AND worker_token = ?",
+                                (worker_pid, review_id, worker_token)).rowcount == 1
+
+    def reserve_route_measurement_calls(self, review_id: str, worker_token: str, amount: int) -> bool:
+        if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
+            raise ValueError("Call reservation must be a positive integer.")
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """UPDATE route_measurement_reviews SET api_calls = api_calls + ?
+                   WHERE review_id = ? AND worker_token = ? AND status = 'running'
+                     AND api_calls + ? <= json_extract(request_json, '$.provider_call_limit')""",
+                (amount, review_id, worker_token, amount),
+            ).rowcount == 1
+
+    def pause_route_measurement_review(self, review_id: str, *, yielding: bool = False) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """UPDATE route_measurement_reviews SET status = CASE WHEN status = 'queued' THEN 'paused' ELSE ? END
+                   WHERE review_id = ? AND status IN ('queued', 'running')""",
+                ("yielding" if yielding else "pausing", review_id),
+            ).rowcount == 1
+
+    def resume_route_measurement_review(self, review_id: str) -> bool:
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute("UPDATE route_measurement_reviews SET status = 'queued' WHERE review_id = ? AND status = 'paused' AND worker_token IS NULL",
+                                (review_id,)).rowcount == 1
+
+    def finish_route_measurement_worker(self, review_id: str, worker_token: str, error_code: str = "worker_exited") -> bool:
+        """Call only after confirming that this worker exited or could not be started."""
+        self.initialize()
+        with self.connect() as conn:
+            return conn.execute(
+                """UPDATE route_measurement_reviews SET
+                   error_code = CASE WHEN status = 'running' THEN ? ELSE error_code END,
+                   finished_at = CASE WHEN status = 'running' THEN ? ELSE finished_at END,
+                   status = CASE WHEN status = 'yielding' THEN 'queued' WHEN status = 'pausing' THEN 'paused'
+                                 WHEN status = 'running' THEN 'failed' ELSE status END,
+                   worker_token = NULL, worker_pid = NULL, job_slot_path = NULL
+                   WHERE review_id = ? AND worker_token = ?""",
+                (error_code, utc_now_iso(), review_id, worker_token),
             ).rowcount == 1
 
     def upsert_job(self, record: dict[str, Any]) -> None:

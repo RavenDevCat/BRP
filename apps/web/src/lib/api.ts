@@ -85,7 +85,9 @@ export type JobRecord = JobSummary & {
     ai_audit_error?: string | null;
 };
 
-export type MeasurementReviewMode = "selected_routes" | "full_audit" | "full_direct_school";
+export type MeasurementReviewMode = "selected_routes" | "full_audit" | "full_direct_school" | "full_fleet" | "full_insert";
+export type SideMeasurementSource = { tool_key: "fleet_planner" | "route_insert_advisor"; run_id: string };
+export type MeasurementSource = string | SideMeasurementSource;
 export type MeasurementRisk = {
     source_supported: boolean;
     status: string;
@@ -94,6 +96,7 @@ export type MeasurementRisk = {
     full_review?: { mode: MeasurementReviewMode; available: boolean; reason?: string; scope_summary?: Record<string, number> };
 };
 export type MeasurementComparison = {
+    plan_key?: string;
     route_key: string;
     route_id: string;
     status: string;
@@ -103,7 +106,9 @@ export type MeasurementComparison = {
 };
 export type MeasurementReviewRecord = {
     review_id: string;
-    source_job_id: string;
+    source_job_id: string | null;
+    source_tool_key?: string | null;
+    source_run_id?: string | null;
     status: string;
     created_at: string;
     started_at?: string | null;
@@ -117,6 +122,8 @@ export type MeasurementReviewRecord = {
         routes: MeasurementComparison[];
         audit_result?: Record<string, unknown>;
         analysis_result?: DirectSchoolAnalysisResult;
+        native_result?: { global_plan_result?: FleetPlannerRoutePreviewResponse; route_preview_result?: FleetPlannerRoutePreviewResponse;
+            route_insert_result?: RouteInsertAdvisorProposalResponse };
         time_window_revalidated?: boolean;
         time_impact_revalidated?: boolean;
         classification_complete?: boolean;
@@ -1288,33 +1295,40 @@ export function getJobDeepVerification(jobId: string) {
     );
 }
 
-export function getMeasurementRisk(jobId: string) {
-    return apiFetch<MeasurementRisk>(`/jobs/${encodeURIComponent(jobId)}/measurement-risk`);
+function measurementSourcePath(source: MeasurementSource): string {
+    if (typeof source === "string") return `/jobs/${encodeURIComponent(source)}`;
+    const tool = source.tool_key === "fleet_planner" ? "fleet-planner" : "route-insert-advisor";
+    return `/${tool}/history/${encodeURIComponent(source.run_id)}`;
 }
 
-export function listMeasurementReviews(jobId: string) {
-    return apiFetch<{ reviews: MeasurementReviewRecord[] }>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews`);
+export function getMeasurementRisk(source: MeasurementSource) {
+    return apiFetch<MeasurementRisk>(`${measurementSourcePath(source)}/measurement-risk`);
 }
 
-export function getMeasurementReview(jobId: string, reviewId: string) {
-    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}`);
+export function listMeasurementReviews(source: MeasurementSource) {
+    return apiFetch<{ reviews: MeasurementReviewRecord[] }>(`${measurementSourcePath(source)}/measurement-reviews`);
 }
 
-export function createMeasurementReview(jobId: string, payload: {
+export function getMeasurementReview(source: MeasurementSource, reviewId: string) {
+    return apiFetch<MeasurementReviewRecord>(`${measurementSourcePath(source)}/measurement-reviews/${encodeURIComponent(reviewId)}`);
+}
+
+export function createMeasurementReview(source: MeasurementSource, payload: {
     mode: Exclude<MeasurementReviewMode, "selected_routes">; provider_call_limit: number;
     request_key: string; confirm_provider_calls: true;
 }) {
-    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews`, {
+    return apiFetch<MeasurementReviewRecord>(`${measurementSourcePath(source)}/measurement-reviews`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
     });
 }
 
-export function controlMeasurementReview(jobId: string, reviewId: string, action: "pause" | "resume" | "cancel") {
-    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}/actions/${action}`, { method: "POST" });
+export function controlMeasurementReview(source: MeasurementSource, reviewId: string, action: "pause" | "resume" | "cancel") {
+    return apiFetch<MeasurementReviewRecord>(`${measurementSourcePath(source)}/measurement-reviews/${encodeURIComponent(reviewId)}/actions/${action}`, { method: "POST" });
 }
 
-export function getMeasurementReviewExportUrl(jobId: string, reviewId: string) {
-    return `${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}/export`;
+export function getMeasurementReviewExportUrl(source: MeasurementSource, reviewId: string, language?: string) {
+    const query = typeof source !== "string" && language ? `?language=${encodeURIComponent(language)}` : "";
+    return `${API_BASE_URL}${measurementSourcePath(source)}/measurement-reviews/${encodeURIComponent(reviewId)}/export${query}`;
 }
 
 export function getMeasurementReviewMapData(jobId: string, reviewId: string, scenarioKey: string) {

@@ -14,7 +14,7 @@ const nativeRequire = createRequire(path.join(web, 'package.json'));
 const ts = nativeRequire('typescript');
 const cache = new Map();
 function load(name) {
-  if (name === '@/lib/i18n/context') return {useT: () => value => value};
+  if (name === '@/lib/i18n/context') return {useT: () => value => value, useLanguage: () => ({lang: 'en'})};
   let file = name.startsWith('@/') ? path.join(web, 'src', name.slice(2)) : name;
   if (!path.isAbsolute(file)) return nativeRequire(name);
   if (!fs.existsSync(file)) file += fs.existsSync(file + '.tsx') ? '.tsx' : '.ts';
@@ -97,8 +97,8 @@ global.fetch = () => { throw Error('Rendering must not issue requests'); };
 function render(admin) {
   const client = new QueryClient({defaultOptions: {queries: {retry: false, staleTime: Infinity, gcTime: Infinity}}});
   client.setQueryData(['me'], {is_admin: admin});
-  client.setQueryData(['measurement-risk', 'source'], {source_supported: true, routes: [{route_key: 'current_plan:R1', route_id: 'R1', risk_reasons: ['missing_unified_measurement'], input_issues: []}], full_review: {mode: 'full_audit', available: true, scope_summary: {route_count: 1}}});
-  client.setQueryData(['measurement-reviews', 'source'], {reviews: [{review_id: 'review', source_job_id: 'source', created_at: '2026-01-01T00:00:00Z', status: 'running', api_calls: 1, request: {mode: 'full_audit', provider_call_limit: 5}}]});
+  client.setQueryData(['measurement-risk', JSON.stringify(['job', 'source'])], {source_supported: true, routes: [{route_key: 'current_plan:R1', route_id: 'R1', risk_reasons: ['missing_unified_measurement'], input_issues: []}], full_review: {mode: 'full_audit', available: true, scope_summary: {route_count: 1}}});
+  client.setQueryData(['measurement-reviews', JSON.stringify(['job', 'source'])], {reviews: [{review_id: 'review', source_job_id: 'source', created_at: '2026-01-01T00:00:00Z', status: 'running', api_calls: 1, request: {mode: 'full_audit', provider_call_limit: 5}}]});
   const html = renderToStaticMarkup(React.createElement(QueryClientProvider, {client},
     React.createElement(MeasurementReviewWorkspace, {job: {job_id: 'source', status: 'succeeded', result: {}}, mode: 'full_audit'},
       correction => React.createElement('div', null, correction ? 'CORRECTED' : 'ORIGINAL_CONTENT'))));
@@ -111,4 +111,54 @@ assert(viewer.includes('Missing unified measurement'));
 assert(!viewer.includes('New correction') && !viewer.includes('aria-label="Pause"'));
 assert(admin.includes('New correction') && admin.includes('aria-label="Pause"'));
 assert(!admin.includes('Start correction')); // Explicit form opening and confirmation are required.
+''')
+
+
+def test_native_side_sources_cannot_share_query_identity_or_export_another_parent():
+    run(r'''
+const state = load('@/lib/measurement-review-state');
+const api = load('@/lib/api');
+const a = {tool_key: 'fleet_planner', run_id: 'same/id'};
+const b = {tool_key: 'route_insert_advisor', run_id: 'same/id'};
+assert.equal(new Set([a, b, 'same/id'].map(state.measurementSourceKey)).size, 3);
+const record = {source_job_id: null, source_tool_key: a.tool_key, source_run_id: a.run_id};
+assert(state.reviewMatchesSource(record, a));
+assert(!state.reviewMatchesSource(record, b) && !state.reviewMatchesSource(record, 'same/id'));
+assert.equal(api.getMeasurementReviewExportUrl(a, 'r/id', 'zh'), '/api/fleet-planner/history/same%2Fid/measurement-reviews/r%2Fid/export?language=zh');
+const requests = [];
+global.fetch = async (url, options) => { requests.push({url, options}); return {ok: true, headers: {get: () => 'application/json'}, json: async () => ({})}; };
+(async () => {
+  await api.getMeasurementRisk(b); await api.listMeasurementReviews(b); await api.getMeasurementReview(b, 'r');
+  assert(requests.every(row => row.url.startsWith('/api/route-insert-advisor/history/same%2Fid/') && !row.options.method));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+for (const [mode, body] of [['full_fleet', {global_plan_result: {routes: [{}]}}], ['full_insert', {route_insert_result: {scenarios: [{}]}}]]) {
+  const row = {status: 'succeeded', request: {mode}, result: {status: 'complete', scope: mode + '_result', native_result: body}};
+  assert(state.reviewHasNativeResult(row, mode));
+  assert(!state.reviewHasNativeResult({...row, status: 'running'}, mode));
+  assert(!state.reviewHasNativeResult({...row, result: {...row.result, scope: 'selected_routes_only'}}, mode));
+  assert(!state.reviewHasNativeResult({...row, result: {...row.result, native_result: {}}}, mode));
+}
+''')
+
+
+def test_native_review_controls_render_with_side_tool_identity():
+    run(r'''
+const React = nativeRequire('react');
+const {renderToStaticMarkup} = nativeRequire('react-dom/server');
+const {QueryClient, QueryClientProvider} = nativeRequire('@tanstack/react-query');
+const {MeasurementReviewWorkspace} = load('@/features/results/measurement-review-panel');
+const {measurementSourceKey} = load('@/lib/measurement-review-state');
+global.fetch = () => { throw Error('Rendering cannot issue provider or API requests'); };
+for (const [tool_key, mode] of [['fleet_planner', 'full_fleet'], ['route_insert_advisor', 'full_insert']]) {
+  const source = {tool_key, run_id: 'native-source'};
+  const client = new QueryClient({defaultOptions: {queries: {retry: false, staleTime: Infinity, gcTime: Infinity}}});
+  client.setQueryData(['me'], {is_admin: true});
+  client.setQueryData(['measurement-risk', measurementSourceKey(source)], {source_supported: true, routes: [], full_review: {mode, available: true, scope_summary: {route_count: 2}}});
+  client.setQueryData(['measurement-reviews', measurementSourceKey(source)], {reviews: []});
+  const markup = renderToStaticMarkup(React.createElement(QueryClientProvider, {client}, React.createElement(MeasurementReviewWorkspace,
+    {source, mode}, correction => React.createElement('p', null, correction ? 'CORRECTED' : 'NATIVE_ORIGINAL'))));
+  assert(markup.includes('NATIVE_ORIGINAL') && markup.includes('New correction'));
+  assert(!markup.includes('Start correction'));
+  client.clear();
+}
 ''')

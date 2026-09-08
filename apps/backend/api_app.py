@@ -26,6 +26,7 @@ try:
     from .measurement_reviews import build_review_request, historical_risk_summary
     from .full_measurement_review import build_full_review_request, build_full_review_workbook
     from .audit_measurement_review import build_audit_review_request, audit_review_record, build_audit_review_workbook
+    from .side_measurement_review import MODES as SIDE_REVIEW_MODES, build_side_review_request, side_risk_summary, corrected_native_record, build_side_review_workbook
 except ImportError:  # pragma: no cover - supports running from apps/backend directly.
     from api_models import (  # type: ignore
         AiAuditRequest,
@@ -40,6 +41,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from measurement_reviews import build_review_request, historical_risk_summary
     from full_measurement_review import build_full_review_request, build_full_review_workbook
     from audit_measurement_review import build_audit_review_request, audit_review_record, build_audit_review_workbook
+    from side_measurement_review import MODES as SIDE_REVIEW_MODES, build_side_review_request, side_risk_summary, corrected_native_record, build_side_review_workbook
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
@@ -1280,7 +1282,7 @@ def get_job(
 
 def _public_measurement_review(record: dict[str, Any], *, include_result: bool = False) -> dict[str, Any]:
     public = {key: record.get(key) for key in (
-        "review_id", "source_job_id", "status", "created_at", "started_at", "finished_at", "api_calls", "error_code")}
+        "review_id", "source_job_id", "source_tool_key", "source_run_id", "status", "created_at", "started_at", "finished_at", "api_calls", "error_code")}
     request = record["request"]
     public["request"] = {key: request.get(key) for key in (
         "provider_call_limit", "evidence_version", "review_version", "requested_by")}
@@ -1338,6 +1340,8 @@ def get_measurement_review(job_id: str, review_id: str,
 @_api_route("POST", "/jobs/{job_id}/measurement-reviews")
 def create_measurement_review(job_id: str, payload: MeasurementReviewRequest,
                                context: UserContext = Depends(require_admin_context)):
+    if payload.mode in SIDE_REVIEW_MODES.values():
+        raise BackendHttpError(409, {"error": "Use the native tool history endpoint for this correction."})
     # Use the stored source, not its read-time legacy UI adaptation, for the immutable digest.
     _job_for_context(job_id, context)
     source = backend_service.JOB_STORE.get_job(job_id.strip())
@@ -1358,6 +1362,100 @@ def create_measurement_review(job_id: str, payload: MeasurementReviewRequest,
         raise BackendHttpError(409, {"error": str(exc)}) from exc
     backend_service.JOB_QUEUE.schedule_queued_jobs()
     return _json_response(200, _public_measurement_review(row))
+
+
+def _side_review_source(tool_path: str, run_id: str, context: UserContext) -> tuple[str, dict]:
+    if tool_path == "fleet-planner":
+        source, tool = _fleet_history_for_context(run_id, context), "fleet_planner"
+    elif tool_path == "route-insert-advisor":
+        source, tool = _route_insert_history_for_context(run_id, context), "route_insert_advisor"
+    else:
+        raise BackendHttpError(404, {"error": "Unknown measurement-review tool."})
+    return tool, source
+
+
+def _side_review_record(tool_path: str, run_id: str, review_id: str, context: UserContext) -> dict:
+    tool, source = _side_review_source(tool_path, run_id, context)
+    row = backend_service._runtime_sqlite_store().get_route_measurement_review(review_id)
+    if (not row or row.get("source_job_id") is not None or row.get("source_tool_key") != tool
+            or row.get("source_run_id") != source["run_id"]):
+        raise BackendHttpError(404, {"error": "Measurement review not found for this source."})
+    return row
+
+
+@_api_route("GET", "/{tool_path}/history/{run_id}/measurement-risk")
+def get_side_measurement_risk(tool_path: str, run_id: str,
+        _authorized: None = Depends(require_authorized_request), context: UserContext = Depends(current_user_context)):
+    tool, source = _side_review_source(tool_path, run_id, context)
+    return _json_response(200, side_risk_summary(source, tool, context.email))
+
+
+@_api_route("GET", "/{tool_path}/history/{run_id}/measurement-reviews")
+def list_side_measurement_reviews(tool_path: str, run_id: str,
+        _authorized: None = Depends(require_authorized_request), context: UserContext = Depends(current_user_context)):
+    tool, source = _side_review_source(tool_path, run_id, context)
+    rows = backend_service._runtime_sqlite_store().list_route_measurement_reviews(None,
+        source_tool_key=tool, source_run_id=source["run_id"], include_result=False)
+    return _json_response(200, {"reviews": [_public_measurement_review(row) for row in rows]})
+
+
+@_api_route("GET", "/{tool_path}/history/{run_id}/measurement-reviews/{review_id}")
+def get_side_measurement_review(tool_path: str, run_id: str, review_id: str,
+        _authorized: None = Depends(require_authorized_request), context: UserContext = Depends(current_user_context)):
+    return _json_response(200, _public_measurement_review(
+        _side_review_record(tool_path, run_id, review_id, context), include_result=True))
+
+
+@_api_route("POST", "/{tool_path}/history/{run_id}/measurement-reviews")
+def create_side_measurement_review(tool_path: str, run_id: str, payload: MeasurementReviewRequest,
+        context: UserContext = Depends(require_admin_context)):
+    tool, source = _side_review_source(tool_path, run_id, context)
+    if payload.mode != SIDE_REVIEW_MODES[tool]:
+        raise BackendHttpError(409, {"error": "Correction mode does not match the native tool."})
+    try:
+        request = build_side_review_request(source, tool_key=tool, requested_by=context.email,
+            request_key=payload.request_key, provider_call_limit=payload.provider_call_limit)
+        row = backend_service._runtime_sqlite_store().create_route_measurement_review(request, queue_scope=backend_service.JOB_QUEUE_SCOPE)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(200, _public_measurement_review(row))
+
+
+@_api_route("POST", "/{tool_path}/history/{run_id}/measurement-reviews/{review_id}/actions/{action}")
+def control_side_measurement_review(tool_path: str, run_id: str, review_id: str, action: str,
+        context: UserContext = Depends(require_admin_context)):
+    _side_review_record(tool_path, run_id, review_id, context)
+    try:
+        row = backend_service.JOB_QUEUE.measurement_reviews.action(review_id, action)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    if not row:
+        raise BackendHttpError(404, {"error": "Measurement review no longer exists."})
+    backend_service.JOB_QUEUE.schedule_queued_jobs()
+    return _json_response(200, _public_measurement_review(row))
+
+
+@_api_route("GET", "/{tool_path}/history/{run_id}/measurement-reviews/{review_id}/native-result")
+def side_measurement_native_result(tool_path: str, run_id: str, review_id: str,
+        _authorized: None = Depends(require_authorized_request), context: UserContext = Depends(current_user_context)):
+    row = _side_review_record(tool_path, run_id, review_id, context)
+    try:
+        return _json_response(200, corrected_native_record(row))
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+
+
+@_api_route("GET", "/{tool_path}/history/{run_id}/measurement-reviews/{review_id}/export")
+def export_side_measurement_review(tool_path: str, run_id: str, review_id: str, language: str = "en",
+        _authorized: None = Depends(require_authorized_request), context: UserContext = Depends(current_user_context)):
+    row = _side_review_record(tool_path, run_id, review_id, context)
+    try:
+        workbook = build_side_review_workbook(row, language)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    return _bytes_response(200, workbook, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=f"measurement-correction-{row['review_id']}.xlsx", inline=False)
 
 
 @_api_route("GET", "/jobs/{job_id}/measurement-reviews/{review_id}/export")
@@ -2799,8 +2897,10 @@ def _insert_build_selected_plan(
     constraints: dict[str, Any],
     suggested_config: dict[str, Any],
     measurement_cache: dict[tuple[Any, ...], dict[str, Any]] | None = None,
+    measure_route: Callable | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any] | None]:
     route_ids = {str(item.get("route_id") or "") for item in selected if item.get("route_id")}
+    measure_route = measure_route or _insert_route_measurement
     if not route_ids:
         return {"status": "unavailable", "feasible": False, "actions": selected}, None
 
@@ -2841,10 +2941,10 @@ def _insert_build_selected_plan(
             for stop in route_stops
         ]
         if insert_actions or provider_required:
-            base_measurement = _insert_route_measurement(
+            base_measurement = measure_route(
                 base_points, country, measurement_cache
             )
-            selected_measurement = _insert_route_measurement(
+            selected_measurement = measure_route(
                 route_points, country, measurement_cache
             ) if insert_actions else deepcopy(base_measurement)
         else:

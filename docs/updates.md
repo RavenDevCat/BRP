@@ -7,6 +7,21 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Native Historical Corrections
+
+- Saved Fleet Planner and Route Insert results now support bounded native
+  corrections when their original input evidence is sufficient. Their own
+  history IDs and permissions are retained; no Audit task is fabricated.
+- Administrators can explicitly start, pause, resume or cancel a correction.
+  Source results stay intact. Original/corrected selection updates the native
+  result and map together; correction Excel supports EN/ZH/KO. Reads, switches
+  and exports do not call map providers.
+- Missing historical coordinates, dwell or acceptance parameters disable full
+  correction instead of using current defaults. Complete measurements do not
+  imply all routes pass, a new assignment or a new minimum-fleet proof.
+- Runtime schema 9 adds native side-tool parents while retaining job review
+  records, leases, budgets and snapshots in a backward-compatible migration.
+
 ### Route Insert Measurement Consistency
 
 - CN selected plans remeasure affected routes even when students only walk to

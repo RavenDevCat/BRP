@@ -298,6 +298,12 @@ def rebuild_review_request(source: dict[str, Any], request: dict[str, Any]) -> d
     arguments = dict(requested_by=str(request.get("requested_by") or ""),
                      request_key=str(request.get("request_key") or ""),
                      provider_call_limit=request.get("provider_call_limit"))
+    if request.get("source_tool_key"):
+        try:
+            from .side_measurement_review import build_side_review_request
+        except ImportError:
+            from side_measurement_review import build_side_review_request
+        return build_side_review_request(source, tool_key=request["source_tool_key"], **arguments)
     if request.get("mode") == "full_audit":
         try:
             from .audit_measurement_review import build_audit_review_request
@@ -349,7 +355,13 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
             raise ReviewClaimLost("Review was stopped before its checkpoint could be saved.")
 
     try:
-        if request.get("mode") == "full_audit":
+        if request.get("mode") in {"full_fleet", "full_insert"}:
+            try:
+                from .side_measurement_review import run_side_review
+            except ImportError:
+                from side_measurement_review import run_side_review
+            result = run_side_review(store, record, worker_token, provider_factory=provider_factory, checkpoint=checkpoint)
+        elif request.get("mode") == "full_audit":
             try:
                 from .audit_measurement_review import run_audit_review
             except ImportError:
@@ -373,6 +385,7 @@ def execute_saved_review(store: Any, review_id: str, worker_token: str, *,
         current = store.get_route_measurement_review(review_id) or {}
         result = dict(current.get("result") or {
             "review_version": request["review_version"], "source_job_id": request["source_job_id"],
+            "source_tool_key": request.get("source_tool_key"), "source_run_id": request.get("source_run_id"),
             "source_result_digest": request["source_result_digest"], "routes": [],
         })
         result.update(status="failed", error_type=type(exc).__name__,

@@ -9,10 +9,10 @@ explicit selection of saved routes, measures those same directed stops through
 job or its result. Full Direct-to-School and Audit corrections have explicit
 scopes and reuse their existing domain pipelines, as described below.
 
-The saved-source adapters cover Route Audit current, Strict and Protected
-scenarios, and Direct-to-School current-route measurements. Unsupported result
-types require their own explicit adapter; do not infer an arbitrary nested
-object to be a route or silently claim coverage of other tool histories.
+The adapters cover Route Audit current, Strict and Protected scenarios,
+Direct-to-School, and native Fleet/Insert histories with sufficient original
+inputs. Other result types require an explicit adapter; arbitrary nested
+objects cannot stand in for a saved route.
 Upload previews without saved inputs are not historical jobs.
 Scheduled/running inputs, absent results and unsupported adapters return an
 explicit unavailable risk summary, never a healthy zero-risk claim.
@@ -233,6 +233,46 @@ If a candidate or its Current baseline lacks complete measurements, its native
 student detail sheets are replaced by an availability explanation; the measured
 route comparison remains available. Old planning values are not student evidence.
 
+## Native Fleet And Insert Corrections
+
+Fleet and Insert use their existing `(tool_key, run_id)` identity and source
+ACL, never a fabricated Audit job. Schema 9 gives each review exactly one job
+or native side-tool parent. The transactional migration preserves rows, queue
+order, worker leases, call reservations and snapshots; older job-only readers
+remain compatible. Deleting a source cascades its reviews and snapshots.
+
+Both native history paths expose `/measurement-risk`, `/measurement-reviews`,
+review detail, `/actions/{pause|resume|cancel}`, `/native-result` and `/export`.
+Reads inherit source access. Creation requires service authentication, an
+administrator, `mode: full_fleet` or `full_insert`, and explicit bounded approval.
+Matching run IDs in different tools never authorize each other's corrections.
+Limits are 1-200 measurement scopes and 1-500 provider attempts. Insert includes
+base and selected routes for every saved scenario, not only the active one.
+
+`side_measurement_review.py` captures the native digest, ordered points, school
+and zero-rider roles, dwell, capacity and window. Missing historical inputs
+disable full correction, not receive today's defaults. Fleet can recover point
+provenance only from a unique saved geocode with identical address/coordinates.
+Insert requires versioned measurement inputs and checks that saved actions
+reproduce its selected sequence. No adapter geocodes or substitutes a pickup.
+
+Fleet reuses its native measurement and display/map/workbook pipeline with
+saved dwell. Insert reuses combined-plan calculation with the same actions;
+candidate search is not rerun. Its selected student cards show the newly
+measured combined-route impact, not an old estimate or an isolated action cost.
+Road calls use the shared bounded provider and review-owned fresh snapshots.
+Uncertain or exhausted measurements remain partial unknowns. Final native
+outputs and comparisons must share evidence and retain route/point identities,
+counts, dwell and window. Complete evidence does not mean every window passes
+or that a new solver/fleet-minimum proof was produced.
+
+Original/corrected selection switches native results, maps and Fleet workbook
+downloads together. Query identities include tool/source/review; changing
+source resets selection. Correction Excel provides summary, route comparison
+and stop details in EN/ZH/KO, preserving unknowns and literal text. Reading,
+switching or exporting makes no provider calls or original-result writes.
+Creation errors remain administrator-only validation messages.
+
 ## Queue And Recovery
 
 `MeasurementReviewQueue` runs under the existing job scheduler, not a second
@@ -268,10 +308,8 @@ cooperatively; the new backend does not forcibly preempt it using a saved PID.
 
 Selected-route APIs return measurement comparisons, not fully corrected source
 results. Consumers must show the applicable scope, measurement times,
-request budget and outstanding input clarification. Other tool-history adapters
-and the administrator/result UI require their own integration. This includes
-selecting appended corrected results and replacing legacy UI reads of raw
-solver metrics with saved measurement evidence. Full backend correction does
+request budget and outstanding input clarification. Other unsupported histories
+require their own adapters. Full backend correction does
 not establish browser, mobile or exported HTML acceptance. No consumer may treat
 prepared coordinates as automatically re-geocoded or move an entrance to obtain
 a shorter route.
@@ -301,3 +339,8 @@ Audit tests cover native AM/PM dwell, empty and legacy-ID candidates, unchanged
 pickup identities, physical capacity and vehicle-saving failures, student-impact
 rejection despite passing road windows, Protected frozen/all-route distinction,
 missing evidence, pause/resume, saved-map reads and native workbook parity.
+
+Also run `tests/test_side_measurement_review.py`. It covers native AM/PM,
+cross-tool IDs, migration/rollback, source integrity, budget limits, pause reuse,
+ACLs, native result reads and localized Excel exports. Browser/mobile and actual
+provider acceptance remain separate from these isolated checks.

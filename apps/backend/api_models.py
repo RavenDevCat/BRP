@@ -34,7 +34,7 @@ class AiAuditRequest(BaseModel):
 class MeasurementReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    mode: Literal["selected_routes", "full_direct_school", "full_audit"] = "selected_routes"
+    mode: Literal["selected_routes", "full_direct_school", "full_audit", "full_fleet", "full_insert"] = "selected_routes"
     route_keys: list[str] = Field(default_factory=list, max_length=20)
     request_key: str = Field(min_length=1, max_length=80)
     provider_call_limit: int = Field(ge=1, le=500)

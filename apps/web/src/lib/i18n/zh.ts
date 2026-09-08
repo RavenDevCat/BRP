@@ -317,6 +317,11 @@ const zh: Translations = {
     "Recommended plan": "推荐方案",
     "Review reference": "复核参考方案",
     "Needs review": "需要复核",
+    "Missing saved acceptance inputs": "缺少原始验收参数",
+    "All saved Fleet plans": "全部已保存的车辆方案",
+    "All saved insert scenarios": "全部已保存的插入方案",
+    "Combined route impact": "合并插入后的整条线路变化",
+    "I approve sending this result's saved stop coordinates to AMap within the call limit. The original result is retained.": "我同意在调用次数上限内，将本结果保存的站点坐标发送给高德。原始结果保持不变。",
     "No adoption-ready optimized plan was produced.": "没有生成可直接采用的优化方案。",
     "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
         "不可直接采用；这是在证据完整的方案中，时间窗与时间影响综合损害最小的参考方案。",

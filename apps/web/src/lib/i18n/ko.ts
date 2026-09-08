@@ -755,6 +755,11 @@ const ko: Translations = {
     "Recommended plan": "권장 계획",
     "Review reference": "검토 참고안",
     "Needs review": "검토 필요",
+    "Missing saved acceptance inputs": "저장된 검증 입력 누락",
+    "All saved Fleet plans": "저장된 모든 차량 계획",
+    "All saved insert scenarios": "저장된 모든 삽입 시나리오",
+    "Combined route impact": "통합 삽입 후 전체 노선 변화",
+    "I approve sending this result's saved stop coordinates to AMap within the call limit. The original result is retained.": "호출 한도 내에서 이 결과에 저장된 정류장 좌표를 AMap에 전송하는 데 동의합니다. 원본 결과는 유지됩니다.",
     "No adoption-ready optimized plan was produced.": "바로 적용 가능한 최적화 계획이 생성되지 않았습니다.",
     "Not adoption-ready. Lowest combined time-window and time-impact harm among plans with complete evidence.":
         "바로 적용할 수 없습니다. 근거가 완전한 계획 중 시간 창과 시간 영향의 종합 위반이 가장 적은 참고안입니다.",

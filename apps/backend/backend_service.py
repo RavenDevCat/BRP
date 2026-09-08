@@ -1245,7 +1245,8 @@ def _route_plan_response(
     }
 
 
-def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routing: Any) -> None:
+def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routing: Any, *,
+                                   measurement_provider: Any = None, preserve_saved_dwell: bool = False) -> None:
     school = dict(route_preview.get("school") or {})
     country = str(school.get("country") or "").strip().upper()
     if country not in {"CN", "CHINA", "中国", "中华人民共和国"}:
@@ -1253,16 +1254,20 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
     summary = route_preview.setdefault("summary", {})
     routes = list(route_preview.get("routes") or [])
     rows = {str(row.get("cluster_id")): row for row in route_preview.get("route_rows") or []}
-    provider = None
+    provider = measurement_provider
     unavailable = "AMap measurement unavailable"
     try:
-        provider = FreshRouteProvider("amap", departure_time=None, api_call_limit=AMAP_FINAL_ROUTE_MAX_CALLS)
+        if provider is None:
+            provider = FreshRouteProvider("amap", departure_time=None, api_call_limit=AMAP_FINAL_ROUTE_MAX_CALLS)
     except RuntimeError as exc:
         unavailable = str(exc)
     review_count = 0
     for route in routes:
         ordered = list(route.get("ordered_points") or [])
-        route["stop_service_time_s"] = max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
+        if not preserve_saved_dwell:
+            route["stop_service_time_s"] = max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
+        elif not isinstance(route.get("stop_service_time_s"), (float, int)) or isinstance(route.get("stop_service_time_s"), bool) or not math.isfinite(route["stop_service_time_s"]) or route["stop_service_time_s"] < 0:
+            raise ValueError("Saved Fleet stop-service time is required for remeasurement.")
         evidence: dict[str, Any] = {}
         try:
             if provider is None:

@@ -31,6 +31,7 @@ import {
   type JobMapData,
 } from "@/lib/api";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
 import { downloadInteractiveMapHtml } from "@/features/results/job-result-view";
 import { formatNumber, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/cn";
@@ -784,21 +785,29 @@ export function FleetPlannerPage() {
           </Card>
 
           {result ? (
+            <MeasurementReviewWorkspace source={loadedHistoryRecord && !globalPlanMutation.data && !routePreviewMutation.data
+              ? {tool_key: "fleet_planner", run_id: loadedHistoryRecord.run_id} : null} mode="full_fleet">
+              {correction => (
             <FleetPreviewResult
+              key={correction?.review_id || "original"}
               result={result}
               mixRows={mixRows}
               geocodeResult={geocodeResult}
               clusterResult={clusterResult}
-              routePreviewResult={routePreviewResult}
-              globalPlanResult={globalPlanResult}
-              mapOutputs={mapOutputs}
-              saveHistoryResult={saveHistoryMutation.data}
+              routePreviewResult={correction ? correction.result?.native_result?.route_preview_result : routePreviewResult}
+              globalPlanResult={correction ? correction.result?.native_result?.global_plan_result : globalPlanResult}
+              mapOutputs={correction ? collectFleetMapOutputs({ geocodeResult, clusterResult,
+                routePreviewResult: correction.result?.native_result?.route_preview_result,
+                globalPlanResult: correction.result?.native_result?.global_plan_result }) : mapOutputs}
+              saveHistoryResult={correction ? undefined : saveHistoryMutation.data}
               saveHistoryError={saveHistoryMutation.error as Error | null}
               isSavingHistory={saveHistoryMutation.isPending}
               historyRecord={loadedHistoryRecord}
               activeView={activeResultView}
               onActiveViewChange={setActiveResultView}
             />
+              )}
+            </MeasurementReviewWorkspace>
           ) : (
             <EmptyResultState title="No result selected" detail="Run Fleet preview or open a saved Fleet Planner history item." />
           )}

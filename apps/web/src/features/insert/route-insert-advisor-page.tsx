@@ -6,6 +6,7 @@ import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
 import {
   getRouteInsertAdvisorCapabilities,
   deleteRouteInsertAdvisorHistory,
@@ -403,11 +404,16 @@ export function RouteInsertAdvisorPage() {
       ) : null}
 
       {result ? (
+        <MeasurementReviewWorkspace source={activeHistoryId ? {tool_key: "route_insert_advisor", run_id: activeHistoryId} : null} mode="full_insert">
+          {correction => (
         <ProposalResults
-          result={result}
+          key={correction?.review_id || "original"}
+          result={correction?.result?.native_result?.route_insert_result || result}
           activeScenarioId={activeScenarioId}
           onSelectScenario={setActiveScenarioId}
         />
+          )}
+        </MeasurementReviewWorkspace>
       ) : null}
         </div>
       </div>
@@ -715,7 +721,7 @@ function RecommendationCard({
       </div>
       {!isWalking ? (
         <p className="mt-3 text-sm text-muted-foreground">
-          {t("Extra impact")}: {minutes(proposal.delta_duration_s)} / {meters(proposal.delta_distance_m)}
+          {t(proposal.measurement_scope === "combined_selected_plan" ? "Combined route impact" : "Extra impact")}: {minutes(proposal.delta_duration_s)} / {meters(proposal.delta_distance_m)}
         </p>
       ) : null}
       <p className="mt-2 text-sm text-muted-foreground">{proposalChecks(proposal, t)}</p>

@@ -10,7 +10,7 @@ import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -312,6 +312,8 @@ class SqliteRuntimeStore:
                 ):
                     if name not in review_columns:
                         conn.execute(f"ALTER TABLE route_measurement_reviews ADD COLUMN {name} {definition}")
+                if "source_tool_key" not in review_columns:
+                    self._migrate_review_sources(conn)
                 duplicate_item = conn.execute(
                     """
                     SELECT scope, item_id
@@ -365,6 +367,42 @@ class SqliteRuntimeStore:
                 )
             self._initialized = True
 
+    @staticmethod
+    def _migrate_review_sources(conn: sqlite3.Connection) -> None:
+        """Retain review leases/snapshots atomically while adding native side-tool parents."""
+        for table in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall():
+            name = table["name"].replace('"', '""')
+            for foreign_key in conn.execute(f'PRAGMA foreign_key_list("{name}")'):
+                if foreign_key["table"] == "route_measurement_reviews" and table["name"] != "route_measurement_review_snapshots":
+                    raise RuntimeError("Unknown review dependent table prevents migration.")
+        conn.execute("""CREATE TABLE route_measurement_reviews_v9 (
+            review_id TEXT PRIMARY KEY, source_job_id TEXT, source_tool_key TEXT, source_run_id TEXT,
+            request_key TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'queued', created_at TEXT NOT NULL,
+            started_at TEXT, finished_at TEXT, worker_token TEXT, queue_scope TEXT NOT NULL DEFAULT '',
+            worker_pid INTEGER, job_slot_path TEXT, api_calls INTEGER NOT NULL DEFAULT 0,
+            error_code TEXT, request_json TEXT NOT NULL, result_json TEXT,
+            CHECK ((source_job_id IS NOT NULL AND source_tool_key IS NULL AND source_run_id IS NULL)
+                OR (source_job_id IS NULL AND source_tool_key IS NOT NULL AND source_run_id IS NOT NULL)),
+            UNIQUE(source_job_id, request_key), UNIQUE(source_tool_key, source_run_id, request_key),
+            FOREIGN KEY(source_job_id) REFERENCES jobs(job_id) ON DELETE CASCADE,
+            FOREIGN KEY(source_tool_key, source_run_id) REFERENCES side_tool_runs(tool_key, run_id) ON DELETE CASCADE
+        )""")
+        columns = "review_id,source_job_id,request_key,status,created_at,started_at,finished_at,worker_token,queue_scope,worker_pid,job_slot_path,api_calls,error_code,request_json,result_json"
+        conn.execute(f"INSERT INTO route_measurement_reviews_v9(rowid,{columns}) SELECT rowid,{columns} FROM route_measurement_reviews")
+        conn.execute("""CREATE TABLE route_measurement_review_snapshots_v9 (
+            review_id TEXT NOT NULL, measurement_key TEXT NOT NULL, snapshot_json TEXT NOT NULL,
+            PRIMARY KEY(review_id, measurement_key),
+            FOREIGN KEY(review_id) REFERENCES route_measurement_reviews_v9(review_id) ON DELETE CASCADE
+        )""")
+        conn.execute("INSERT INTO route_measurement_review_snapshots_v9 SELECT * FROM route_measurement_review_snapshots")
+        conn.execute("DROP TABLE route_measurement_review_snapshots")
+        conn.execute("DROP TABLE route_measurement_reviews")
+        conn.execute("ALTER TABLE route_measurement_reviews_v9 RENAME TO route_measurement_reviews")
+        conn.execute("ALTER TABLE route_measurement_review_snapshots_v9 RENAME TO route_measurement_review_snapshots")
+        conn.execute("CREATE INDEX idx_route_measurement_reviews_queue ON route_measurement_reviews(status, created_at)")
+        if conn.execute("PRAGMA foreign_key_check").fetchone():
+            raise RuntimeError("Review source migration failed integrity validation.")
+
     def create_route_measurement_review(self, request: dict[str, Any], *, queue_scope: str = "") -> dict[str, Any]:
         """Append a bounded request; idempotent retries never overwrite a prior review."""
         try:
@@ -374,17 +412,25 @@ class SqliteRuntimeStore:
         self.initialize()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
-            source_row = conn.execute("SELECT record_json FROM jobs WHERE job_id = ?",
-                                      (request.get("source_job_id"),)).fetchone()
+            side_tool = request.get("source_tool_key")
+            if side_tool:
+                if request.get("source_job_id") is not None:
+                    raise ValueError("A review must have exactly one native source.")
+                source_row = conn.execute("SELECT record_json FROM side_tool_runs WHERE tool_key = ? AND run_id = ?",
+                                          (side_tool, request.get("source_run_id"))).fetchone()
+            else:
+                source_row = conn.execute("SELECT record_json FROM jobs WHERE job_id = ?",
+                                          (request.get("source_job_id"),)).fetchone()
             if not source_row:
-                raise ValueError("Source job no longer exists.")
+                raise ValueError("Source result no longer exists.")
             source = json_loads(source_row["record_json"], {})
             expected = rebuild_review_request(source, request)
             if request != expected:
                 raise ValueError("Source changed or review request was modified; refresh the selection.")
             existing = conn.execute(
-                "SELECT * FROM route_measurement_reviews WHERE source_job_id = ? AND request_key = ?",
-                (expected["source_job_id"], expected["request_key"]),
+                """SELECT * FROM route_measurement_reviews WHERE source_job_id IS ?
+                   AND source_tool_key IS ? AND source_run_id IS ? AND request_key = ?""",
+                (expected.get("source_job_id"), expected.get("source_tool_key"), expected.get("source_run_id"), expected["request_key"]),
             ).fetchone()
             if existing:
                 if json_loads(existing["request_json"], {}) != expected or existing["queue_scope"] != queue_scope:
@@ -393,9 +439,10 @@ class SqliteRuntimeStore:
             review_id = uuid4().hex[:12]
             conn.execute(
                 """INSERT INTO route_measurement_reviews
-                   (review_id, source_job_id, request_key, status, created_at, request_json, queue_scope)
-                   VALUES (?, ?, ?, 'queued', ?, ?, ?)""",
-                (review_id, expected["source_job_id"], expected["request_key"], utc_now_iso(), json_dumps(expected), queue_scope),
+                   (review_id, source_job_id, source_tool_key, source_run_id, request_key, status, created_at, request_json, queue_scope)
+                   VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)""",
+                (review_id, expected.get("source_job_id"), expected.get("source_tool_key"), expected.get("source_run_id"),
+                 expected["request_key"], utc_now_iso(), json_dumps(expected), queue_scope),
             )
             row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
             return self._route_measurement_review_from_row(row)
@@ -403,6 +450,7 @@ class SqliteRuntimeStore:
     @staticmethod
     def _route_measurement_review_from_row(row: sqlite3.Row) -> dict[str, Any]:
         return {"review_id": row["review_id"], "source_job_id": row["source_job_id"],
+                "source_tool_key": row["source_tool_key"], "source_run_id": row["source_run_id"],
                 "status": row["status"], "created_at": row["created_at"], "started_at": row["started_at"],
                 "finished_at": row["finished_at"], "request": json_loads(row["request_json"], {}),
                 "queue_scope": row["queue_scope"], "worker_pid": row["worker_pid"],
@@ -415,16 +463,18 @@ class SqliteRuntimeStore:
             row = conn.execute("SELECT * FROM route_measurement_reviews WHERE review_id = ?", (review_id,)).fetchone()
         return self._route_measurement_review_from_row(row) if row else None
 
-    def list_route_measurement_reviews(self, source_job_id: str, *, limit: int = 100,
-                                       include_result: bool = True) -> list[dict[str, Any]]:
+    def list_route_measurement_reviews(self, source_job_id: str | None, *, limit: int = 100,
+                                       include_result: bool = True, source_tool_key: str | None = None,
+                                       source_run_id: str | None = None) -> list[dict[str, Any]]:
         self.initialize()
         with self.connect() as conn:
             rows = conn.execute(
-                """SELECT review_id, source_job_id, status, created_at, started_at, finished_at,
+                """SELECT review_id, source_job_id, source_tool_key, source_run_id, status, created_at, started_at, finished_at,
                           request_json, queue_scope, worker_pid, job_slot_path, api_calls, error_code,
                           CASE WHEN ? THEN result_json ELSE NULL END AS result_json
-                   FROM route_measurement_reviews WHERE source_job_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?""",
-                (include_result, source_job_id, max(1, min(100, int(limit)))),
+                   FROM route_measurement_reviews WHERE source_job_id IS ? AND source_tool_key IS ? AND source_run_id IS ?
+                   ORDER BY created_at DESC, rowid DESC LIMIT ?""",
+                (include_result, source_job_id, source_tool_key, source_run_id, max(1, min(100, int(limit)))),
             ).fetchall()
         return [self._route_measurement_review_from_row(row) for row in rows]
 
@@ -464,6 +514,12 @@ class SqliteRuntimeStore:
             if not row:
                 return False
             request = json_loads(row["request_json"], {})
+            if request.get("mode") in {"full_fleet", "full_insert"}:
+                try:
+                    from .side_measurement_review import validate_side_result
+                except ImportError:
+                    from side_measurement_review import validate_side_result
+                validate_side_result(request, result, terminal=terminal)
             if request.get("mode") == "full_audit":
                 try:
                     from .audit_measurement_review import validate_audit_result
@@ -478,7 +534,7 @@ class SqliteRuntimeStore:
                 validate_full_result(request, result, terminal=terminal)
             requested_keys = [scope["route_key"] for scope in request["routes"]]
             result_keys = [scope.get("route_key") for scope in result.get("routes") or []]
-            if (result.get("source_job_id") != request["source_job_id"]
+            if (any(result.get(key) != request.get(key) for key in ("source_job_id", "source_tool_key", "source_run_id"))
                     or result.get("source_result_digest") != request["source_result_digest"]
                     or result.get("review_version") != request["review_version"]
                     or result_keys != requested_keys[:len(result_keys)]

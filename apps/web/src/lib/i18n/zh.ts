@@ -1,6 +1,7 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved.": "地址已定位，请核对接送入口或道路侧向。已保存的位置未被移动。",
     "Measurement status": "测算状态",
     "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count} 条路线测算不完整。证据缺失的总时间和站点时刻不作为有效结果展示。",
     "{count} measured routes exceed the route-time target, including stop time.": "{count} 条已测算路线超出路线时间目标（包含停车时间）。",

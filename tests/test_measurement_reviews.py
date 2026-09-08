@@ -204,6 +204,10 @@ def test_real_shared_provider_measurement_and_pickup_guard(monkeypatch):
     original["result"]["structured_results"]["current_plan"]["points"][2].pop("geocode_quality_version")
     calls.clear()
     result = review.run_measurement_review(request(original))
+    assert result["status"] == "complete" and len(calls) == 2
+    original["result"]["structured_results"]["current_plan"]["points"][2]["lat"] = None
+    calls.clear()
+    result = review.run_measurement_review(request(original))
     assert result["status"] == "partial" and not calls
     assert result["routes"][0]["route_evidence"]["issues"][0]["code"] == "pickup_precision_needs_review"
 

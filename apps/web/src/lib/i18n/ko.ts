@@ -1,6 +1,7 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved.": "주소 좌표를 찾았습니다. 승하차 출입구나 도로 방향을 확인하세요. 저장된 위치는 변경되지 않았습니다.",
     "Measurement status": "측정 상태",
     "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count}개 노선의 측정이 불완전합니다. 근거가 없는 합계와 정류장 시각은 표시하지 않습니다.",
     "{count} measured routes exceed the route-time target, including stop time.": "측정된 {count}개 노선이 정차 시간을 포함하여 노선 시간 목표를 초과합니다.",

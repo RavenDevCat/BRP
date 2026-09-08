@@ -5,12 +5,14 @@ import re
 import math
 from typing import Any
 
-GEOCODE_QUALITY_VERSION = "amap-pickup-precision-v1"
+GEOCODE_QUALITY_VERSION = "amap-pickup-review-v2"
 GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
+    "pickup_precision_status", "pickup_precision_issues",
 )
 PRECISE_LEVELS = {"\u95e8\u724c\u53f7", "\u5174\u8da3\u70b9", "\u9053\u8def\u4ea4\u53c9\u53e3", "poi"}
+PRECISE_LEVELS.update({"\u95e8\u5740", "\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9", "\u9053\u8def\u4ea4\u53c9\u8def\u53e3"})
 
 
 class GeocodePrecisionError(RuntimeError):
@@ -99,9 +101,30 @@ def select_amap_pickup_candidate(requested: str, candidates: list[dict[str, Any]
 def reusable_amap_geocode(point: dict[str, Any], requested: str) -> bool:
     if str(point.get("provider") or "").lower() != "amap":
         return True
-    return point.get("geocode_quality_version") == GEOCODE_QUALITY_VERSION and not amap_candidate_issues(
-        requested, point, poi=str(point.get("geocode_level") or "") == "poi",
-    )
+    # Cache schema age and pickup precision are not coordinate-resolution failures.
+    # City/address plausibility is checked by both callers before reuse.
+    try:
+        lat, lng = float(point["lat"]), float(point["lng"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (point.get("cache_status") != "failed" and math.isfinite(lat) and math.isfinite(lng)
+            and abs(lat) <= 90 and abs(lng) <= 180 and (lat, lng) != (0, 0))
+
+
+def annotate_amap_pickup(point: dict[str, Any], requested: str, *, ambiguous: bool = False) -> dict[str, Any]:
+    result = dict(point)
+    if str(result.get("provider") or "").lower() != "amap":
+        return result
+    issues = amap_candidate_issues(requested, result, poi=result.get("geocode_level") == "poi")
+    if ambiguous:
+        issues.append("multiple_provider_candidates")
+    result.update({"geocode_quality_version": GEOCODE_QUALITY_VERSION,
+                   "pickup_precision_status": "needs_review" if issues else "matched",
+                   "pickup_precision_issues": list(dict.fromkeys(issues))})
+    if issues:
+        result["geocode_status"] = "needs_review"
+        result["warning"] = "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved."
+    return result
 
 
 def require_amap_pickup_precision(points: list[dict[str, Any]]) -> None:
@@ -109,16 +132,16 @@ def require_amap_pickup_precision(points: list[dict[str, Any]]) -> None:
                   if not reusable_amap_geocode(point, str(point.get("requested_address") or point.get("address") or ""))]
     if unresolved:
         raise GeocodePrecisionError(
-            "Pickup location precision needs review at route point index(es): "
+            "Pickup coordinates are unavailable at route point index(es): "
             + ", ".join(map(str, unresolved))
-            + ". Re-prepare these addresses with an explicit stop or entrance; saved coordinates were not changed."
+            + ". Re-prepare these addresses; no stop was skipped."
         )
 
 
 def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                         city_code: str, geocode_limiter, poi_limiter,
                         plausible, to_wgs84) -> dict[str, Any]:
-    """Resolve one precise, geographically valid pickup, never a first-hit guess."""
+    """Resolve coordinates; keep pickup precision separate from geocoding success."""
     def convert(candidate: dict[str, Any], poi: bool) -> dict[str, Any] | None:
         try:
             lng, lat = map(float, str(candidate["location"]).split(","))
@@ -146,8 +169,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                 "amap_poi_type": str(candidate.get("type") or "") if poi else "",
                 "geocode_quality_version": GEOCODE_QUALITY_VERSION}
 
-    # A single structured query followed by a city-bounded POI query prevents
-    # repeatedly accepting the same road/area centroid with different prefixes.
+    # Keep the provider's structured address location, even when its entrance
+    # needs review. POI search is only a fallback for truly unresolved addresses.
     for poi in (False, True):
         params = ({"keywords": address.strip(), "citylimit": "true", "offset": 10, "page": 1}
                   if poi else {"address": address.strip()})
@@ -162,7 +185,15 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
             continue
         candidates = [point for raw in response.get("pois" if poi else "geocodes") or []
                       if (point := convert(dict(raw), poi)) is not None]
-        chosen = select_amap_pickup_candidate(address, candidates, poi=poi)
+        if not poi and candidates:
+            return annotate_amap_pickup(candidates[0], address, ambiguous=len(candidates) > 1)
+        try:
+            chosen = select_amap_pickup_candidate(address, candidates, poi=poi)
+        except GeocodePrecisionError:
+            # Same-name bus stops may represent opposite road sides. Preserve
+            # provider ranking and expose ambiguity, never choose by route length.
+            chosen = next(candidate for candidate in candidates if not amap_candidate_issues(address, candidate, poi=poi))
+            return annotate_amap_pickup(chosen, address, ambiguous=True)
         if chosen is not None:
-            return chosen
+            return annotate_amap_pickup(chosen, address)
     raise GeocodePrecisionError("No unique, precise pickup matches this address. Road/area centroids, unrelated POIs and unrequested parking locations are not accepted; specify the stop, building number or entrance.")

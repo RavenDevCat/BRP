@@ -7,6 +7,18 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Address Resolution Compatibility
+
+- Corrected a regression where pickup-precision metadata and multiple same-name
+  candidates were treated as failed address resolution. Valid saved coordinates
+  remain usable without relocation; entrance uncertainty is a review warning.
+- Recognize the provider's actual bus/metro-stop, street-number and intersection
+  precision labels. Revisit precision-only failures from the earlier cache policy
+  without requiring users to clear unrelated cache entries.
+- Missing coordinates and wrong-city matches remain blocking. Road detour and
+  geometry checks are unchanged; restored address visibility is not proof that
+  a reported road detour has been corrected.
+
 ### Historical Correction Results
 
 - Audit and Direct-to-School pages expose a shared historical-measurement

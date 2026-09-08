@@ -51,7 +51,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
-from amap_geocode_quality import GeocodePrecisionError, require_amap_pickup_precision
+from amap_geocode_quality import GeocodePrecisionError, annotate_amap_pickup, require_amap_pickup_precision
 
 try:
     from planning_contract_adapters import (
@@ -728,6 +728,11 @@ def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
 
 
 def _check_amap_pickup_precision(points: list[dict[str, Any]], state: dict[str, Any]) -> None:
+    state["pickup_precision_reviews"] = [
+        {"point_index": index, "issues": reviewed["pickup_precision_issues"]}
+        for index, point in enumerate(points)
+        if (reviewed := annotate_amap_pickup(point, str(point.get("requested_address") or point.get("address") or ""))).get("pickup_precision_issues")
+    ]
     try:
         require_amap_pickup_precision(points)
     except GeocodePrecisionError as exc:
@@ -793,6 +798,7 @@ def _amap_route_stats(
     evidence = measure_amap_route(
         planner, request_points, cache, state, fetch_leg=_amap_route_segment_stats,
     )
+    evidence["pickup_precision_reviews"] = deepcopy(state.get("pickup_precision_reviews") or [])
     return evidence if evidence["status"] == "verified" else None
 
 

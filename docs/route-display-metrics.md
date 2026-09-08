@@ -1,5 +1,20 @@
 # Route Display Measurements
 
+## Coordinates And Pickup Precision
+
+Coordinate resolution and pickup-entrance confirmation are separate. An older
+cache schema or a coarse provider precision label must not remove an otherwise
+valid, city-matched stop. Reused coordinates stay unchanged; uncertain entrances
+and road sides use the existing address-review warning flow. Invalid coordinates,
+wrong-city matches and city-centre fallbacks remain blocked.
+
+AMap measurements describe travel between the supplied coordinates, not proof
+that a pickup entrance has been physically confirmed. Saved road evidence keeps
+`pickup_precision_reviews` separately from road-geometry and detour issues.
+The latter still prevent questionable measurements from passing the final gate.
+Old precision-only negative cache entries are retried under the revised policy;
+normal successful cache reuse does not trigger new geocoding.
+
 ## Read Contract
 
 `route_display_metrics` in the shared `route_measurement_view.py` selects values

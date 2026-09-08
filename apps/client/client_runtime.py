@@ -23,7 +23,7 @@ from quota_store_sqlite import SqliteQuotaStore
 APPS_DIR = Path(__file__).resolve().parents[1]
 if str(APPS_DIR) not in sys.path:
     sys.path.insert(0, str(APPS_DIR))
-from amap_geocode_quality import GEOCODE_QUALITY_VERSION, reusable_amap_geocode, resolve_amap_pickup
+from amap_geocode_quality import GEOCODE_QUALITY_VERSION, annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
@@ -1065,7 +1065,7 @@ def resolve_geocoded_point(
                 requested_address=address,
             ):
                 enriched_cached = annotate_geocode_point(
-                    dict(cached),
+                    annotate_amap_pickup(cached, address),
                     country=country,
                     city=city,
                     address=address,

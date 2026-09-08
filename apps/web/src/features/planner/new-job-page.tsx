@@ -902,7 +902,7 @@ function CurrentPlanReviewPanel({
                     {item.formatted_address ? (
                       <div className="mt-1 text-xs text-muted-foreground">{t("Resolved")}: {item.formatted_address}</div>
                     ) : null}
-                    {item.reason ? <div className="mt-1 text-xs text-muted-foreground">{item.reason}</div> : null}
+                    {item.reason ? <div className="mt-1 text-xs text-muted-foreground">{t(item.reason)}</div> : null}
                   </div>
                   <Button
                     type="button"

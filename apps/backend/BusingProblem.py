@@ -24,7 +24,7 @@ APPS_DIR = Path(__file__).resolve().parents[1]
 if str(APPS_DIR) not in sys.path:
     sys.path.insert(0, str(APPS_DIR))
 
-from amap_geocode_quality import reusable_amap_geocode, resolve_amap_pickup
+from amap_geocode_quality import annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
 from ortools_route_core import (  # noqa: E402
     add_capacity_dimension,
     add_route_time_dimension,
@@ -1032,7 +1032,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
                     cached_adcode,
                     requested_address=address,
                 ):
-                    point = dict(cached)
+                    point = annotate_amap_pickup(cached, address)
             except Exception:
                 point = None
         if point is None:

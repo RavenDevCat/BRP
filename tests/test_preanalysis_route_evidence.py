@@ -49,16 +49,16 @@ def preview(monkeypatch):
     return current, {"original_points": points}, calls, planner, scenario
 
 
-def test_old_zero_passenger_waypoint_blocks_certification_without_new_api_calls(preview):
+def test_old_zero_passenger_waypoint_remains_in_preview_and_measurement(preview):
     current, prepared, calls, _planner, scenario = preview
     scenario["points"][2].pop("geocode_quality_version")
     budget = {"minutes": 5}
     payload, error = service._current_plan_preview_map(current, prepared, {"service_direction": "To School"}, budget)
     assert error is None
-    assert calls == []
+    assert len(calls) == 2
     route = payload["routes"][0]
-    assert route["evidence_status"] == "needs_review"
-    assert route["route_evidence"]["issues"][0]["code"] == "pickup_precision_needs_review"
+    assert route["evidence_status"] == "verified"
+    assert route["route_evidence"]["point_count"] == 3
 
 
 @pytest.mark.parametrize("dwell", [0, 2])

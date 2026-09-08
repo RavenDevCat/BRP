@@ -46,11 +46,11 @@ def test_distinct_poi_ids_at_same_location_are_still_ambiguous():
         quality.select_amap_pickup_candidate(REQUEST, [poi(id="one"), poi(id="two")], poi=True)
 
 
-def test_old_prepared_points_require_review_before_any_provider_request(monkeypatch):
+def test_invalid_prepared_coordinates_block_before_any_provider_request(monkeypatch):
     analysis = importlib.import_module("direct_school_analysis")
     monkeypatch.setattr(core, "load_legacy_planner", lambda: type("Planner", (), {"AMAP_KEY": "test"})())
     monkeypatch.setattr(core, "_amap_route_stats", lambda *_: pytest.fail("must not request routes for unverified pickups"))
-    points = [{"provider": "amap", "address": REQUEST, "lat": 31.2, "lng": 121.43},
+    points = [{"provider": "amap", "address": REQUEST, "lat": float("nan"), "lng": 121.43},
               {"provider": "amap", "address": "school", "lat": 31.21, "lng": 121.44}]
     snapshot = [dict(point) for point in points]
     provider = analysis.FreshRouteProvider("amap", departure_time=None, api_call_limit=10)
@@ -60,6 +60,8 @@ def test_old_prepared_points_require_review_before_any_provider_request(monkeypa
     assert provider.state["last_route_evidence"]["status"] == "needs_review"
     state = {}
     with pytest.raises(quality.GeocodePrecisionError):
+        core._check_amap_pickup_precision(points, state)
+    with pytest.raises(ValueError, match="stop cannot be skipped"):
         core._route_amap_points(points, {"nodes": [0, 1]}, state)
     assert state["last_route_evidence"]["issues"][0]["code"] == "pickup_precision_needs_review"
     assert points == snapshot
@@ -96,8 +98,10 @@ def test_insert_map_points_preserve_precision_and_wgs_boundary(monkeypatch):
     assert quality.reusable_amap_geocode(point, REQUEST)
     point.pop("geocode_quality_version")
     state = {}
+    assert core._route_amap_points([point, point], {"nodes": [0, 1]}, state)
+    point["lng"] = float("nan")
     with pytest.raises(quality.GeocodePrecisionError):
-        core._route_amap_points([point, point], {"nodes": [0, 1]}, state)
+        core._check_amap_pickup_precision([point, point], state)
     assert state["last_route_evidence"]["status"] == "needs_review"
 
 
@@ -129,7 +133,7 @@ def test_building_number_and_explicit_entrance_must_match():
 
 
 @pytest.mark.parametrize("backend", [False, True])
-def test_both_clients_share_precision_filter_and_city_bounded_poi(monkeypatch, backend):
+def test_both_clients_keep_resolved_coordinate_and_flag_precision(monkeypatch, backend):
     module = core.load_legacy_planner() if backend else runtime
     calls = []
     def fetch(endpoint, params, limiter):
@@ -142,16 +146,17 @@ def test_both_clients_share_precision_filter_and_city_bounded_poi(monkeypatch, b
         return {"pois": [poi("\u67ab\u6811\u8def" + ROAD_B + BUS), poi()]}
     monkeypatch.setattr(module, "amap_request_json", fetch)
     point = module.amap_geocode_query("China", "Shanghai", REQUEST)
-    assert calls == ["/v3/geocode/geo", "/v3/place/text"]
-    assert point["amap_poi_name"] == REQUEST
+    assert calls == ["/v3/geocode/geo"]
+    assert point["geocode_status"] == "needs_review"
+    assert point["pickup_precision_status"] == "needs_review"
     assert point["geocode_quality_version"] == quality.GEOCODE_QUALITY_VERSION
     assert quality.reusable_amap_geocode(point, REQUEST)
     point["amap_poi_name"] = "wrong stop"
     point["formatted_address"] = "wrong stop"
-    assert not quality.reusable_amap_geocode(point, REQUEST)
+    assert "requested_road_not_preserved" in quality.amap_candidate_issues(REQUEST, point)
 
 
-def test_old_amap_cache_without_precision_cannot_bypass_new_check(monkeypatch):
+def test_old_amap_cache_without_precision_remains_usable_without_relocation(monkeypatch):
     address = ROAD_A + "123\u53f7"
     key = runtime.geocode_cache_key("China", "Shanghai", address)
     old = {"provider": "amap", "lat": 31.2, "lng": 121.43,
@@ -163,9 +168,47 @@ def test_old_amap_cache_without_precision_cannot_bypass_new_check(monkeypatch):
         return {**old, "geocode_level": "\u95e8\u724c\u53f7", "geocode_quality_version": quality.GEOCODE_QUALITY_VERSION}
     monkeypatch.setattr(runtime, "run_geocode_provider", fresh)
     point, warning, changed = runtime.resolve_geocoded_point("China", "Shanghai", address)
-    assert warning is None and changed and len(calls) == 1
+    assert warning is None and changed and len(calls) == 0
+    assert (point["lat"], point["lng"]) == (old["lat"], old["lng"])
+    assert point["pickup_precision_status"] == "needs_review"
     assert runtime.GEOCODE_CACHE["unrelated"] == {"keep": True}
     assert point["geocode_quality_version"] == quality.GEOCODE_QUALITY_VERSION
+    runtime.resolve_geocoded_point("China", "Shanghai", address)
+    assert len(calls) == 0
+
+
+@pytest.mark.parametrize("level", ["\u95e8\u5740", "\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9", "\u9053\u8def\u4ea4\u53c9\u8def\u53e3"])
+def test_actual_provider_precision_levels_are_recognized(level):
+    assert "coarse_or_unknown_geocode_precision" not in quality.amap_candidate_issues(REQUEST, {"level": level, "formatted_address": REQUEST})
+
+
+def test_legacy_points_are_measurable_but_pickup_review_is_preserved(monkeypatch):
+    points = [{"provider": "amap", "address": REQUEST, "lat": 31.2, "lng": 121.43},
+              {"provider": "amap", "address": "school", "lat": 31.21, "lng": 121.44}]
+    snapshot = [dict(point) for point in points]
+    state = {}
+    assert core._route_amap_points(points, {"nodes": [0, 1]}, state) == [(31.2, 121.43), (31.21, 121.44)]
+    assert len(state["pickup_precision_reviews"]) == 2
+    evidence = {"status": "verified", "duration_s": 600, "distance_m": 1000}
+    monkeypatch.setattr(core, "measure_amap_route", lambda *_, **__: evidence)
+    result = core._amap_route_stats(None, [(31.2, 121.43), (31.21, 121.44)], {}, state)
+    assert len(result["pickup_precision_reviews"]) == 2
+    assert points == snapshot
+
+
+def test_failed_v1_precision_cache_is_retried_without_manual_cache_clear(monkeypatch):
+    address = ROAD_A + "123\u53f7"
+    key = runtime.geocode_cache_key("China", "Shanghai", address)
+    monkeypatch.setattr(runtime, "GEOCODE_CACHE", {key: {"cache_status": "failed", "attempted_providers": ["amap"],
+                                                      "geocode_quality_version": "amap-pickup-precision-v1"}})
+    calls = []
+    def fresh(*args):
+        calls.append(args)
+        return quality.annotate_amap_pickup({"provider": "amap", "lat": 31.2, "lng": 121.43,
+                                            "formatted_address": address, "geocode_level": "\u95e8\u5740"}, address)
+    monkeypatch.setattr(runtime, "run_geocode_provider", fresh)
+    point, warning, changed = runtime.resolve_geocoded_point("China", "Shanghai", address)
+    assert point and warning is None and changed and len(calls) == 1
     runtime.resolve_geocoded_point("China", "Shanghai", address)
     assert len(calls) == 1
 

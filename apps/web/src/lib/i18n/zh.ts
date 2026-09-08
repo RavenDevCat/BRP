@@ -1,6 +1,10 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Measurement status": "测算状态",
+    "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count} 条路线测算不完整。证据缺失的总时间和站点时刻不作为有效结果展示。",
+    "{count} measured routes exceed the route-time target, including stop time.": "{count} 条已测算路线超出路线时间目标（包含停车时间）。",
+    "Planning references and historical measurements are not a new live verification.": "规划参考值与历史测算值不代表本次实时验证。",
     "Historical measurement review": "历史测算复核",
     "Refresh reviews": "刷新复核记录",
     "New correction": "新建修正测算",

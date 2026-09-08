@@ -1,6 +1,10 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Measurement status": "측정 상태",
+    "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count}개 노선의 측정이 불완전합니다. 근거가 없는 합계와 정류장 시각은 표시하지 않습니다.",
+    "{count} measured routes exceed the route-time target, including stop time.": "측정된 {count}개 노선이 정차 시간을 포함하여 노선 시간 목표를 초과합니다.",
+    "Planning references and historical measurements are not a new live verification.": "계획 참고값과 이전 측정값은 새로운 실시간 검증이 아닙니다.",
     "Historical measurement review": "이전 측정 검토",
     "Refresh reviews": "검토 새로 고침",
     "New correction": "새 보정 측정",

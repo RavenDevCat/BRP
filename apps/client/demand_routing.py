@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import io
+import math
 import sys
 import tempfile
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from openpyxl.styles import Alignment, Font, PatternFill
 
 APPS_DIR = Path(__file__).resolve().parents[1]
 if str(APPS_DIR) not in sys.path:
@@ -18,6 +21,7 @@ from ortools_route_core import (  # noqa: E402
 )
 import client_runtime as runtime
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
+from route_measurement_view import route_display_metrics, measurement_note
 from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details
 
 
@@ -343,11 +347,65 @@ def build_osrm_route_preview(
     }
 
 
+def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
+    """Read saved Fleet measurements without re-solving, routing or changing inputs."""
+    view = deepcopy(route_preview)
+    routes = list(view.get("routes") or [])
+    summary = view.setdefault("summary", {})
+    by_id = {str(route.get("cluster_id")): route for route in routes}
+    for route in routes:
+        metrics = route_display_metrics(route)
+        route["display_metrics"] = metrics
+        points = list(route.get("ordered_points") or [])
+        evidence = dict(route.get("route_evidence") or {})
+        legs = list(evidence.get("legs") or [])
+        # A route total alone is insufficient to reconstruct stop schedules.
+        schedule_known = metrics["source"] == "measurement" and metrics["duration_s"] is not None and metrics["distance_m"] is not None and len(points) > 1 and len(legs) == len(points) - 1
+        if schedule_known:
+            for key in ("duration_s", "distance_m"):
+                values = [leg.get(key) for leg in legs]
+                schedule_known &= all(isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 for value in values)
+                if schedule_known:
+                    schedule_known &= math.isclose(sum(values), evidence[key], abs_tol=.01, rel_tol=0)
+        if schedule_known:
+            route["ordered_points"] = _annotate_ordered_points_with_schedule(points, legs,
+                route_duration_s=evidence["duration_s"], service_direction=str(summary.get("service_direction") or "to_school"),
+                dwell_seconds=route["stop_service_time_s"] / (len(points) - 1))
+        elif metrics["source"] != "planning_reference" or metrics["duration_s"] is None or metrics["distance_m"] is None:
+            for point in points:
+                for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
+                    point.pop(key, None)
+        route["measurement_schedule_available"] = bool(schedule_known or (metrics["source"] == "planning_reference" and metrics["duration_s"] is not None and metrics["distance_m"] is not None))
+        route["display_traffic_gate"] = (dict(route.get("final_route_traffic_gate") or {})
+            if metrics["duration_s"] is not None and metrics["distance_m"] is not None else {"status": "unavailable", "passes": None})
+        route["measurement_note"] = measurement_note(route)
+    for field in ("route_rows", "rows"):
+        if field not in view:
+            continue
+        for row in view[field]:
+            route = by_id.get(str(row.get("cluster_id")))
+            metrics = route["display_metrics"] if route else {"duration_s": None, "distance_m": None, "source": "unavailable"}
+            row["duration_min"] = round(metrics["duration_s"] / 60, 1) if metrics["duration_s"] is not None else None
+            row["distance_km"] = round(metrics["distance_m"] / 1000, 2) if metrics["distance_m"] is not None else None
+            row["measurement_source"] = metrics["source"]
+            row["measurement_note"] = route["measurement_note"] if route else "Route measurement needs review; time-window compliance is not verified."
+    metrics = [route["display_metrics"] for route in routes]
+    for source, field, divisor, precision in (("duration_s", "total_duration_min", 60, 1), ("distance_m", "total_distance_km", 1000, 2)):
+        values = [item[source] for item in metrics]
+        summary[field] = round(sum(values) / divisor, precision) if values and None not in values else None
+    summary["route_measurement_review_count"] = sum(item["duration_s"] is None or item["distance_m"] is None for item in metrics)
+    summary["route_measurement_reference_count"] = sum(item["source"] in {"planning_reference", "historical_measurement"} for item in metrics)
+    summary["route_time_limit_exceeded_count"] = sum(route["display_traffic_gate"].get("status") == "failed" for route in routes)
+    return view
+
+
 def route_preview_to_dataframe(route_preview: dict[str, Any]) -> pd.DataFrame:
-    return pd.DataFrame(list(route_preview.get("route_rows") or []))
+    view = fleet_route_display_view(route_preview)
+    return pd.DataFrame(list(view.get("route_rows") or view.get("rows") or []))
 
 
 def route_preview_stop_detail_to_dataframe(route_preview: dict[str, Any]) -> pd.DataFrame:
+    route_preview = fleet_route_display_view(route_preview)
     rows: list[dict[str, Any]] = []
     for route in list(route_preview.get("routes") or []):
         vehicle = dict(route.get("selected_vehicle") or {})
@@ -376,6 +434,7 @@ def _build_route_preview_workbook_bytes(
     assignments_sheet_name: str,
     fleet_sheet_name: str,
 ) -> bytes:
+    route_preview = fleet_route_display_view(route_preview)
     assignment_rows: list[dict[str, Any]] = []
     fleet_counts: dict[tuple[str, int], int] = {}
     service_direction = str((route_preview.get("summary") or {}).get("service_direction", "to_school"))
@@ -416,7 +475,7 @@ def _build_route_preview_workbook_bytes(
         {
             "field": "source",
             "value": "Fleet Planner Preview",
-            "note": "Auto-generated from demand inputs, OSRM road metrics, and OR-Tools routing.",
+            "note": "Route order uses OSRM and OR-Tools. Route Measurements lists saved travel evidence separately.",
         },
     ]
     output = io.BytesIO()
@@ -424,6 +483,37 @@ def _build_route_preview_workbook_bytes(
         pd.DataFrame(assignment_rows).to_excel(writer, sheet_name=assignments_sheet_name, index=False)
         pd.DataFrame(fleet_rows).to_excel(writer, sheet_name=fleet_sheet_name, index=False)
         pd.DataFrame(notes_rows).to_excel(writer, sheet_name="template_notes", index=False)
+        measurement_rows = []
+        for route in route_preview.get("routes") or []:
+            metrics = route["display_metrics"]
+            evidence = dict(route.get("route_evidence") or {})
+            measurement_rows.append({
+                "Route": route.get("cluster_id"),
+                "Total time min": metrics["duration_s"] / 60 if metrics["duration_s"] is not None else None,
+                "Distance km": metrics["distance_m"] / 1000 if metrics["distance_m"] is not None else None,
+                "Driving time min": evidence["duration_s"] / 60 if metrics["source"] == "measurement" else None,
+                "Stop time min": route["stop_service_time_s"] / 60 if metrics["source"] == "measurement" and route.get("stop_service_time_s") is not None else None,
+                "Source": metrics["source"], "Measured at": evidence.get("called_at"),
+                "Note": route["measurement_note"],
+            })
+        pd.DataFrame(measurement_rows).to_excel(writer, sheet_name="Route Measurements", index=False)
+        sheet = writer.sheets["Route Measurements"]
+        sheet.freeze_panes = "B2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for cell in sheet[1]:
+            cell.fill = PatternFill("solid", fgColor="E7EEF1")
+            cell.font = Font(bold=True, color="17343A")
+            cell.alignment = Alignment(wrap_text=True, vertical="center")
+        for column, width in zip("ABCDEFGH", (16, 20, 18, 20, 18, 24, 30, 76)):
+            sheet.column_dimensions[column].width = width
+        for row in sheet.iter_rows(min_row=2):
+            for cell in row:
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+            for cell in row[1:5]:
+                cell.number_format = "0.0"
+            if row[1].value is None or row[2].value is None:
+                for cell in row:
+                    cell.fill = PatternFill("solid", fgColor="FFF2CC")
     return output.getvalue()
 
 
@@ -513,6 +603,7 @@ def build_route_preview_map_data(
     scenario_key: str = "optimized_plan",
     scenario_name: str = "Optimized Plan",
 ) -> dict[str, Any]:
+    route_preview = fleet_route_display_view(route_preview)
     routes = list(route_preview.get("routes") or [])
     summary = dict(route_preview.get("summary") or {})
     service_direction = str(summary.get("service_direction") or "to_school")
@@ -527,10 +618,16 @@ def build_route_preview_map_data(
         ordered_points = list(route.get("ordered_points") or [])
         leg_details = list(route.get("leg_details") or [])
         evidence = dict(route.get("route_evidence") or {})
-        if evidence.get("complete"):
+        measurement_attempted = "route_evidence" in route or route["display_metrics"]["source"] == "unavailable"
+        if measurement_attempted:
             leg_details = [{**leg, "geometry": [list(reversed(pair)) for pair in leg.get("geometry") or []]}
                            for leg in evidence.get("legs") or []]
-        geometry = _route_geometry_from_leg_details(leg_details)
+        geometry_segments = (evidence.get("geometry_segments") or [leg["geometry"] for leg in evidence.get("legs") or [] if len(leg.get("geometry") or []) >= 2]
+            if measurement_attempted else [])
+        geometry = [] if measurement_attempted else _route_geometry_from_leg_details(leg_details)
+        for segment in geometry_segments:
+            for lng, lat in segment:
+                all_coordinates.append((lat, lng))
         for lng, lat in geometry:
             all_coordinates.append((lat, lng))
         connectors = _route_connectors_from_leg_details(
@@ -544,6 +641,7 @@ def build_route_preview_map_data(
                 all_coordinates.append((lat, lng))
         cumulative_duration_s = 0.0
         cumulative_distance_m = 0.0
+        schedule_available = route["measurement_schedule_available"]
         stop_ids: list[str] = []
         load = 0
         for order, point in enumerate(ordered_points):
@@ -575,8 +673,8 @@ def build_route_preview_map_data(
                     "is_depot": order == (len(ordered_points) - 1 if service_direction_label == "To School" else 0),
                     "lat": lat,
                     "lng": lng,
-                    "cumulative_duration_s": cumulative_duration_s,
-                    "cumulative_distance_m": cumulative_distance_m,
+                    "cumulative_duration_s": cumulative_duration_s if schedule_available else None,
+                    "cumulative_distance_m": cumulative_distance_m if schedule_available else None,
                     "schedule_anchor_label": point.get("schedule_anchor_label"),
                     "schedule_anchor_kind": point.get("schedule_anchor_kind"),
                     "scheduled_offset_s": point.get("scheduled_offset_s"),
@@ -596,24 +694,21 @@ def build_route_preview_map_data(
                 "comfort_capacity": None,
                 "stop_count": max(0, len(ordered_points) - 1),
                 "max_stops": None,
-                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
-                "duration_s": float(route.get("duration_s", 0.0) or 0.0),
-                "raw_duration_s": float(route.get("duration_s", 0.0) or 0.0),
+                "distance_m": route["display_metrics"]["distance_m"],
+                "duration_s": route["display_metrics"]["duration_s"],
+                "raw_duration_s": route.get("raw_osrm_duration_s", route.get("duration_s")),
+                "raw_distance_m": route.get("raw_osrm_distance_m", route.get("distance_m")),
+                "stop_service_time_s": route.get("stop_service_time_s"),
+                "display_metrics": route["display_metrics"],
                 "traffic_time_source": str(summary.get("traffic_profile_context") or ""),
                 "geometry": geometry,
-                "geometry_segments": evidence.get("geometry_segments") or [],
+                "geometry_segments": geometry_segments,
                 "route_evidence": evidence or None,
-                "final_route_traffic_gate": route.get("final_route_traffic_gate"),
-                "evidence_status": evidence.get("status") or route.get("evidence_status") or (
+                "final_route_traffic_gate": route["display_traffic_gate"],
+                "evidence_status": "needs_review" if route["display_metrics"]["duration_s"] is None or route["display_metrics"]["distance_m"] is None else evidence.get("status") or route.get("evidence_status") or (
                     "legacy" if any(str(point.get("country") or "").upper() in {"CN", "CHINA"} for point in ordered_points) else "not_applicable"
                 ),
-                "display_geometry_message": (
-                    "Route measurement needs review; time-window compliance is not verified."
-                    if route.get("evidence_status") == "unavailable" or evidence.get("status") in {"needs_review", "unavailable"}
-                    else "Historical result: map and timing were not saved as one measurement. Rerun to verify."
-                    if not evidence and any(str(point.get("country") or "").upper() in {"CN", "CHINA"} for point in ordered_points)
-                    else ""
-                ),
+                "display_geometry_message": route["measurement_note"],
                 "stop_ids": stop_ids,
             }
         )
@@ -633,13 +728,15 @@ def build_route_preview_map_data(
             "route_count": len(route_payloads),
             "stop_count": len([stop for stop in stop_payloads if not stop.get("is_depot")]),
             "passenger_count": sum(int(route.get("load", 0) or 0) for route in route_payloads),
-            "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in route_payloads),
-            "duration_s": max([float(route.get("duration_s", 0.0) or 0.0) for route in route_payloads] or [0.0]),
+            "distance_m": sum(route["distance_m"] for route in route_payloads) if route_payloads and all(route["distance_m"] is not None for route in route_payloads) else None,
+            "duration_s": max(route["duration_s"] for route in route_payloads) if route_payloads and all(route["duration_s"] is not None for route in route_payloads) else None,
+            "measurement_unavailable_route_count": summary["route_measurement_review_count"],
         },
     }
 
 
 def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
+    route_preview = fleet_route_display_view(route_preview)
     routes = list(route_preview.get("routes") or [])
     if not routes:
         return ""
@@ -685,7 +782,7 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
         leg_details = []
         evidence = dict(route.get("route_evidence") or {})
         measured_legs = [{**leg, "geometry": [list(reversed(pair)) for pair in leg.get("geometry") or []]}
-                         for leg in evidence.get("legs") or []] if evidence.get("complete") else list(route.get("leg_details") or [])
+                         for leg in evidence.get("legs") or []] if "route_evidence" in route or route["display_metrics"]["source"] == "unavailable" else list(route.get("leg_details") or [])
         for leg_index, detail in enumerate(measured_legs):
             if leg_index + 1 >= len(node_indexes):
                 break
@@ -703,12 +800,14 @@ def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
                 "bus_type_name": str(vehicle.get("display_name") or "Selected vehicle"),
                 "bus_capacity": bus_capacity,
                 "load": load,
-                "time_s": float(route.get("duration_s", 0.0) or 0.0),
-                "distance_m": float(route.get("distance_m", 0.0) or 0.0),
+                "time_s": route["display_metrics"]["duration_s"],
+                "distance_m": route["display_metrics"]["distance_m"],
+                "stop_service_time_s": route.get("stop_service_time_s"),
+                "evidence_status": route.get("evidence_status"),
                 "nodes": node_indexes,
                 "leg_details": leg_details,
                 "route_evidence": evidence,
-                "final_route_traffic_gate": route.get("final_route_traffic_gate"),
+                "final_route_traffic_gate": route["display_traffic_gate"],
             }
         )
 

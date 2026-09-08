@@ -65,7 +65,7 @@ def test_old_prepared_points_require_review_before_any_provider_request(monkeypa
     assert points == snapshot
     service = importlib.import_module("backend_service")
     fleet = {"school": {"country": "China"}, "routes": [{"ordered_points": points}]}
-    service._attach_fleet_route_measurements(fleet, None)
+    service._attach_fleet_route_measurements(fleet, service._client_module("demand_routing"))
     assert fleet["summary"]["route_measurement_review_count"] == 1
     assert fleet["routes"][0]["evidence_status"] == "needs_review"
     assert fleet["routes"][0]["ordered_points"] == snapshot

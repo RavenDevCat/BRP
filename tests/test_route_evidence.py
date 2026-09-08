@@ -270,7 +270,11 @@ def test_fleet_keeps_order_and_vehicles_while_measuring_same_shared_edges(monkey
     assert route["route_evidence"]["leg_durations_s"] == [120, 600]
     assert route["final_route_traffic_gate"]["status"] == "passed"
     data = routing.build_route_preview_map_data(plan)
-    assert data["routes"][0]["duration_s"] == 720
+    assert data["routes"][0]["duration_s"] == 840
+    assert data["routes"][0]["stop_service_time_s"] == 120
+    assert route["route_evidence"]["duration_s"] == 720
+    assert plan["summary"]["total_duration_min"] == 14
+    assert plan["route_rows"][0]["duration_min"] == 14
     assert data["routes"][0]["geometry_segments"] == route["route_evidence"]["geometry_segments"]
     assert [stop["cumulative_duration_s"] for stop in data["stops"]] == [0, 120, 720]
 

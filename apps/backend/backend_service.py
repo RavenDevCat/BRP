@@ -1220,6 +1220,7 @@ def _route_plan_response(
 ) -> dict[str, Any]:
     demand_routing = _client_module("demand_routing")
     _attach_fleet_route_measurements(route_preview, demand_routing)
+    route_preview = demand_routing.fleet_route_display_view(route_preview)
     workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
     map_data = demand_routing.build_route_preview_map_data(
         route_preview,
@@ -1261,6 +1262,7 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
     review_count = 0
     for route in routes:
         ordered = list(route.get("ordered_points") or [])
+        route["stop_service_time_s"] = max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
         evidence: dict[str, Any] = {}
         try:
             if provider is None:
@@ -1275,8 +1277,8 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
         if evidence.get("status") != "verified":
             review_count += 1
         if evidence.get("complete"):
-            route["raw_osrm_duration_s"] = route.get("duration_s")
-            route["raw_osrm_distance_m"] = route.get("distance_m")
+            route.setdefault("raw_osrm_duration_s", route.get("duration_s"))
+            route.setdefault("raw_osrm_distance_m", route.get("distance_m"))
             route["duration_s"] = evidence["duration_s"]
             route["distance_m"] = evidence["distance_m"]
             route["ordered_points"] = demand_routing._annotate_ordered_points_with_schedule(
@@ -1288,7 +1290,7 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
                     for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
                         point.pop(key, None)
             target = float(summary.get("max_route_duration_minutes") or 0)
-            total_s = evidence["duration_s"] + max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
+            total_s = evidence["duration_s"] + route["stop_service_time_s"]
             route["final_route_traffic_gate"] = {
                 "status": "unavailable" if evidence.get("status") != "verified" else "failed" if target and total_s > target * 60 else "passed",
                 "verified_drive_duration_s": evidence["duration_s"],
@@ -1305,42 +1307,53 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
             for point in route["ordered_points"]:
                 for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
                     point.pop(key, None)
+        metrics = route_display_metrics(route)
         row = rows.get(str(route.get("cluster_id")))
         if row is not None:
-            row["duration_min"] = round(float(route.get("duration_s") or 0) / 60, 1)
-            row["distance_km"] = round(float(route.get("distance_m") or 0) / 1000, 2)
+            row["duration_min"] = round(metrics["duration_s"] / 60, 1) if metrics["duration_s"] is not None else None
+            row["distance_km"] = round(metrics["distance_m"] / 1000, 2) if metrics["distance_m"] is not None else None
             row["warnings"] = "; ".join(route.get("warnings") or [])
     summary["route_measurement_review_count"] = review_count
     summary["traffic_profile_context"] = "AMap measurements captured for this plan"
-    summary["total_duration_min"] = round(sum(float(route.get("duration_s") or 0) for route in routes) / 60, 1)
-    summary["total_distance_km"] = round(sum(float(route.get("distance_m") or 0) for route in routes) / 1000, 2)
+    summary.update(demand_routing.fleet_route_display_view(route_preview)["summary"])
 
 
 def _ensure_fleet_planner_map_data(
     route_preview_result: dict[str, Any],
 ) -> dict[str, Any]:
     result = deepcopy(route_preview_result or {})
-    if result.get("map_data") or not result.get("routes"):
+    if not result.get("routes"):
         return result
     try:
         demand_routing = _client_module("demand_routing")
+        result = demand_routing.fleet_route_display_view(result)
         result["map_data"] = demand_routing.build_route_preview_map_data(
             result,
             scenario_key="optimized_plan",
             scenario_name="Optimized Plan",
         )
+        result["rows"] = _dataframe_records(demand_routing.route_preview_to_dataframe(result))
+        result["stop_rows"] = _dataframe_records(demand_routing.route_preview_stop_detail_to_dataframe(result))
+        result["workbook_base64"] = base64.b64encode(demand_routing.build_generated_plan_workbook_bytes(result)).decode("ascii")
+        result.pop("map_html", None)
     except Exception as exc:
-        result["map_data_error"] = str(exc)
+        result["map_data_error"] = f"Saved Fleet measurement readout unavailable ({type(exc).__name__})."
+        for key in ("map_data", "map_html", "workbook_base64"):
+            result.pop(key, None)
+        result["summary"] = {**dict(result.get("summary") or {}), "total_duration_min": None,
+            "total_distance_km": None, "route_measurement_review_count": len(result.get("routes") or [])}
+        for field in ("route_rows", "rows"):
+            for row in result.get(field) or []:
+                row.update(duration_min=None, distance_km=None, measurement_note=result["map_data_error"])
+        result["stop_rows"] = []
     return result
 
 
 def _hydrate_fleet_planner_history_record(record: dict[str, Any]) -> dict[str, Any]:
     hydrated = deepcopy(record or {})
-    global_plan_result = hydrated.get("global_plan_result")
-    if isinstance(global_plan_result, dict):
-        hydrated["global_plan_result"] = _ensure_fleet_planner_map_data(
-            global_plan_result
-        )
+    for key in ("global_plan_result", "route_preview_result"):
+        if isinstance(hydrated.get(key), dict):
+            hydrated[key] = _ensure_fleet_planner_map_data(hydrated[key])
     return hydrated
 
 

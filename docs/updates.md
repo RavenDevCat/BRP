@@ -25,6 +25,13 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Consistent Measurement Readouts
 
+- Fleet result tables, maps and generated workbooks now use that same read
+  contract, including saved stop dwell. An incomplete route prevents a complete
+  fleet total. Historical views rebuild presentation from saved data without
+  remeasurement or overwrite; old cached exports are not returned as current
+  readouts. The added Route Measurements worksheet separates route total,
+  driving time and stop time and retains explicit source/review notes.
+
 - Result tables, map summaries and legacy HTML exports use the same saved
   measurement values. Route duration includes recorded stop dwell once; driving
   duration remains separate. Missing dwell, contradictory totals and incomplete

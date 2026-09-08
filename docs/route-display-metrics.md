@@ -54,6 +54,31 @@ Unknown totals print `Not available`; partial/contradictory evidence is labelled
 for review. Saved planning references remain separate. Exporting a saved result
 does not fetch road measurements or silently replace its evidence.
 
+## Fleet Readouts
+
+Fleet uses `fleet_route_display_view` after its unchanged assignment/order
+solver and on historical reads. Newly captured CN results save the existing
+Fleet dwell convention explicitly. Route table and map duration is driving
+time plus saved dwell once; planning references remain separately available.
+Missing or contradictory evidence cannot fall back to an old OSRM duration.
+
+Stop schedules require complete saved legs whose totals agree with the route
+measurement and known dwell. A route total alone cannot reconstruct a stop
+time. Zero-passenger waypoints remain in the ordered service sequence.
+AMap geometry uses its saved segments; a partial attempted measurement cannot
+substitute OSRM geometry or draw a synthetic line across missing segments.
+
+Historical read conversion rebuilds rows, map payload and downloadable workbook
+from saved data only. It does not write the history record or call a provider.
+It omits stale cached HTML/workbook responses, and conversion failure does not
+fall back to their old values. This is display consistency, not a new traffic
+sample or proof that an old pickup coordinate was correct.
+
+The generated workbook retains its Audit input sheets and adds a readable
+`Route Measurements` sheet with route total, driving time, dwell, distance,
+source, timestamp and review note. Missing totals stay blank and highlighted;
+the original saved workbook remains unchanged.
+
 ## Verification
 
 Run `tests/test_route_measurement_views.py` with the web TypeScript toolchain
@@ -62,3 +87,6 @@ views, aggregate unknowns, saved-map total duration and suppression of old
 planning numbers. Run the native map, Audit and student time-impact export suites,
 then compile React and verify desktop/mobile and standalone export rendering.
 Unit contract parity alone does not prove browser or live road correctness.
+Also run `tests/test_fleet_measurement_views.py` and the Fleet behavior suites:
+they cover read immutability, partial/zero values, saved schedules, real Folium
+HTML generation and workbook contents without external provider requests.

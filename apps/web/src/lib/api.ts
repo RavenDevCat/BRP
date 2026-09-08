@@ -955,8 +955,11 @@ export type FleetPlannerClusterResponse = {
 export type FleetPlannerRoutePreviewResponse = {
     summary: {
         route_count?: number;
-        total_distance_km?: number;
-        total_duration_min?: number;
+        total_distance_km?: number | null;
+        total_duration_min?: number | null;
+        route_measurement_review_count?: number;
+        route_measurement_reference_count?: number;
+        route_time_limit_exceeded_count?: number;
         service_direction?: string;
         max_route_duration_minutes?: number | null;
         candidate_vehicle_count?: number;
@@ -968,7 +971,7 @@ export type FleetPlannerRoutePreviewResponse = {
     routes: Array<Record<string, unknown>>;
     rows: Array<Record<string, unknown>>;
     stop_rows: Array<Record<string, unknown>>;
-    map_html: string;
+    map_html?: string;
     map_data?: JobMapData;
     refinement_note: string;
     workbook_file_name?: string;

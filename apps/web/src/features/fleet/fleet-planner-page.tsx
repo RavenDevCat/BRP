@@ -1017,7 +1017,7 @@ function FleetPreviewResult({
               </div>
             ) : null}
           </div>
-          <Badge tone={globalPlanResult ? "success" : "info"}>{globalPlanResult ? t("Plan ready") : t("Preview mode")}</Badge>
+          <Badge tone={Number(globalPlanSummary.route_measurement_review_count || 0) || Number(globalPlanSummary.route_time_limit_exceeded_count || 0) ? "warning" : "neutral"}>{globalPlanResult ? t("Plan ready") : t("Preview mode")}</Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -1242,6 +1242,11 @@ function RoutePreviewResult({
 }) {
   const t = useT();
   const summary = result.summary || {};
+  const measurementReviewCount = Number(summary.route_measurement_review_count || 0);
+  const referenceCount = Number(summary.route_measurement_reference_count || 0);
+  const exceedsCount = Number(summary.route_time_limit_exceeded_count || 0);
+  const badgeTone = result.refinement_note || measurementReviewCount || exceedsCount ? "warning" : referenceCount ? "info" : "success";
+  const metric = (value: unknown, unit: string) => typeof value === "number" && Number.isFinite(value) ? `${formatNumber(value)} ${unit}` : t("Not available");
   const content = (
     <>
       {framed ? (
@@ -1251,7 +1256,7 @@ function RoutePreviewResult({
               <Route className="h-4 w-4 text-primary" aria-hidden="true" />
               <h2 className="text-sm font-semibold">{title}</h2>
             </div>
-            <Badge tone={result.refinement_note ? "warning" : "success"}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
+            <Badge tone={badgeTone}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
           </div>
         </CardHeader>
       ) : (
@@ -1260,17 +1265,20 @@ function RoutePreviewResult({
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
             <h2 className="text-sm font-semibold">{title}</h2>
           </div>
-          <Badge tone={result.refinement_note ? "warning" : "success"}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
+          <Badge tone={badgeTone}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
         </div>
       )}
       <div className="space-y-4">
         <div className="grid gap-3 md:grid-cols-5">
           <Metric label="Routes" value={formatNumber(summary.route_count)} />
-          <Metric label="Distance" value={`${formatNumber(summary.total_distance_km)} km`} />
-          <Metric label="Time" value={`${formatNumber(summary.total_duration_min)} min`} />
+          <Metric label="Distance" value={metric(summary.total_distance_km, "km")} />
+          <Metric label="Time" value={metric(summary.total_duration_min, "min")} />
           <Metric label="Direction" value={summary.service_direction === "from_school" ? t("From School") : t("To School")} />
           <Metric label="Target" value={summary.max_route_duration_minutes ? `${formatNumber(summary.max_route_duration_minutes)} ${t("min")}` : t("N/A")} />
         </div>
+        {measurementReviewCount ? <div role="status" className="border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900">{template(t("{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing."), { count: formatNumber(measurementReviewCount) })}</div> : null}
+        {exceedsCount ? <div role="status" className="border-l-4 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-900">{template(t("{count} measured routes exceed the route-time target, including stop time."), { count: formatNumber(exceedsCount) })}</div> : null}
+        {referenceCount ? <p className="text-xs text-muted-foreground">{t("Planning references and historical measurements are not a new live verification.")}</p> : null}
         {summary.candidate_vehicle_count || summary.solver ? (
           <div className="grid gap-3 md:grid-cols-2">
             <Metric label="Candidates" value={formatNumber(summary.candidate_vehicle_count)} />
@@ -1299,6 +1307,7 @@ function RoutePreviewResult({
             "vehicle",
             "distance_km",
             "duration_min",
+            "measurement_note",
             "load_factor_pct",
             "warnings",
           ]}
@@ -2038,7 +2047,7 @@ function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; 
           <tr>
             {columns.map((column) => (
               <th key={column} className="whitespace-nowrap px-3 py-2 font-medium">
-                {t(column)}
+                {t(column === "measurement_note" ? "Measurement status" : column)}
               </th>
             ))}
           </tr>
@@ -2047,8 +2056,8 @@ function ResultTable({ rows, columns }: { rows: Array<Record<string, unknown>>; 
           {rows.slice(0, 80).map((row, index) => (
             <tr key={index}>
               {columns.map((column) => (
-                <td key={column} className="max-w-80 truncate px-3 py-2">
-                  {formatCell(row[column])}
+                <td key={column} className="max-w-80 truncate px-3 py-2" title={String(row[column] ?? "")}>
+                  {["distance_km", "duration_min"].includes(column) ? row[column] === null || row[column] === undefined ? t("Not available") : formatNumber(row[column]) : formatCell(row[column])}
                 </td>
               ))}
             </tr>

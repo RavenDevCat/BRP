@@ -181,6 +181,36 @@ the original saved workbook remains unchanged.
 
 ## Verification
 
+### Residential And Named-Gate Pickups
+
+CN residential pickups are outside at an entrance, not at a compound-centre
+POI. Both geocoders use `amap-pickup-review-v4`. Explicit directional, numbered
+and lettered gates must match the gate POI identity, not a parent POI's address.
+For example, gate 1 is not gate 11, and a south gate is not a southeast gate.
+Building numbers, phases, branches and the original input address remain intact.
+
+Fresh named-gate and recognizable residential lookups try city-limited POIs.
+An ordinary street-number geocode remains first, but a returned residential-area
+level triggers an entrance check. POI requests use `extensions=all`. A unique
+matching entrance POI uses its own coordinate; a residential POI without an
+explicit requested gate may use its valid `entr_location`, never its centre as
+proof of an entrance. Multiple matching entrances require review; they are not
+selected by proximity, short route length or provider ranking as a confirmed
+pickup. A generic entrance cannot stand in for an explicitly named gate.
+
+`pickup_entrance_source`, `amap_poi_location` and `amap_poi_entr_location` record
+the choice separately. Routing receives GCJ02; map coordinates are converted
+to WGS84 once after choosing the pickup coordinate. See the provider's
+[POI entrance field documentation](https://lbs.amap.com/api/webservice/guide/api/search/).
+
+Coordinate availability and entrance confirmation remain distinct. Ambiguous,
+missing or failed POI checks retain a usable geocode for display with review
+metadata. Existing valid caches are annotated, not silently relocated or mass
+invalidated, and no background bulk refresh is triggered by a policy version.
+Resolving a known old pickup requires an explicitly confirmed correction or a
+controlled re-preparation; a metadata warning does not prove its route fixed.
+Confirmed corrections take precedence over automated entrance matching.
+
 ### Operator-Confirmed Pickups
 
 `GET /api/pickup-corrections` reads the current revision for `country`, `city`

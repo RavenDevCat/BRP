@@ -7,6 +7,19 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Roadside Entrance Matching
+
+- Residential pickups use an entrance, not a compound-centre POI. Explicit
+  directional, numbered and lettered gates must match; parent POI address text
+  does not prove that its coordinate is the requested gate.
+- A unique matching residential POI may supply its provider entrance coordinate
+  when no specific gate was requested. Multiple entrances remain for review,
+  not automatic selection by the shortest route. Preserve entrance provenance.
+- Valid old coordinates stay visible with review metadata. Failed or ambiguous
+  entrance checks do not remove addresses, passengers or zero-rider waypoints.
+  Existing cached/prepared/history coordinates are not bulk rewritten; use a
+  confirmed correction and re-prepare to apply a known entrance correction.
+
 ### Confirmed Pickup Corrections
 
 - Administrators can save an explicitly confirmed AMap pickup for an exact

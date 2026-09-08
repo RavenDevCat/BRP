@@ -273,3 +273,196 @@ def test_failed_school_cannot_promote_zero_passenger_waypoint_to_depot(monkeypat
                             ({"address": address, "lat": 31.2, "lng": 121.4}, None, False))
     with pytest.raises(RuntimeError, match="school address"):
         module.geocode_records(rows)
+
+
+RESIDENCE = "\u661f\u5149\u5c0f\u533a"
+EAST_GATE = "\u4e1c\u95e8"
+WEST_GATE = "\u897f\u95e8"
+
+
+@pytest.mark.parametrize("requested,actual,matched", [
+    ("8\u53f7\u95e8", "8\u53f7\u95e8", True),
+    ("8\u53f7\u95e8", "18\u53f7\u95e8", False),
+    ("1\u53f7\u95e8", "11\u53f7\u95e8", False),
+    ("\uff18\u53f7\u95e8", "8\u53f7\u95e8", True),
+    ("\u516b\u53f7\u95e8", "8\u53f7\u95e8", True),
+    ("\u7b2c\u5341\u516b\u53f7\u95e8", "18\u53f7\u95e8", True),
+    ("A\u95e8", "B\u95e8", False),
+    ("A\u95e8", "A\u95e8", True),
+    (EAST_GATE, "\u4e1c\u5357\u95e8", False),
+    ("\u5357\u95e8", "\u4e1c\u5357\u95e8", False),
+    (EAST_GATE, "\u4e1c\u5165\u53e3", True),
+    ("\u4e1c\u95e8\u53e3", EAST_GATE, True),
+])
+def test_gate_identity_is_exact_not_a_substring_or_building_number(requested, actual, matched):
+    address = ROAD_A + "123\u53f7 " + RESIDENCE + "(" + requested + ")"
+    candidate = poi(RESIDENCE + "(" + actual + ")", address=ROAD_A + "123\u53f7", type="\u51fa\u5165\u53e3")
+    issues = quality.amap_candidate_issues(address, candidate, poi=True)
+    assert (not issues) == matched
+    assert "requested_building_number_not_preserved" not in issues
+    if not matched:
+        assert "requested_entrance_not_preserved" in issues
+
+
+def test_parent_location_cannot_impersonate_a_gate_in_its_address():
+    address = RESIDENCE + "(" + EAST_GATE + ")"
+    candidate = poi(RESIDENCE, address=address, type="\u4f4f\u5b85\u533a")
+    issues = quality.amap_candidate_issues(address, candidate, poi=True)
+    assert "requested_entrance_not_preserved" in issues
+    assert "residential_entrance_unconfirmed" in issues
+
+
+@pytest.mark.parametrize("backend", [False, True])
+def test_residential_explicit_gate_uses_gate_poi_not_centroid(monkeypatch, backend):
+    module = core.load_legacy_planner() if backend else runtime
+    address = RESIDENCE + "(8\u53f7\u95e8)"
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        assert params["city"] == "310000" and params["citylimit"] == "true"
+        assert params["extensions"] == "all"
+        return {"pois": [poi(RESIDENCE, type="\u4f4f\u5b85\u533a"),
+                          poi(RESIDENCE + "(18\u53f7\u95e8)", type="\u51fa\u5165\u53e3"),
+                          poi(address, location="121.431,31.201", type="\u51fa\u5165\u53e3")]}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", address)
+    assert calls == ["/v3/place/text"]
+    assert (point["lat"], point["lng"]) == (31.201, 121.431)
+    assert point["pickup_precision_status"] == "matched"
+    assert point["pickup_entrance_source"] == "named_gate_poi"
+    assert point["address"] == address
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_provider_entrance_is_separate_from_parent_poi_and_cannot_substitute_explicit_gate(monkeypatch, explicit):
+    address = RESIDENCE + ("(" + EAST_GATE + ")" if explicit else "")
+    def fetch(endpoint, params, limiter):
+        if endpoint == "/v3/place/text":
+            return {"pois": [poi(RESIDENCE, type="\u4f4f\u5b85\u533a", entr_location="121.432,31.202")]}
+        return {"geocodes": [{"formatted_address": address, "level": "\u4f4f\u5b85\u533a",
+                               "location": "121.430,31.200", "adcode": "310105"}]}
+    monkeypatch.setattr(runtime, "amap_request_json", fetch)
+    point = runtime.amap_geocode_query("China", "Shanghai", address)
+    if explicit:
+        assert (point["lat"], point["lng"]) == (31.200, 121.430)
+        assert point["pickup_precision_status"] == "needs_review"
+    else:
+        assert (point["lat"], point["lng"]) == (31.202, 121.432)
+        assert point["pickup_precision_status"] == "matched"
+        assert point["pickup_entrance_source"] == "provider_entr_location"
+        assert point["amap_poi_location"] == "121.430,31.200"
+        assert point["amap_poi_entr_location"] == "121.432,31.202"
+        assert (point["plot_lat"], point["plot_lng"]) == runtime.gcj02_to_wgs84(31.202, 121.432)
+
+
+@pytest.mark.parametrize("backend", [False, True])
+@pytest.mark.parametrize("failure", ["missing", "exception", "multiple", "invalid_entrance", "centroid_only"])
+def test_unconfirmed_entrances_keep_geocode_visible_and_do_not_pick_nearest(monkeypatch, backend, failure):
+    module = core.load_legacy_planner() if backend else runtime
+    def fetch(endpoint, params, limiter):
+        if endpoint == "/v3/geocode/geo":
+            return {"geocodes": [{"formatted_address": RESIDENCE, "level": "\u4f4f\u5b85\u533a",
+                                   "location": "121.435,31.205", "adcode": "310105"}]}
+        if failure == "exception":
+            raise RuntimeError("Provider unavailable")
+        candidates = []
+        if failure == "multiple":
+            candidates = [poi(RESIDENCE + "(" + gate + ")", location=location, type="\u51fa\u5165\u53e3")
+                          for gate, location in [(EAST_GATE, "121.431,31.201"), (WEST_GATE, "121.432,31.202")]]
+        if failure in {"invalid_entrance", "centroid_only"}:
+            candidates = [poi(RESIDENCE, type="\u4f4f\u5b85\u533a", entr_location="nan,31.2" if failure == "invalid_entrance" else "")]
+        return {"pois": candidates}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", RESIDENCE)
+    assert (point["lat"], point["lng"]) == (31.205, 121.435)
+    assert point["pickup_precision_status"] == "needs_review"
+    assert quality.reusable_amap_geocode(point, RESIDENCE)
+    again = quality.annotate_amap_pickup(point, RESIDENCE)
+    assert again["pickup_precision_issues"] == point["pickup_precision_issues"]
+
+
+def test_residential_geocode_discovered_from_street_number_checks_entrance(monkeypatch):
+    address = ROAD_A + "123\u53f7"
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        if endpoint == "/v3/geocode/geo":
+            return {"geocodes": [{"formatted_address": address, "level": "\u4f4f\u5b85\u533a",
+                                   "location": "121.435,31.205", "adcode": "310105"}]}
+        return {"pois": [poi(RESIDENCE + "(" + gate + ")", address=address, type="\u51fa\u5165\u53e3")
+                          for gate in (EAST_GATE, WEST_GATE)]}
+    monkeypatch.setattr(runtime, "amap_request_json", fetch)
+    point = runtime.amap_geocode_query("China", "Shanghai", address)
+    assert calls == ["/v3/geocode/geo", "/v3/place/text"]
+    assert (point["lat"], point["lng"]) == (31.205, 121.435)
+    assert point["pickup_precision_status"] == "needs_review"
+
+
+@pytest.mark.parametrize("address", ["\u82b1\u56ed\u8def123\u53f7", "\u897f\u95e8\u8def123\u53f7", "\u516c\u5bd3\u8def123\u53f7"])
+def test_road_names_do_not_become_residential_or_gate_requests(address):
+    assert not quality._gate_tokens(address)
+    assert not quality._residential_pickup(address, {})
+
+
+def test_old_residential_cache_warns_without_relocation_or_provider_calls(monkeypatch):
+    key = runtime.geocode_cache_key("China", "Shanghai", RESIDENCE)
+    old = {"provider": "amap", "lat": 31.2, "lng": 121.43, "adcode": "310105",
+           "formatted_address": "\u4e0a\u6d77\u5e02" + RESIDENCE, "geocode_level": "poi",
+           "amap_poi_name": RESIDENCE, "amap_poi_type": "\u4f4f\u5b85\u533a"}
+    monkeypatch.setattr(runtime, "GEOCODE_CACHE", {key: old})
+    monkeypatch.setattr(runtime, "run_geocode_provider", lambda *_: pytest.fail("Do not silently refresh live caches"))
+    point, warning, _ = runtime.resolve_geocoded_point("China", "Shanghai", RESIDENCE)
+    assert warning is None and quality.reusable_amap_geocode(point, RESIDENCE)
+    assert (point["lat"], point["lng"]) == (old["lat"], old["lng"])
+    assert "residential_entrance_unconfirmed" in point["pickup_precision_issues"]
+
+
+def test_operator_confirmation_survives_shared_annotation_for_old_landmark():
+    point = {"provider": "amap", "lat": 31.2, "lng": 121.43, "pickup_precision_status": "operator_confirmed",
+             "pickup_override_revision": 1, "pickup_precision_issues": [], "amap_poi_name": "confirmed pickup"}
+    assert quality.annotate_amap_pickup(point, RESIDENCE) == point
+
+
+def test_fleet_payload_keeps_separate_entrance_provenance():
+    demand = importlib.import_module("demand_routing")
+    point = {"provider": "amap", "lat": 31.2, "lng": 121.43, "address": RESIDENCE,
+             "pickup_entrance_source": "provider_entr_location", "amap_poi_location": "121.44,31.21",
+             "amap_poi_entr_location": "121.43,31.2"}
+    payload = demand._point_payload(point)
+    for key in ("pickup_entrance_source", "amap_poi_location", "amap_poi_entr_location"):
+        assert payload[key] == point[key]
+
+
+def test_unknown_city_does_not_discard_resolved_residential_geocode():
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        assert endpoint == "/v3/geocode/geo"
+        return {"geocodes": [{"formatted_address": RESIDENCE, "level": "\u4f4f\u5b85\u533a",
+                               "location": "121.435,31.205"}]}
+    point = quality.resolve_amap_pickup(request_json=fetch, country="China", city="Other", address=RESIDENCE,
+                                        city_code="", geocode_limiter=None, poi_limiter=None,
+                                        plausible=lambda *args, **kwargs: True, to_wgs84=lambda lat, lng: (lat, lng))
+    assert calls == ["/v3/geocode/geo"]
+    assert (point["lat"], point["lng"]) == (31.205, 121.435)
+    assert point["pickup_precision_status"] == "needs_review"
+
+
+def test_building_number_cannot_match_a_larger_number_at_same_gate():
+    address = ROAD_A + "123\u53f7(" + EAST_GATE + ")"
+    candidate = poi(RESIDENCE + "(" + EAST_GATE + ")", address=ROAD_A + "1123\u53f7", type="\u51fa\u5165\u53e3")
+    assert "requested_building_number_not_preserved" in quality.amap_candidate_issues(address, candidate, poi=True)
+
+
+def test_same_compound_different_phase_cannot_supply_gate():
+    address = RESIDENCE + "(2\u671f)(8\u53f7\u95e8)"
+    candidate = poi(RESIDENCE + "(1\u671f)(8\u53f7\u95e8)", type="\u51fa\u5165\u53e3")
+    assert "requested_branch_not_preserved" in quality.amap_candidate_issues(address, candidate, poi=True)
+
+
+def test_named_residential_section_is_not_stripped_as_an_administrative_district():
+    residence = "\u661f\u5149\u897f\u533a"
+    assert quality._local_address(residence) == residence
+    requested = residence + "(" + EAST_GATE + ")"
+    wrong = poi(RESIDENCE + "(" + EAST_GATE + ")", type="\u51fa\u5165\u53e3")
+    assert "requested_landmark_not_preserved" in quality.amap_candidate_issues(requested, wrong, poi=True)

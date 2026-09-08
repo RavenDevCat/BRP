@@ -7,6 +7,22 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Historical Correction Results
+
+- Audit and Direct-to-School pages expose a shared historical-measurement
+  review area. The original result remains the default and is not overwritten.
+  A finalized correction opens in the existing result views, with its own
+  map data, statistics and Excel report rather than the source result's cache.
+- Administrators can confirm a complete saved-input scope and an API-attempt
+  limit, then start, pause, resume or cancel a low-priority correction. Viewers
+  can inspect authorized results but cannot start provider work. Reading the
+  risk summary or review history does not call a map provider or enqueue work.
+- Partial and route-diagnostic-only records are explicitly distinguished from
+  full results. Differences include before/corrected route times and distances;
+  student analyses also compare the three removal/classification counts.
+  Fresh traffic can contribute to differences. Stop assignments and order
+  remain unchanged, and correction does not rerun a minimum-fleet proof.
+
 ### Consistent Measurement Readouts
 
 - Result tables, map summaries and legacy HTML exports use the same saved

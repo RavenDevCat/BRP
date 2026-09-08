@@ -85,6 +85,45 @@ export type JobRecord = JobSummary & {
     ai_audit_error?: string | null;
 };
 
+export type MeasurementReviewMode = "selected_routes" | "full_audit" | "full_direct_school";
+export type MeasurementRisk = {
+    source_supported: boolean;
+    status: string;
+    reason?: string;
+    routes: Array<{ route_key: string; route_id: string; risk_reasons: string[]; input_issues: string[] }>;
+    full_review?: { mode: MeasurementReviewMode; available: boolean; reason?: string; scope_summary?: Record<string, number> };
+};
+export type MeasurementComparison = {
+    route_key: string;
+    route_id: string;
+    status: string;
+    before: { total_duration_s?: number | null; distance_m?: number | null; captured_at?: string | null };
+    after: { total_duration_s?: number | null; distance_m?: number | null; captured_at?: string | null };
+    delta: { total_duration_s?: number | null; distance_m?: number | null };
+};
+export type MeasurementReviewRecord = {
+    review_id: string;
+    source_job_id: string;
+    status: string;
+    created_at: string;
+    started_at?: string | null;
+    finished_at?: string | null;
+    api_calls: number;
+    error_code?: string | null;
+    request: { mode: MeasurementReviewMode; provider_call_limit: number; route_keys: string[]; scope_summary?: Record<string, number> | null };
+    result?: {
+        scope: string;
+        status: string;
+        routes: MeasurementComparison[];
+        audit_result?: Record<string, unknown>;
+        analysis_result?: DirectSchoolAnalysisResult;
+        time_window_revalidated?: boolean;
+        time_impact_revalidated?: boolean;
+        classification_complete?: boolean;
+        conclusion_changes?: Record<string, { before?: number | null; after?: number | null; delta?: number | null }>;
+    } | null;
+};
+
 export type DeepVerificationCandidate = {
     candidate_id: string;
     verification_id: string;
@@ -1244,6 +1283,39 @@ export function getJobDeepVerification(jobId: string) {
     return apiFetch<DeepVerificationResponse>(
         `/jobs/${encodeURIComponent(jobId)}/deep-verification`,
     );
+}
+
+export function getMeasurementRisk(jobId: string) {
+    return apiFetch<MeasurementRisk>(`/jobs/${encodeURIComponent(jobId)}/measurement-risk`);
+}
+
+export function listMeasurementReviews(jobId: string) {
+    return apiFetch<{ reviews: MeasurementReviewRecord[] }>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews`);
+}
+
+export function getMeasurementReview(jobId: string, reviewId: string) {
+    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}`);
+}
+
+export function createMeasurementReview(jobId: string, payload: {
+    mode: Exclude<MeasurementReviewMode, "selected_routes">; provider_call_limit: number;
+    request_key: string; confirm_provider_calls: true;
+}) {
+    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+}
+
+export function controlMeasurementReview(jobId: string, reviewId: string, action: "pause" | "resume" | "cancel") {
+    return apiFetch<MeasurementReviewRecord>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}/actions/${action}`, { method: "POST" });
+}
+
+export function getMeasurementReviewExportUrl(jobId: string, reviewId: string) {
+    return `${API_BASE_URL}/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}/export`;
+}
+
+export function getMeasurementReviewMapData(jobId: string, reviewId: string, scenarioKey: string) {
+    return apiFetch<JobMapData>(`/jobs/${encodeURIComponent(jobId)}/measurement-reviews/${encodeURIComponent(reviewId)}/map-data/${encodeURIComponent(scenarioKey)}`);
 }
 
 export function startJobDeepVerification(jobId: string) {

@@ -30,6 +30,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
 import {
   controlDeepVerification,
   extendDeepVerificationBudget,
@@ -39,6 +40,9 @@ import {
   getJobDeepVerification,
   getJobExportUrl,
   getJobMapData,
+  getMeasurementReviewMapData,
+  getMeasurementReviewExportUrl,
+  type MeasurementReviewRecord,
   startJobDeepVerification,
   type DeepVerificationRecord,
   type DeepVerificationResponse,
@@ -71,6 +75,14 @@ const resultTabs: Array<{ key: ResultTab; label: string }> = [
 ];
 
 export function JobResultView({ job }: { job: JobRecord }) {
+  return <MeasurementReviewWorkspace key={job.job_id} job={job} mode="full_audit">
+    {correction => <JobResultBody key={correction?.review_id || job.job_id} measurementReview={correction || undefined}
+      job={correction ? { ...job, result: correction.result!.audit_result, error: null, traceback: null,
+        started_at: correction.started_at, finished_at: correction.finished_at } : job} />}
+  </MeasurementReviewWorkspace>;
+}
+
+function JobResultBody({ job, measurementReview }: { job: JobRecord; measurementReview?: MeasurementReviewRecord }) {
   const t = useT();
   const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const result = asRecord(job.result);
@@ -81,7 +93,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
   const reallocationSummary = asRecord(reallocation.summary);
   const priorityActions = asRecordArray(reallocationSummary.priority_recommendations).slice(0, 4);
   const diagnostics = getDiagnostics(job);
-  const mapOutputs = useMemo(() => collectMapOutputs(job.job_id, result), [job.job_id, result]);
+  const mapOutputs = useMemo(() => collectMapOutputs(job.job_id, result, Boolean(measurementReview)), [job.job_id, result, measurementReview]);
   const jobDisplayName = getJobDisplayName(job);
 
   const scenarios = useMemo(() => buildScenarioRows(result), [result]);
@@ -133,6 +145,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
 
       {activeTab === "summary" ? (
         <SummaryPanel
+          measurementReview={measurementReview}
           job={job}
           result={result}
           currentPlan={currentPlan}
@@ -147,6 +160,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
       ) : null}
       {activeTab === "plans" ? (
         <PlansPanel
+          measurementReview={measurementReview}
           jobId={job.job_id}
           jobName={jobDisplayName}
           mapOutputs={mapOutputs}
@@ -156,7 +170,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
           currentComparison={currentComparison}
         />
       ) : null}
-      {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} mapOutputs={mapOutputs} /> : null}
+      {activeTab === "impact" ? <TimeImpactPanel jobId={job.job_id} mapOutputs={mapOutputs} measurementReview={measurementReview} /> : null}
       {activeTab === "review" ? (
         <ReviewPanel
           currentPlan={currentPlan}
@@ -172,6 +186,7 @@ export function JobResultView({ job }: { job: JobRecord }) {
 }
 
 function SummaryPanel({
+  measurementReview,
   job,
   result,
   currentPlan,
@@ -183,6 +198,7 @@ function SummaryPanel({
   scenarios,
   onOpenReview,
 }: {
+  measurementReview?: MeasurementReviewRecord;
   job: JobRecord;
   result: Record<string, unknown>;
   currentPlan: Record<string, unknown>;
@@ -259,17 +275,17 @@ function SummaryPanel({
         />
       </div>
 
-      <SolveProcessCard rows={solveProcessRows} />
+      {!measurementReview ? <SolveProcessCard rows={solveProcessRows} /> : null}
 
-      <DeepVerificationPanel job={job} />
+      {!measurementReview ? <DeepVerificationPanel job={job} /> : null}
 
-      <AiAuditPanel
+      {!measurementReview ? <AiAuditPanel
         job={job}
         currentPlan={currentPlan}
         currentComparison={currentComparison}
         reallocationSummary={reallocationSummary}
         scenarios={scenarios}
-      />
+      /> : null}
 
       <CollapsibleSection title="Detailed action signals">
         <ActionPanel
@@ -313,6 +329,7 @@ function InputAddressWarningBanner({
 }
 
 function PlansPanel({
+  measurementReview,
   jobId,
   jobName,
   mapOutputs,
@@ -321,6 +338,7 @@ function PlansPanel({
   scenarios,
   currentComparison,
 }: {
+  measurementReview?: MeasurementReviewRecord;
   jobId: string;
   jobName: string;
   mapOutputs: MapOutput[];
@@ -339,6 +357,7 @@ function PlansPanel({
   return (
     <div className="space-y-4">
       <MapsPanel
+        measurementReview={measurementReview}
         jobId={jobId}
         jobName={jobName}
         mapOutputs={mapOutputs}
@@ -1415,9 +1434,11 @@ function DiagnosticsPanel({
 type TimeImpactFilter = "all" | "worse" | "over_acceptance" | "high_risk" | "route_changed" | "unavailable";
 
 function TimeImpactPanel({
+  measurementReview,
   jobId,
   mapOutputs,
 }: {
+  measurementReview?: MeasurementReviewRecord;
   jobId: string;
   mapOutputs: MapOutput[];
 }) {
@@ -1435,8 +1456,8 @@ function TimeImpactPanel({
     scenarioOptions.find((item) => item.key === "time_constrained") ||
     scenarioOptions[0];
   const impactQuery = useQuery({
-    queryKey: ["job-map-data", jobId, selected?.key],
-    queryFn: () => getJobMapData(jobId, selected?.key || ""),
+    queryKey: ["job-map-data", jobId, measurementReview?.review_id || "original", selected?.key],
+    queryFn: () => measurementReview ? getMeasurementReviewMapData(jobId, measurementReview.review_id, selected?.key || "") : getJobMapData(jobId, selected?.key || ""),
     enabled: Boolean(selected),
     staleTime: Infinity,
   });
@@ -1580,7 +1601,7 @@ function TimeImpactPanel({
                     </button>
                   ) : null}
                   <a
-                    href={getJobExportUrl(jobId, `time-impact-${selected.key}`)}
+                    href={measurementReview ? getMeasurementReviewExportUrl(jobId, measurementReview.review_id) : getJobExportUrl(jobId, `time-impact-${selected.key}`)}
                     className={cn(buttonClassName("secondary"), "h-8")}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
@@ -1608,7 +1629,7 @@ function TimeImpactPanel({
                 </div>
                 <div className="flex flex-wrap gap-2">
                   <a
-                    href={getJobExportUrl(jobId, `time-impact-${selected.key}`)}
+                    href={measurementReview ? getMeasurementReviewExportUrl(jobId, measurementReview.review_id) : getJobExportUrl(jobId, `time-impact-${selected.key}`)}
                     className={cn(buttonClassName("secondary"), "h-8")}
                   >
                     <Download className="h-4 w-4" aria-hidden="true" />
@@ -2213,6 +2234,7 @@ function stopAffectedRiders(stop: JobMapStop) {
 }
 
 function MapsPanel({
+  measurementReview,
   jobId,
   jobName,
   mapOutputs,
@@ -2221,6 +2243,7 @@ function MapsPanel({
   selectedKey,
   onSelectKey,
 }: {
+  measurementReview?: MeasurementReviewRecord;
   jobId: string;
   jobName: string;
   mapOutputs: MapOutput[];
@@ -2236,8 +2259,8 @@ function MapsPanel({
   const excludedStopCount = diagnostics.excludedStops.length;
   const geocodeWarningCount = diagnostics.geocodeWarnings.length;
   const interactiveQuery = useQuery({
-    queryKey: ["job-map-data", jobId, selected?.key],
-    queryFn: () => getJobMapData(jobId, selected.key),
+    queryKey: ["job-map-data", jobId, measurementReview?.review_id || "original", selected?.key],
+    queryFn: () => measurementReview ? getMeasurementReviewMapData(jobId, measurementReview.review_id, selected.key) : getJobMapData(jobId, selected.key),
     enabled: Boolean(selected),
     staleTime: Infinity,
   });
@@ -2251,7 +2274,7 @@ function MapsPanel({
     [interactiveQuery.data, scenarioSummaries, selected],
   );
   const workbookExportUrl = selected?.key
-    ? getJobExportUrl(jobId, `scenario-template-${selected.key}`)
+    ? measurementReview ? getMeasurementReviewExportUrl(jobId, measurementReview.review_id) : getJobExportUrl(jobId, `scenario-template-${selected.key}`)
     : "";
 
   if (!mapOutputs.length || !selected) {
@@ -2384,7 +2407,7 @@ function MapsPanel({
                 aria-label={t("Download workbook")}
               >
                 <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                {t("Workbook")}
+                {t(measurementReview ? "Correction report" : "Workbook")}
               </a>
             ) : null}
           </div>
@@ -2428,7 +2451,7 @@ function MapsPanel({
                     aria-label={t("Download workbook")}
                     >
                       <FileSpreadsheet className="h-4 w-4" aria-hidden="true" />
-                      {t("Workbook")}
+                      {t(measurementReview ? "Correction report" : "Workbook")}
                     </a>
                   ) : null}
                   <button
@@ -4032,7 +4055,7 @@ function scenarioForMapSurface(result: Record<string, unknown>, key: string): Re
   return asRecord(structured[key]);
 }
 
-function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapOutput[] {
+function collectMapOutputs(jobId: string, result: Record<string, unknown>, corrected = false): MapOutput[] {
   const structured = asRecord(result.structured_results);
   const timeConstrainedScenario = asRecord(result.time_constrained_optimization || structured.time_constrained);
   const keys = [
@@ -4048,7 +4071,8 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
       const path = stringValue(scenario.output_html);
       const hasRenderableMap = Boolean(
         scenarioIsInspectableStatus(scenarioStatusFromPayload(scenario)) &&
-        path &&
+        (corrected ? asRecord(scenario.measurement_summary).complete === true
+          && asRecord(asRecord(structured.current_plan).measurement_summary).complete === true : path) &&
         asRecordArray(scenario.points).length > 0 &&
         asRecordArray(scenario.routes).length > 0,
       );
@@ -4057,8 +4081,8 @@ function collectMapOutputs(jobId: string, result: Record<string, unknown>): MapO
         name,
         path,
         hasRenderableMap,
-        url: getJobArtifactUrl(jobId, key, { refresh: true }),
-        downloadUrl: getJobArtifactUrl(jobId, key, { download: true, refresh: true }),
+        url: corrected ? "" : getJobArtifactUrl(jobId, key, { refresh: true }),
+        downloadUrl: corrected ? "" : getJobArtifactUrl(jobId, key, { download: true, refresh: true }),
       };
     })
     .filter((item) => item.hasRenderableMap);

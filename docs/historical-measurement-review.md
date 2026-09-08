@@ -90,6 +90,31 @@ administrator-only `pause`, `resume` and `cancel` commands. Control stays in the
 environment that enqueued the review; sharing the runtime database does not
 authorize a different environment to adopt or terminate its process.
 
+## Result UI
+
+Audit and Direct-to-School result pages share a historical-measurement workspace.
+The default remains the original result. Selecting a correction changes the
+native result, map data and report export together; Audit query keys include
+the correction identity, and Direct-to-School uses the correction's saved
+analysis geometry. The separately labelled original-statistics shortcut still
+exports the preserved source. Corrected results do not inherit original
+multi-day comparisons or solver/deep-verification action panels.
+
+Risk reads also expose `full_review` availability and aggregate scope, built
+from the same native request validation as submission. This does not enqueue
+work, call a provider, expose coordinates or modify the source. Missing saved
+inputs keep the risk visible but disable full correction.
+
+Only administrators see creation and pause/resume/cancel controls. Creation
+requires opening the form and confirming the saved-input scope and a 1-500 API
+attempt limit. A failed retry with unchanged inputs reuses its idempotency key.
+Ordinary viewers inherit source read access but cannot start provider work.
+
+Queued, running and diagnostic-only records are not full-result replacements.
+Finalized partial native snapshots remain inspectable with an explicit warning;
+unresolved measurements are never a time-window pass. Comparisons retain null
+values and explain that fresh traffic may contribute to before/after changes.
+
 ## Full Direct-to-School Corrections
 
 An administrator can explicitly select `mode: full_direct_school` at the same

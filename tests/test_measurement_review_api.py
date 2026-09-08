@@ -133,3 +133,37 @@ def test_completed_detail_keeps_scope_limits_and_list_skips_large_snapshots(fixt
     assert store.list_route_measurement_reviews("source", include_result=False)[0]["result"] is None
     assert store.list_route_measurement_reviews("source")[0]["result"] == detail["result"]
     assert "result" not in client.get(BASE).json()["reviews"][0]
+
+
+@pytest.mark.parametrize("mode", ["full_audit", "full_direct_school"])
+def test_full_review_availability_is_native_read_only_and_acl_scoped(fixture, mode):
+    from test_audit_measurement_review import source as audit_source
+    from test_full_measurement_review import source as school_source
+    client, store, schedule = fixture
+    store.upsert_job(audit_source() if mode == "full_audit" else school_source())
+    before = deepcopy(store.get_job("source"))
+    for _ in range(2):
+        response = client.get("/api/jobs/source/measurement-risk", headers={"X-BRP-User-Email": "owner@example.test"})
+        assert response.status_code == 200, response.text
+        capability = response.json()["full_review"]
+        assert capability["mode"] == mode and capability["available"] is True
+        assert capability["scope_summary"]["route_count"] > 0
+        assert not {"points", "routes", "full_input", "before_analysis"} & capability.keys()
+    assert client.get("/api/jobs/source/measurement-risk", headers={"X-BRP-User-Email": "stranger@example.test"}).status_code == 403
+    assert store.get_job("source") == before
+    assert not store.list_route_measurement_reviews("source")
+    schedule.assert_not_called()
+
+
+def test_risk_remains_visible_when_native_correction_input_is_missing(fixture):
+    client, store, schedule = fixture
+    before = deepcopy(store.get_job("source"))
+    response = client.get("/api/jobs/source/measurement-risk")
+    assert response.status_code == 200
+    risk = response.json()
+    assert risk["source_supported"] and risk["routes"]
+    assert risk["full_review"]["available"] is False
+    assert risk["full_review"]["reason"]
+    assert not store.list_route_measurement_reviews("source")
+    assert store.get_job("source") == before
+    schedule.assert_not_called()

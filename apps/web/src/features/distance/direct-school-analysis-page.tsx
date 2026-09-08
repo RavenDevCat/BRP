@@ -23,6 +23,7 @@ import MapView, { Layer, NavigationControl, Source, type MapRef } from "react-ma
 import type { FeatureCollection, LineString, Point } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { HistorySidebar } from "@/components/history-sidebar";
+import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
@@ -40,6 +41,7 @@ import {
   getDeploymentFeatures,
   getDirectSchoolAnalysisExportUrl,
   getDirectSchoolAnalysisJob,
+  getMeasurementReviewExportUrl,
   getWorkbookTemplateUrl,
   listDirectSchoolAnalysisJobs,
   previewDirectSchoolAnalysis,
@@ -84,10 +86,6 @@ export function DirectSchoolAnalysisPage() {
   const [historyCollapsed, setHistoryCollapsed] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [deletingJobId, setDeletingJobId] = useState("");
-  const [selectedStopKey, setSelectedStopKey] = useState("");
-  const [selectionRevision, setSelectionRevision] = useState(0);
-  const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>("all");
-  const [searchText, setSearchText] = useState("");
 
   const featuresQuery = useQuery({
     queryKey: ["deployment-features"],
@@ -161,8 +159,6 @@ export function DirectSchoolAnalysisPage() {
       await queryClient.invalidateQueries({ queryKey: ["direct-school-history"] });
       const firstId = created[0]?.job.job_id || "";
       setSelectedJobId(firstId);
-      setSelectedStopKey("");
-      setSelectionRevision(0);
     },
   });
 
@@ -198,14 +194,6 @@ export function DirectSchoolAnalysisPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileBase64]);
 
-  useEffect(() => {
-    const result = detailQuery.data?.result;
-    if (!result?.stops?.length) return;
-    if (!selectedStopKey || !result.stops.some((row) => row.stop_key === selectedStopKey)) {
-      setSelectedStopKey(result.stops[0].stop_key);
-    }
-  }, [detailQuery.data?.result, selectedStopKey]);
-
   async function handleFileChange(nextFile: File | null) {
     setFile(nextFile);
     setFileBase64("");
@@ -233,24 +221,7 @@ export function DirectSchoolAnalysisPage() {
   const selectedRecord = detailQuery.data || null;
   const rawResult = selectedRecord?.result;
   const result = rawResult && Array.isArray(rawResult.stops) && !isActiveStatus(selectedRecord?.status) ? rawResult : null;
-  const filteredStops = useMemo(() => {
-    const rows = result?.stops || [];
-    const search = searchText.trim().toLowerCase();
-    return rows.filter((row) => {
-      if (classificationFilter !== "all" && operationalCategory(row) !== classificationFilter) return false;
-      if (!search) return true;
-      return [row.address, row.city, row.primary_route_id, ...(row.route_ids || [])]
-        .join(" ")
-        .toLowerCase()
-        .includes(search);
-    });
-  }, [classificationFilter, result?.stops, searchText]);
-  const selectedStop = result?.stops.find((row) => row.stop_key === selectedStopKey) || filteredStops[0] || null;
   const scheduledEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
-  const selectStop = (stopKey: string) => {
-    setSelectedStopKey(stopKey);
-    setSelectionRevision((value) => value + 1);
-  };
 
   return (
     <div className="pb-16 lg:pb-0">
@@ -272,8 +243,6 @@ export function DirectSchoolAnalysisPage() {
           onRefresh={() => void historyQuery.refetch()}
           onOpen={(jobId) => {
             setSelectedJobId(jobId);
-            setSelectedStopKey("");
-            setSelectionRevision(0);
           }}
           onDelete={(jobId) => deleteMutation.mutate([jobId])}
           onBulkDelete={(jobIds) => deleteMutation.mutate(jobIds)}
@@ -344,26 +313,14 @@ export function DirectSchoolAnalysisPage() {
               </Card>
 
               {result ? (
-                <>
-                  <ResultSummary record={selectedRecord!} />
-                  <AddressClassificationBoard
-                    rows={filteredStops}
-                    allRows={result.stops}
-                    selectedStopKey={selectedStop?.stop_key || ""}
-                    filter={classificationFilter}
-                    search={searchText}
-                    onFilter={setClassificationFilter}
-                    onSearch={setSearchText}
-                    onSelect={selectStop}
-                  />
-                  <div className="grid min-w-0 gap-4">
-                    <DirectSchoolMap result={result} selectedStop={selectedStop} selectionRevision={selectionRevision} onSelect={selectStop} />
-                    <DistanceScatter rows={result.stops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
-                  </div>
-                  <StopDetailTable rows={filteredStops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
-                  <MultiDayPanel record={selectedRecord!} />
-                  <RouteRecoveryPanel rows={result.route_window_analysis} />
-                </>
+                <MeasurementReviewWorkspace key={selectedRecord!.job_id} job={selectedRecord!} mode="full_direct_school">
+                  {correction => <DirectSchoolResultView key={correction?.review_id || selectedRecord!.job_id}
+                    record={correction ? { ...selectedRecord!, result: correction.result!.analysis_result,
+                      started_at: correction.started_at, finished_at: correction.finished_at } : selectedRecord!}
+                    corrected={Boolean(correction)}
+                    exportUrl={correction ? getMeasurementReviewExportUrl(selectedRecord!.job_id, correction.review_id)
+                      : getDirectSchoolAnalysisExportUrl(selectedRecord!.job_id)} />}
+                </MeasurementReviewWorkspace>
               ) : selectedRecord ? (
                 <PendingResult record={selectedRecord} />
               ) : null}
@@ -499,7 +456,7 @@ export function DirectSchoolAnalysisPage() {
                     {result ? (
                       <a className={cn(buttonClassName("secondary"), "w-full")} href={getDirectSchoolAnalysisExportUrl(selectedRecord.job_id)}>
                         <Download className="h-4 w-4" aria-hidden="true" />
-                        {t("Export statistics")}
+                        {t("Export original statistics")}
                       </a>
                     ) : null}
                     {(cancelMutation.error || retryMutation.error) ? <InlineError message={String((cancelMutation.error || retryMutation.error) as Error)} /> : null}
@@ -528,7 +485,34 @@ export function DirectSchoolAnalysisPage() {
   );
 }
 
-function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
+function DirectSchoolResultView({ record, exportUrl, corrected }: { record: DirectSchoolJobRecord; exportUrl: string; corrected: boolean }) {
+  const [selectedStopKey, setSelectedStopKey] = useState("");
+  const [selectionRevision, setSelectionRevision] = useState(0);
+  const [classificationFilter, setClassificationFilter] = useState<ClassificationFilter>("all");
+  const [searchText, setSearchText] = useState("");
+  const result = record.result!;
+  const filteredStops = useMemo(() => {
+    const search = searchText.trim().toLowerCase();
+    return result.stops.filter(row => (classificationFilter === "all" || operationalCategory(row) === classificationFilter)
+      && (!search || [row.address, row.city, row.primary_route_id, ...(row.route_ids || [])].join(" ").toLowerCase().includes(search)));
+  }, [classificationFilter, result.stops, searchText]);
+  const selectedStop = result.stops.find(row => row.stop_key === selectedStopKey) || filteredStops[0] || null;
+  const selectStop = (stopKey: string) => { setSelectedStopKey(stopKey); setSelectionRevision(value => value + 1); };
+  return <div className="min-w-0 space-y-4">
+    <ResultSummary record={record} exportUrl={exportUrl} />
+    <AddressClassificationBoard rows={filteredStops} allRows={result.stops} selectedStopKey={selectedStop?.stop_key || ""}
+      filter={classificationFilter} search={searchText} onFilter={setClassificationFilter} onSearch={setSearchText} onSelect={selectStop} />
+    <div className="grid min-w-0 gap-4">
+      <DirectSchoolMap result={result} selectedStop={selectedStop} selectionRevision={selectionRevision} onSelect={selectStop} />
+      <DistanceScatter rows={result.stops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
+    </div>
+    <StopDetailTable rows={filteredStops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
+    {!corrected ? <MultiDayPanel record={record} /> : null}
+    <RouteRecoveryPanel rows={result.route_window_analysis} />
+  </div>;
+}
+
+function ResultSummary({ record, exportUrl }: { record: DirectSchoolJobRecord; exportUrl: string }) {
   const t = useT();
   const result = record.result;
   if (!result) return null;
@@ -546,7 +530,7 @@ function ResultSummary({ record }: { record: DirectSchoolJobRecord }) {
           <div className="flex flex-wrap items-center justify-end gap-2">
             <a
               className={cn(buttonClassName("secondary"), "h-8 px-3")}
-              href={getDirectSchoolAnalysisExportUrl(record.job_id)}
+              href={exportUrl}
             >
               <Download className="h-4 w-4" aria-hidden="true" />
               {t("Export statistics")}

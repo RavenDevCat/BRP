@@ -1301,7 +1301,20 @@ def _measurement_review_for_job(job_id: str, review_id: str, context: UserContex
 @_api_route("GET", "/jobs/{job_id}/measurement-risk")
 def get_measurement_risk(job_id: str, _authorized: None = Depends(require_authorized_request),
                          context: UserContext = Depends(current_user_context)):
-    return _json_response(200, historical_risk_summary(_job_for_context(job_id, context)))
+    _job_for_context(job_id, context)
+    source = backend_service.JOB_STORE.get_job(job_id.strip())
+    if not source:
+        raise BackendHttpError(404, {"error": "Source job no longer exists."})
+    risk = historical_risk_summary(source)
+    if risk["source_supported"]:
+        mode = "full_direct_school" if dict(source.get("metadata") or {}).get("job_kind") == "direct_school_analysis" else "full_audit"
+        try:
+            builder = build_full_review_request if mode == "full_direct_school" else build_audit_review_request
+            request = builder(source, requested_by=context.email, request_key="availability-check", provider_call_limit=500)
+            risk["full_review"] = {"mode": mode, "available": True, "scope_summary": request["scope_summary"]}
+        except ValueError as exc:
+            risk["full_review"] = {"mode": mode, "available": False, "reason": str(exc)}
+    return _json_response(200, risk)
 
 
 @_api_route("GET", "/jobs/{job_id}/measurement-reviews")

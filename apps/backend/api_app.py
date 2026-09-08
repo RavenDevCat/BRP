@@ -43,6 +43,8 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
+from pickup_overrides import (PickupRevisionConflict, change_pickup_correction,
+                              prepare_confirmation, read_pickup_correction)
 
 
 class BackendHttpError(Exception):
@@ -3441,6 +3443,36 @@ def geocode_cache_clear(
     return _json_response(
         200, backend_service._handle_geocode_cache_clear(_payload_dict(payload))
     )
+
+
+@_api_route("GET", "/pickup-corrections", dependencies=[Depends(require_authorized_request)])
+def pickup_correction_detail(country: str, city: str, address: str,
+                             context: UserContext = Depends(require_admin_context)) -> JSONResponse:
+    runtime = backend_service._client_core_module().runtime
+    config = runtime._china_city_config(city) if runtime.is_china_country(country) else None
+    if not config:
+        raise BackendHttpError(422, {"error": "A supported CN city is required."})
+    try:
+        record = read_pickup_correction(str(config["amap_city"]), address)
+    except ValueError as exc:
+        raise BackendHttpError(422, {"error": str(exc)}) from exc
+    return _json_response(200, record or {"revision": 0, "active": False})
+
+
+@_api_route("POST", "/pickup-corrections", dependencies=[Depends(require_authorized_request)])
+def pickup_correction_save(payload: FlexiblePayload | None = Body(default=None),
+                           context: UserContext = Depends(require_admin_context)) -> JSONResponse:
+    body = _payload_dict(payload)
+    try:
+        city_code, address, point = prepare_confirmation(body, backend_service._client_core_module().runtime)
+        record = change_pickup_correction(city_code=city_code, address=address, point=point,
+            operator=context.email, reason=str(body.get("reason") or ""),
+            expected_revision=body.get("expected_revision"))
+    except PickupRevisionConflict as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    except ValueError as exc:
+        raise BackendHttpError(422, {"error": str(exc)}) from exc
+    return _json_response(200, record)
 
 
 @_api_route("POST", "/jobs", dependencies=[Depends(require_authorized_request)])

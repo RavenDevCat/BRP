@@ -7,6 +7,18 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Confirmed Pickup Corrections
+
+- Administrators can save an explicitly confirmed AMap pickup for an exact
+  original address and supported CN city. New geocoding/preparation checks the
+  correction before disposable caches; clearing a cache does not lose it.
+- Changes are revision-checked, retry-safe and append-only audited. Deactivation
+  restores normal geocoding without deleting the previous coordinate or evidence.
+  A correction is not chosen automatically by route length or an ambiguous POI.
+- Original workbooks, saved prepared/scheduled snapshots and historical results
+  remain unchanged. Re-prepare the original input to use corrections in a new
+  run. No map request is made when saving or reading a confirmed point.
+
 ### Bus-Stop Identity
 
 - Distinguish bus stops whose two road names appear in the opposite order.

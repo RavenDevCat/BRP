@@ -10,6 +10,7 @@ GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
     "pickup_precision_status", "pickup_precision_issues",
+    "pickup_override_revision", "pickup_override_confirmed_at",
 )
 PRECISE_LEVELS = {"\u95e8\u724c\u53f7", "\u5174\u8da3\u70b9", "\u9053\u8def\u4ea4\u53c9\u53e3", "poi"}
 PRECISE_LEVELS.update({"\u95e8\u5740", "\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9", "\u9053\u8def\u4ea4\u53c9\u8def\u53e3"})

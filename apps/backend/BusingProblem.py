@@ -25,6 +25,7 @@ if str(APPS_DIR) not in sys.path:
     sys.path.insert(0, str(APPS_DIR))
 
 from amap_geocode_quality import annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
+from pickup_overrides import confirmed_pickup
 from ortools_route_core import (  # noqa: E402
     add_capacity_dimension,
     add_route_time_dimension,
@@ -982,6 +983,10 @@ def geocode_provider_order(country: str) -> list[str]:
 
 
 def geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
+    config = _china_city_config(city) if is_china_country(country) else None
+    override = confirmed_pickup(str(config["amap_city"]), address) if config else None
+    if override is not None:
+        return override
     errors: list[str] = []
     for provider in geocode_provider_order(country):
         try:
@@ -1016,8 +1021,9 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         passenger_count = int(item.get("passenger_count", 0 if index == 0 else 1))
         cache_key = geocode_cache_key(country, city, address)
         cached = GEOCODE_CACHE.get(cache_key)
-        point = None
-        if cached:
+        config = _china_city_config(city) if is_china_country(country) else None
+        point = confirmed_pickup(str(config["amap_city"]), address) if config else None
+        if cached and point is None:
             try:
                 cached_lat = float(cached.get("lat", 0.0) or 0.0)
                 cached_lng = float(cached.get("lng", 0.0) or 0.0)

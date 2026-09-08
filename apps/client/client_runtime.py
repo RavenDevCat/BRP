@@ -24,6 +24,7 @@ APPS_DIR = Path(__file__).resolve().parents[1]
 if str(APPS_DIR) not in sys.path:
     sys.path.insert(0, str(APPS_DIR))
 from amap_geocode_quality import GEOCODE_QUALITY_VERSION, annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
+from pickup_overrides import confirmed_pickup
 
 BASE_DIR = Path(__file__).resolve().parent
 CACHE_DIR = Path(os.environ.get("BRP_CLIENT_CACHE_DIR", str(BASE_DIR / "cache"))).expanduser()
@@ -1023,6 +1024,10 @@ def resolve_geocoded_point(
     address: str,
     source_excel_rows: list[int] | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, str] | None, bool]:
+    config = _china_city_config(city) if is_china_country(country) else None
+    override = confirmed_pickup(str(config["amap_city"]), address) if config else None
+    if override is not None:
+        return override, None, False
     cache_key = geocode_cache_key(country, city, address)
     cached = None
     matched_cache_key = None

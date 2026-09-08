@@ -181,6 +181,37 @@ the original saved workbook remains unchanged.
 
 ## Verification
 
+### Operator-Confirmed Pickups
+
+`GET /api/pickup-corrections` reads the current revision for `country`, `city`
+and the exact original `address`. `POST /api/pickup-corrections` requires service
+authentication and a global administrator, `confirm: true`, `expected_revision`,
+an explicit confirmation `reason`, and the confirmed AMap `poi_id`, `poi_name`,
+GCJ02 `lat` and `lng`. A different POI name may be an intentional operator
+correction to an old landmark; it is not silently accepted by geocode matching.
+Unknown fields and unsupported cities are rejected. `active: false` appends a
+deactivation at the expected revision; it does not erase the earlier audit.
+
+The independent SQLite registry defaults to `pickup_overrides.sqlite` beside
+`BRP_RUNTIME_DB_PATH`, or uses explicit `BRP_PICKUP_OVERRIDES_DB_PATH`. Reads do
+not create files. Consumers read the current revision before cached geocoding
+on each new preparation; stale in-memory geocode caches cannot overwrite it.
+Country/city normalization uses each existing geocoder's supported-city table.
+Addresses match exactly after whitespace normalization, not fuzzy matching.
+The API performs no geocode or route request and computes WGS84 plotting
+coordinates from the explicitly declared GCJ02 point exactly once.
+
+Existing workbooks, prepared job snapshots (including scheduled jobs) and
+historical results are immutable. Re-prepare a new run from its original input
+to apply a correction; do not present old routes as recalculated. Route order,
+passengers, school identity and zero-passenger waypoints are unchanged.
+
+This maintenance API currently has administrator-only English validation
+messages; it has no new end-user form. User-facing localization is deferred
+until a confirmation UI is added, not mixed into ordinary geocode failure UI.
+
+### Test Coverage
+
 Run `tests/test_route_measurement_views.py` with the web TypeScript toolchain
 installed. It exercises a shared Python/TypeScript case matrix, immutable source
 views, aggregate unknowns, saved-map total duration and suppression of old

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from bisect import bisect_right
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -23,8 +24,9 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-adjacent-evidence-v2"
+EVIDENCE_VERSION = "amap-adjacent-evidence-v3"
 CACHE_MAX_AGE_SECONDS = 600
+CONTEXT_GEOMETRY_TOLERANCE_M = 1.0
 
 
 def distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -119,6 +121,66 @@ def _junction_issues(previous: dict[str, Any], following: dict[str, Any]) -> lis
     return issues
 
 
+def _geometry_profile(raw: Any) -> tuple[list[list[float]], list[float]]:
+    if not isinstance(raw, list) or not 2 <= len(raw) <= 10000:
+        raise ValueError("Invalid continuous-route geometry")
+    points: list[list[float]] = []
+    cumulative: list[float] = []
+    for pair in raw:
+        if (not isinstance(pair, (list, tuple)) or len(pair) != 2
+                or not all(math.isfinite(float(value)) for value in pair)
+                or abs(float(pair[0])) > 180 or abs(float(pair[1])) > 90):
+            raise ValueError("Invalid continuous-route coordinate")
+        point = list(map(float, pair))
+        if not points or point != points[-1]:
+            cumulative.append(cumulative[-1] + distance_m(tuple(reversed(points[-1])), tuple(reversed(point))) if points else 0.0)
+            points.append(point)
+    if len(points) < 2 or cumulative[-1] <= 0:
+        raise ValueError("Empty continuous-route geometry")
+    return points, cumulative
+
+
+def _geometry_position(points: list[list[float]], cumulative: list[float], fraction: float) -> list[float]:
+    along = cumulative[-1] * fraction
+    index = min(len(points) - 2, max(0, bisect_right(cumulative, along) - 1))
+    part = (along - cumulative[index]) / (cumulative[index + 1] - cumulative[index])
+    return [a + (b - a) * part for a, b in zip(points[index], points[index + 1])]
+
+
+def _continuous_turn_resolution(previous: dict[str, Any], following: dict[str, Any],
+                                context: dict[str, Any]) -> dict[str, Any]:
+    """Certify only the same directed road trace, never the shorter alternative."""
+    result: dict[str, Any] = {"status": "unresolved", "policy": "same-directed-trace-v1"}
+    try:
+        if distance_m(tuple(reversed(previous["geometry"][-1])), tuple(reversed(following["geometry"][0]))) > CONTEXT_GEOMETRY_TOLERANCE_M:
+            return {**result, "reason": "adjacent_road_gap"}
+        before, a = _geometry_profile(previous["geometry"] + following["geometry"])
+        continuous, b = _geometry_profile(context.get("geometry"))
+        lengths = [float(previous["distance_m"]) + float(following["distance_m"]), float(context["distance_m"])]
+        durations = [float(previous["duration_s"]) + float(following["duration_s"]), float(context["duration_s"])]
+        if not all(math.isfinite(value) and value > 0 for value in lengths + durations):
+            return {**result, "reason": "incomplete_context_metrics"}
+        result.update(distance_delta_m=lengths[1] - lengths[0], duration_delta_s=durations[1] - durations[0])
+        if abs(lengths[1] - lengths[0]) > 5 or abs(a[-1] - b[-1]) > 5:
+            return {**result, "reason": "continuous_distance_differs"}
+        if abs(durations[1] - durations[0]) > max(30.0, min(durations) * 0.1):
+            return {**result, "reason": "continuous_duration_differs"}
+        # Compare in travel order at every corner and every five metres. Unlike
+        # an unordered corridor test, this cannot equate a loop with a shortcut.
+        steps = max(1, math.ceil(max(a[-1], b[-1]) / 5))
+        if steps > 10000:
+            return {**result, "reason": "geometry_comparison_limit"}
+        fractions = {i / steps for i in range(steps + 1)} | {value / a[-1] for value in a} | {value / b[-1] for value in b}
+        maximum = max(distance_m(tuple(reversed(_geometry_position(before, a, fraction))),
+                                 tuple(reversed(_geometry_position(continuous, b, fraction)))) for fraction in fractions)
+        result["maximum_separation_m"] = maximum
+        if maximum > CONTEXT_GEOMETRY_TOLERANCE_M:
+            return {**result, "reason": "continuous_geometry_differs"}
+        return {**result, "status": "confirmed", "reason": "same_directed_route"}
+    except (KeyError, ValueError, TypeError, IndexError, OverflowError):
+        return {**result, "reason": "invalid_context_evidence"}
+
+
 def measure_amap_route(
     planner: Any,
     points: list[tuple[float, float]],
@@ -204,6 +266,7 @@ def measure_amap_route(
     # comparison for questionable junctions; never distribute its total time
     # across stops to invent missing segment measurements.
     context_checks: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
     junctions = sorted({int(issue["leg_index"]) for issue in issues
                         if issue["code"] in {"stop_road_continuity_needs_review", "stop_turnaround_needs_review"}})
     for index in junctions:
@@ -229,6 +292,12 @@ def measure_amap_route(
             check.update({"status": "measured", "measurement": snapshot,
                           "adjacent_duration_s": legs[index - 1]["duration_s"] + legs[index]["duration_s"],
                           "adjacent_distance_m": legs[index - 1]["distance_m"] + legs[index]["distance_m"]})
+            resolution = _continuous_turn_resolution(legs[index - 1], legs[index], snapshot)
+            check["resolution"] = resolution
+            if resolution["status"] == "confirmed":
+                resolved = [issue for issue in issues if issue["leg_index"] == index and issue["code"] == "stop_turnaround_needs_review"]
+                observations.extend({**issue, "resolution": "continuous_route_confirmed", "context_stop_index": index} for issue in resolved)
+                issues = [issue for issue in issues if issue not in resolved]
         except Exception as exc:
             check["error_type"] = type(exc).__name__
     status = "unavailable" if not complete else "needs_review" if issues else "verified"
@@ -241,7 +310,7 @@ def measure_amap_route(
         "evidence_version": EVIDENCE_VERSION, "routing_version": AMAP_DRIVING_VERSION,
         "provider": "amap", "source": "amap_adjacent_legs", "status": status,
         "complete": complete, "legs": legs, "issues": issues,
-        "context_checks": context_checks,
+        "context_checks": context_checks, "observations": observations,
         "point_count": len(points), "segment_count": len(legs),
         "called_at": max((leg["called_at"] for leg in legs), default=None),
         "measurement_started_at": min((leg["called_at"] for leg in legs), default=None),

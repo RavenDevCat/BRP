@@ -7,6 +7,17 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Continuously Confirmed Turnarounds
+
+- Use saved continuous-waypoint comparisons to distinguish a provider-confirmed
+  turnaround from an unexplained conflict between adjacent route requests.
+  Only matching directed road shapes with consistent measurements may resolve
+  that stop's turnaround warning. Other quality issues still require review.
+- Preserve original segment times, distances, route order and the confirmation
+  evidence. Do not take the shorter response or split a whole-route duration
+  among stops. Historical results are unchanged; new measurements use a revised
+  evidence version and cannot silently reuse older verification decisions.
+
 ### Address Resolution Compatibility
 
 - Corrected a regression where pickup-precision metadata and multiple same-name

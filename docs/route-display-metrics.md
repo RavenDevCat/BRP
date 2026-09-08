@@ -15,6 +15,30 @@ The latter still prevent questionable measurements from passing the final gate.
 Old precision-only negative cache entries are retried under the revised policy;
 normal successful cache reuse does not trigger new geocoding.
 
+## Continuous Turn Evidence
+
+`amap-adjacent-evidence-v3` distinguishes an unexplained stop turnaround from
+the same turnaround confirmed by a continuous AMap waypoint request. Existing
+bounded context checks are reused; the rule does not add a second measurement
+pass or choose a shorter alternative.
+
+Only the turnaround issue at that specific stop may be resolved. The adjacent
+road endpoints must join within one metre. Reported and geometry lengths must
+agree within five metres, and duration difference must be at most thirty seconds
+or ten percent of the smaller total, whichever is greater. Travel-ordered shapes
+are compared at all vertices and at five-metre intervals, with at most one metre
+separation. Different road order, a gap, an alternate detour, invalid context,
+exhausted comparison budget or a significant time difference remains unresolved.
+The geometry comparison is bounded and fails closed for oversized inputs.
+
+Confirmed turn observations and their context resolution are retained in saved
+evidence. Independent detour, snap or distance warnings cannot be cleared by a
+turn confirmation. Per-leg times, distances, geometry, stop order and dwell are
+never replaced or proportionally redistributed from the context total. Existing
+final gates and all consumers use the resulting complete evidence normally.
+Older cached evidence is not upgraded silently, and reading a historical result
+does not rerun this rule or make new provider requests.
+
 ## Read Contract
 
 `route_display_metrics` in the shared `route_measurement_view.py` selects values

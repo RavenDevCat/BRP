@@ -242,6 +242,31 @@ until a confirmation UI is added, not mixed into ordinary geocode failure UI.
 
 ### Test Coverage
 
+Route Insert uses the same CN evidence for geometry, exact driving legs,
+distance and timing. A walking-only selection remeasures its existing driving
+sequence once, using the same run cache as inserted stops. A missing or
+unverified AMap result cannot fall back to OSRM as a measured time; failed OSRM
+requests supply neither a synthetic straight-line route nor a comparison
+baseline. Successful non-CN OSRM behavior remains a planning estimate.
+
+The selected route duration is driving plus saved base dwell plus inserted-stop
+dwell. An explicit zero is preserved. Map summaries total their displayed routes;
+unknown values propagate through totals and deltas. Individual map stop
+`cumulative_duration_s` remains driving-only, not a promised arrival clock.
+Source `display_metrics` and limit markers are discarded from the derived map
+so they cannot override its new measurement. The original source stays intact.
+
+Each affected-route `measurement_inputs` snapshot records ordered base/selected
+points, explicit school/waypoint roles, saved-versus-derived base dwell,
+inserted dwell, direction and window configuration. It is input evidence for
+future review, not an implemented Fleet/Insert historical-correction adapter.
+Existing histories are not auto-refreshed. Run a new proposal for new evidence.
+
+Run `tests/test_route_insert_measurements.py` and `tests/test_route_insert_ui.py`
+alongside the existing Insert suite. They cover zero dwell, walking-only refresh,
+unknown values, source immutability, stale display metadata and actual result
+markup. Rendered markup tests do not replace desktop/mobile map acceptance.
+
 Run `tests/test_route_measurement_views.py` with the web TypeScript toolchain
 installed. It exercises a shared Python/TypeScript case matrix, immutable source
 views, aggregate unknowns, saved-map total duration and suppression of old

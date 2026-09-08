@@ -2061,6 +2061,7 @@ def _insert_coord_payload(point: dict[str, Any], country: str, city: str) -> dic
         "lng": lng,
         "plot_lat": lat,
         "plot_lng": lng,
+        **{key: deepcopy(point[key]) for key in ("id", "order", "is_depot", "passenger_count") if key in point},
     }
 
 
@@ -2648,8 +2649,8 @@ def _insert_route_measurement(
     planner = backend_service.load_legacy_planner()
     previous_osrm_base_url = getattr(planner, "OSRM_BASE_URL", "")
     osrm_geometry: list[list[float]] = []
-    osrm_duration_s = 0.0
-    osrm_distance_m = 0.0
+    osrm_duration_s: float | None = None
+    osrm_distance_m: float | None = None
     leg_durations_s: list[float] = []
     leg_distances_m: list[float] = []
     warnings: list[str] = []
@@ -2667,8 +2668,10 @@ def _insert_route_measurement(
             {"overview": "full", "geometries": "geojson", "steps": "false"},
         )
         route = dict((payload.get("routes") or [{}])[0] or {})
-        osrm_duration_s = float(route.get("duration", 0.0) or 0.0)
-        osrm_distance_m = float(route.get("distance", 0.0) or 0.0)
+        osrm_duration_s = _insert_float(route.get("duration"))
+        osrm_distance_m = _insert_float(route.get("distance"))
+        if osrm_duration_s is None or osrm_distance_m is None or min(osrm_duration_s, osrm_distance_m) < 0:
+            raise ValueError("OSRM route metrics unavailable")
         osrm_geometry = [
             [float(pair[0]), float(pair[1])]
             for pair in list(dict(route.get("geometry") or {}).get("coordinates") or [])
@@ -2679,17 +2682,10 @@ def _insert_route_measurement(
         leg_distances_m = [float(item.get("distance", 0.0) or 0.0) for item in legs]
     except Exception as exc:
         warnings.append(f"osrm_route_failed:{exc.__class__.__name__}")
-        osrm_geometry = [
-            [float(point.get("lng") or 0.0), float(point.get("lat") or 0.0)]
-            for point in route_points
-        ]
-        leg_distances_m = [
-            _insert_haversine_m(route_points[index], route_points[index + 1])
-            for index in range(max(0, len(route_points) - 1))
-        ]
-        leg_durations_s = [distance / 8.33 for distance in leg_distances_m]
-        osrm_distance_m = sum(leg_distances_m)
-        osrm_duration_s = sum(leg_durations_s)
+        osrm_geometry = []
+        leg_distances_m = []
+        leg_durations_s = []
+        osrm_distance_m = osrm_duration_s = None
     finally:
         if hasattr(planner, "OSRM_BASE_URL"):
             planner.OSRM_BASE_URL = previous_osrm_base_url
@@ -2702,6 +2698,7 @@ def _insert_route_measurement(
     route_evidence: dict[str, Any] = {}
     country_key = str(country or "").strip().upper()
     if country_key in {"CHINA", "CN", "中国", "中华人民共和国"}:
+        display_source = "amap_unavailable"
         context_key = ("amap_evidence_context", country_key)
         context = {"cache": {}, "state": {"api_call_limit": backend_service.AMAP_FINAL_ROUTE_MAX_CALLS}}
         if cache is not None:
@@ -2729,26 +2726,46 @@ def _insert_route_measurement(
             warnings.append("amap_final_validation_unavailable")
             display_message = "Route measurement needs review; time-window compliance is not verified."
 
-    duration_s = display_duration_s if display_duration_s is not None else osrm_duration_s
-    distance_m = display_distance_m if display_distance_m is not None else osrm_distance_m
-    duration_scale = duration_s / osrm_duration_s if osrm_duration_s > 0 else 1.0
-    distance_scale = distance_m / osrm_distance_m if osrm_distance_m > 0 else 1.0
+    china = country_key in {"CHINA", "CN", "中国", "中华人民共和国"}
+    verified = route_evidence.get("status") == "verified" and route_evidence.get("complete") is True and not route_evidence.get("issues")
+    if china and not verified:
+        if "amap_final_validation_unavailable" not in warnings:
+            warnings.append("amap_final_validation_unavailable")
+        display_message = "Route measurement needs review; time-window compliance is not verified."
+    duration_s = display_duration_s if verified else None if china else osrm_duration_s
+    distance_m = display_distance_m if verified else None if china else osrm_distance_m
     result = {
-        "geometry": osrm_geometry,
+        "geometry": list(route_evidence.get("geometry") or []) if china else osrm_geometry,
         "display_geometry": display_geometry,
         "display_geometry_source": display_source,
         "display_geometry_message": display_message,
         "duration_s": duration_s,
         "distance_m": distance_m,
-        "leg_durations_s": route_evidence.get("leg_durations_s") if route_evidence.get("complete") else [value * duration_scale for value in leg_durations_s],
-        "leg_distances_m": route_evidence.get("leg_distances_m") if route_evidence.get("complete") else [value * distance_scale for value in leg_distances_m],
-        "provider_verified": route_evidence.get("status") == "verified",
+        "leg_durations_s": list(route_evidence.get("leg_durations_s") or []) if verified else [] if china else leg_durations_s,
+        "leg_distances_m": list(route_evidence.get("leg_distances_m") or []) if verified else [] if china else leg_distances_m,
+        "provider_verified": verified,
+        "planning_reference": {"duration_s": osrm_duration_s, "distance_m": osrm_distance_m},
         "route_evidence": route_evidence or None,
         "warnings": warnings,
     }
     if cache is not None:
         cache[signature] = deepcopy(result)
     return result
+
+
+def _insert_optional_sum(values: list[Any]) -> float | None:
+    numbers = [_insert_float(value) for value in values]
+    return sum(numbers) if all(value is not None for value in numbers) else None
+
+
+def _insert_optional_round(value: Any) -> int | None:
+    number = _insert_float(value)
+    return round(number) if number is not None else None
+
+
+def _insert_optional_delta(after: Any, before: Any) -> float | None:
+    after, before = _insert_float(after), _insert_float(before)
+    return after - before if after is not None and before is not None else None
 
 
 def _insert_clock_minutes(value: Any) -> int | None:
@@ -2799,7 +2816,9 @@ def _insert_build_selected_plan(
     merged_config = dict(suggested_config)
     merged_config.update({key: value for key, value in constraints.items() if value not in (None, "")})
     window_s = _insert_time_window_seconds(merged_config)
-    dwell_s = max(0.0, (_insert_float(merged_config.get("stop_service_minutes")) or 1.0) * 60.0)
+    dwell_minutes = _insert_float(merged_config.get("stop_service_minutes"))
+    dwell_s = max(0.0, (1.0 if dwell_minutes is None else dwell_minutes) * 60.0)
+    provider_required = str(country or "").strip().upper() in {"CHINA", "CN", "中国", "中华人民共和国"}
     map_routes: list[dict[str, Any]] = []
     map_stops: list[dict[str, Any]] = []
     private_links: list[dict[str, Any]] = []
@@ -2817,17 +2836,17 @@ def _insert_build_selected_plan(
             _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
             for stop in sequence
         ]
-        if insert_actions:
-            base_points = [
-                _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
-                for stop in route_stops
-            ]
+        base_points = [
+            _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
+            for stop in route_stops
+        ]
+        if insert_actions or provider_required:
             base_measurement = _insert_route_measurement(
                 base_points, country, measurement_cache
             )
             selected_measurement = _insert_route_measurement(
                 route_points, country, measurement_cache
-            )
+            ) if insert_actions else deepcopy(base_measurement)
         else:
             original_geometry = list(route.get("display_geometry") or route.get("geometry") or [])
             base_measurement = {
@@ -2851,22 +2870,16 @@ def _insert_build_selected_plan(
             }
             selected_measurement = dict(base_measurement)
 
-        base_service_s = float(route.get("stop_service_time_s", 0.0) or 0.0)
-        if base_service_s <= 0:
+        base_service_s = _insert_float(route.get("stop_service_time_s"))
+        if base_service_s is None:
             base_service_s = max(0, _insert_int(route.get("stop_count"), 0)) * dwell_s
         selected_service_s = base_service_s + len(insert_actions) * dwell_s
-        base_total_s = float(base_measurement.get("duration_s", 0.0) or 0.0) + base_service_s
-        selected_total_s = float(selected_measurement.get("duration_s", 0.0) or 0.0) + selected_service_s
-        time_window_ok = window_s is None or selected_total_s <= window_s
+        base_total_s = _insert_optional_sum([base_measurement.get("duration_s"), base_service_s])
+        selected_total_s = _insert_optional_sum([selected_measurement.get("duration_s"), selected_service_s])
+        time_window_ok = (window_s is None or selected_total_s <= window_s) if selected_total_s is not None else None
         action_ok = all(bool(item.get("feasible")) for item in route_actions)
-        provider_required = bool(insert_actions) and str(country or "").strip().upper() in {
-            "CHINA",
-            "CN",
-            "中国",
-            "中华人民共和国",
-        }
         provider_ok = not provider_required or bool(selected_measurement.get("provider_verified") and base_measurement.get("provider_verified"))
-        route_feasible = action_ok and time_window_ok and provider_ok
+        route_feasible = action_ok and time_window_ok is True and provider_ok
         load_after = _insert_int(route.get("load"), 0) + sum(
             max(1, _insert_int(dict(item.get("new_stop") or {}).get("passenger_count"), 1))
             for item in route_actions
@@ -2875,15 +2888,21 @@ def _insert_build_selected_plan(
             {
                 "route_id": route_id,
                 "feasible": route_feasible,
-                "base_duration_s": round(base_total_s),
-                "selected_duration_s": round(selected_total_s),
-                "delta_duration_s": round(selected_total_s - base_total_s),
-                "base_distance_m": round(float(base_measurement.get("distance_m", 0.0) or 0.0)),
-                "selected_distance_m": round(float(selected_measurement.get("distance_m", 0.0) or 0.0)),
-                "delta_distance_m": round(
-                    float(selected_measurement.get("distance_m", 0.0) or 0.0)
-                    - float(base_measurement.get("distance_m", 0.0) or 0.0)
-                ),
+                "base_duration_s": _insert_optional_round(base_total_s),
+                "selected_duration_s": _insert_optional_round(selected_total_s),
+                "delta_duration_s": _insert_optional_round(_insert_optional_delta(selected_total_s, base_total_s)),
+                "base_distance_m": _insert_optional_round(base_measurement.get("distance_m")),
+                "selected_distance_m": _insert_optional_round(selected_measurement.get("distance_m")),
+                "delta_distance_m": _insert_optional_round(_insert_optional_delta(selected_measurement.get("distance_m"), base_measurement.get("distance_m"))),
+                "measurement_inputs": {
+                    "version": 1, "country": country,
+                    "base_points": deepcopy(base_points), "selected_points": deepcopy(route_points),
+                    "base_stop_service_time_s": base_service_s, "selected_stop_service_time_s": selected_service_s,
+                    "inserted_stop_dwell_s": dwell_s,
+                    "base_dwell_source": "saved_route" if _insert_float(route.get("stop_service_time_s")) is not None else "configured_stop_count",
+                    "window_limit_s": window_s, "config": {key: deepcopy(merged_config.get(key)) for key in
+                        ("service_direction", "time_window_start", "time_window_end", "from_school_departure_time", "stop_service_minutes", "stop_limit")},
+                },
                 "capacity_before": _insert_int(route.get("load"), 0),
                 "capacity_after": load_after,
                 "capacity_limit": _insert_int(route.get("bus_capacity"), 0) or None,
@@ -2927,19 +2946,23 @@ def _insert_build_selected_plan(
                     "is_depot": bool(stop.get("is_depot")),
                     "lat": _insert_float(stop.get("lat")) or 0.0,
                     "lng": _insert_float(stop.get("lng")) or 0.0,
-                    "cumulative_duration_s": cumulative_duration_s,
-                    "cumulative_distance_m": cumulative_distance_m,
+                    "cumulative_duration_s": cumulative_duration_s if not provider_required or selected_measurement.get("provider_verified") else None,
+                    "cumulative_distance_m": cumulative_distance_m if not provider_required or selected_measurement.get("provider_verified") else None,
                 }
             )
 
         map_route = dict(route)
+        # These describe the source route and must not override the new measurement.
+        for key in ("display_metrics", "limit_stop_node", "limit_stop_order", "limit_stop_elapsed_s"):
+            map_route.pop(key, None)
         map_route.update(
             {
                 "load": load_after,
                 "stop_count": _insert_int(route.get("stop_count"), 0) + len(insert_actions),
-                "distance_m": float(selected_measurement.get("distance_m", 0.0) or 0.0),
-                "duration_s": float(selected_measurement.get("duration_s", 0.0) or 0.0),
-                "raw_duration_s": float(selected_measurement.get("duration_s", 0.0) or 0.0),
+                "distance_m": selected_measurement.get("distance_m"),
+                "duration_s": selected_total_s,
+                "raw_duration_s": selected_measurement.get("duration_s"),
+                "stop_service_time_s": selected_service_s,
                 "geometry": list(selected_measurement.get("geometry") or []),
                 "display_geometry": selected_measurement.get("display_geometry"),
                 "display_geometry_source": selected_measurement.get("display_geometry_source") or "osrm",
@@ -2947,7 +2970,12 @@ def _insert_build_selected_plan(
                 "route_evidence": selected_measurement.get("route_evidence"),
                 "geometry_segments": dict(selected_measurement.get("route_evidence") or {}).get("geometry_segments") or [],
                 "evidence_status": dict(selected_measurement.get("route_evidence") or {}).get("status"),
-                "final_route_traffic_gate": {"status": "unavailable" if not provider_ok else "failed" if not time_window_ok else "passed"},
+                "final_route_traffic_gate": {
+                    "status": "unavailable" if not provider_ok or time_window_ok is None else "failed" if not time_window_ok else "passed",
+                    "verified_drive_duration_s": selected_measurement.get("duration_s") if provider_ok else None,
+                    "verified_total_duration_s": selected_total_s if provider_ok else None,
+                    "verified_distance_m": selected_measurement.get("distance_m") if provider_ok else None,
+                },
                 "stop_ids": stop_ids,
             }
         )
@@ -2966,8 +2994,8 @@ def _insert_build_selected_plan(
                         "address": "Original route",
                         "pickup_address": route_id,
                         "pickup_route_id": route_id,
-                        "drive_time_s": float(base_measurement.get("duration_s", 0.0) or 0.0),
-                        "drive_distance_m": float(base_measurement.get("distance_m", 0.0) or 0.0),
+                        "drive_time_s": base_measurement.get("duration_s"),
+                        "drive_distance_m": base_measurement.get("distance_m"),
                         "geometry": segment,
                     }
                 )
@@ -3029,14 +3057,15 @@ def _insert_build_selected_plan(
                 "route_count": len(map_routes),
                 "stop_count": sum(_insert_int(route.get("stop_count"), 0) for route in map_routes),
                 "passenger_count": sum(_insert_int(route.get("load"), 0) for route in map_routes),
-                "distance_m": sum(float(route.get("distance_m", 0.0) or 0.0) for route in map_routes),
-                "duration_s": max([float(route.get("duration_s", 0.0) or 0.0) for route in map_routes] or [0.0]),
+                "distance_m": _insert_optional_sum([route.get("distance_m") for route in map_routes]),
+                "duration_s": _insert_optional_sum([route.get("duration_s") for route in map_routes]),
             },
         }
     )
     selected_map["bounds"] = _insert_bounds_for_map(selected_map)
     feasible = len(selected) > 0 and all(bool(item.get("feasible")) for item in selected)
     feasible = feasible and all(bool(item.get("feasible")) for item in route_results)
+    feasible = feasible and len(route_results) == len(route_ids)
     plan = {
         "status": "ready" if feasible else "needs_review",
         "feasible": feasible,
@@ -3045,8 +3074,8 @@ def _insert_build_selected_plan(
         "affected_route_count": len(route_results),
         "inserted_stop_count": sum(1 for item in selected if item.get("type") == "insert_stop"),
         "walking_stop_count": sum(1 for item in selected if item.get("type") == "walk_to_stop"),
-        "total_added_duration_s": round(sum(float(item.get("delta_duration_s", 0.0) or 0.0) for item in route_results)),
-        "total_added_distance_m": round(sum(float(item.get("delta_distance_m", 0.0) or 0.0) for item in route_results)),
+        "total_added_duration_s": _insert_optional_round(_insert_optional_sum([item.get("delta_duration_s") for item in route_results])),
+        "total_added_distance_m": _insert_optional_round(_insert_optional_sum([item.get("delta_distance_m") for item in route_results])),
         "provider_verified_route_count": sum(1 for item in route_results if item.get("provider_verified")),
         "time_window_start": merged_config.get("time_window_start"),
         "time_window_end": merged_config.get("time_window_end"),

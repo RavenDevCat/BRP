@@ -7,6 +7,23 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Route Insert Measurement Consistency
+
+- CN selected plans remeasure affected routes even when students only walk to
+  an existing stop. The unchanged driving sequence is measured once per run,
+  rather than accepting an old route time as a fresh time-window check.
+- Zero-minute stops and explicitly saved zero dwell remain zero. Route cards
+  and map totals include the same driving and stop-service time. Old display
+  values and limit markers cannot override the new route measurement.
+- Missing or unverified provider measurements remain unavailable, not zero or
+  an OSRM substitute. A failed OSRM request is not converted into an artificial
+  straight-line journey. Unverified time windows are distinct from measured
+  overruns. No existing saved result is rewritten; run a new proposal to obtain
+  the corrected measurement and conclusion.
+- New selected plans retain their ordered input points and dwell configuration
+  for future native historical review. This does not enable a full historical
+  correction or retroactively verify an older plan.
+
 ### Roadside Entrance Matching
 
 - Residential pickups use an entrance, not a compound-centre POI. Explicit

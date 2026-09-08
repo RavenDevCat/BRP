@@ -20,22 +20,26 @@ import {
 import { formatDateTime } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 
-function asNumber(value: unknown): number {
+function measurementNumber(value: unknown): number | null {
+  if ((typeof value !== "number" && typeof value !== "string") || String(value).trim() === "") return null;
   const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function minutes(value: unknown): string {
-  return `${Math.round(asNumber(value) / 60)} min`;
+  const raw = measurementNumber(value);
+  return raw === null ? "-" : `${Math.round(raw / 60)} min`;
 }
 
 function meters(value: unknown): string {
-  const raw = asNumber(value);
+  const raw = measurementNumber(value);
+  if (raw === null) return "-";
   return raw >= 1000 ? `${(raw / 1000).toFixed(1)} km` : `${Math.round(raw)} m`;
 }
 
 function signed(value: unknown, formatter: (item: unknown) => string): string {
-  const raw = asNumber(value);
+  const raw = measurementNumber(value);
+  if (raw === null) return "-";
   return `${raw > 0 ? "+" : ""}${formatter(raw)}`;
 }
 
@@ -638,11 +642,11 @@ function ProposalResults({
                     <Metric label={t("Capacity")} value={`${String(route.capacity_before ?? "-")} -> ${String(route.capacity_after ?? "-")}${route.capacity_limit ? ` / ${String(route.capacity_limit)}` : ""}`} />
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge tone={route.time_window_ok ? "success" : "warning"}>
-                      {route.time_window_ok ? t("Time window passed") : t("Outside time window")}
+                    <Badge tone={route.time_window_ok === true ? "success" : "warning"}>
+                      {route.time_window_ok === true ? t("Time window passed") : route.time_window_ok === false ? t("Outside time window") : t("Unverified")}
                     </Badge>
                     <Badge tone={route.provider_verified ? "success" : "warning"}>
-                      {route.provider_verified ? t("AMap verified") : t("Road estimate only")}
+                      {route.provider_verified ? t("AMap verified") : route.provider_required ? t("Unverified") : t("Road estimate only")}
                     </Badge>
                     <Badge tone="info">{signed(route.delta_duration_s, minutes)}</Badge>
                   </div>

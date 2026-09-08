@@ -9,6 +9,14 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Fresh Pickup Resolution
 
+- Numbered transit exits (for example `3号口`) are matched as exits, not as
+  building numbers or the parent station centre. An explicit exit must match
+  the named station as well as its exit number.
+- Compound/building entrance evidence comes from the site itself, not a
+  tenant that shares its address. A site with the requested number in its own
+  address takes precedence over a nearby POI that only repeats it in its name.
+  Missing geocode results no longer skip the numbered-building entrance check.
+
 - New CN addresses use shared pickup-identity matching in both geocoders.
   A numbered building returned as a POI is checked for its entrance; a nearby
   tenant or compound centre cannot substitute for the requested pickup.

@@ -242,7 +242,7 @@ until a confirmation UI is added, not mixed into ordinary geocode failure UI.
 
 ### Test Coverage
 
-Fresh AMap pickup resolution (v5) separates `pickup_resolution_status` from
+Fresh AMap pickup resolution (v6) separates `pickup_resolution_status` from
 coordinate availability. `reference_only` remains visible/cacheable but is
 rejected by the shared route precision guard before provider I/O, unless an
 audited operator confirmation applies. This flag is retained in serialized
@@ -254,6 +254,11 @@ them. Re-prepare original inputs explicitly to apply fresh resolution.
 Numbered-building POIs require entrance evidence; ordinary precise door-number
 geocodes keep the existing fast path. Explicit gates request child POIs and
 match the exact gate, retaining the parent ID but never inheriting its location.
+Numbered transit exits such as `3号口` are gate identities, not door numbers.
+Only a compound/building's own POI can supply its residential entrance; tenant
+entrances cannot establish a compound pickup. When several sites match, exact
+door-number evidence in the site's address is stronger than name-only evidence
+paired with a nearby junction address. Equal precise site candidates stay ambiguous.
 Failure to establish a unique entrance is not fixed by choosing the shortest
 route, deleting a waypoint, or replacing the provider's returned geometry.
 

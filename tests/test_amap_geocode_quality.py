@@ -243,6 +243,73 @@ def test_new_numbered_building_uses_entrance_not_centre_or_tenant(monkeypatch, b
     quality.require_amap_pickup_precision([point])
 
 
+@pytest.mark.parametrize("backend", [False, True])
+def test_empty_geocode_still_requires_building_entrance_not_tenant(monkeypatch, backend):
+    module = core.load_legacy_planner() if backend else runtime
+    address = ROAD_A + "238\u53f7"
+    def fetch(endpoint, params, limiter):
+        if endpoint == '/v3/geocode/geo':
+            return {'geocodes': []}
+        return {'pois': [poi('\u697c\u5185\u9910\u5385', address=address+'4\u697c', type='\u9910\u996e\u670d\u52a1',
+                             entr_location='121.437,31.207'),
+                         poi('\u661f\u5149\u5927\u53a6', address=address, type='\u5546\u52a1\u4f4f\u5b85;\u697c\u5b87',
+                             entr_location='121.436,31.206', id='building')]}
+    monkeypatch.setattr(module,'amap_request_json',fetch)
+    point = module.amap_geocode_query('China','Shanghai',address)
+    assert point['pickup_resolution_status'] == 'matched'
+    assert point['amap_poi_id'] == 'building' and point['lng'] == 121.436
+
+
+@pytest.mark.parametrize("backend", [False, True])
+def test_compound_address_prefers_own_numbered_site_not_nearby_named_child_or_tenant(monkeypatch, backend):
+    module = core.load_legacy_planner() if backend else runtime
+    address = ROAD_A+'381\u5f04'
+    def fetch(endpoint, params, limiter):
+        assert endpoint == '/v3/place/text'
+        return {'pois':[poi('\u661f\u5149\u82d1',address=address+'1-11',type='\u5546\u52a1\u4f4f\u5b85',
+                            entr_location='121.436,31.206',id='compound'),
+                        poi('\u661f\u5149\u82d1'+address,address=ROAD_A+'\u4ea4\u53c9\u53e3\u4e1c220\u7c73',
+                            type='\u5546\u52a1\u4f4f\u5b85',entr_location='121.437,31.207',id='child'),
+                        poi('\u6c34\u679c\u5e97',address=address,type='\u8d2d\u7269\u670d\u52a1',
+                            entr_location='121.438,31.208',id='tenant')]}
+    monkeypatch.setattr(module,'amap_request_json',fetch)
+    point = module.amap_geocode_query('China','Shanghai',address)
+    assert point['pickup_resolution_status']=='matched' and point['amap_poi_id']=='compound'
+
+
+@pytest.mark.parametrize("suffix", ['3\u53f7\u53e3','3\u53f7\u51fa\u53e3','A\u51fa\u53e3'])
+def test_subway_exit_is_not_a_building_number_or_station_centre(monkeypatch,suffix):
+    station='\u4e0a\u6d77\u661f\u5149\u573a\u5730\u94c1\u7ad9'
+    address=station+'-'+suffix
+    def fetch(endpoint,params,limiter):
+        assert endpoint=='/v3/place/text' and params['children']==1
+        return {'pois':[poi(station,type='\u5730\u94c1\u7ad9'),
+                        poi(station+suffix,location='121.436,31.206',type='\u5730\u94c1\u7ad9;\u51fa\u5165\u53e3',id='exit'),
+                        poi(station+'13\u53f7\u53e3',location='121.437,31.207',type='\u51fa\u5165\u53e3',id='wrong')]}
+    monkeypatch.setattr(runtime,'amap_request_json',fetch)
+    point=runtime.amap_geocode_query('China','Shanghai',address)
+    assert point['pickup_resolution_status']=='matched' and point['amap_poi_id']=='exit'
+
+
+@pytest.mark.parametrize('conflicting_location',[False,True])
+def test_parent_and_flat_exit_same_id_whitespace_is_one_candidate_unless_coordinates_conflict(monkeypatch,conflicting_location):
+    station='\u4e0a\u6d77\u661f\u5149\u573a\u5730\u94c1\u7ad9'
+    address=station+'-3\u53f7\u53e3'
+    def fetch(endpoint,params,limiter):
+        if endpoint=='/v3/geocode/geo':
+            return {'geocodes':[{'formatted_address':station,'level':'\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9',
+                                'location':'121.435,31.205','adcode':'310105'}]}
+        child={'id':' exit ','name':' '+station+'3\u53f7\u53e3 ',
+               'location':'121.437,31.207' if conflicting_location else '121.436,31.206'}
+        return {'pois':[poi(station+'3\u53f7\u53e3',location='121.436,31.206',type='\u51fa\u5165\u53e3',id='exit'),
+                        poi(station,type='\u5730\u94c1\u7ad9',id='parent',children=[child])]}
+    monkeypatch.setattr(runtime,'amap_request_json',fetch)
+    point=runtime.amap_geocode_query('China','Shanghai',address)
+    assert point['pickup_resolution_status']==('reference_only' if conflicting_location else 'matched')
+    if not conflicting_location:
+        assert point['amap_poi_id']=='exit'
+
+
 def test_reference_only_identity_blocks_shared_provider_before_outbound_io(monkeypatch):
     analysis = importlib.import_module("direct_school_analysis")
     monkeypatch.setattr(core, "load_legacy_planner", lambda: type("Planner", (), {"AMAP_KEY": "test"})())

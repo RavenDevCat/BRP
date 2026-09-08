@@ -6,7 +6,7 @@ import math
 import unicodedata
 from typing import Any
 
-GEOCODE_QUALITY_VERSION = "amap-pickup-review-v5"
+GEOCODE_QUALITY_VERSION = "amap-pickup-review-v6"
 GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
@@ -31,7 +31,7 @@ def _compact(value: Any) -> str:
 GATE_PATTERN = re.compile(
     r"(?:\u4e1c\u5357|\u4e1c\u5317|\u897f\u5357|\u897f\u5317|\u4e1c|\u897f|\u5357|\u5317|\u6b63|\u4fa7|\u540e|"
     r"\u7b2c?[0-9\u4e00\u4e8c\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341]+\u53f7?|[a-z])"
-    r"(?:\u5927\u95e8|\u95e8|\u5165\u53e3|\u51fa\u53e3)(?:\u53e3)?(?=$|[\s(),;/\u3001\uff0c\uff1b]|\u5916)"
+    r"(?:\u5927\u95e8|\u95e8|\u5165\u53e3|\u51fa\u53e3|\u53e3)(?:\u53e3)?(?=$|[\s(),;/\u3001\uff0c\uff1b]|\u5916)"
 )
 RESIDENTIAL_PATTERN = re.compile(r"\u5c0f\u533a|\u4f4f\u5b85|\u516c\u5bd3|\u82d1|\u82b1\u56ed|\u522b\u5885|\d+\u5f04")
 
@@ -56,7 +56,8 @@ def _gate_tokens(value: str) -> set[str]:
             else:
                 canonical = raw
             token = canonical + token[number.end():]
-        tokens.add(token.replace("\u53f7", "").replace("\u5927\u95e8", "\u95e8").replace("\u95e8\u53e3", "\u95e8").replace("\u5165\u53e3", "\u95e8"))
+        token = token.replace("\u53f7", "").replace("\u5927\u95e8", "\u95e8").replace("\u95e8\u53e3", "\u95e8").replace("\u5165\u53e3", "\u95e8").replace("\u51fa\u53e3", "\u95e8")
+        tokens.add(re.sub(r"\u53e3$", "\u95e8", token))
     return tokens
 
 
@@ -154,11 +155,24 @@ def amap_candidate_issues(requested: str, candidate: dict[str, Any], *, poi: boo
 
 def select_amap_pickup_candidate(requested: str, candidates: list[dict[str, Any]], *, poi: bool = False) -> dict[str, Any] | None:
     accepted = [candidate for candidate in candidates if not amap_candidate_issues(requested, candidate, poi=poi)]
+    if poi:
+        # A numbered compound's own address is stronger evidence than a POI
+        # whose name mentions it but whose address is merely a nearby junction.
+        numbers = re.findall(r"\d+(?:\u53f7|\u5f04)", _without_gates(requested))
+        exact_sites = [candidate for candidate in accepted if numbers and _residential_pickup("", candidate)
+                       and candidate.get("pickup_entrance_source") == "provider_entr_location"
+                       and all(re.search(r"(?<!\d)" + re.escape(number),
+                                         str(candidate.get("amap_poi_address") or candidate.get("address") or ""))
+                               for number in numbers)]
+        if exact_sites:
+            accepted = exact_sites
     unique = {}
     for candidate in accepted:
-        key = str(candidate.get("id") or candidate.get("amap_poi_id") or
+        identity = str(candidate.get("id") or candidate.get("amap_poi_id") or
                   (candidate.get("name") or candidate.get("amap_poi_name"),
-                   candidate.get("location") or (candidate.get("lat"), candidate.get("lng"))))
+                   candidate.get("location") or (candidate.get("lat"), candidate.get("lng")))).strip()
+        key = (identity, candidate.get("lat"), candidate.get("lng"),
+               str(candidate.get("location") or "").strip())
         unique.setdefault(key, candidate)
     if len(unique) > 1:
         raise GeocodePrecisionError("Multiple pickup locations match this address. Specify the stop, building number or entrance; no candidate was selected automatically.")
@@ -245,7 +259,7 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
         entrance_location = str(candidate.get("entr_location") or "") if poi else ""
         if poi and _named_gate_poi(candidate):
             entrance_source = "named_gate_poi"
-        elif poi and not _gate_tokens(address) and _residential_pickup(address, candidate):
+        elif poi and not _gate_tokens(address) and _residential_pickup("", candidate):
             try:
                 entrance_lng, entrance_lat = map(float, entrance_location.split(","))
             except (TypeError, ValueError):
@@ -262,8 +276,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                 "plot_lat": plot_lat, "plot_lng": plot_lng,
                 "formatted_address": formatted, "adcode": adcode,
                 "geocode_level": "poi" if poi else str(candidate.get("level") or ""),
-                "amap_poi_id": str(candidate.get("id") or "") if poi else "",
-                "amap_parent_poi_id": str(candidate.get("parent_id") or "") if poi else "",
+                "amap_poi_id": str(candidate.get("id") or "").strip() if poi else "",
+                "amap_parent_poi_id": str(candidate.get("parent_id") or "").strip() if poi else "",
                 "amap_poi_name": name, "amap_poi_address": actual_address,
                 "amap_poi_type": str(candidate.get("type") or "") if poi else "",
                 "amap_poi_location": str(candidate.get("location") or "") if poi else "",
@@ -320,6 +334,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                 return fallback_geocode
             continue
         eligible = candidates
+        if poi and re.search(r"\d+(?:\u53f7|\u5f04)", _without_gates(address)):
+            entrance_required = entrance_required or any(_residential_pickup("", candidate) for candidate in candidates)
         if poi and entrance_required:
             eligible = [candidate for candidate in candidates if candidate.get("pickup_entrance_source")
                         in {"named_gate_poi", "provider_entr_location"}]

@@ -36,6 +36,13 @@ def test_poi_must_preserve_both_roads_and_bus_stop():
     assert quality.select_amap_pickup_candidate(REQUEST, [poi(ROAD_A + ROAD_B, type="shop")], poi=True) is None
 
 
+def test_bus_stop_with_reversed_road_names_is_not_the_requested_station():
+    reversed_stop = poi(ROAD_B + ROAD_A + BUS)
+    correct = poi(ROAD_A + ROAD_B + "(" + BUS + ")")
+    assert "requested_bus_stop_road_order_not_preserved" in quality.amap_candidate_issues(REQUEST, reversed_stop, poi=True)
+    assert quality.select_amap_pickup_candidate(REQUEST, [reversed_stop, correct], poi=True) == correct
+
+
 def test_ambiguous_bus_stop_does_not_select_first_or_shortest():
     with pytest.raises(quality.GeocodePrecisionError, match="Multiple"):
         quality.select_amap_pickup_candidate(REQUEST, [poi(), poi(location="121.431,31.200")], poi=True)
@@ -133,7 +140,7 @@ def test_building_number_and_explicit_entrance_must_match():
 
 
 @pytest.mark.parametrize("backend", [False, True])
-def test_both_clients_keep_resolved_coordinate_and_flag_precision(monkeypatch, backend):
+def test_both_clients_prefer_the_named_bus_stop_not_a_road_centroid(monkeypatch, backend):
     module = core.load_legacy_planner() if backend else runtime
     calls = []
     def fetch(endpoint, params, limiter):
@@ -143,17 +150,51 @@ def test_both_clients_keep_resolved_coordinate_and_flag_precision(monkeypatch, b
             return {"geocodes": [{"formatted_address": "\u4e0a\u6d77\u5e02" + ROAD_A,
                                    "level": "\u9053\u8def", "location": "121.43,31.20", "adcode": "310105"}]}
         assert params["citylimit"] == "true"
-        return {"pois": [poi("\u67ab\u6811\u8def" + ROAD_B + BUS), poi()]}
+        return {"pois": [poi(ROAD_B + ROAD_A + BUS), poi()]}
     monkeypatch.setattr(module, "amap_request_json", fetch)
     point = module.amap_geocode_query("China", "Shanghai", REQUEST)
-    assert calls == ["/v3/geocode/geo"]
-    assert point["geocode_status"] == "needs_review"
-    assert point["pickup_precision_status"] == "needs_review"
+    assert calls == ["/v3/place/text"]
+    assert point["pickup_precision_status"] == "matched"
     assert point["geocode_quality_version"] == quality.GEOCODE_QUALITY_VERSION
     assert quality.reusable_amap_geocode(point, REQUEST)
     point["amap_poi_name"] = "wrong stop"
     point["formatted_address"] = "wrong stop"
     assert "requested_road_not_preserved" in quality.amap_candidate_issues(REQUEST, point)
+
+
+@pytest.mark.parametrize("backend", [False, True])
+@pytest.mark.parametrize("poi_problem", ["missing", "exception", "ambiguous", "reversed_only"])
+def test_bus_poi_problem_keeps_valid_geocode_visible_without_relocation(monkeypatch, backend, poi_problem):
+    module = core.load_legacy_planner() if backend else runtime
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        if endpoint == "/v3/place/text":
+            if poi_problem == "exception":
+                raise RuntimeError("Provider unavailable")
+            candidates = [] if poi_problem == "missing" else [poi(), poi(location="121.431,31.200")] if poi_problem == "ambiguous" else [poi(ROAD_B+ROAD_A+BUS)]
+            return {"pois": candidates}
+        return {"geocodes": [{"formatted_address": "\u4e0a\u6d77\u5e02" + ROAD_A,
+                               "level": "\u9053\u8def", "location": "121.435,31.205", "adcode": "310105"}]}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", REQUEST)
+    assert calls == ["/v3/place/text", "/v3/geocode/geo"]
+    assert (point["lat"], point["lng"]) == (31.205, 121.435)
+    assert point["pickup_precision_status"] == "needs_review"
+    assert quality.reusable_amap_geocode(point, REQUEST)
+
+
+def test_ordinary_street_address_still_uses_geocoding_first(monkeypatch):
+    calls = []
+    address = ROAD_A + "123\u53f7"
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        assert endpoint == "/v3/geocode/geo"
+        return {"geocodes": [{"formatted_address": "\u4e0a\u6d77\u5e02"+address, "level": "\u95e8\u724c\u53f7",
+                               "location": "121.435,31.205", "adcode": "310105"}]}
+    monkeypatch.setattr(runtime, "amap_request_json", fetch)
+    assert runtime.amap_geocode_query("China", "Shanghai", address)["pickup_precision_status"] == "matched"
+    assert calls == ["/v3/geocode/geo"]
 
 
 def test_old_amap_cache_without_precision_remains_usable_without_relocation(monkeypatch):

@@ -5,7 +5,7 @@ import re
 import math
 from typing import Any
 
-GEOCODE_QUALITY_VERSION = "amap-pickup-review-v2"
+GEOCODE_QUALITY_VERSION = "amap-pickup-review-v3"
 GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
@@ -53,6 +53,10 @@ def amap_candidate_issues(requested: str, candidate: dict[str, Any], *, poi: boo
     is_bus_stop = bool(re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", requested_compact))
     if poi and is_bus_stop and any(_compact(road) not in _compact(name) for road in roads):
         issues.append("requested_bus_stop_name_not_preserved")
+    if poi and is_bus_stop and len(roads) >= 2:
+        positions = [_compact(name).find(_compact(road)) for road in roads]
+        if all(position >= 0 for position in positions) and positions != sorted(positions):
+            issues.append("requested_bus_stop_road_order_not_preserved")
     if is_bus_stop and not re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", text + str(candidate.get("type") or candidate.get("amap_poi_type") or "")):
         issues.append("requested_bus_stop_not_preserved")
     if not is_bus_stop:
@@ -169,9 +173,12 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                 "amap_poi_type": str(candidate.get("type") or "") if poi else "",
                 "geocode_quality_version": GEOCODE_QUALITY_VERSION}
 
-    # Keep the provider's structured address location, even when its entrance
-    # needs review. POI search is only a fallback for truly unresolved addresses.
-    for poi in (False, True):
+    # Named bus stops need their station identity, not an intersection geocode.
+    # Preserve a usable geocode if POI lookup fails or leaves road-side ambiguity.
+    named_bus_stop = bool(re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", _compact(address)))
+    prefer_poi = named_bus_stop and bool(city_code)
+    ambiguous_poi: dict[str, Any] | None = None
+    for poi in ((True, False) if prefer_poi else (False, True)):
         params = ({"keywords": address.strip(), "citylimit": "true", "offset": 10, "page": 1}
                   if poi else {"address": address.strip()})
         if city_code:
@@ -186,14 +193,19 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
         candidates = [point for raw in response.get("pois" if poi else "geocodes") or []
                       if (point := convert(dict(raw), poi)) is not None]
         if not poi and candidates:
-            return annotate_amap_pickup(candidates[0], address, ambiguous=len(candidates) > 1)
+            return annotate_amap_pickup(candidates[0], address, ambiguous=len(candidates) > 1 or ambiguous_poi is not None)
         try:
             chosen = select_amap_pickup_candidate(address, candidates, poi=poi)
         except GeocodePrecisionError:
             # Same-name bus stops may represent opposite road sides. Preserve
             # provider ranking and expose ambiguity, never choose by route length.
             chosen = next(candidate for candidate in candidates if not amap_candidate_issues(address, candidate, poi=poi))
+            if prefer_poi:
+                ambiguous_poi = chosen
+                continue
             return annotate_amap_pickup(chosen, address, ambiguous=True)
         if chosen is not None:
             return annotate_amap_pickup(chosen, address)
+    if ambiguous_poi is not None:
+        return annotate_amap_pickup(ambiguous_poi, address, ambiguous=True)
     raise GeocodePrecisionError("No unique, precise pickup matches this address. Road/area centroids, unrelated POIs and unrequested parking locations are not accepted; specify the stop, building number or entrance.")

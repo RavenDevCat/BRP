@@ -7,6 +7,15 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Bus-Stop Identity
+
+- Distinguish bus stops whose two road names appear in the opposite order.
+  For a named bus stop and known city, prefer the matching station POI to a
+  generic intersection geocode. Do not choose a platform by the shortest route.
+- If POI lookup fails or remains ambiguous, retain a usable structured address
+  coordinate with a review warning. Ordinary addresses and existing valid cache
+  entries are not bulk moved or invalidated by this matching change.
+
 ### Native Waypoint Measurements
 
 - Continuous AMap itineraries are now the primary measurement for every

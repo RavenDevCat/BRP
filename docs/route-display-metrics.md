@@ -15,6 +15,14 @@ The latter still prevent questionable measurements from passing the final gate.
 Old precision-only negative cache entries are retried under the revised policy;
 normal successful cache reuse does not trigger new geocoding.
 
+Named bus-stop lookups with a known city now prefer a matching station POI over
+a generic road/intersection geocode. Road-name order matters: `Road A Road B`
+must not silently select `Road B Road A`, which may be a different stop. Multiple
+same-name platforms remain ambiguous. Failed or ambiguous POI searches retain
+a usable structured geocode with its review warning, rather than removing the
+address. Ordinary building addresses still use structured geocoding first.
+Existing valid cache coordinates remain unchanged until explicitly corrected.
+
 ## Continuous Turn Evidence
 
 The v3 continuous-turn comparison distinguishes an unexplained stop turnaround from

@@ -122,7 +122,7 @@ type HoverInfo =
           label: string;
           address: string;
           passengerCount: number;
-          cumulativeDurationSeconds: number;
+          cumulativeDurationSeconds: number | null;
           longitude: number;
           latitude: number;
       }
@@ -217,7 +217,7 @@ export function InteractiveRouteMap({
     const longRouteThreshold = useMemo(
         () =>
             percentile(
-                data.routes.map((route) => route.duration_s),
+                data.routes.map((route) => route.duration_s).filter((value): value is number => value !== null),
                 0.75,
             ),
         [data.routes],
@@ -254,7 +254,7 @@ export function InteractiveRouteMap({
         () => ({
             all: sortedRoutes.length,
             long: sortedRoutes.filter(
-                (route) => route.duration_s >= longRouteThreshold,
+                (route) => route.duration_s !== null && route.duration_s >= longRouteThreshold,
             ).length,
             high_load: sortedRoutes.filter(
                 (route) => routeLoadRatio(route) >= 0.85,
@@ -282,7 +282,7 @@ export function InteractiveRouteMap({
                 }
             }
             if (routeFilter === "long") {
-                return route.duration_s >= longRouteThreshold;
+                return route.duration_s !== null && route.duration_s >= longRouteThreshold;
             }
             if (routeFilter === "high_load") {
                 return routeLoadRatio(route) >= 0.85;
@@ -1715,7 +1715,7 @@ function routeStatusLabel(route: JobMapRoute) {
     if (loadRatio >= 0.85) {
         return "High load";
     }
-    if (route.duration_s >= 3600) {
+    if (route.duration_s !== null && route.duration_s >= 3600) {
         return "Long";
     }
     return "";

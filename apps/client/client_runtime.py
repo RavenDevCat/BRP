@@ -1373,7 +1373,7 @@ def build_map_summary_html(
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
     private_access_mode: str = "private_drive_stop",
 ) -> str:
-    from route_measurement_view import measured_route_views, measurement_note
+    from route_measurement_view import measured_route_views, measurement_note, route_display_metrics
 
     routes = measured_route_views(routes)
     traffic_note = "saved route measurement where available, otherwise an OSRM estimate"
@@ -1407,6 +1407,9 @@ def build_map_summary_html(
     for route_index, route in enumerate(routes):
         color = palette[route_index % len(palette)] if palette else "#2563eb"
         route_label = str(route.get("route_id", "")).strip() or f"Bus {route['vehicle_id']}"
+        metrics = route_display_metrics(route)
+        duration_label = seconds_to_human(metrics["duration_s"]) if metrics["duration_s"] is not None else "Not available"
+        distance_label = f"{metrics['distance_m'] / 1000.0:.1f} km" if metrics["distance_m"] is not None else "Not available"
         lines.extend(
             [
                 (
@@ -1418,8 +1421,8 @@ def build_map_summary_html(
                 ),
                 f"<div>Vehicle type: {route['bus_type_name']}</div>",
                 f"<div>Passengers: {route['load']} / {route['bus_capacity']} seats</div>",
-                f"<div>Estimated time: {seconds_to_human(route['time_s'])}</div>",
-                f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
+                f"<div>Duration: {duration_label}</div>",
+                f"<div>Distance: {distance_label}</div>",
                 f"<div><strong>{html.escape(measurement_note(route))}</strong></div>",
             ]
         )

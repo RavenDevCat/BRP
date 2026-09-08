@@ -59,6 +59,8 @@ import {
 } from "@/lib/format";
 import { useLanguage, useT } from "@/lib/i18n/context";
 
+import { routeDisplayMetrics, routeMeasurementLabel, sumAvailable, maxAvailable, summaryMeasurementValue, measuredTotalDuration, compareAvailableDurations } from "@/lib/route-measurements";
+
 type ResultTab = "summary" | "plans" | "impact" | "review";
 
 const resultTabs: Array<{ key: ResultTab; label: string }> = [
@@ -405,14 +407,14 @@ function AuditPanel({
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
         <MetricCard label="Service stops" value={formatNumber(assessmentServiceStopCount(currentPlan))} />
-        <MetricCard label="Avg distance" value={formatDistanceKmFromMeters(currentPlan.avg_route_distance_m)} />
-        <MetricCard label="Avg duration" value={formatDurationMinFromSeconds(currentPlan.avg_route_duration_s)} />
+        <MetricCard label="Avg distance" value={formatDistanceKmFromMeters(summaryMeasurementValue(currentPlan, "avg_route_distance_m"))} />
+        <MetricCard label="Avg duration" value={formatDurationMinFromSeconds(summaryMeasurementValue(currentPlan, "avg_route_duration_s"))} />
       </div>
 
       <div className="grid gap-3 md:grid-cols-4">
         <MetricCard label="Average load" value={formatPercent(currentPlan.avg_load_factor, 100)} />
         <MetricCard label="Low-load routes" value={formatNumber(currentPlan.low_load_route_count)} tone="warning" />
-        <MetricCard label="Overlong routes" value={formatNumber(currentPlan.overlong_route_count)} tone="warning" />
+        <MetricCard label="Overlong routes" value={formatNumber(summaryMeasurementValue(currentPlan, "overlong_route_count"))} tone="warning" />
         <MetricCard label="Route gap" value={formatSignedNumber(currentComparison.route_gap)} tone="info" />
       </div>
 
@@ -881,7 +883,7 @@ function AiAuditPanel({
           <div className="grid gap-3 md:grid-cols-4">
             <MetricCard label="Current routes" value={formatNumber(currentPlan.route_count)} />
             <MetricCard label="Average load" value={formatPercent(currentPlan.avg_load_factor, 100)} />
-            <MetricCard label="Average time" value={formatDurationMinFromSeconds(currentPlan.avg_route_duration_s)} />
+            <MetricCard label="Average time" value={formatDurationMinFromSeconds(summaryMeasurementValue(currentPlan, "avg_route_duration_s"))} />
             <MetricCard label="Action signals" value={formatNumber(reallocationSummary.actionable_weak_route_count)} tone="info" />
           </div>
 
@@ -2476,8 +2478,8 @@ function RouteDiagnosticsTable({ routes }: { routes: Array<Record<string, unknow
               <td className="px-3 py-2">{formatNumber(routeServiceStopCount(route))}</td>
               <td className="px-3 py-2">{formatNumber(route.passenger_count)}</td>
               <td className="px-3 py-2">{formatPercent(route.load_factor, 100)}</td>
-              <td className="px-3 py-2">{formatDistanceKmFromMeters(route.distance_m)}</td>
-              <td className="px-3 py-2">{formatDurationMinFromSeconds(route.duration_s)}</td>
+              <td className="px-3 py-2">{formatDistanceKmFromMeters(routeDisplayMetrics(route).distance_m)}</td>
+              <td className="px-3 py-2">{formatDurationMinFromSeconds(routeDisplayMetrics(route).duration_s)}<span className="mt-1 block text-xs text-muted-foreground">{t(routeMeasurementLabel(route))}</span></td>
             </tr>
           ))}
         </tbody>
@@ -2550,8 +2552,8 @@ function BaselineRouteTable({
               <td className="px-3 py-2">{formatNumber(routePassengerCount(route))}</td>
               <td className="px-3 py-2">{formatNumber(route.bus_capacity || route.capacity)}</td>
               <td className="px-3 py-2">{formatPercent(routeLoadFactor(route), 100)}</td>
-              <td className="px-3 py-2">{formatDistanceKmFromMeters(route.distance_m || route.total_distance_m)}</td>
-              <td className="px-3 py-2">{formatDurationMinFromSeconds(route.time_s || route.duration_s)}</td>
+              <td className="px-3 py-2">{formatDistanceKmFromMeters(routeDisplayMetrics(route).distance_m)}</td>
+              <td className="px-3 py-2">{formatDurationMinFromSeconds(routeDisplayMetrics(route).duration_s)}<span className="mt-1 block text-xs text-muted-foreground">{t(routeMeasurementLabel(route))}</span></td>
             </tr>
           ))}
         </tbody>
@@ -2944,7 +2946,7 @@ type ScenarioRow = {
   busMix: Record<string, unknown>;
   routes: Array<Record<string, unknown>>;
   points: Array<Record<string, unknown>>;
-  providerTotalDurationS: number;
+  providerTotalDurationS: number | null;
   decisionMetrics: ScenarioDecisionMetrics;
 };
 
@@ -3310,12 +3312,12 @@ function scenarioFromAssessment(key: string, name: string, detail: string, asses
     exceptionAccepted: false,
     routeCount: assessment.route_count,
     stopCount: assessmentServiceStopCount(assessment),
-    avgDistanceM: assessment.avg_route_distance_m,
-    avgDurationS: assessment.avg_route_duration_s,
+    avgDistanceM: summaryMeasurementValue(assessment, "avg_route_distance_m"),
+    avgDurationS: summaryMeasurementValue(assessment, "avg_route_duration_s"),
     busMix: asRecord(assessment.bus_mix),
     routes: asRecordArray(assessment.route_summaries),
     points: [],
-    providerTotalDurationS: 0,
+    providerTotalDurationS: null,
     decisionMetrics: emptyScenarioDecisionMetrics(),
   };
 }
@@ -3336,15 +3338,12 @@ function scenarioFromScenario(key: string, name: string, detail: string, scenari
     exceptionAccepted: Boolean(asRecord(scenario.exception_preserving).accepted || scenario.exception_feasible),
     routeCount: scenario.route_count || scenario.bus_count,
     stopCount: scenarioServiceStopCount(scenario),
-    avgDistanceM: scenario.avg_route_distance_m,
-    avgDurationS: scenario.avg_route_duration_s,
+    avgDistanceM: summaryMeasurementValue(scenario, "avg_route_distance_m"),
+    avgDurationS: summaryMeasurementValue(scenario, "avg_route_duration_s"),
     busMix: asRecord(scenario.bus_mix),
     routes,
     points,
-    providerTotalDurationS: routes.reduce(
-      (total, route) => total + Number(asRecord(route.final_route_traffic_gate).verified_total_duration_s || 0),
-      0,
-    ),
+    providerTotalDurationS: measuredTotalDuration(routes),
     decisionMetrics: buildScenarioDecisionMetrics(scenario, routes, points),
   };
 }
@@ -3663,7 +3662,7 @@ function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario 
     .sort((left, right) => {
       const routeDifference = Number(left.routeCount || Number.MAX_SAFE_INTEGER)
         - Number(right.routeCount || Number.MAX_SAFE_INTEGER);
-      const durationDifference = left.providerTotalDurationS - right.providerTotalDurationS;
+      const durationDifference = compareAvailableDurations(left.providerTotalDurationS, right.providerTotalDurationS);
       return routeDifference || durationDifference || optimized.indexOf(left.key) - optimized.indexOf(right.key);
     })[0];
   if (adoptionReady) {
@@ -3683,7 +3682,7 @@ function pickRecommendedScenario(scenarios: ScenarioRow[]): RecommendedScenario 
       || leftMetrics.affectedRiderCount - rightMetrics.affectedRiderCount
       || leftMetrics.worstOverLimitMinutes - rightMetrics.worstOverLimitMinutes
       || Number(left.routeCount || Number.MAX_SAFE_INTEGER) - Number(right.routeCount || Number.MAX_SAFE_INTEGER)
-      || left.providerTotalDurationS - right.providerTotalDurationS
+      || compareAvailableDurations(left.providerTotalDurationS, right.providerTotalDurationS)
       || optimized.indexOf(left.key) - optimized.indexOf(right.key);
   })[0];
   return { ...reviewReference, adoptionReady: false, recommendationType: "review_reference" };
@@ -3790,6 +3789,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     retainedRoute: t("Retained route"),
     newOptimizedRoute: t("New optimized route"),
     min: t("min"),
+    unavailable: t("Not available"),
   }).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html>
@@ -3947,7 +3947,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function selectedRouteGeojson() { const route = routesById.get(selectedRouteId); return { type: "FeatureCollection", features: route && routeGeometry(route).length >= 2 ? [{ type: "Feature", properties: { route_id: route.id, color: color(route.route_index) }, geometry: routeLineGeometry(route) }] : [] }; }
     function stopGeojson() { const stops = selectedRouteId ? data.stops.filter(stop => stop.route_id === selectedRouteId) : data.stops; return { type: "FeatureCollection", features: stops.map(stop => ({ type: "Feature", properties: { stop_id: stop.id, route_id: stop.route_id, color: color(stop.route_index), is_depot: stop.is_depot }, geometry: { type: "Point", coordinates: [stop.lng, stop.lat] } })) }; }
     function updateMapSources() { if (!map.getSource("routes")) return; map.getSource("route-connectors").setData(connectorGeojson(Boolean(selectedRouteId))); map.getSource("routes").setData(routeGeojson(Boolean(selectedRouteId))); map.getSource("selected-route-connectors").setData(selectedConnectorGeojson()); map.getSource("selected-route").setData(selectedRouteGeojson()); map.getSource("stops").setData(stopGeojson()); }
-    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.source_route_id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
+    function renderRoutes() { const routes = data.routes.filter(route => { const hay = [route.id, route.source_route_id, route.bus_type_name, route.vehicle_id, route.route_index + 1].join(" ").toLowerCase(); if (search && !hay.includes(search)) return false; if (filter === "long") return Number.isFinite(route.duration_s) && route.duration_s >= longThreshold; if (filter === "high") return loadRatio(route) >= .85; if (filter === "many") return route.stop_count >= 8; return true; }); document.getElementById("showing").textContent = labels.showing.replace("{shown}", routes.length).replace("{total}", data.routes.length); document.getElementById("routes").innerHTML = routes.map(routeCard).join(""); document.querySelectorAll("[data-route]").forEach(btn => btn.addEventListener("click", () => selectRoute(btn.dataset.route))); document.querySelectorAll("[data-stop]").forEach(btn => btn.addEventListener("click", event => { event.stopPropagation(); selectStop(btn.dataset.stop); })); }
     function routeCard(route) { const active = route.id === selectedRouteId; const frozen = route.exception_role === 'frozen_current'; const stops = stopsByRouteId.get(route.id) || []; return '<div class="route-card ' + (active ? 'active ' : '') + (frozen ? 'frozen' : '') + '"><button class="route-main" data-route="' + escAttr(route.id) + '" style="border-left-color:' + color(route.route_index) + '"><span class="dot" style="background:' + color(route.route_index) + '"></span><span class="route-text"><span class="route-title"><span>' + esc(route.id || (labels.bus + ' ' + (route.vehicle_id || route.route_index + 1))) + '</span>' + lineageBadge(route) + statusBadge(route) + '</span><span class="route-meta">' + fmt(route.load) + ' ' + labels.riders + ' · ' + fmt(route.stop_count) + ' ' + labels.stops + ' · ' + duration(route.duration_s) + '<br />' + distance(route.distance_m) + (route.bus_type_name ? ' · ' + esc(route.bus_type_name) : '') + '</span></span><span class="chevron">' + (active ? '⌃' : '⌄') + '</span></button>' + (active ? '<div class="stops"><p class="stops-label">' + esc(labels.stopSequence) + '</p>' + stops.map(stop => '<button class="stop-row ' + (stop.id === selectedStopId ? 'active ' : '') + '" data-stop="' + escAttr(stop.id) + '"><span><strong>' + (stop.is_depot ? 'S' : stop.order) + '</strong></span><span><span class="stop-address">' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</span><span class="stop-meta">' + fmt(stop.passenger_count) + ' ' + labels.riders + ' · ' + stopTiming(stop) + '</span></span></button>').join('') + '</div>' : '') + '</div>'; }
     function selectRoute(routeId) { if (selectedRouteId === routeId) { selectedRouteId = ''; selectedStopId = ''; updateMapSources(); renderRoutes(); fitAll(); return; } selectedRouteId = routeId; selectedStopId = ''; updateMapSources(); renderRoutes(); fitRoute(routesById.get(routeId)); }
     function selectStop(stopId) { const stop = data.stops.find(item => item.id === stopId); if (!stop) return; selectedStopId = stopId; selectedRouteId = stop.route_id; updateMapSources(); renderRoutes(); map.flyTo({ center: [stop.lng, stop.lat], zoom: Math.max(map.getZoom(), 14), duration: 450 }); new maplibregl.Popup().setLngLat([stop.lng, stop.lat]).setHTML('<div class="popup"><strong>' + esc(stop.is_depot ? labels.schoolStart : labels.stop + ' ' + stop.order) + '</strong><div>' + esc(stop.address || stop.requested_address || labels.unknownAddress) + '</div><div>' + esc(stop.route_id) + ' · ' + fmt(stop.passenger_count) + ' ' + labels.riders + '</div><div>' + stopTiming(stop) + ' · ' + distance(stop.cumulative_distance_m) + '</div></div>').addTo(map); }
@@ -3970,8 +3970,8 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     function loadRatio(route) { return route.bus_capacity ? route.load / route.bus_capacity : 0; }
     function percentile(values, ratio) { const sorted = values.filter(Number.isFinite).sort((a,b)=>a-b); return sorted.length ? sorted[Math.max(0, Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * ratio)))] : 0; }
     function fmt(value) { return new Intl.NumberFormat().format(Number(value || 0)); }
-    function duration(seconds) { const m = Math.round(Number(seconds || 0) / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + ' ' + labels.min; }
-    function distance(meters) { const km = Number(meters || 0) / 1000; return (Math.round(km * 10) / 10) + ' km'; }
+    function duration(seconds) { if (seconds == null || !Number.isFinite(Number(seconds))) return labels.unavailable; const m = Math.round(Number(seconds) / 60); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + ' ' + labels.min; }
+    function distance(meters) { if (meters == null || !Number.isFinite(Number(meters))) return labels.unavailable; const km = Number(meters) / 1000; return (Math.round(km * 10) / 10) + ' km'; }
     function esc(value) { return String(value == null ? '' : value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
     function escAttr(value) { return esc(value).split(String.fromCharCode(96)).join("&#96;"); }
   </script>
@@ -4015,8 +4015,8 @@ type MapScenarioSummary = {
   routeCount: number;
   stopCount: number;
   passengerCount: number;
-  totalDistanceM: number;
-  longestDurationS: number;
+  totalDistanceM: number | null;
+  longestDurationS: number | null;
   exceptionAccepted: boolean;
   decisionMetrics: ScenarioDecisionMetrics;
   trafficStatusLabel: string;
@@ -4075,8 +4075,8 @@ function buildMapScenarioSummaries(result: Record<string, unknown>, mapOutputs: 
       routeCount: Number(scenario.route_count || scenario.bus_count || routes.length || 0),
       stopCount: Number(scenarioServiceStopCount(scenario) || 0),
       passengerCount: routes.reduce((total, route) => total + Number(routePassengerCount(route) || 0), 0),
-      totalDistanceM: routes.reduce((total, route) => total + Number(route.distance_m || 0), 0),
-      longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, mapRouteDurationSeconds(route)), 0),
+      totalDistanceM: sumAvailable(routes.map(route => routeDisplayMetrics(route).distance_m)),
+      longestDurationS: maxAvailable(routes.map(route => routeDisplayMetrics(route).duration_s)),
       exceptionAccepted,
       decisionMetrics: buildScenarioDecisionMetrics(scenario, routes, asRecordArray(scenario.points)),
       trafficStatusLabel: scenarioTrafficStatusLabel({
@@ -4102,20 +4102,14 @@ function mapDataScenarioSummary(base: MapScenarioSummary, data: JobMapData): Map
   const summary = data.summary || {};
   return {
     ...base,
-    routeCount: Number(summary.route_count || routes.length || base.routeCount),
-    stopCount: Number(summary.stop_count || base.stopCount),
+    routeCount: Number(summary.route_count ?? routes.length),
+    stopCount: Number(summary.stop_count ?? base.stopCount),
     passengerCount: Number(
-      summary.passenger_count || routes.reduce((total, route) => total + Number(route.load || 0), 0) || base.passengerCount,
+      summary.passenger_count ?? routes.reduce((total, route) => total + Number(route.load ?? 0), 0),
     ),
-    totalDistanceM: Number(
-      summary.distance_m || routes.reduce((total, route) => total + Number(route.distance_m || 0), 0) || base.totalDistanceM,
-    ),
-    longestDurationS: routes.reduce((maxDuration, route) => Math.max(maxDuration, Number(route.duration_s || 0)), 0) || base.longestDurationS,
+    totalDistanceM: sumAvailable(routes.map(route => route.distance_m)),
+    longestDurationS: maxAvailable(routes.map(route => route.duration_s)),
   };
-}
-
-function mapRouteDurationSeconds(route: Record<string, unknown>) {
-  return Number(route.traffic_api_duration_s || route.traffic_adjusted_drive_time_s || route.time_s || 0);
 }
 
 function buildAiReportHtml({
@@ -4196,7 +4190,7 @@ function buildAiReportHtml({
   <div class="grid">
     <div class="metric"><span>${htmlEscape(t("Current Routes"))}</span><strong>${htmlEscape(formatNumber(currentPlan.route_count))}</strong></div>
     <div class="metric"><span>${htmlEscape(t("Average Load"))}</span><strong>${htmlEscape(formatPercent(currentPlan.avg_load_factor, 100))}</strong></div>
-    <div class="metric"><span>${htmlEscape(t("Average Time"))}</span><strong>${htmlEscape(formatDurationMinFromSeconds(currentPlan.avg_route_duration_s))}</strong></div>
+    <div class="metric"><span>${htmlEscape(t("Average Time"))}</span><strong>${htmlEscape(formatDurationMinFromSeconds(summaryMeasurementValue(currentPlan, "avg_route_duration_s")))}</strong></div>
     <div class="metric"><span>${htmlEscape(t("Route Gap"))}</span><strong>${htmlEscape(formatSignedNumber(currentComparison.route_gap))}</strong></div>
   </div>
   ${markdownToHtml(stringValue(report.report_markdown))}

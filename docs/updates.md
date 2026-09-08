@@ -5,6 +5,23 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-08
+
+### Consistent Measurement Readouts
+
+- Result tables, map summaries and legacy HTML exports use the same saved
+  measurement values. Route duration includes recorded stop dwell once; driving
+  duration remains separate. Missing dwell, contradictory totals and incomplete
+  measurements are unavailable rather than zero or old planning estimates.
+- Planning references and historical measurements are labelled separately.
+  Reading an old map does not remeasure its route or replace saved statistics
+  with a drawing-cache estimate. Unverified routes have no inferred stop
+  schedule or complete aggregate, and exports retain visible review notices.
+- Recommendation duration tiebreakers no longer treat missing measurements as
+  the fastest option. Existing vehicle-count and rider-impact priorities,
+  assignment algorithms and stop order are unchanged. Historical results are
+  not overwritten; affected inputs still need re-preparation or remeasurement.
+
 ## 2026-09-07
 
 ### Shared Route Measurement Snapshots

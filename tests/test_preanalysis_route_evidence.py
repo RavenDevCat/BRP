@@ -72,7 +72,8 @@ def test_preview_uses_one_measurement_for_budget_geometry_and_stop_timing(previe
     route = payload["routes"][0]
     assert len(calls) == 2
     assert route["evidence_status"] == "verified"
-    assert route["duration_s"] == 720
+    assert route["duration_s"] == 720 + dwell * 120
+    assert route["verified_drive_duration_s"] == 720
     assert route["verified_total_duration_s"] == 720 + dwell * 120
     assert route["distance_m"] == 800
     assert route["display_geometry"] == route["route_evidence"]["geometry"]

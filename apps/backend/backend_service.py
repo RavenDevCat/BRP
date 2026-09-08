@@ -73,6 +73,7 @@ try:
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
         build_planner_config,
+        effective_route_duration_limit_minutes,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -128,6 +129,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         build_baseline_template_workbook_bytes,
         build_current_plan_map_scenario,
         build_planner_config,
+        effective_route_duration_limit_minutes,
         build_excel_template_bytes,
         infer_traffic_location,
         load_legacy_planner,
@@ -138,6 +140,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
+from route_measurement_view import route_display_metrics, scenario_display_summary
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -3328,6 +3331,7 @@ def _adapt_legacy_scenario_statuses_for_read(
                 reference_routes=reference_routes,
             )
             result[key] = scenario
+            scenario["display_summary"] = scenario_display_summary(scenario["routes"])
 
     for key in _STRUCTURED_SCENARIO_KEYS:
         scenario = dict(structured.get(key) or {})
@@ -3339,6 +3343,25 @@ def _adapt_legacy_scenario_statuses_for_read(
                 reference_routes=reference_routes,
             )
             structured[key] = scenario
+            scenario["display_summary"] = scenario_display_summary(scenario["routes"])
+    assessment = dict(result.get("current_plan_assessment") or structured.get("current_plan_assessment") or {})
+    if assessment and reference_routes:
+        current_routes = _routes_with_display_ids(reference_routes, "current_plan")
+        current_by_id = {route["display_route_id"]: route for route in current_routes}
+        assessment["route_summaries"] = [
+            {**row, "display_metrics": current_by_id.get(str(row.get("route_id") or ""), {}).get("display_metrics",
+                {"duration_s": None, "distance_m": None, "source": "unavailable"})}
+            for row in assessment.get("route_summaries") or []]
+        assessment["display_summary"] = scenario_display_summary(current_routes)
+        limit = _float_or_none(assessment.get("effective_route_duration_limit_minutes"))
+        source_config = dict(job_record.get("config") or {})
+        if limit is None and source_config.get("max_route_duration_minutes") is not None:
+            limit = effective_route_duration_limit_minutes(build_planner_config(source_config))
+        durations = [route["display_metrics"]["duration_s"] for route in current_routes]
+        assessment["display_summary"]["overlong_route_count"] = (
+            sum(value > limit * 60 for value in durations) if limit is not None and None not in durations else None)
+        result["current_plan_assessment"] = assessment
+        structured["current_plan_assessment"] = deepcopy(assessment)
     if structured:
         result["structured_results"] = structured
     adapted["result"] = result
@@ -4217,7 +4240,7 @@ def _routes_with_display_ids(
             reference_routes if scenario_key == "time_constrained" else None
         ),
     )
-    return list(payload["routes"])
+    return [{**route, "display_metrics": route_display_metrics(route)} for route in payload["routes"]]
 
 
 def _format_time_impact_limit_minutes(value: Any) -> str:
@@ -5046,7 +5069,10 @@ def _apply_schedule_times(payload: dict[str, Any], job_record: dict[str, Any]) -
         route_stops.sort(key=lambda item: int(item.get("order", 0) or 0))
         route = routes_by_id.get(route_id, {})
         evidence = dict(route.get("route_evidence") or {})
-        if evidence and evidence.get("status") != "verified":
+        if ((evidence and evidence.get("status") != "verified")
+                or route.get("display_metrics", {}).get("source") == "unavailable"
+                or route.get("display_metrics", {}).get("duration_s", 0) is None
+                or route.get("display_metrics", {}).get("distance_m", 0) is None):
             for stop in route_stops:
                 stop["scheduled_time_label"] = ""
                 stop["scheduled_time_minutes"] = None
@@ -5719,6 +5745,10 @@ def _build_job_map_payload(
                     all_coordinates.append((lat, lng))
         traffic_gate = dict(route.get("final_route_traffic_gate") or {})
         arrival_check = dict(route.get("arrival_reverse_check") or {})
+        metrics = route_display_metrics(route)
+        if metrics["source"] == "unavailable" or metrics["duration_s"] is None or metrics["distance_m"] is None:
+            traffic_gate = {"status": "unavailable", "passes": None, "reason": "saved_measurement_unavailable"}
+            arrival_check = {}
         verified_drive_duration_s = _float_or_none(arrival_check.get("verified_drive_duration_s"))
         if verified_drive_duration_s is None:
             verified_drive_duration_s = _float_or_none(traffic_gate.get("verified_drive_duration_s"))
@@ -5814,6 +5844,7 @@ def _build_job_map_payload(
                 "verified_distance_m": verified_distance_m,
                 "duration_s": float(route_duration_s),
                 "raw_duration_s": float(route.get("time_s", 0.0) or 0.0),
+                "display_metrics": metrics,
                 "stop_service_time_s": float(route.get("stop_service_time_s", 0.0) or 0.0),
                 "verified_drive_duration_s": verified_drive_duration_s,
                 "verified_total_duration_s": verified_total_duration_s,
@@ -5952,7 +5983,29 @@ def _build_job_map_payload(
             list(payload.get("stops") or []),
             acceptance_threshold,
         )
+    _apply_map_display_metrics(payload)
     return payload, None
+
+
+def _apply_map_display_metrics(payload: dict[str, Any]) -> None:
+    """Keep missing measurements out of map readouts and aggregate totals."""
+    routes = payload["routes"]
+    unavailable_ids = set()
+    for route in routes:
+        metrics = route["display_metrics"]
+        route["duration_s"], route["distance_m"] = metrics["duration_s"], metrics["distance_m"]
+        if metrics["source"] == "unavailable" or metrics["duration_s"] is None or metrics["distance_m"] is None:
+            unavailable_ids.add(route["id"])
+            if route.get("evidence_status") not in {"unavailable", "legacy"}:
+                route["evidence_status"] = "needs_review"
+    for stop in payload["stops"]:
+        if stop["route_id"] in unavailable_ids:
+            stop["cumulative_duration_s"], stop["cumulative_distance_m"] = None, None
+    durations, distances = [route["duration_s"] for route in routes], [route["distance_m"] for route in routes]
+    payload["summary"]["duration_s"] = max(durations, default=0) if None not in durations else None
+    payload["summary"]["distance_m"] = sum(distances) if None not in distances else None
+    payload["summary"]["measurement_unavailable_route_count"] = sum(
+        route["duration_s"] is None or route["distance_m"] is None for route in routes)
 
 
 def _infer_output_directory_name(result: dict[str, Any]) -> str:

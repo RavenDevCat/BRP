@@ -212,9 +212,11 @@ def test_map_reads_saved_geometry_and_per_stop_times_without_provider_requests(m
     points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "is_depot": i == 2}
               for i, p in enumerate([A, B, C])]
     route = {"route_id": "R1", "nodes": [0, 1, 2], "time_s": 200, "distance_m": 200,
+             "stop_service_time_s": 120,
              "leg_details": [{"duration_s": 100, "distance_m": 100}] * 2,
              "route_evidence": saved,
-             "final_route_traffic_gate": {"verified_drive_duration_s": 720, "verified_distance_m": 800}}
+             "final_route_traffic_gate": {"status": "passed", "verified_drive_duration_s": 720,
+                                          "verified_total_duration_s": 840, "verified_distance_m": 800}}
     job = {"job_id": "test", "result": {"service_direction": "To School", "structured_results": {
         "current_plan": {"points": points, "routes": [route]}}}}
     original = deepcopy(job)
@@ -222,7 +224,8 @@ def test_map_reads_saved_geometry_and_per_stop_times_without_provider_requests(m
     assert error is None
     displayed = payload["routes"][0]
     assert displayed["geometry_segments"] == saved["geometry_segments"]
-    assert displayed["duration_s"] == 720
+    assert displayed["duration_s"] == 840
+    assert displayed["verified_drive_duration_s"] == 720
     assert displayed["distance_m"] == 800
     assert [stop["cumulative_duration_s"] for stop in payload["stops"]] == [0, 120, 720]
     assert [stop["cumulative_distance_m"] for stop in payload["stops"]] == [0, 400, 800]
@@ -307,8 +310,9 @@ def test_legacy_exports_use_saved_segments_and_visible_review_notes(module_name,
     module.render_map(points, [route], str(path))
     html = path.read_text(encoding="utf-8")
     assert "Route measurement needs review" in html
-    assert "Estimated time: 12m" in html
-    assert "Estimated distance: 0.8 km" in html
+    assert "Duration: Not available" in html
+    assert "Distance: Not available" in html
+    assert "Duration: 12m" not in html
     assert html.count("L.polyline(") == 4
     assert route == original
 

@@ -322,7 +322,7 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(impact["current_route_id"], "R2")
         self.assertEqual(impact["new_route_id"], "Opt Bus 1")
 
-    def test_china_map_payload_adds_amap_display_geometry_and_duration(self) -> None:
+    def test_china_cached_map_never_remeasures_or_overwrites_saved_totals(self) -> None:
         old_key = os.environ.get("AMAP_API_KEY")
         old_enabled = self.service.AMAP_DISPLAY_GEOMETRY_ENABLED
         old_func = self.service._amap_display_geometry_for_route
@@ -338,15 +338,18 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.addCleanup(restore)
         os.environ["AMAP_API_KEY"] = "unit-test-key"
         self.service.AMAP_DISPLAY_GEOMETRY_ENABLED = True
-        self.service._amap_display_geometry_for_route = (
-            lambda _points, _nodes, **_kwargs: (
-                [[121.4001, 31.2001], [121.4101, 31.2101]],
-                "amap_cn",
-                "",
-                700,
-                1300,
-            )
-        )
+        def read_cached_geometry(points, nodes, **kwargs):
+            self.assertIs(kwargs.get("allow_fetch"), False)
+            request_points = [self.service._amap_request_coordinates_for_point(points[node]) for node in nodes]
+            cache_key = self.service._amap_display_cache_key(request_points)
+            kwargs["cache"] = {cache_key: {
+                "geometry": [[121.4001, 31.2001], [121.4101, 31.2101]],
+                "duration_s": 700,
+                "distance_m": 1300,
+            }}
+            return old_func(points, nodes, **kwargs)
+
+        self.service._amap_display_geometry_for_route = read_cached_geometry
         job_record = {
             "job_id": "job-cn-display",
             "config": {"country": "China", "city": "Shanghai"},
@@ -411,13 +414,15 @@ class InteractiveMapDataTests(unittest.TestCase):
         self.assertEqual(
             route["display_geometry"], [[121.4001, 31.2001], [121.4101, 31.2101]]
         )
-        self.assertEqual(route["display_geometry_source"], "amap_cn")
-        self.assertEqual(route["display_duration_s"], 700)
-        self.assertEqual(route["display_distance_m"], 1300)
-        self.assertEqual(route["duration_s"], 700)
+        self.assertEqual(route["display_geometry_source"], "amap_legacy_cache")
+        self.assertIn("Historical result", route["display_geometry_message"])
+        self.assertIsNone(route["display_duration_s"])
+        self.assertIsNone(route["display_distance_m"])
+        self.assertEqual(route["duration_s"], 600)
         self.assertEqual(route["raw_duration_s"], 600)
-        self.assertEqual(route["distance_m"], 1300)
+        self.assertEqual(route["distance_m"], 1200)
         self.assertEqual(route["raw_distance_m"], 1200)
+        self.assertEqual(route["display_metrics"]["source"], "planning_reference")
         self.assertEqual(payload["bounds"]["max_lng"], 121.4101)
 
     def test_non_china_map_payload_does_not_request_amap_display_geometry(self) -> None:

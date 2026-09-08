@@ -1,3 +1,5 @@
+import type { RouteDisplayMetrics } from "./route-measurements";
+
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 
 export type ApiUser = {
@@ -257,6 +259,8 @@ export type RouteEvidence = {
     status: "verified" | "needs_review" | "unavailable";
     called_at?: string | null;
     complete: boolean;
+    duration_s?: number | null;
+    distance_m?: number | null;
     issues?: Array<{ leg_index: number; code: string }>;
 };
 
@@ -273,9 +277,11 @@ export type JobMapRoute = {
     comfort_capacity?: number | null;
     stop_count: number;
     max_stops?: number | null;
-    distance_m: number;
-    duration_s: number;
+    distance_m: number | null;
+    duration_s: number | null;
     raw_duration_s: number;
+    display_metrics?: RouteDisplayMetrics;
+    stop_service_time_s?: number;
     traffic_time_source?: string;
     geometry: number[][];
     display_geometry?: number[][] | null;
@@ -303,8 +309,8 @@ export type JobMapStop = {
     is_depot: boolean;
     lat: number;
     lng: number;
-    cumulative_duration_s: number;
-    cumulative_distance_m: number;
+    cumulative_duration_s: number | null;
+    cumulative_distance_m: number | null;
     demand_batch_index?: number | null;
     demand_batch_count?: number | null;
     schedule_anchor_label?: string;
@@ -451,8 +457,9 @@ export type JobMapData = {
         route_count: number;
         stop_count: number;
         passenger_count: number;
-        distance_m: number;
-        duration_s: number;
+        distance_m: number | null;
+        duration_s: number | null;
+        measurement_unavailable_route_count?: number;
         time_impact?: JobMapTimeImpactSummary;
     };
 };

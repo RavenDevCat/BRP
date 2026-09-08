@@ -1,6 +1,9 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Measured route": "已测算路线",
+    "Historical measurement": "历史测算值",
+    "Planning reference": "规划参考值",
     "Students awaiting classification": "尚待分类的学生",
     "Missing measurements are not counted as within limit.": "测算缺失不代表符合时间上限。",
     "Historical result": "历史结果",

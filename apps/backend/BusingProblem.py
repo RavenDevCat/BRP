@@ -2437,7 +2437,7 @@ def build_map_summary_html(
     routes: list[dict[str, Any]],
     outlying_private_access_rows: list[dict[str, Any]] | None = None,
 ) -> str:
-    from route_measurement_view import measured_route_views, measurement_note
+    from route_measurement_view import measured_route_views, measurement_note, route_display_metrics
 
     routes = measured_route_views(routes)
     traffic_note = f"{TRAFFIC_PROFILE_NAME} direct-provider validation policy"
@@ -2476,7 +2476,9 @@ def build_map_summary_html(
                 private_access_by_pickup.setdefault(pickup_address, []).append(item)
     for route in routes:
         route_id = f"Bus {route['vehicle_id']}"
-        display_time_s = route.get("time_s")
+        metrics = route_display_metrics(route)
+        duration_label = seconds_to_human(metrics["duration_s"]) if metrics["duration_s"] is not None else "Not available"
+        distance_label = f"{metrics['distance_m'] / 1000.0:.1f} km" if metrics["distance_m"] is not None else "Not available"
         raw_osrm_time_s = route.get("raw_osrm_time_s")
         comfort_capacity = int(route.get("comfort_capacity", route.get("bus_capacity", 0)) or 0)
         bus_capacity = int(route.get("bus_capacity", 0) or 0)
@@ -2493,13 +2495,13 @@ def build_map_summary_html(
                 f"<div>Vehicle type: {route['bus_type_name']}</div>",
                 passenger_line,
                 f"<div>Stops: {stop_count} / {max_stops}</div>",
-                f"<div>Estimated time: {seconds_to_human(display_time_s)}</div>",
-                f"<div>Estimated distance: {route['distance_m']/1000.0:.1f} km</div>",
+                f"<div>Duration: {duration_label}</div>",
+                f"<div>Distance: {distance_label}</div>",
             ]
         )
         lines.append(f"<div><strong>{html.escape(measurement_note(route))}</strong></div>")
         if raw_osrm_time_s:
-            lines.append(f"<div>OSRM drive time: {seconds_to_human(raw_osrm_time_s)}</div>")
+            lines.append(f"<div>Planning reference (OSRM drive time): {seconds_to_human(raw_osrm_time_s)}</div>")
         if route.get("limit_stop_order") is not None:
             lines.append(
                 f"<div><b>{ANNOTATION_ROUTE_DURATION_SECONDS // 60}-minute mark:</b> Stop {route['limit_stop_order']} "

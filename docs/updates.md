@@ -7,6 +7,20 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Native Waypoint Measurements
+
+- Recover unresolved stop-approach conflicts using a complete continuous AMap
+  itinerary and its actual navigation waypoint boundaries. Segment time, distance
+  and map shape come from that same response, not independent approaches or a
+  proportional split of whole-route time. The supplied stop order is unchanged.
+- Keep original adjacent measurements for comparison and recheck detour and road
+  snapping concerns. Continuous routes may be longer; a provider response alone
+  is not proof that the pickup entrance is correct. Incomplete boundaries, geometry
+  gaps or exhausted budgets remain reviewable, not silently certified.
+- Applies to new shared CN measurements, including manual and scheduled work.
+  Saved historical results are not automatically rewritten. This improves the
+  measurement contract but is not a claim that every reported detour is resolved.
+
 ### Continuously Confirmed Turnarounds
 
 - Use saved continuous-waypoint comparisons to distinguish a provider-confirmed

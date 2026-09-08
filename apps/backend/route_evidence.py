@@ -24,7 +24,7 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-adjacent-evidence-v3"
+EVIDENCE_VERSION = "amap-route-evidence-v4"
 CACHE_MAX_AGE_SECONDS = 600
 CONTEXT_GEOMETRY_TOLERANCE_M = 1.0
 
@@ -61,6 +61,51 @@ def fetch_amap_leg(planner: Any, points: list[tuple[float, float]]) -> dict[str,
     return fetch_amap_itinerary(planner, points)
 
 
+def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]]) -> list[dict[str, Any]]:
+    """Split only at provider navigation boundaries, never by distance ratios."""
+    steps = path.get("steps") or []
+    arrival = "\u5230\u8fbe\u9014\u7ecf\u5730"
+    destination = "\u5230\u8fbe\u76ee\u7684\u5730"
+    actions = [dict(step.get("navi") or {}).get("assistant_action") for step in steps]
+    boundaries = [i for i, action in enumerate(actions) if action == arrival]
+    if (len(points) < 2 or not steps or len(boundaries) != len(points) - 2
+            or boundaries and boundaries[-1] == len(steps) - 1
+            or [i for i, action in enumerate(actions) if action == destination] != [len(steps) - 1]):
+        raise ValueError("Incomplete native waypoint boundaries")
+    legs: list[dict[str, Any]] = []
+    start = 0
+    for index, end in enumerate([*boundaries, len(steps) - 1]):
+        segment = steps[start:end + 1]
+        durations = [float(step["cost"]["duration"]) for step in segment]
+        distances = [float(step["step_distance"]) for step in segment]
+        if not all(math.isfinite(value) and value >= 0 for value in durations + distances):
+            raise ValueError("Invalid native step metrics")
+        geometry: list[list[float]] = []
+        for step in segment:
+            trace = _geometry({"steps": [step]})
+            # AMap can emit a one-coordinate, one-metre arrival instruction.
+            if (not trace or len(trace) == 1 and float(step["step_distance"]) > 1
+                    or geometry and distance_m(tuple(reversed(geometry[-1])), tuple(reversed(trace[0]))) > 50):
+                raise ValueError("Incomplete native step geometry")
+            for pair in trace:
+                if not geometry or geometry[-1] != pair:
+                    geometry.append(pair)
+        if sum(distances) <= 0 or sum(durations) <= 0:
+            raise ValueError("Ambiguous zero-length native waypoint leg")
+        if len(geometry) == 1:
+            geometry.append(list(geometry[0]))
+        legs.append({"duration_s": sum(durations), "distance_m": sum(distances),
+                     "geometry": geometry, "native_step_start": start, "native_step_end": end,
+                     "boundary_action": actions[end], "native_steps": deepcopy(segment),
+                     "origin": list(points[index]), "destination": list(points[index + 1])})
+        start = end + 1
+    totals = amap_driving_path_stats(path)
+    if any(not math.isfinite(totals[key]) or abs(sum(leg[key] for leg in legs) - totals[key]) > 1
+           for key in ("duration_s", "distance_m")):
+        raise ValueError("Native step totals disagree with route totals")
+    return legs
+
+
 def fetch_amap_itinerary(planner: Any, points: list[tuple[float, float]]) -> dict[str, Any]:
     params = build_amap_driving_params(points, include_geometry=True)
     payload = planner.amap_request_json(AMAP_DRIVING_ENDPOINT, params, planner.AMAP_ROUTING_LIMITER)
@@ -72,9 +117,16 @@ def fetch_amap_itinerary(planner: Any, points: list[tuple[float, float]]) -> dic
     if (any(not math.isfinite(value) or value <= 0 for value in stats.values())
             or len(geometry) < 2):
         raise ValueError("AMap returned incomplete distance, time or geometry")
-    return {**stats, "geometry": geometry, "request": params,
-            "roads": [str(step.get("road_name") or step.get("road") or "")
-                      for step in path.get("steps") or []]}
+    result = {**stats, "geometry": geometry, "request": params,
+              "roads": [str(step.get("road_name") or step.get("road") or "")
+                        for step in path.get("steps") or []]}
+    if len(points) > 2:
+        try:
+            result["waypoint_legs"] = _native_waypoint_legs(path, points)
+            result["segmentation"] = "native_navigation_boundaries"
+        except (ValueError, KeyError, TypeError, IndexError, OverflowError):
+            result["segmentation"] = "native_boundaries_unavailable"
+    return result
 
 
 def _leg_issues(leg: dict[str, Any], reference_distance_m: float | None) -> list[str]:
@@ -179,6 +231,53 @@ def _continuous_turn_resolution(previous: dict[str, Any], following: dict[str, A
         return {**result, "status": "confirmed", "reason": "same_directed_route"}
     except (KeyError, ValueError, TypeError, IndexError, OverflowError):
         return {**result, "reason": "invalid_context_evidence"}
+
+
+def _recover_continuous_legs(planner: Any, points: list[tuple[float, float]], cache: dict[str, Any],
+                             state: dict[str, Any], legs: list[dict[str, Any]],
+                             fetch_context: Callable) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    recovery: dict[str, Any] = {"status": "unavailable", "policy": "native-waypoint-boundaries-v1"}
+    if not 3 <= len(points) <= 18:
+        return [], [], {**recovery, "reason": "waypoint_limit"}
+    key = "context|" + _key(points)
+    cached = cache.get(key) or {}
+    try:
+        if (cached.get("evidence_version") == EVIDENCE_VERSION
+                and 0 <= time.time() - float(cached.get("measured_at_epoch", 0)) <= CACHE_MAX_AGE_SECONDS):
+            snapshot = deepcopy(cached)
+            state["cache_hits"] = int(state.get("cache_hits", 0)) + 1
+        else:
+            if int(state.get("api_calls", 0)) >= int(state.get("api_call_limit", 0)):
+                return [], [], {**recovery, "reason": "provider_call_budget_exhausted"}
+            state["api_calls"] = int(state.get("api_calls", 0)) + 1
+            snapshot = {**fetch_context(planner, points), "called_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        "measured_at_epoch": time.time(), "evidence_version": EVIDENCE_VERSION}
+            cache[key] = deepcopy(snapshot)
+        recovery["measurement"] = snapshot
+        native = snapshot.get("waypoint_legs") or []
+        if snapshot.get("segmentation") != "native_navigation_boundaries" or len(native) != len(points) - 1:
+            return [], [], {**recovery, "reason": "native_boundaries_unavailable"}
+        corrected: list[dict[str, Any]] = []
+        issues: list[dict[str, Any]] = []
+        for index, (measured, original) in enumerate(zip(native, legs)):
+            if measured["origin"] != list(points[index]) or measured["destination"] != list(points[index + 1]):
+                return [], [], {**recovery, "reason": "waypoint_order_mismatch"}
+            leg = {**deepcopy(measured), "leg_index": index, "provider": "amap", "coordinate_system": "WGS84",
+                   "request_coordinate_system": "GCJ02", "source": "amap_continuous_waypoint_legs",
+                   "evidence_version": EVIDENCE_VERSION, "called_at": snapshot["called_at"],
+                   "measured_at_epoch": snapshot["measured_at_epoch"], "request": snapshot.get("request"),
+                   "origin_wgs84": original["origin_wgs84"], "destination_wgs84": original["destination_wgs84"],
+                   "straight_distance_m": original["straight_distance_m"],
+                   "osrm_reference_distance_m": original.get("osrm_reference_distance_m"),
+                   "osrm_reference_duration_s": original.get("osrm_reference_duration_s")}
+            leg["issues"] = _leg_issues(leg, leg["osrm_reference_distance_m"])
+            issues.extend({"leg_index": index, "code": code} for code in leg["issues"])
+            if corrected and distance_m(tuple(reversed(corrected[-1]["geometry"][-1])), tuple(reversed(leg["geometry"][0]))) > 50:
+                issues.append({"leg_index": index, "code": "stop_road_continuity_needs_review"})
+            corrected.append(leg)
+        return corrected, issues, {**recovery, "status": "applied", "reason": "provider_continuous_approach"}
+    except Exception as exc:
+        return [], [], {**recovery, "error_type": type(exc).__name__}
 
 
 def measure_amap_route(
@@ -300,6 +399,17 @@ def measure_amap_route(
                 issues = [issue for issue in issues if issue not in resolved]
         except Exception as exc:
             check["error_type"] = type(exc).__name__
+    recovery: dict[str, Any] | None = None
+    comparison: dict[str, Any] | None = None
+    source = "amap_adjacent_legs"
+    if complete and any(issue["code"] in {"stop_road_continuity_needs_review", "stop_turnaround_needs_review"} for issue in issues):
+        corrected, corrected_issues, recovery = _recover_continuous_legs(planner, points, cache, state, legs, fetch_context)
+        if corrected:
+            comparison = {"legs": deepcopy(legs), "issues": deepcopy(issues),
+                          "duration_s": sum(leg["duration_s"] for leg in legs),
+                          "distance_m": sum(leg["distance_m"] for leg in legs)}
+            legs, issues = corrected, corrected_issues
+            source = "amap_continuous_waypoint_legs"
     status = "unavailable" if not complete else "needs_review" if issues else "verified"
     geometry: list[list[float]] = []
     for leg in legs:
@@ -308,7 +418,7 @@ def measure_amap_route(
                 geometry.append(pair)
     evidence = {
         "evidence_version": EVIDENCE_VERSION, "routing_version": AMAP_DRIVING_VERSION,
-        "provider": "amap", "source": "amap_adjacent_legs", "status": status,
+        "provider": "amap", "source": source, "status": status,
         "complete": complete, "legs": legs, "issues": issues,
         "context_checks": context_checks, "observations": observations,
         "point_count": len(points), "segment_count": len(legs),
@@ -320,5 +430,9 @@ def measure_amap_route(
         "leg_durations_s": [leg["duration_s"] for leg in legs],
         "leg_distances_m": [leg["distance_m"] for leg in legs],
     }
+    if recovery is not None:
+        evidence["continuous_recovery"] = recovery
+    if comparison is not None:
+        evidence["adjacent_comparison"] = comparison
     state["last_route_evidence"] = evidence
     return evidence

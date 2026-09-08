@@ -2716,7 +2716,7 @@ def _insert_route_measurement(
             )
             route_evidence = dict(state.get("last_route_evidence") or {})
             display_geometry = list(route_evidence.get("geometry") or [])
-            display_source = "amap_adjacent_legs"
+            display_source = str(route_evidence.get("source") or "amap_adjacent_legs")
             if route_evidence.get("complete"):
                 display_duration_s = route_evidence.get("duration_s")
                 display_distance_m = route_evidence.get("distance_m")

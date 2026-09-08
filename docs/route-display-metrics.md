@@ -17,7 +17,7 @@ normal successful cache reuse does not trigger new geocoding.
 
 ## Continuous Turn Evidence
 
-`amap-adjacent-evidence-v3` distinguishes an unexplained stop turnaround from
+The v3 continuous-turn comparison distinguishes an unexplained stop turnaround from
 the same turnaround confirmed by a continuous AMap waypoint request. Existing
 bounded context checks are reused; the rule does not add a second measurement
 pass or choose a shorter alternative.
@@ -38,6 +38,37 @@ never replaced or proportionally redistributed from the context total. Existing
 final gates and all consumers use the resulting complete evidence normally.
 Older cached evidence is not upgraded silently, and reading a historical result
 does not rerun this rule or make new provider requests.
+
+## Native Waypoint Recovery
+
+`amap-route-evidence-v4` adds a bounded recovery for complete adjacent measurements
+whose stop approach or turnaround still conflicts with continuous driving. For
+routes with two to sixteen interior waypoints (also one interior waypoint), use
+one whole ordered AMap v5 itinerary, reusing an existing identical context result.
+The request uses the same job call budget and ten-minute directed cache. Longer
+routes are not truncated, reordered or certified by this recovery.
+
+Only native `navi.assistant_action` waypoint-arrival boundaries can divide the
+provider's steps into legs. Every step must include finite nonnegative distance,
+duration and geometry. All waypoint boundaries and the final arrival must exist;
+step totals must reconcile with path totals within one metre and one second.
+Single-coordinate one-metre arrival instructions retain their native cost.
+Missing geometry, road-step gaps over fifty metres, ambiguous zero-length legs
+or missing boundaries prevent replacement. No time is allocated proportionally.
+
+When complete, `amap_continuous_waypoint_legs` supplies the geometry, route totals
+and each student's remaining route ride from the same continuous response. It
+may be longer or shorter than independently requested edges; the policy does
+not choose the shortest response. Each leg retains its native steps and boundary
+indexes. `adjacent_comparison` preserves the original measurements and warnings;
+`continuous_recovery` records the replacement decision and provider evidence.
+Continuous context legs never overwrite the independent two-point cache.
+
+Road snapping, direct-distance detours and OSRM-distance disagreement checks run
+again on the replacement legs. A valid continuous response proves provider
+continuity, not the correctness of a supplied pickup or unrestricted real-world
+access. Remaining issues still prevent time-window certification. No historical
+result or original workbook is rewritten by this policy.
 
 ## Read Contract
 

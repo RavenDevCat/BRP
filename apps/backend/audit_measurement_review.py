@@ -233,8 +233,10 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
         scenario["planning_reference_metrics"] = {field: scenario.get(field) for field in ("avg_route_duration_s", "avg_route_distance_m")}
         scenario["avg_route_duration_s"] = sum(g["verified_total_duration_s"] for g in measured) / len(measured) if complete else None
         scenario["avg_route_distance_m"] = sum(g["verified_distance_m"] for g in measured) / len(measured) if complete else None
+        sources = sorted({str((route.get("route_evidence") or {}).get("source") or "unavailable") for route in scenario["routes"]})
         scenario["measurement_summary"] = {"complete": complete, "measured_route_count": sum(g.get("status") in {"passed", "failed"} for g in measured),
-            "route_count": len(measured), "source": "amap_adjacent_legs", "financial_basis": "unchanged_planning_reference"}
+            "route_count": len(measured), "source": sources[0] if len(sources) == 1 else "mixed_amap_evidence",
+            "sources": sources, "financial_basis": "unchanged_planning_reference"}
     output["audit_result"] = _native_result(structured, config)
     for scope in request["routes"]:
         scenario_key = scope["route_key"].split(":", 1)[0]

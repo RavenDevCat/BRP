@@ -242,6 +242,21 @@ until a confirmation UI is added, not mixed into ordinary geocode failure UI.
 
 ### Test Coverage
 
+Fresh AMap pickup resolution (v5) separates `pickup_resolution_status` from
+coordinate availability. `reference_only` remains visible/cacheable but is
+rejected by the shared route precision guard before provider I/O, unless an
+audited operator confirmation applies. This flag is retained in serialized
+point provenance; cache reuse does not promote it to a measured service stop.
+Old cache entries without the flag are not automatically reclassified or moved.
+Prepared snapshots retain their original evidence; deployment does not rerun
+them. Re-prepare original inputs explicitly to apply fresh resolution.
+
+Numbered-building POIs require entrance evidence; ordinary precise door-number
+geocodes keep the existing fast path. Explicit gates request child POIs and
+match the exact gate, retaining the parent ID but never inheriting its location.
+Failure to establish a unique entrance is not fixed by choosing the shortest
+route, deleting a waypoint, or replacing the provider's returned geometry.
+
 Route Insert uses the same CN evidence for geometry, exact driving legs,
 distance and timing. A walking-only selection remeasures its existing driving
 sequence once, using the same run cache as inserted stops. A missing or

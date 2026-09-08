@@ -6,13 +6,15 @@ import math
 import unicodedata
 from typing import Any
 
-GEOCODE_QUALITY_VERSION = "amap-pickup-review-v4"
+GEOCODE_QUALITY_VERSION = "amap-pickup-review-v5"
 GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
     "pickup_precision_status", "pickup_precision_issues",
     "pickup_override_revision", "pickup_override_confirmed_at",
     "pickup_entrance_source", "amap_poi_location", "amap_poi_entr_location",
+    "pickup_resolution_status",
+    "amap_parent_poi_id",
 )
 PRECISE_LEVELS = {"\u95e8\u724c\u53f7", "\u5174\u8da3\u70b9", "\u9053\u8def\u4ea4\u53c9\u53e3", "poi"}
 PRECISE_LEVELS.update({"\u95e8\u5740", "\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9", "\u9053\u8def\u4ea4\u53c9\u8def\u53e3"})
@@ -63,12 +65,13 @@ def _without_gates(value: str) -> str:
 
 
 def _residential_pickup(requested: str, candidate: dict[str, Any]) -> bool:
-    identity = _without_gates(requested) + " " + str(candidate.get("amap_poi_name") or candidate.get("name") or "")
+    identity = _without_gates(requested) + " " + str(candidate.get("amap_poi_name") or candidate.get("name") or candidate.get("formatted_address") or "")
     for road in _road_tokens(identity):
         identity = identity.replace(road, "")
     poi_type = str(candidate.get("amap_poi_type") or candidate.get("type") or "")
     level = str(candidate.get("geocode_level") or candidate.get("level") or "")
-    return bool(RESIDENTIAL_PATTERN.search(identity) or "\u4f4f\u5b85\u533a" in poi_type + level)
+    return bool(RESIDENTIAL_PATTERN.search(identity) or any(word in poi_type + level + identity
+                for word in ("\u4f4f\u5b85\u533a", "\u5546\u52a1\u4f4f\u5b85", "\u697c\u5b87", "\u5927\u53a6", "\u5927\u697c")))
 
 
 def _named_gate_poi(candidate: dict[str, Any]) -> bool:
@@ -194,6 +197,15 @@ def annotate_amap_pickup(point: dict[str, Any], requested: str, *, ambiguous: bo
 
 
 def require_amap_pickup_precision(points: list[dict[str, Any]]) -> None:
+    reference_only = [index for index, point in enumerate(points)
+                      if point.get("pickup_resolution_status") == "reference_only"
+                      and point.get("pickup_precision_status") != "operator_confirmed"]
+    if reference_only:
+        raise GeocodePrecisionError(
+            "Pickup identity or entrance requires confirmation at route point index(es): "
+            + ", ".join(map(str, reference_only))
+            + ". The visible coordinate is a reference, not a confirmed service stop; no stop was skipped."
+        )
     unresolved = [index for index, point in enumerate(points)
                   if not reusable_amap_geocode(point, str(point.get("requested_address") or point.get("address") or ""))]
     if unresolved:
@@ -208,6 +220,11 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                         city_code: str, geocode_limiter, poi_limiter,
                         plausible, to_wgs84) -> dict[str, Any]:
     """Resolve coordinates; keep pickup precision separate from geocoding success."""
+    def resolved(point: dict[str, Any], *, ambiguous: bool = False) -> dict[str, Any]:
+        result = annotate_amap_pickup(point, address, ambiguous=ambiguous)
+        result["pickup_resolution_status"] = "reference_only" if result["pickup_precision_issues"] else "matched"
+        return result
+
     def convert(candidate: dict[str, Any], poi: bool) -> dict[str, Any] | None:
         try:
             lng, lat = map(float, str(candidate["location"]).split(","))
@@ -246,6 +263,7 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                 "formatted_address": formatted, "adcode": adcode,
                 "geocode_level": "poi" if poi else str(candidate.get("level") or ""),
                 "amap_poi_id": str(candidate.get("id") or "") if poi else "",
+                "amap_parent_poi_id": str(candidate.get("parent_id") or "") if poi else "",
                 "amap_poi_name": name, "amap_poi_address": actual_address,
                 "amap_poi_type": str(candidate.get("type") or "") if poi else "",
                 "amap_poi_location": str(candidate.get("location") or "") if poi else "",
@@ -264,6 +282,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
     for poi in ((True, False) if prefer_poi else (False, True)):
         params = ({"keywords": address.strip(), "citylimit": "true", "offset": 10, "page": 1, "extensions": "all"}
                   if poi else {"address": address.strip()})
+        if poi and _gate_tokens(address):
+            params["children"] = 1
         if city_code:
             params["city"] = city_code
         elif poi:
@@ -275,26 +295,46 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                                     poi_limiter if poi else geocode_limiter)
         except Exception:
             continue
-        candidates = [point for raw in response.get("pois" if poi else "geocodes") or []
+        raw_candidates = list(response.get("pois" if poi else "geocodes") or [])
+        if poi and _gate_tokens(address):
+            # Gates can be subordinate POIs. Only the child's own coordinate is usable.
+            for parent in list(raw_candidates):
+                for child in parent.get("children") or []:
+                    if not isinstance(child, dict) or not _named_gate_poi(child):
+                        continue
+                    name = str(child.get("name") or "")
+                    parent_name = str(parent.get("name") or "")
+                    if _compact(parent_name) not in _compact(name):
+                        name = parent_name + "(" + name + ")"
+                    raw_candidates.append({**{key: parent[key] for key in ("pname", "cityname", "adname", "adcode", "address") if key in parent},
+                                           **child, "name": name, "parent_id": str(parent.get("id") or "")})
+        candidates = [point for raw in raw_candidates
                       if (point := convert(dict(raw), poi)) is not None]
         if not poi and candidates:
-            fallback_geocode = annotate_amap_pickup(candidates[0], address, ambiguous=len(candidates) > 1 or ambiguous_poi is not None)
+            fallback_geocode = resolved(candidates[0], ambiguous=len(candidates) > 1 or ambiguous_poi is not None)
             entrance_required = entrance_required or _residential_pickup(address, candidates[0])
-            if not entrance_required:
+            # A POI-level coordinate is not evidence of a numbered address's doorway.
+            entrance_required = entrance_required or (str(candidates[0].get("geocode_level")) == "\u5174\u8da3\u70b9"
+                and bool(re.search(r"\d+(?:\u53f7|\u5f04)", _without_gates(address))))
+            if not entrance_required and fallback_geocode["pickup_resolution_status"] == "matched":
                 return fallback_geocode
             continue
+        eligible = candidates
+        if poi and entrance_required:
+            eligible = [candidate for candidate in candidates if candidate.get("pickup_entrance_source")
+                        in {"named_gate_poi", "provider_entr_location"}]
         try:
-            chosen = select_amap_pickup_candidate(address, candidates, poi=poi)
+            chosen = select_amap_pickup_candidate(address, eligible, poi=poi)
         except GeocodePrecisionError:
             # Same-name bus stops may represent opposite road sides. Preserve
             # provider ranking and expose ambiguity, never choose by route length.
-            chosen = next(candidate for candidate in candidates if not amap_candidate_issues(address, candidate, poi=poi))
+            chosen = next(candidate for candidate in eligible if not amap_candidate_issues(address, candidate, poi=poi))
             if prefer_poi or entrance_required:
                 ambiguous_poi = chosen
                 continue
-            return annotate_amap_pickup(chosen, address, ambiguous=True)
+            return resolved(chosen, ambiguous=True)
         if chosen is not None:
-            return annotate_amap_pickup(chosen, address)
+            return resolved(chosen)
         if entrance_required:
             # Retain only the requested landmark as a visible reference, not an
             # unrelated tenant or a route-length-based choice of pickup gate.
@@ -303,9 +343,11 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
             fallback_poi = next((candidate for candidate in candidates
                                  if set(amap_candidate_issues(address, candidate, poi=poi)) <= reference_issues), None)
     if fallback_geocode is not None:
-        return annotate_amap_pickup(fallback_geocode, address, ambiguous=ambiguous_poi is not None)
+        result = resolved(fallback_geocode, ambiguous=ambiguous_poi is not None)
+        result["pickup_resolution_status"] = "reference_only"
+        return result
     if ambiguous_poi is not None:
-        return annotate_amap_pickup(ambiguous_poi, address, ambiguous=True)
+        return resolved(ambiguous_poi, ambiguous=True)
     if fallback_poi is not None:
-        return annotate_amap_pickup(fallback_poi, address)
+        return {**resolved(fallback_poi), "pickup_resolution_status": "reference_only"}
     raise GeocodePrecisionError("No unique, precise pickup matches this address. Road/area centroids, unrelated POIs and unrequested parking locations are not accepted; specify the stop, building number or entrance.")

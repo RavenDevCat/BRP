@@ -1,4 +1,5 @@
 import importlib
+import json
 from pathlib import Path
 import sys
 
@@ -195,6 +196,118 @@ def test_ordinary_street_address_still_uses_geocoding_first(monkeypatch):
     monkeypatch.setattr(runtime, "amap_request_json", fetch)
     assert runtime.amap_geocode_query("China", "Shanghai", address)["pickup_precision_status"] == "matched"
     assert calls == ["/v3/geocode/geo"]
+
+
+@pytest.mark.parametrize("backend", [False, True])
+def test_new_relative_parking_address_does_not_accept_landmark_geocode_as_stop(monkeypatch, backend):
+    module = core.load_legacy_planner() if backend else runtime
+    address = ROAD_A + "\u67d0\u5355\u4f4d\u5bf9\u9762\u505c\u8f66\u573a"
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        if endpoint == "/v3/geocode/geo":
+            return {"geocodes": [{"formatted_address": ROAD_A + "\u67d0\u5355\u4f4d", "level": "\u5174\u8da3\u70b9",
+                                   "location": "121.435,31.205", "adcode": "310105"}]}
+        return {"pois": [poi("\u5468\u8fb9\u505c\u8f66\u573a", type="\u505c\u8f66\u573a", entr_location="121.436,31.206")]}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", address)
+    assert calls == ["/v3/geocode/geo", "/v3/place/text"]
+    assert point["pickup_resolution_status"] == "reference_only"
+    assert point["pickup_precision_status"] == "needs_review"
+    assert (point["lat"], point["lng"]) == (31.205, 121.435)
+    with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
+        quality.require_amap_pickup_precision([point])
+    assert quality.reusable_amap_geocode(point, address)  # Keep a visible reference, not another failed-address cache.
+
+
+@pytest.mark.parametrize("backend", [False, True])
+def test_new_numbered_building_uses_entrance_not_centre_or_tenant(monkeypatch, backend):
+    module = core.load_legacy_planner() if backend else runtime
+    address = ROAD_A + "238\u53f7"
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        if endpoint == "/v3/geocode/geo":
+            return {"geocodes": [{"formatted_address": address, "level": "\u5174\u8da3\u70b9",
+                                   "location": "121.435,31.205", "adcode": "310105"}]}
+        return {"pois": [poi("\u9152\u5e97\u56db\u697c\u9910\u5385", address=address, type="\u9910\u996e\u670d\u52a1"),
+                          poi("\u661f\u5149\u5927\u53a6", address=address, type="\u5546\u52a1\u4f4f\u5b85;\u697c\u5b87",
+                              entr_location="121.436,31.206", id="building")]}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", address)
+    assert calls == ["/v3/geocode/geo", "/v3/place/text"]
+    assert point["pickup_resolution_status"] == "matched"
+    assert point["amap_poi_id"] == "building"
+    assert (point["lat"], point["lng"]) == (31.206, 121.436)
+    assert point["amap_poi_location"] == "121.430,31.200"
+    quality.require_amap_pickup_precision([point])
+
+
+def test_reference_only_identity_blocks_shared_provider_before_outbound_io(monkeypatch):
+    analysis = importlib.import_module("direct_school_analysis")
+    monkeypatch.setattr(core, "load_legacy_planner", lambda: type("Planner", (), {"AMAP_KEY": "test"})())
+    monkeypatch.setattr(core, "_amap_route_stats", lambda *_: pytest.fail("reference point cannot become route evidence"))
+    point = {"provider": "amap", "address": REQUEST, "lat": 31.2, "lng": 121.43,
+             "pickup_resolution_status": "reference_only", "passenger_count": 0, "is_depot": False}
+    provider = analysis.FreshRouteProvider("amap", departure_time=None, api_call_limit=10)
+    with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
+        provider.route([point, {"provider": "amap", "address": "school", "lat":31.1, "lng":121.4}])
+    assert provider.state["api_calls"] == 0 and point["is_depot"] is False
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_fresh_pickup_evidence_survives_cache_and_serialized_payload(monkeypatch, confirmed):
+    address = ROAD_A + "123\u53f7"
+    point = {"provider": "amap", "address": address, "lat": 31.2, "lng": 121.43,
+             "adcode": "310105", "formatted_address": address, "geocode_level": "\u95e8\u724c\u53f7",
+             "pickup_resolution_status": "reference_only", "amap_parent_poi_id": "parent",
+             "passenger_count": 0, "is_depot": False}
+    if confirmed:
+        point.update(pickup_precision_status="operator_confirmed", pickup_override_revision=1)
+    key = runtime.geocode_cache_key("China", "Shanghai", address)
+    monkeypatch.setattr(runtime, "GEOCODE_CACHE", {key: json.loads(json.dumps(point))})
+    monkeypatch.setattr(runtime, "run_geocode_provider", lambda *_: pytest.fail("Cache read must not call providers"))
+    monkeypatch.setattr(runtime, "save_json_cache", lambda *_: None)
+    cached, warning, _ = runtime.resolve_geocoded_point("China", "Shanghai", address)
+    assert cached and warning is None
+    payload = importlib.import_module("demand_routing")._point_payload(cached)
+    restored = json.loads(json.dumps(payload))
+    assert restored["pickup_resolution_status"] == "reference_only"
+    assert restored["amap_parent_poi_id"] == "parent"
+    if confirmed:
+        quality.require_amap_pickup_precision([restored])
+    else:
+        with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
+            quality.require_amap_pickup_precision([restored])
+
+
+@pytest.mark.parametrize("backend", [False, True])
+@pytest.mark.parametrize("missing_location", [False, True])
+def test_explicit_gate_resolves_child_poi_without_inheriting_parent_centre(monkeypatch, backend, missing_location):
+    module = core.load_legacy_planner() if backend else runtime
+    park = "\u661f\u5149\u4f53\u80b2\u516c\u56ed"
+    address = park + "(8\u53f7\u95e8)"
+    calls = []
+    def fetch(endpoint, params, limiter):
+        calls.append(endpoint)
+        if endpoint == "/v3/geocode/geo":
+            return {"geocodes": [{"formatted_address": park, "level": "\u5174\u8da3\u70b9",
+                                   "location": "121.435,31.205", "adcode": "310105"}]}
+        assert params["children"] == 1 and params["city"] == "310000"
+        child = {"id": "gate8", "name": "8\u53f7\u95e8", "location": "" if missing_location else "121.436,31.206"}
+        return {"pois": [poi(park, id="parent", type="\u516c\u56ed", children=[child,
+                         {"id":"gate18", "name":"18\u53f7\u95e8", "location":"121.437,31.207"}])]}
+    monkeypatch.setattr(module, "amap_request_json", fetch)
+    point = module.amap_geocode_query("China", "Shanghai", address)
+    if missing_location:
+        assert point["pickup_resolution_status"] == "reference_only"
+        assert point["amap_poi_id"] != "gate8"
+        assert calls == ["/v3/place/text", "/v3/geocode/geo"]
+    else:
+        assert point["pickup_resolution_status"] == "matched"
+        assert point["amap_poi_id"] == "gate8" and point["amap_parent_poi_id"] == "parent"
+        assert (point["lat"], point["lng"]) == (31.206, 121.436)
+        assert calls == ["/v3/place/text"]
 
 
 def test_old_amap_cache_without_precision_remains_usable_without_relocation(monkeypatch):

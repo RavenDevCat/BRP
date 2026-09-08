@@ -7,6 +7,21 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-08
 
+### Fresh Pickup Resolution
+
+- New CN addresses use shared pickup-identity matching in both geocoders.
+  A numbered building returned as a POI is checked for its entrance; a nearby
+  tenant or compound centre cannot substitute for the requested pickup.
+- Explicit gates also inspect subordinate POIs, using the child's own location
+  and exact gate identity. A parent centre or generic entrance cannot stand in
+  for a specified gate.
+- Unconfirmed fresh locations remain visible reference points but do not become
+  route measurement inputs. This evidence survives cache and payload storage.
+  Existing unlabelled cache coordinates are not bulk-invalidated or relocated.
+- This is not a guarantee of shorter routes or complete provider entrance data.
+  Ambiguous locations still need confirmation. Existing snapshots and results
+  are unchanged; re-prepare from the original input for the new resolution flow.
+
 ### Native Historical Corrections
 
 - Saved Fleet Planner and Route Insert results now support bounded native

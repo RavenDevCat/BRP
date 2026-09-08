@@ -1125,7 +1125,7 @@ def test_amap_final_route_retries_once_and_counts_attempts(monkeypatch):
     assert state["api_calls"] == 2
 
 
-def test_amap_final_route_always_measures_adjacent_legs(monkeypatch):
+def test_amap_final_route_without_continuous_proof_keeps_adjacent_diagnostics(monkeypatch):
     calls: list[int] = []
 
     def fake_segment(_planner, request_points):
@@ -1150,10 +1150,14 @@ def test_amap_final_route_always_measures_adjacent_legs(monkeypatch):
     )
 
     assert calls == [2, 2]
-    assert stats["duration_s"] == 600
-    assert stats["distance_m"] == 1200
-    assert stats["source"] == "amap_adjacent_legs"
-    assert stats["leg_durations_s"] == [300, 300]
+    assert stats is None
+    saved = state["last_route_evidence"]
+    assert saved["status"] == "needs_review"
+    assert saved["duration_s"] == 600
+    assert saved["distance_m"] == 1200
+    assert saved["source"] == "amap_adjacent_legs"
+    assert saved["leg_durations_s"] == [300, 300]
+    assert any(issue["code"] == "continuous_itinerary_unverified" for issue in saved["issues"])
 
 
 def test_amap_final_route_cache_is_scoped_to_one_planner_run(monkeypatch):

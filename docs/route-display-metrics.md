@@ -39,11 +39,33 @@ final gates and all consumers use the resulting complete evidence normally.
 Older cached evidence is not upgraded silently, and reading a historical result
 does not rerun this rule or make new provider requests.
 
-## Native Waypoint Recovery
+## Native Continuous Measurements
+
+`amap-route-evidence-v5` makes a continuous itinerary the primary measurement for
+every multi-stop route, including routes without an obvious turnaround. Complete
+native evidence avoids all independent-edge and junction-comparison requests.
+Two-point trips still use one directed pair measurement. The native boundary and
+geometry checks below remain mandatory; waypoint and student counts are unchanged.
+
+Long routes use up to eighteen points per request, overlapping the previous two
+complete legs. Before accepting a chunk, compare those two directed road traces
+with the retained incoming legs using the continuous-turn evidence tolerances.
+Only a proven matching approach may join the chunks. Discard the repeated legs
+from the accumulated time, distance and stop sequence, not from the proof record.
+Each chunk retains its request, timestamps, native steps and overlap resolution.
+The same per-job request budget and fresh directed cache apply to every chunk.
+
+Missing native segmentation or an unproven chunk join may retain independent
+edges as diagnostic preview evidence, but never certify the route's time window.
+The saved `continuous_measurement` explains the primary attempt and failures;
+`continuous_itinerary_unverified` prevents a fallback from appearing verified.
+Reading historical records does not silently run or upgrade this new policy.
+
+### Previous Recovery Policy
 
 `amap-route-evidence-v4` adds a bounded recovery for complete adjacent measurements
 whose stop approach or turnaround still conflicts with continuous driving. For
-routes with two to sixteen interior waypoints (also one interior waypoint), use
+routes with one to sixteen interior waypoints, use
 one whole ordered AMap v5 itinerary, reusing an existing identical context result.
 The request uses the same job call budget and ten-minute directed cache. Longer
 routes are not truncated, reordered or certified by this recovery.

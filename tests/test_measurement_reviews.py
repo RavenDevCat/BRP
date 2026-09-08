@@ -183,28 +183,37 @@ def test_changed_request_refused_before_provider_io():
 
 
 def test_real_shared_provider_measurement_and_pickup_guard(monkeypatch):
-    monkeypatch.setattr(core, "load_legacy_planner", lambda: SimpleNamespace(
-        AMAP_KEY="synthetic-key", AMAP_ROUTING_LIMITER=None,
-        amap_request_json=lambda *_, **__: pytest.fail("Unexpected outbound provider I/O")))
     calls = []
-    def fetch(_planner, coords):
-        from amap_driving import gcj02_to_wgs84
+    complete_native = [True]
+    def fetch(endpoint, params, limiter):
+        assert endpoint == "/v5/direction/driving"
+        coords = [tuple(reversed(tuple(map(float, value.split(",")))))
+                  for value in [params["origin"], *params["waypoints"].split(";"), params["destination"]]]
         calls.append(coords)
-        return {"duration_s": 120, "distance_m": 700,
-                "geometry": [list(reversed(gcj02_to_wgs84(*point))) for point in coords]}
-    monkeypatch.setattr(core, "_amap_route_segment_stats", fetch)
+        if not complete_native[0]:
+            return {"route": {"paths": []}}
+        steps = [{"step_distance": "700", "cost": {"duration": "120"},
+                  "polyline": f"{a[1]},{a[0]};{b[1]},{b[0]}",
+                  "navi": {"assistant_action": "\u5230\u8fbe\u9014\u7ecf\u5730" if i == 0 else "\u5230\u8fbe\u76ee\u7684\u5730"}}
+                 for i, (a, b) in enumerate(zip(coords, coords[1:]))]
+        return {"route": {"paths": [{"distance": "1400", "cost": {"duration": "240"}, "steps": steps}]}}
+    monkeypatch.setattr(core, "load_legacy_planner", lambda: SimpleNamespace(
+        AMAP_KEY="synthetic-key", AMAP_ROUTING_LIMITER=None, amap_request_json=fetch))
+    monkeypatch.setattr(core, "_amap_route_segment_stats", lambda *args: pytest.fail("Unexpected pair request"))
     result = review.run_measurement_review(request())
-    assert result["provider_api_calls"] == len(calls) == 2
+    assert result["provider_api_calls"] == len(calls) == 1
     assert result["status"] == "complete"
     calls.clear()
+    complete_native[0] = False
     exhausted = review.run_measurement_review(request(provider_call_limit=1))
     assert exhausted["provider_api_calls"] == len(calls) == 1
     assert exhausted["status"] == "partial"
+    complete_native[0] = True
     original = source()
     original["result"]["structured_results"]["current_plan"]["points"][2].pop("geocode_quality_version")
     calls.clear()
     result = review.run_measurement_review(request(original))
-    assert result["status"] == "complete" and len(calls) == 2
+    assert result["status"] == "complete" and len(calls) == 1
     original["result"]["structured_results"]["current_plan"]["points"][2]["lat"] = None
     calls.clear()
     result = review.run_measurement_review(request(original))

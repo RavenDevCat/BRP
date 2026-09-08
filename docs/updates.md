@@ -9,6 +9,14 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Native Waypoint Measurements
 
+- Continuous AMap itineraries are now the primary measurement for every
+  multi-stop route, not only a repair after a visible turnaround. Complete
+  responses avoid redundant independent-edge calls. Long itineraries preserve
+  two incoming legs across request boundaries and require matching directed road
+  traces before joining; repeated legs are not counted twice.
+- Missing continuous proof cannot be presented as a verified route just because
+  separate point-to-point responses were successful. Diagnostic previews remain
+  available, with explicit uncertainty and no automatic history rewrite.
 - Recover unresolved stop-approach conflicts using a complete continuous AMap
   itinerary and its actual navigation waypoint boundaries. Segment time, distance
   and map shape come from that same response, not independent approaches or a

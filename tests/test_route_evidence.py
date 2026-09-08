@@ -15,13 +15,30 @@ PRECISE_PICKUP = {"geocode_quality_version": importlib.import_module("amap_geoco
 A, B, C = (31.20, 121.40), (31.202, 121.402), (31.204, 121.404)
 
 
+class NativePlanner:
+    AMAP_KEY = "test"
+    AMAP_ROUTING_LIMITER = object()
+    MAX_ROUTE_DURATION_SECONDS = 7200
+
+    def amap_request_json(self, endpoint, params, limiter):
+        assert endpoint == "/v5/direction/driving"
+        points = [tuple(reversed(tuple(map(float, value.split(",")))))
+                  for value in [params["origin"], *params.get("waypoints", "").split(";"), params["destination"]]]
+        assert len(points) == 3
+        steps = [{"step_distance": "400", "cost": {"duration": str(120 if i == 0 else 600)},
+                  "polyline": ";".join(f"{p[1]},{p[0]}" for p in points[i:i+2]),
+                  "navi": {"assistant_action": "\u5230\u8fbe\u9014\u7ecf\u5730" if i == 0 else "\u5230\u8fbe\u76ee\u7684\u5730"}}
+                 for i in range(2)]
+        return {"route": {"paths": [{"distance": "800", "cost": {"duration": "720"}, "steps": steps}]}}
+
+
 def leg(_planner, points):
     return {"duration_s": 120 if points[0] == A else 600, "distance_m": 400,
             "geometry": [list(reversed(amap.gcj02_to_wgs84(*point))) for point in points]}
 
 
 def measure(points, *, cache=None, state=None, fetch=leg):
-    return evidence.measure_amap_route(object(), points, cache if cache is not None else {},
+    return evidence._measure_adjacent_route(object(), points, cache if cache is not None else {},
         state if state is not None else {"api_call_limit": 100}, fetch_leg=fetch)
 
 
@@ -114,7 +131,7 @@ def test_continuous_waypoint_comparison_is_saved_without_replacing_segment_times
     def context(planner, points):
         calls.append(points)
         return {"duration_s": 450, "distance_m": 950, "geometry": [[121, 31], [121.01, 31.01]]}
-    result = evidence.measure_amap_route(object(), [A, B, A], {}, state, fetch_leg=leg, fetch_context=context)
+    result = evidence._measure_adjacent_route(object(), [A, B, A], {}, state, fetch_leg=leg, fetch_context=context)
     assert calls == [[A, B, A]]
     assert state["api_calls"] == 3
     assert result["context_checks"][0]["measurement"]["duration_s"] == 450
@@ -127,7 +144,7 @@ def test_context_comparison_respects_same_request_budget():
     state = {"api_call_limit": 2}
     def forbidden(*args):
         raise AssertionError("Budget exhausted")
-    result = evidence.measure_amap_route(object(), [A, B, A], {}, state, fetch_leg=leg, fetch_context=forbidden)
+    result = evidence._measure_adjacent_route(object(), [A, B, A], {}, state, fetch_leg=leg, fetch_context=forbidden)
     assert result["context_checks"][0]["reason"] == "context_check_budget_exhausted"
     assert state["api_calls"] == 2
 
@@ -143,7 +160,7 @@ def confirmed_turn_context(_planner, points):
 
 def test_same_directed_continuous_route_confirms_turn_despite_different_vertex_sampling():
     state = {"api_call_limit": 3}
-    result = evidence.measure_amap_route(object(), [A, B, A], {}, state,
+    result = evidence._measure_adjacent_route(object(), [A, B, A], {}, state,
         fetch_leg=leg, fetch_context=confirmed_turn_context)
     assert result["status"] == "verified"
     assert result["issues"] == []
@@ -183,7 +200,7 @@ def test_context_cannot_confirm_different_or_invalid_evidence(mutation, reason):
         elif mutation == "nonfinite":
             result["distance_m"] = float("inf")
         return result
-    result = evidence.measure_amap_route(object(), [A, B, A], {}, {"api_call_limit": 3},
+    result = evidence._measure_adjacent_route(object(), [A, B, A], {}, {"api_call_limit": 3},
         fetch_leg=leg, fetch_context=context)
     assert result["status"] == "needs_review"
     assert result["observations"] == []
@@ -196,7 +213,7 @@ def test_matching_continuous_turn_does_not_clear_independent_detour_or_distance_
         return {**leg(planner, points), "distance_m": 1400}
     def context(planner, points):
         return {**confirmed_turn_context(planner, points), "distance_m": 2800}
-    result = evidence.measure_amap_route(object(), [A, B, A], {},
+    result = evidence._measure_adjacent_route(object(), [A, B, A], {},
         {"api_call_limit": 5, "expected_leg_distances_m": [300, 300]}, fetch_leg=fetch, fetch_context=context)
     assert result["context_checks"][0]["resolution"]["status"] == "confirmed"
     assert result["status"] == "needs_review"
@@ -223,12 +240,12 @@ def test_a_gap_between_adjacent_road_snaps_cannot_be_filled_to_confirm_turn():
 
 def test_confirmed_context_can_be_reused_without_mutating_original_snapshot():
     cache, state = {}, {"api_call_limit": 3}
-    first = evidence.measure_amap_route(object(), [A, B, A], cache, state,
+    first = evidence._measure_adjacent_route(object(), [A, B, A], cache, state,
         fetch_leg=leg, fetch_context=confirmed_turn_context)
     before = deepcopy(first)
     def forbidden(*args):
         raise AssertionError("Cached context must not be fetched again")
-    second = evidence.measure_amap_route(object(), [A, B, A], cache, {"api_call_limit": 1},
+    second = evidence._measure_adjacent_route(object(), [A, B, A], cache, {"api_call_limit": 1},
         fetch_leg=forbidden, fetch_context=forbidden)
     assert second["status"] == "verified"
     assert first == before
@@ -239,15 +256,6 @@ def test_continuously_confirmed_turn_restores_gate_and_student_times_without_reo
     monkeypatch.setattr(core, "infer_traffic_location", lambda _: ("CHINA", "Shanghai"))
     monkeypatch.setattr(core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     monkeypatch.setattr(core, "_amap_route_segment_stats", leg)
-    class Planner:
-        AMAP_KEY = "test"
-        AMAP_ROUTING_LIMITER = object()
-        MAX_ROUTE_DURATION_SECONDS = 7200
-        def amap_request_json(self, endpoint, params, limiter):
-            assert endpoint == "/v5/direction/driving"
-            assert params["waypoints"] == f"{B[1]:.6f},{B[0]:.6f}"
-            return {"route": {"paths": [{"distance": "800", "cost": {"duration": "720"},
-                "steps": [{"polyline": ";".join(f"{p[1]:.6f},{p[0]:.6f}" for p in (A, B, depot))}]}]}}
     points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap",
                "is_depot": i == 0, "passenger_count": 0 if i == 0 else 1}
               for i, p in enumerate([depot, A, B])]
@@ -256,10 +264,10 @@ def test_continuously_confirmed_turn_restores_gate_and_student_times_without_reo
              "leg_details": [{"duration_s": 250, "distance_m": 400}] * 2}
     scenario = {"routes": [route]}
     config = core.PlannerConfig(service_direction="To School", stop_service_minutes=1)
-    core.attach_final_route_traffic_gate(Planner(), scenario, points, config, [], "test")
+    core.attach_final_route_traffic_gate(NativePlanner(), scenario, points, config, [], "test")
     assert route["nodes"] == [1, 2, 0]
     assert route["route_evidence"]["status"] == "verified"
-    assert route["route_evidence"]["observations"][0]["resolution"] == "continuous_route_confirmed"
+    assert route["route_evidence"]["source"] == "amap_continuous_waypoint_legs"
     assert route["final_route_traffic_gate"]["verified_total_duration_s"] == 840
     rows, unavailable = core._scenario_time_impact_rows(scenario, points, config)
     assert unavailable == 0
@@ -299,9 +307,6 @@ def test_final_gate_and_student_timing_use_same_saved_segments(monkeypatch):
     monkeypatch.setattr(core, "_amap_route_segment_stats", leg)
     monkeypatch.setattr(core, "infer_traffic_location", lambda _: ("CHINA", "Shanghai"))
     monkeypatch.setattr(core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
-    class Planner:
-        AMAP_KEY = "test"
-        MAX_ROUTE_DURATION_SECONDS = 7200
     points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "is_depot": i == 0,
                "passenger_count": 0 if i == 0 else 1} for i, p in enumerate([C, A, B])]
     route = {"route_id": "R1", "nodes": [1, 2, 0], "time_s": 420,
@@ -309,7 +314,7 @@ def test_final_gate_and_student_timing_use_same_saved_segments(monkeypatch):
              "leg_details": [{"duration_s": 150, "distance_m": 400}, {"duration_s": 150, "distance_m": 400}]}
     scenario = {"routes": [route]}
     config = core.PlannerConfig(service_direction="To School", stop_service_minutes=1)
-    core.attach_final_route_traffic_gate(Planner(), scenario, points, config, [], "test")
+    core.attach_final_route_traffic_gate(NativePlanner(), scenario, points, config, [], "test")
     assert route["final_route_traffic_gate"]["verified_drive_duration_s"] == 720
     assert route["final_route_traffic_gate"]["verified_total_duration_s"] == 840
     assert route["route_evidence"]["duration_s"] == 720
@@ -388,9 +393,7 @@ def test_fleet_keeps_order_and_vehicles_while_measuring_same_shared_edges(monkey
     service = importlib.import_module("backend_service")
     routing = service._client_module("demand_routing")
     monkeypatch.setattr(core, "_amap_route_segment_stats", leg)
-    class Planner:
-        AMAP_KEY = "test"
-    monkeypatch.setattr(core, "load_legacy_planner", lambda: Planner())
+    monkeypatch.setattr(core, "load_legacy_planner", lambda: NativePlanner())
     points = [{"lat": p[0], "lng": p[1], **PRECISE_PICKUP, "provider": "amap", "country": "China",
                "student_count": i + 1 if i < 2 else 0} for i, p in enumerate([A, B, C])]
     route = {"cluster_id": "G01", "order": [1, 2, 0], "selected_vehicle": {"capacity": 42},

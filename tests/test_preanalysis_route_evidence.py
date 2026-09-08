@@ -28,7 +28,7 @@ def preview(monkeypatch):
         "leg_details": [{"duration_s": 100, "distance_m": 400},
                         {"duration_s": 200, "distance_m": 400}],
     }]}
-    planner = SimpleNamespace(AMAP_KEY="test-key", MAX_ROUTE_DURATION_SECONDS=3600)
+    planner = SimpleNamespace(AMAP_KEY="test-key", AMAP_ROUTING_LIMITER=None, MAX_ROUTE_DURATION_SECONDS=3600)
     monkeypatch.setattr(service, "load_legacy_planner", lambda: planner)
     monkeypatch.setattr(service, "_build_assessment_metric_matrices", lambda *_: ([], []))
     monkeypatch.setattr(service, "assess_current_plan", lambda *_, **__: {})
@@ -38,13 +38,20 @@ def preview(monkeypatch):
     monkeypatch.setattr(core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)
     calls = []
 
-    def fetch(_planner, request):
+    def fetch(endpoint, params, limiter):
+        assert endpoint == "/v5/direction/driving"
+        request = [tuple(reversed(tuple(map(float, value.split(",")))))
+                   for value in [params["origin"], *params["waypoints"].split(";"), params["destination"]]]
         calls.append(request)
-        return {"duration_s": 120 if request[0] == coords[1] else 600,
-                "distance_m": 400,
-                "geometry": [list(reversed(amap.gcj02_to_wgs84(*point))) for point in request]}
+        steps = [{"step_distance": "400", "cost": {"duration": str(120 if a == coords[1] else 600)},
+                  "polyline": f"{a[1]},{a[0]};{b[1]},{b[0]}",
+                  "navi": {"assistant_action": "\u5230\u8fbe\u9014\u7ecf\u5730" if i == 0 else "\u5230\u8fbe\u76ee\u7684\u5730"}}
+                 for i, (a, b) in enumerate(zip(request, request[1:]))]
+        return {"route": {"paths": [{"distance": "800", "cost": {"duration": str(sum(int(s["cost"]["duration"]) for s in steps))},
+                                     "steps": steps}]}}
 
-    monkeypatch.setattr(core, "_amap_route_segment_stats", fetch)
+    planner.amap_request_json = fetch
+    monkeypatch.setattr(core, "_amap_route_segment_stats", lambda *args: pytest.fail("Complete continuous route must not request pairs"))
     monkeypatch.setattr(service, "_amap_display_geometry_for_route", lambda *_, **__: pytest.fail("Map must not remeasure"))
     return current, {"original_points": points}, calls, planner, scenario
 
@@ -55,7 +62,7 @@ def test_old_zero_passenger_waypoint_remains_in_preview_and_measurement(preview)
     budget = {"minutes": 5}
     payload, error = service._current_plan_preview_map(current, prepared, {"service_direction": "To School"}, budget)
     assert error is None
-    assert len(calls) == 2
+    assert len(calls) == 1
     route = payload["routes"][0]
     assert route["evidence_status"] == "verified"
     assert route["route_evidence"]["point_count"] == 3
@@ -70,14 +77,14 @@ def test_preview_uses_one_measurement_for_budget_geometry_and_stop_timing(previe
     )
     assert error is None
     route = payload["routes"][0]
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert route["evidence_status"] == "verified"
     assert route["duration_s"] == 720 + dwell * 120
     assert route["verified_drive_duration_s"] == 720
     assert route["verified_total_duration_s"] == 720 + dwell * 120
     assert route["distance_m"] == 800
     assert route["display_geometry"] == route["route_evidence"]["geometry"]
-    assert budget["amap_route_api_calls"] == 2
+    assert budget["amap_route_api_calls"] == 1
     assert budget["amap_route_duration_minutes"] == 12 + dwell * 2
     assert budget["amap_route_distance_km"] == 0.8
     assert budget["amap_route_status"] == "ready"
@@ -107,7 +114,7 @@ def test_preview_does_not_reuse_measurements_across_uploads(preview):
         payload, error = service._current_plan_preview_map(current, prepared, {"service_direction": "To School"})
         assert error is None
         assert payload["routes"][0]["evidence_status"] == "verified"
-    assert len(calls) == 4
+    assert len(calls) == 2
 
 
 def test_partial_preview_budget_cannot_claim_all_routes_measured():
@@ -131,7 +138,7 @@ def test_from_school_preview_keeps_uploaded_order_and_forward_timing(preview):
         "time_window_start": "15:40", "time_window_end": "17:00",
     })
     assert error is None
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert [stop["node_index"] for stop in payload["stops"]] == [0, 2, 1]
     assert [stop["scheduled_offset_s"] for stop in payload["stops"]] == [0, 600, 1320]
     assert payload["routes"][0]["evidence_status"] == "verified"

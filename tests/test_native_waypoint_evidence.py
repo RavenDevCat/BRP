@@ -81,7 +81,7 @@ def test_incomplete_native_boundaries_never_fabricate_segment_times(mutation):
     assert result["source"] == "amap_adjacent_legs"
     assert result["status"] == "needs_review"
     assert result["leg_durations_s"] == [100, 100]
-    assert result["continuous_recovery"]["reason"] == "native_boundaries_unavailable"
+    assert result["continuous_measurement"]["chunks"][0]["reason"] == "native_boundaries_unavailable"
 
 
 @pytest.mark.parametrize("durations,distances", [((180, 360), (400, 200)), ((30, 60), (350, 180))])
@@ -93,10 +93,9 @@ def test_continuous_recovery_uses_native_response_whether_longer_or_shorter(dura
     assert result["leg_durations_s"] == list(durations)
     assert result["distance_m"] == sum(distances)
     assert result["duration_s"] == sum(durations)
-    assert result["adjacent_comparison"]["duration_s"] == 200
-    assert result["adjacent_comparison"]["issues"][0]["code"] == "stop_turnaround_needs_review"
+    assert "adjacent_comparison" not in result
     assert result["geometry_segments"] == [leg["geometry"] for leg in result["legs"]]
-    assert state["api_calls"] == 3
+    assert state["api_calls"] == 1
     assert len(planner.calls) == 1
 
 
@@ -144,10 +143,10 @@ def test_recovery_cache_does_not_change_direct_pair_cache_or_saved_evidence():
 
 def test_recovery_respects_budget_and_preserves_unknown_status():
     planner = Planner()
-    result = measure(planner, state={"api_call_limit": 2})
+    result = measure(planner, state={"api_call_limit": 0})
     assert planner.calls == []
-    assert result["status"] == "needs_review"
-    assert result["continuous_recovery"]["reason"] == "provider_call_budget_exhausted"
+    assert result["status"] == "unavailable"
+    assert result["continuous_measurement"]["chunks"][0]["reason"] == "provider_call_budget_exhausted"
 
 
 def test_recovery_does_not_drop_waypoints_to_fit_provider_limit():
@@ -187,3 +186,75 @@ def test_gate_student_ride_and_map_share_native_segments_with_zero_rider_waypoin
     assert payload["routes"][0]["duration_s"] == 660
     assert payload["routes"][0]["geometry_segments"] == route["route_evidence"]["geometry_segments"]
     assert [stop["cumulative_duration_s"] for stop in payload["stops"]] == [0, 180, 540]
+
+
+def test_continuous_is_primary_even_without_an_obvious_turnaround():
+    points = (A, B, (31.204, 121.404))
+    planner = Planner(native_path(points=points))
+    state = {"api_call_limit": 1}
+    def forbidden(*args):
+        raise AssertionError("A complete native itinerary must not request independent edges")
+    result = evidence.measure_amap_route(planner, list(points), {}, state, fetch_leg=forbidden)
+    assert result["source"] == "amap_continuous_waypoint_legs"
+    assert result["status"] == "verified"
+    assert result["duration_s"] == 540
+    assert state["api_calls"] == 1
+
+
+class ChunkPlanner:
+    AMAP_ROUTING_LIMITER = object()
+
+    def __init__(self, mutate_overlap=False):
+        self.calls = []
+        self.mutate_overlap = mutate_overlap
+
+    def amap_request_json(self, endpoint, params, limiter):
+        self.calls.append(params)
+        points = [tuple(reversed(tuple(map(float, value.split(",")))))
+                  for value in [params["origin"], *params["waypoints"].split(";"), params["destination"]]]
+        assert len(points) <= 18
+        path = native_path(points, (60,)*(len(points)-1), (300,)*(len(points)-1))
+        if self.mutate_overlap and len(self.calls) == 2:
+            a, b = points[:2]
+            path["steps"][0]["polyline"] = f"{a[1]},{a[0]};{a[1]+.003},{a[0]};{b[1]},{b[0]}"
+        return {"route": {"paths": [path]}}
+
+
+@pytest.mark.parametrize("point_count", [18, 19, 33, 34])
+def test_long_routes_preserve_every_stop_and_charge_overlap_only_once(point_count):
+    points = [(31.2+i*.002, 121.4) for i in range(point_count)]
+    planner, cache, state = ChunkPlanner(), {}, {"api_call_limit": 3}
+    def forbidden(*args):
+        raise AssertionError("Native chunks should not need pair requests")
+    result = evidence.measure_amap_route(planner, points, cache, state, fetch_leg=forbidden)
+    assert result["status"] == "verified"
+    assert len(result["legs"]) == point_count-1
+    assert result["duration_s"] == (point_count-1)*60
+    assert result["distance_m"] == (point_count-1)*300
+    assert [leg["leg_index"] for leg in result["legs"]] == list(range(point_count-1))
+    assert [leg["origin"] for leg in result["legs"]] == [list(p) for p in points[:-1]]
+    assert len(planner.calls) == (point_count-4)//15+1
+    original = deepcopy(result)
+    again = evidence.measure_amap_route(planner, points, cache, {"api_call_limit": 0}, fetch_leg=forbidden)
+    assert again["duration_s"] == result["duration_s"]
+    assert result == original
+
+
+def test_long_route_cannot_silently_reset_approach_at_chunk_boundary():
+    points = [(31.2+i*.002, 121.4) for i in range(19)]
+    planner = ChunkPlanner(mutate_overlap=True)
+    result = evidence.measure_amap_route(planner, points, {}, {"api_call_limit": 2})
+    assert result["status"] == "unavailable"
+    assert result["continuous_measurement"]["chunks"][-1]["reason"] == "continuous_chunk_join_unverified"
+    assert len(planner.calls) == 2
+
+
+def test_missing_native_proof_keeps_all_independent_edges_diagnostic_not_verified():
+    path = native_path(points=(A, B, (31.204, 121.404)))
+    path["steps"][0]["navi"] = {}
+    result = evidence.measure_amap_route(Planner(path), [A, B, (31.204, 121.404)], {},
+        {"api_call_limit": 3}, fetch_leg=adjacent)
+    assert result["complete"] is True
+    assert result["point_count"] == 3
+    assert result["status"] == "needs_review"
+    assert any(issue["code"] == "continuous_itinerary_unverified" for issue in result["issues"])

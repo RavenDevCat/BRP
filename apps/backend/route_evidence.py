@@ -24,7 +24,7 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-route-evidence-v4"
+EVIDENCE_VERSION = "amap-route-evidence-v5"
 CACHE_MAX_AGE_SECONDS = 600
 CONTEXT_GEOMETRY_TOLERANCE_M = 1.0
 
@@ -280,7 +280,7 @@ def _recover_continuous_legs(planner: Any, points: list[tuple[float, float]], ca
         return [], [], {**recovery, "error_type": type(exc).__name__}
 
 
-def measure_amap_route(
+def _measure_adjacent_route(
     planner: Any,
     points: list[tuple[float, float]],
     cache: dict[str, Any],
@@ -436,3 +436,81 @@ def measure_amap_route(
         evidence["adjacent_comparison"] = comparison
     state["last_route_evidence"] = evidence
     return evidence
+
+
+def measure_amap_route(
+    planner: Any, points: list[tuple[float, float]], cache: dict[str, Any], state: dict[str, Any], *,
+    fetch_leg: Callable[[Any, list[tuple[float, float]]], dict[str, Any]] = fetch_amap_leg,
+    fetch_context: Callable[[Any, list[tuple[float, float]]], dict[str, Any]] = fetch_amap_itinerary,
+) -> dict[str, Any]:
+    """Prefer one continuous itinerary; independent edges are diagnostic fallback."""
+    if len(points) <= 2:
+        return _measure_adjacent_route(planner, points, cache, state, fetch_leg=fetch_leg, fetch_context=fetch_context)
+    if any(len(p) != 2 or not all(math.isfinite(x) for x in p)
+           or abs(p[0]) > 90 or abs(p[1]) > 180 for p in points):
+        raise ValueError("Route contains unresolved coordinates")
+    references = list(state.get("expected_leg_distances_m") or [])
+    reference_times = list(state.get("expected_leg_durations_s") or [])
+    bases = [{"origin_wgs84": list(gcj02_to_wgs84(*a)), "destination_wgs84": list(gcj02_to_wgs84(*b)),
+              "straight_distance_m": distance_m(a, b),
+              "osrm_reference_distance_m": references[i] if i < len(references) else None,
+              "osrm_reference_duration_s": reference_times[i] if i < len(reference_times) else None}
+             for i, (a, b) in enumerate(zip(points, points[1:]))]
+    legs: list[dict[str, Any]] = []
+    issues: list[dict[str, Any]] = []
+    chunks: list[dict[str, Any]] = []
+    start = 0
+    while start < len(points) - 1:
+        end = min(len(points), start + 18)
+        chunk, chunk_issues, record = _recover_continuous_legs(
+            planner, points[start:end], cache, state, bases[start:end - 1], fetch_context)
+        record.update(point_start=start, point_end=end - 1)
+        chunks.append(record)
+        if not chunk:
+            break
+        skip = 0
+        if start:
+            # Re-request two complete incoming legs so a chunk cannot reset the
+            # approach at its join. An unproven join remains diagnostic only.
+            overlap = {"geometry": chunk[0]["geometry"] + chunk[1]["geometry"],
+                       "duration_s": chunk[0]["duration_s"] + chunk[1]["duration_s"],
+                       "distance_m": chunk[0]["distance_m"] + chunk[1]["distance_m"]}
+            resolution = _continuous_turn_resolution(legs[-2], legs[-1], overlap)
+            record["overlap_resolution"] = resolution
+            if resolution["status"] != "confirmed":
+                record.update(status="unavailable", reason="continuous_chunk_join_unverified")
+                break
+            skip = 2
+        for leg in chunk[skip:]:
+            leg["leg_index"] += start
+            legs.append(leg)
+        issues.extend({**item, "leg_index": item["leg_index"] + start}
+                      for item in chunk_issues if item["leg_index"] >= skip)
+        if end == len(points):
+            geometry: list[list[float]] = []
+            for leg in legs:
+                for pair in leg["geometry"]:
+                    if not geometry or pair != geometry[-1]:
+                        geometry.append(pair)
+            result = {"evidence_version": EVIDENCE_VERSION, "routing_version": AMAP_DRIVING_VERSION,
+                      "provider": "amap", "source": "amap_continuous_waypoint_legs",
+                      "status": "needs_review" if issues else "verified", "complete": True,
+                      "legs": legs, "issues": issues, "context_checks": [], "observations": [],
+                      "continuous_measurement": {"status": "complete", "chunks": chunks},
+                      "point_count": len(points), "segment_count": len(legs),
+                      "called_at": max(leg["called_at"] for leg in legs),
+                      "measurement_started_at": min(leg["called_at"] for leg in legs),
+                      "duration_s": sum(leg["duration_s"] for leg in legs),
+                      "distance_m": sum(leg["distance_m"] for leg in legs), "geometry": geometry,
+                      "geometry_segments": [leg["geometry"] for leg in legs],
+                      "leg_durations_s": [leg["duration_s"] for leg in legs],
+                      "leg_distances_m": [leg["distance_m"] for leg in legs]}
+            state["last_route_evidence"] = result
+            return result
+        start = end - 3
+    result = _measure_adjacent_route(planner, points, cache, state, fetch_leg=fetch_leg, fetch_context=fetch_context)
+    result["continuous_measurement"] = {"status": "unavailable", "chunks": chunks}
+    result["issues"].append({"leg_index": 0, "code": "continuous_itinerary_unverified"})
+    if result["status"] == "verified":
+        result["status"] = "needs_review"
+    return result

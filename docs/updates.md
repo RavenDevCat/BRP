@@ -9,6 +9,9 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Map And Historical Input Reliability
 
+- Pickup revalidation removes its own obsolete review warning only after the
+  saved point satisfies identity and entrance checks. Unrelated warnings,
+  ambiguous locations and operator-confirmed coordinates remain unchanged.
 - Narrow-screen route maps reserve separate space for the route list and map.
   Navigation controls stay clear of route details and time-impact overlays.
 - Fleet historical correction recognizes saved school and demand-point geocodes,

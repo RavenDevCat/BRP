@@ -603,6 +603,26 @@ def test_operator_confirmation_survives_shared_annotation_for_old_landmark():
     assert quality.annotate_amap_pickup(point, RESIDENCE) == point
 
 
+def test_matched_pickup_clears_only_its_own_stale_review_warning():
+    address = "\u5efa\u56fd\u8def123\u53f7"
+    point = {"provider": "amap", "lat": 31.2, "lng": 121.43,
+             "formatted_address": address, "geocode_level": "\u95e8\u724c\u53f7",
+             "geocode_status": "needs_review", "warning": quality.PICKUP_REVIEW_WARNING,
+             "pickup_resolution_status": "reference_only"}
+    result = quality.annotate_amap_pickup(point, address)
+    assert result["pickup_precision_issues"] == []
+    assert result["pickup_resolution_status"] == "matched"
+    assert result["geocode_status"] == "ok" and result["warning"] == ""
+    assert point["warning"] == quality.PICKUP_REVIEW_WARNING
+    assert (result["lat"], result["lng"]) == (point["lat"], point["lng"])
+    other = quality.annotate_amap_pickup({**point, "warning": "Manual data quality review"}, address)
+    assert other["warning"] == "Manual data quality review"
+    assert other["geocode_status"] == "needs_review"
+    unresolved = quality.annotate_amap_pickup({**point, "geocode_level": ""}, address)
+    assert unresolved["warning"] == quality.PICKUP_REVIEW_WARNING
+    assert unresolved["pickup_resolution_status"] == "reference_only"
+
+
 def test_fleet_payload_keeps_separate_entrance_provenance():
     demand = importlib.import_module("demand_routing")
     point = {"provider": "amap", "lat": 31.2, "lng": 121.43, "address": RESIDENCE,

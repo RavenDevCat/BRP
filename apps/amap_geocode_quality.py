@@ -7,6 +7,7 @@ import unicodedata
 from typing import Any
 
 GEOCODE_QUALITY_VERSION = "amap-pickup-review-v6"
+PICKUP_REVIEW_WARNING = "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved."
 GEOCODE_PROVENANCE_FIELDS = (
     "geocode_quality_version", "geocode_level", "adcode", "amap_poi_id",
     "amap_poi_name", "amap_poi_address", "amap_poi_type",
@@ -206,7 +207,13 @@ def annotate_amap_pickup(point: dict[str, Any], requested: str, *, ambiguous: bo
                    "pickup_precision_issues": list(dict.fromkeys(issues))})
     if issues:
         result["geocode_status"] = "needs_review"
-        result["warning"] = "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved."
+        result["warning"] = PICKUP_REVIEW_WARNING
+    elif result.get("warning") == PICKUP_REVIEW_WARNING:
+        result["warning"] = ""
+        if result.get("geocode_status") == "needs_review":
+            result["geocode_status"] = "ok"
+        if result.get("pickup_resolution_status") == "reference_only":
+            result["pickup_resolution_status"] = "matched"
     return result
 
 

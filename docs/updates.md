@@ -14,6 +14,8 @@ runtime architecture, or recommended rerun guidance changed.
   ambiguous locations and operator-confirmed coordinates remain unchanged.
 - Narrow-screen route maps reserve separate space for the route list and map.
   Navigation controls stay clear of route details and time-impact overlays.
+- Downloaded interactive maps size the map below the actual toolbar height,
+  keeping the title and map controls visible when mobile headings wrap.
 - Fleet historical correction recognizes saved school and demand-point geocodes,
   in addition to legacy point lists. Coordinate-system provenance is recovered
   only for identical addresses and coordinates with unambiguous metadata;

@@ -3824,10 +3824,10 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #111827; background: #0f172a; }
-    .app { height: 100vh; min-height: 640px; padding: 18px; background: radial-gradient(circle at top left, rgba(15,118,110,.22), transparent 32%), linear-gradient(135deg, #0f172a, #1e293b 55%, #0f172a); }
-    .viewer { height: 100%; min-height: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.55); border-radius: 14px; background: rgba(255,255,255,.72); box-shadow: 0 28px 70px rgba(15,23,42,.38); backdrop-filter: blur(18px); }
+    .app { height: 100vh; height: 100dvh; min-height: 0; padding: 18px; background: radial-gradient(circle at top left, rgba(15,118,110,.22), transparent 32%), linear-gradient(135deg, #0f172a, #1e293b 55%, #0f172a); }
+    .viewer { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; overflow: hidden; border: 1px solid rgba(255,255,255,.55); border-radius: 14px; background: rgba(255,255,255,.72); box-shadow: 0 28px 70px rgba(15,23,42,.38); backdrop-filter: blur(18px); }
     .toolbar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.55); background: rgba(255,255,255,.72); backdrop-filter: blur(18px); }
-    .title { min-width: 0; }
+    .title { min-width: 0; max-width: 100%; }
     .title h1 { margin: 0; font-size: 15px; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .title p { margin: 3px 0 0; color: #64748b; font-size: 12px; }
     .toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
@@ -3835,7 +3835,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     .button { height: 36px; border-radius: 8px; border: 1px solid #cbd5e1; background: rgba(255,255,255,.78); padding: 0 12px; font-size: 14px; font-weight: 650; color: #334155; cursor: pointer; backdrop-filter: blur(12px); }
     .button:hover { background: white; }
     .button.close { border-color: #fca5a5; background: rgba(254,242,242,.92); color: #b91c1c; }
-    .body { position: relative; height: calc(100% - 58px); min-height: 0; }
+    .body { position: relative; min-height: 0; }
     #map { position: absolute; inset: 0; }
     .sidebar { position: absolute; z-index: 3; inset: 12px auto 12px 12px; width: 360px; display: flex; min-height: 0; flex-direction: column; overflow: hidden; border: 1px solid rgba(255,255,255,.48); border-radius: 14px; background: rgba(255,255,255,.30); box-shadow: 0 24px 55px rgba(15,23,42,.24); backdrop-filter: blur(26px); }
     .sidebar-head { padding: 14px; border-bottom: 1px solid rgba(255,255,255,.42); background: rgba(255,255,255,.18); backdrop-filter: blur(22px); }
@@ -3875,7 +3875,7 @@ function buildStandaloneInteractiveMapHtml(data: JobMapData, jobName: string, ma
     .maplibregl-popup-content { border-radius: 10px; box-shadow: 0 14px 40px rgba(15,23,42,.25); }
     .popup { max-width: 260px; font-size: 12px; }
     .popup strong { display: block; margin-bottom: 4px; }
-    @media (max-width: 760px) { .app { padding: 8px; } .toolbar { align-items: flex-start; flex-direction: column; } .body { height: calc(100% - 106px); } .sidebar { inset: 10px; width: auto; max-height: 45%; } }
+    @media (max-width: 760px) { .app { padding: 8px; } .toolbar { align-items: flex-start; flex-direction: column; } .sidebar { inset: 10px; width: auto; max-height: 45%; } }
   </style>
 </head>
 <body>

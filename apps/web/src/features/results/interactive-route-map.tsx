@@ -1484,7 +1484,7 @@ export function InteractiveRouteMap({
                     </div>
                 ) : null}
                 {selectedRoute ? (
-                    <div className="absolute bottom-3 left-3 right-3 rounded-md border border-border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto md:w-[420px]">
+                    <div className="absolute bottom-8 left-3 right-3 max-h-[55%] overflow-y-auto rounded-md border border-border bg-surface/95 p-3 shadow-lg backdrop-blur md:left-auto md:w-[420px]">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2">

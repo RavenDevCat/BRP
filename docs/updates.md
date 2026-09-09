@@ -5,6 +5,17 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-09
+
+### Map And Historical Input Reliability
+
+- Narrow-screen route maps reserve separate space for the route list and map.
+  Navigation controls stay clear of route details and time-impact overlays.
+- Fleet historical correction recognizes saved school and demand-point geocodes,
+  in addition to legacy point lists. Coordinate-system provenance is recovered
+  only for identical addresses and coordinates with unambiguous metadata;
+  passenger counts, stop order and saved source results are not replaced.
+
 ## 2026-09-08
 
 ### Fresh Pickup Resolution

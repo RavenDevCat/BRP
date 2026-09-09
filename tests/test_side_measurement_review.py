@@ -126,6 +126,51 @@ def test_legacy_insert_missing_inputs_remains_explicitly_unavailable(monkeypatch
     assert not risk["full_review"]["available"] and risk["routes"]
 
 
+@pytest.mark.parametrize("direction", ["to_school", "from_school"])
+@pytest.mark.parametrize("shape", ["native", "legacy", "duplicate"])
+def test_fleet_recovers_only_coordinate_provenance_from_saved_geocodes(direction, shape):
+    source = fleet_source(direction)
+    points = source["global_plan_result"]["routes"][0]["ordered_points"]
+    school_index = len(points) - 1 if direction == "to_school" else 0
+    geocodes = deepcopy(points)
+    source["geocode_result"] = ({"points": geocodes} if shape == "legacy" else {
+        "school": geocodes[school_index],
+        "demand_points": [point for index, point in enumerate(geocodes) if index != school_index],
+    })
+    if shape == "duplicate":
+        source["geocode_result"]["points"] = deepcopy(geocodes)
+    for point in points:
+        point.pop("coordinate_system")
+    for point in geocodes:
+        point["student_count"] = 999
+    before = deepcopy(source)
+    scopes = side.source_scopes(source, "fleet_planner")
+    assert not scopes[0]["input_issues"]
+    assert [point["coordinate_system"] for point in scopes[0]["points"]] == [point["coordinate_system"] for point in geocodes]
+    assert [point["passenger_count"] for point in scopes[0]["points"]] == [point["student_count"] for point in points]
+    assert source == before
+
+
+@pytest.mark.parametrize("change", ["address", "lat", "conflicting_system", "missing_system"])
+def test_fleet_does_not_guess_missing_coordinate_provenance(change):
+    source = fleet_source()
+    point = source["global_plan_result"]["routes"][0]["ordered_points"][0]
+    saved = deepcopy(point)
+    source["geocode_result"] = {"demand_points": [saved]}
+    point.pop("coordinate_system")
+    if change == "address":
+        saved["address"] += " other gate"
+    elif change == "lat":
+        saved["lat"] += .001
+    elif change == "missing_system":
+        saved.pop("coordinate_system")
+    else:
+        source["geocode_result"]["points"] = [{**saved, "coordinate_system": "GCJ02" if saved["coordinate_system"] == "WGS84" else "WGS84"}]
+    before = deepcopy(source)
+    assert "source_stop_coordinates_missing" in side.source_scopes(source, "fleet_planner")[0]["input_issues"]
+    assert source == before
+
+
 def test_review_results_cannot_switch_native_parent_or_change_student_count(tmp_path):
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
     row = create(store, fleet_source(), "fleet_planner")

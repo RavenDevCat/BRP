@@ -58,7 +58,11 @@ def _before(route: dict, dwell: Any) -> dict:
 
 def _fleet_scopes(source: dict) -> list[dict]:
     scopes = []
-    geocodes = dict(source.get("geocode_result") or {}).get("points") or []
+    geocode_result = dict(source.get("geocode_result") or {})
+    geocodes = [item for field in ("points", "demand_points")
+                for item in (geocode_result.get(field) or []) if isinstance(item, dict)]
+    if isinstance(geocode_result.get("school"), dict):
+        geocodes.append(geocode_result["school"])
     for field in PLAN_FIELDS:
         plan = dict(source.get(field) or {})
         summary, school = dict(plan.get("summary") or {}), dict(plan.get("school") or {})
@@ -71,8 +75,9 @@ def _fleet_scopes(source: dict) -> list[dict]:
                 if not point.get("coordinate_system"):
                     matches = [item for item in geocodes if item.get("address") == point.get("address")
                                and item.get("lat") == point.get("lat") and item.get("lng") == point.get("lng")]
-                    if len(matches) == 1:
-                        point = {**matches[0], **point, "coordinate_system": matches[0].get("coordinate_system")}
+                    systems = {item.get("coordinate_system") for item in matches}
+                    if len(systems) == 1 and systems <= {"WGS84", "GCJ02"}:
+                        point = {**point, "coordinate_system": next(iter(systems))}
                 depot = index == (len(ordered) - 1 if direction == "to_school" else 0)
                 points.append({**point, "country": point.get("country") or school.get("country"),
                     "is_depot": depot, "passenger_count": point.get("student_count", point.get("passenger_count"))})

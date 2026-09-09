@@ -615,16 +615,12 @@ export function InteractiveRouteMap({
             className={cn(
                 fullscreen
                     ? "relative overflow-hidden border-0 bg-transparent"
-                    : "grid overflow-hidden border border-border bg-surface lg:grid-cols-[320px_minmax(0,1fr)]",
+                    : "grid h-[960px] grid-rows-[320px_minmax(0,1fr)] overflow-hidden border border-border bg-surface lg:h-[clamp(560px,calc(100vh-220px),760px)] lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-1",
                 fullscreen
                     ? "h-full min-h-0 rounded-none"
                     : "min-h-[560px] rounded-md",
             )}
-            style={{
-                height: fullscreen
-                    ? "100%"
-                    : "clamp(560px, calc(100vh - 220px), 760px)",
-            }}
+            style={fullscreen ? { height: "100%" } : undefined}
         >
             <aside
                 className={cn(
@@ -1007,7 +1003,7 @@ export function InteractiveRouteMap({
                     onMouseLeave={() => setHoverInfo(null)}
                     cursor={hoverInfo ? "pointer" : "grab"}
                 >
-                    <NavigationControl position="bottom-right" />
+                    <NavigationControl position="top-right" />
                     <Source
                         id="private-links"
                         type="geojson"
@@ -1431,7 +1427,7 @@ export function InteractiveRouteMap({
                 {topImpactedStops.length ? (
                     <div
                         className={cn(
-                            "absolute right-3 top-14 z-10 max-h-[42%] w-[min(340px,calc(100%-24px))] overflow-auto rounded-md border p-3 text-xs shadow-xl",
+                            "absolute right-14 top-14 z-10 max-h-[42%] w-[min(340px,calc(100%-80px))] overflow-auto rounded-md border p-3 text-xs shadow-xl",
                             fullscreen
                                 ? "border-white/45 bg-white/35 backdrop-blur-2xl"
                                 : "border-border bg-surface/95 backdrop-blur",

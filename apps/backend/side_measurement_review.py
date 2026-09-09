@@ -105,6 +105,7 @@ def _insert_scopes(source: dict) -> list[dict]:
             saved = dict(route.get("measurement_inputs") or {})
             config = dict(saved.get("config") or {})
             direction = config.get("service_direction")
+            direction = {"To School": "to_school", "From School": "from_school"}.get(direction, direction)
             for role in ("base", "selected"):
                 evidence = route.get("base_route_evidence" if role == "base" else "route_evidence")
                 dwell = reviews._number(saved.get(f"{role}_stop_service_time_s"))

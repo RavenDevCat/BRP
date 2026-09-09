@@ -73,6 +73,33 @@ def test_native_review_preserves_source_order_counts_and_saved_dwell(tmp_path, m
         assert plan["affected_routes"][0]["selected_duration_s"] == 3000
 
 
+@pytest.mark.parametrize("direction,label", [("to_school", "To School"), ("from_school", "From School")])
+def test_insert_review_accepts_saved_product_direction_labels(tmp_path, monkeypatch, direction, label):
+    source = insert_source(monkeypatch, direction)
+    for scenario in source["route_insert_result"]["scenarios"]:
+        for route in scenario["selected_plan"]["affected_routes"]:
+            route["measurement_inputs"]["config"]["service_direction"] = label
+    before = deepcopy(source)
+    risk = side.side_risk_summary(source, "route_insert_advisor", "admin@example.test")
+    assert risk["full_review"]["available"]
+    store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
+    row = create(store, source, "route_insert_advisor")
+    assert all(scope["service_direction"] == direction for scope in row["request"]["routes"])
+    result = reviews.execute_saved_review(store, row["review_id"], "worker", provider_factory=Provider)
+    assert result["status"] == "succeeded"
+    assert source == before
+    for scope in row["request"]["routes"]:
+        school_index = len(scope["points"]) - 1 if direction == "to_school" else 0
+        assert scope["points"][school_index]["is_depot"] is True
+
+
+@pytest.mark.parametrize("direction", [None, "unknown"])
+def test_insert_review_still_rejects_missing_or_unknown_direction(monkeypatch, direction):
+    source = insert_source(monkeypatch)
+    source["route_insert_result"]["scenarios"][0]["selected_plan"]["affected_routes"][0]["measurement_inputs"]["config"]["service_direction"] = direction
+    assert not side.side_risk_summary(source, "route_insert_advisor", "admin@example.test")["full_review"]["available"]
+
+
 def test_native_parent_identity_and_concurrent_idempotency(tmp_path, monkeypatch):
     store = SqliteRuntimeStore(tmp_path / "runtime.sqlite")
     first, other = fleet_source(), insert_source(monkeypatch)

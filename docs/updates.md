@@ -20,6 +20,9 @@ runtime architecture, or recommended rerun guidance changed.
   in addition to legacy point lists. Coordinate-system provenance is recovered
   only for identical addresses and coordinates with unambiguous metadata;
   passenger counts, stop order and saved source results are not replaced.
+- Insert measurement correction accepts the product's saved `To School` and
+  `From School` labels as well as their internal equivalents. Unknown directions
+  and incomplete saved inputs remain unavailable; original records are retained.
 
 ## 2026-09-08
 

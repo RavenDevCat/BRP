@@ -88,6 +88,48 @@ def fake_osrm(origin: dict, destination: dict, _cache: dict) -> dict:
     }
 
 
+@pytest.mark.parametrize("scheduled_at", [None, "2026-09-10T23:00:00+00:00"])
+def test_runner_retains_provisional_values_without_removal_or_trusted_time(monkeypatch, scheduled_at):
+    class ReviewProvider(FakeProvider):
+        def route(self, points, **kwargs):
+            if len(points) == 3:
+                self.state['last_route_evidence'] = {
+                    'complete': True, 'provider': 'amap', 'source': 'amap_continuous_waypoint_legs',
+                    'point_count': 3, 'duration_s': 5400, 'distance_m': 40000,
+                    'leg_durations_s': [3600, 1800], 'leg_distances_m': [30000, 10000],
+                    'issues': [{'code': 'provider_distance_disagreement', 'leg_index': 0}],
+                }
+                raise RuntimeError('Route measurement needs review: provider_distance_disagreement')
+            self.state.pop('last_route_evidence', None)
+            return super().route(points, **kwargs)
+
+    state = {'record': {'job_id': 'review-runner', 'status': 'queued', 'prepared_payload': prepared_payload(),
+        'scheduled_start_at': scheduled_at, 'metadata': {'job_kind': 'direct_school_analysis',
+            'analysis_config': {'far_duration_minutes': 45}, 'scheduled_job': bool(scheduled_at)}}}
+    monkeypatch.setattr(analysis, 'FreshRouteProvider', ReviewProvider)
+    monkeypatch.setattr(analysis, '_osrm_leg', fake_osrm)
+    monkeypatch.setattr(backend_job_runner, '_load_job', lambda _: deepcopy(state['record']))
+    monkeypatch.setattr(backend_job_runner, '_save_job', lambda record: state.update(record=deepcopy(record)))
+    monkeypatch.setattr(backend_job_runner, '_release_concurrency_slot', lambda: None)
+    monkeypatch.setattr(sys, 'argv', ['backend_job_runner.py', 'review-runner'])
+    assert backend_job_runner.main() == 0
+    result = state['record']['result']
+    assert result['status'] == 'partial'
+    assert result['routes'][0]['status'] == 'needs_review'
+    assert result['summary']['route_measurement_review_count'] == 1
+    assert result['operational_conclusion']['additional_removal']['rider_count'] == 0
+    assert result['route_window_analysis'][0]['status'] == 'data_review'
+    for stop in result['stops']:
+        assert stop.get('estimated_current_ride_min') is None
+        assert stop['route_contexts'][0]['provisional_current_ride_min'] > 0
+    monkeypatch.setattr(backend_service, '_direct_school_compatible_records', lambda *_a, **_k: [])
+    public = backend_service._direct_school_public_record(state['record'], user_email='test@example.test', include_all=False)
+    assert public['result'] == result
+    book = load_workbook(BytesIO(analysis.build_direct_school_workbook(state['record'])))
+    assert book['Unverified Ride References']['F5'].value > 0
+    assert book['Student Classification']['G5'].value is None
+
+
 def test_osrm_leg_uses_audit_plot_coordinates_and_snap_connectors(monkeypatch) -> None:
     origin = {
         **point("Origin", 31.2400, 121.4800),
@@ -534,6 +576,8 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
 
     assert workbook.sheetnames == [
         "Operational Summary",
+        "Route Measurement Review",
+        "Unverified Ride References",
         "Student Classification",
         "Route Outcomes",
         "Address Measurements",

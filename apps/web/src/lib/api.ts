@@ -776,6 +776,11 @@ export type DirectSchoolStopResult = {
         route_id?: string;
         stop_sequence?: number;
         riders?: number;
+        measurement_status?: string;
+        measurement_error?: string;
+        measurement_called_at?: string;
+        review_codes?: string[];
+        provisional_current_ride_min?: number;
         estimated_current_ride_min?: number | null;
         route_total_min?: number | null;
         operational_category?: string;

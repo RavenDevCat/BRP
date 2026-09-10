@@ -5,6 +5,24 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-10
+
+### Direct-to-School Measurement Review
+
+- Separate complete provider captures awaiting distance review from unavailable
+  route measurements. AMap/OSRM disagreement is a diagnostic, not proof that
+  either route is correct. Existing integrity and solver gates remain intact.
+- Complete native captures can expose clearly labeled, unverified per-route
+  ride references. These never replace trusted times, classify route-only
+  overruns or drive removal/compliance decisions.
+- Results show verified/review/unavailable coverage; completed jobs with partial
+  results no longer appear as unqualified successes in analysis history.
+- Existing saved results receive the same read-only presentation without API
+  calls, cache changes or rewriting history. Incomplete captures remain unavailable.
+- Statistics exports include dedicated route-review and unverified-ride sheets;
+  existing formal measurement columns remain unchanged. Map exports retain
+  warning labels and route coverage.
+
 ## 2026-09-09
 
 ### Map And Historical Input Reliability

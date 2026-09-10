@@ -41,6 +41,8 @@ try:
         FreshRouteProvider,
         aggregate_direct_school_results,
         build_direct_school_workbook,
+        present_direct_school_result,
+        route_coverage,
         DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
     )
     from .deep_verification import (
@@ -97,6 +99,8 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         FreshRouteProvider,
         aggregate_direct_school_results,
         build_direct_school_workbook,
+        present_direct_school_result,
+        route_coverage,
         DEFAULT_ANALYSIS_CONFIG as DIRECT_SCHOOL_DEFAULTS,
     )
     from deep_verification import (
@@ -2437,6 +2441,7 @@ def _direct_school_jobs(*, user_email: str, include_all: bool) -> list[dict[str,
         record = JOB_STORE.get_job(job_id) if job_id else None
         result = dict((record or {}).get("result") or {})
         summary = dict(result.get("summary") or {})
+        summary.update(route_coverage(result))
         summaries.append(
             {
                 **entry,
@@ -2736,7 +2741,7 @@ def _direct_school_public_record(
         "scheduled_trigger_label": record.get("scheduled_trigger_label"),
         "metadata": dict(record.get("metadata") or {}),
         "prepared_payload_summary": dict(record.get("prepared_payload_summary") or {}),
-        "result": dict(record.get("result") or {}),
+        "result": present_direct_school_result(record.get("result")),
         "error": record.get("error"),
         "multi_day": aggregate_direct_school_results(compatible),
     }

@@ -1,6 +1,19 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Completed with review": "완료, 검토 필요",
+    "Verified routes": "검증된 노선",
+    "Awaiting review": "검토 대기",
+    "Measurement unavailable": "측정값 없음",
+    "Unverified reference": "검토용 미검증 참고값",
+    "Review reason": "검토 사유",
+    "Segment": "구간",
+    "Partial": "일부 완료",
+    "Route distance needs review": "노선 거리 확인 필요",
+    "Incomplete route evidence": "불완전한 노선 증거",
+    "Unverified routes are excluded from route compliance and removal conclusions.": "미검증 노선은 시간 준수 및 학생 제외 결론에서 제외됩니다. 전체 노선에 대한 결론이 아닙니다.",
+    "AMap distance differs substantially from the OSRM reference; this does not prove the AMap route is wrong.": "AMap 거리와 OSRM 참고 거리에 큰 차이가 있습니다. AMap 경로가 틀렸다는 의미는 아닙니다.",
+    "Driving distance is unusually long relative to straight-line distance. Verify roads and pickup access.": "직선거리 대비 주행거리가 깁니다. 도로 및 승차 출입구를 확인하세요.",
     "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved.": "주소 좌표를 찾았습니다. 승하차 출입구나 도로 방향을 확인하세요. 저장된 위치는 변경되지 않았습니다.",
     "Measurement status": "측정 상태",
     "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count}개 노선의 측정이 불완전합니다. 근거가 없는 합계와 정류장 시각은 표시하지 않습니다.",

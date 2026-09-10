@@ -22,8 +22,10 @@ if str(CLIENT_DIR) not in sys.path:
 
 try:
     from . import planner_core
+    from .direct_school_review import present_direct_school_result, route_coverage
 except ImportError:  # pragma: no cover - direct worker execution
     import planner_core  # type: ignore
+    from direct_school_review import present_direct_school_result, route_coverage
 
 import distance_tool  # type: ignore
 
@@ -1142,7 +1144,7 @@ def run_direct_school_analysis(
             "in_run_reuse_count": int(provider.state.get("cache_hits", 0)),
         }
     )
-    return result
+    return present_direct_school_result(result)
 
 
 def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1217,7 +1219,7 @@ def build_direct_school_workbook(
     record: dict[str, Any],
     multi_day: dict[str, Any] | None = None,
 ) -> bytes:
-    result = dict(record.get("result") or {})
+    result = present_direct_school_result(record.get("result"))
     if not result:
         raise ValueError("Direct-to-school analysis result is not available.")
     conclusion = dict(result.get("operational_conclusion") or _legacy_operational_conclusion(result))
@@ -1309,6 +1311,31 @@ def build_direct_school_workbook(
     for row in parameter_rows:
         summary_sheet.append(list(row))
     _style_summary_sheet(summary_sheet)
+
+    coverage = route_coverage(result)
+    _write_readable_table(
+        workbook.create_sheet("Route Measurement Review"),
+        "Route Measurement Coverage / 路线测算覆盖",
+        f"Verified / 已验证: {coverage['route_measurement_verified_count']} / {coverage['route_measurement_total_count']}. "
+        "Provisional values are provider references only, excluded from compliance and removal decisions. / 待复核值仅供参考，不用于达标或减人结论。",
+        ["Route / 路线", "Measurement status / 测算状态", "Reason / 原因", "Captured / 测算时间",
+         "Reference driving min / 参考行驶分钟", "Reference total min / 参考总分钟", "Reference km / 参考公里"],
+        [[r.get("route_id"), r.get("measurement_status"), r.get("error"), r.get("provider_called_at"),
+          r.get("provisional_provider_duration_min"), r.get("provisional_total_duration_min"),
+          r.get("provisional_distance_km")] for r in result.get("routes") or []],
+        [12, 24, 70, 28, 24, 24, 20],
+    )
+    _write_readable_table(
+        workbook.create_sheet("Unverified Ride References"),
+        "Unverified Student Ride References / 待复核乘车参考",
+        "Not verified; never substitute for Current ride min. / 未验证，不替代正式乘车时间。",
+        ["Route / 路线", "Address / 地址", "Stop order / 站序", "Students / 学生", "Status / 状态",
+         "Reference ride min / 参考乘车分钟", "Reason / 原因", "Captured / 测算时间"],
+        [[c.get("route_id"), s.get("address"), c.get("stop_sequence"), c.get("riders"), c.get("measurement_status"),
+          c.get("provisional_current_ride_min"), c.get("measurement_error"), c.get("measurement_called_at")]
+         for s in result.get("stops") or [] for c in s.get("route_contexts") or [] if c.get("measurement_status")],
+        [12, 42, 12, 12, 24, 24, 70, 28],
+    )
 
     classification_rows = _student_classification_rows(result)
     _write_readable_table(

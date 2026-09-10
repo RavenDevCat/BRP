@@ -524,7 +524,7 @@ function ResultSummary({ record, exportUrl }: { record: DirectSchoolJobRecord; e
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />
+            {unverifiedRouteCount(result) > 0 ? <AlertTriangle className="h-4 w-4 text-amber-600" aria-hidden="true" /> : <CheckCircle2 className="h-4 w-4 text-primary" aria-hidden="true" />}
             <h2 className="text-sm font-semibold">{t("Operational conclusion")}</h2>
           </div>
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -540,6 +540,7 @@ function ResultSummary({ record, exportUrl }: { record: DirectSchoolJobRecord; e
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
+        <RouteMeasurementCoverage result={result} />
         {reviewRiders > 0 ? (
           <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-900">
             <strong>{t("Students awaiting classification")}: {formatNumber(reviewRiders)} {t("out of")} {formatNumber(totalRiders)}</strong>
@@ -756,7 +757,7 @@ function AddressClassificationBoard({
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} tone={operationalCategory(row) === "direct_over_limit" ? "danger" : "neutral"} />
-                <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} />
+                <CurrentRideMetric row={row} />
                 <MiniMetric label="Over limit" value={minutes(largestOverLimit(row))} tone={classificationMetricTone(operationalCategory(row))} />
               </div>
               <div className="mt-3 line-clamp-2 text-xs leading-5 text-muted-foreground">{(row.reasons || []).map((reason) => t(reason)).join(" ")}</div>
@@ -961,7 +962,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <MiniMetric label="Direct distance km" value={distance(selectedStop.direct_distance_km)} />
                 <MiniMetric label="Direct duration min" value={minutes(selectedStop.direct_duration_min)} tone={selectedCategory === "direct_over_limit" ? "danger" : "neutral"} />
-                <MiniMetric label="Current route ride" value={minutes(selectedStop.estimated_current_ride_min)} tone={selectedCategory === "route_only_over_limit" ? "warning" : "neutral"} />
+                <CurrentRideMetric row={selectedStop} />
               </div>
               {selectedStop.route_evidence?.called_at ? <div className="mt-2 text-xs text-muted-foreground">{t("Measured at")}: {formatDateTime(selectedStop.route_evidence.called_at)}</div> : null}
             </div>
@@ -993,6 +994,7 @@ function downloadDirectSchoolMapHtml(
       directDistanceKm: row.direct_distance_km,
       directDurationMin: row.direct_duration_min,
       currentRideMin: row.estimated_current_ride_min,
+      currentRideText: currentRideText(row, t),
       geometry: row.direct_geometry || [],
       connectors: row.direct_snap_connectors || [],
       measuredAt: row.route_evidence?.called_at || row.provider_called_at || "",
@@ -1045,7 +1047,7 @@ function downloadDirectSchoolMapHtml(
     .detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 7px; margin-top: 10px; }
     .detail-item { min-width: 0; border: 1px solid #e2e8f0; border-radius: 6px; background: #f8fafc; padding: 8px; }
     .detail-label { color: #64748b; font-size: 10px; line-height: 1.25; }
-    .detail-value { margin-top: 4px; font-size: 12px; font-weight: 700; }
+    .detail-value { margin-top: 4px; font-size: 12px; font-weight: 700; overflow-wrap: anywhere; }
     button { height: 32px; border: 1px solid #94a3b8; border-radius: 6px; background: white; padding: 0 10px; color: #334155; font: inherit; font-size: 12px; font-weight: 650; cursor: pointer; }
     @media (max-width: 600px) { .detail-grid { grid-template-columns: 1fr; } .panel { width: min(300px, calc(100% - 28px)); } }
   </style>
@@ -1056,6 +1058,8 @@ function downloadDirectSchoolMapHtml(
     <div class="title-row"><h1 id="summaryTitle"></h1><button id="fitAll" type="button"></button></div>
     <div class="metric danger"><span id="directLabel"></span><strong id="directValue"></strong></div>
     <div class="metric warning"><span id="routeLabel"></span><strong id="routeValue"></strong></div>
+    <p class="meta">${htmlEscape(coverageText(result, t))}</p>
+    ${unverifiedRouteCount(result) > 0 ? `<p class="meta warning">${htmlEscape(t("Unverified routes are excluded from route compliance and removal conclusions."))}</p>` : ""}
     ${reviewRiders > 0 ? `<div class="metric warning"><span>${htmlEscape(t("Students awaiting classification"))}</span><strong>${reviewRiders}</strong></div><p class="meta">${htmlEscape(t("Missing measurements are not counted as within limit."))}</p>` : ""}
     ${result.provider === "amap" && result.analysis_version < 6 ? `<p class="meta">${htmlEscape(t("Historical result: map and timing were not saved as one measurement. Rerun to verify."))}</p>` : ""}
   </section>
@@ -1133,7 +1137,7 @@ function downloadDirectSchoolMapHtml(
       document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students + (stop.measuredAt ? " · " + new Date(stop.measuredAt).toLocaleString() : "");
       document.getElementById("distanceValue").textContent = Number.isFinite(stop.directDistanceKm) ? stop.directDistanceKm + " km" : "-";
       document.getElementById("durationValue").textContent = Number.isFinite(stop.directDurationMin) ? stop.directDurationMin + " min" : "-";
-      document.getElementById("rideValue").textContent = Number.isFinite(stop.currentRideMin) ? stop.currentRideMin + " min" : "-";
+      document.getElementById("rideValue").textContent = stop.currentRideText;
       if (focus) focusSelected(stop);
     }
     map.on("load", () => {
@@ -1294,7 +1298,7 @@ function StopDetailTable({ rows, selectedStopKey, onSelect }: { rows: DirectScho
                   <td className="px-3 py-2">{formatNumber(row.riders)}</td>
                   <td className="px-3 py-2">{row.primary_route_id || row.route_ids?.join(", ")}</td>
                   <td className="whitespace-nowrap px-3 py-2">{metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{minutes(row.estimated_current_ride_min)}</td>
+                  <td className="min-w-48 max-w-72 whitespace-normal px-3 py-2">{currentRideText(row, t)}</td>
                   <td className="whitespace-nowrap px-3 py-2">{minutes(largestOverLimit(row))}</td>
                   <td className="whitespace-nowrap px-3 py-2">{metricPair(row.osrm_duration_min, "min", row.osrm_distance_km, "km")}</td>
                   <td className="px-3 py-2">{row.additional_window_routes?.join(", ") || "-"}</td>
@@ -1355,7 +1359,7 @@ function DirectSchoolHistoryItem({ job, active }: { job: DirectSchoolJobSummary;
   const overLimitCount = Number(summary.direct_over_limit_address_count || 0) + Number(summary.route_only_over_limit_address_count || 0);
   return (
     <div className="min-w-0 px-1 py-1">
-      <Badge tone={statusTone(job.status)}>{t(statusLabel(job.status))}</Badge>
+      <Badge tone={job.status === "succeeded" && job.result_status === "partial" ? "warning" : statusTone(job.status)}>{t(job.status === "succeeded" && job.result_status === "partial" ? "Completed with review" : statusLabel(job.status))}</Badge>
       <div className={cn("mt-2 text-xs", active ? "text-primary-foreground/80" : "text-muted-foreground")}>
         {job.started_at ? t("Started") : job.finished_at ? t("Finished") : t("Created")}{" "}
         {formatDateTime(job.started_at || job.finished_at || job.created_at)}
@@ -1398,6 +1402,56 @@ function NumberField({ label, value, min, max, step, onChange }: { label: string
 function Metric({ label, value, accent = false }: { label: string; value: ReactNode; accent?: boolean }) {
   const t = useT();
   return <div className={cn("rounded-md border p-3", accent ? "border-amber-200 bg-amber-50" : "border-border bg-muted/50")}><div className="text-xs text-muted-foreground">{t(label)}</div><div className="mt-1 text-lg font-semibold">{typeof value === "number" ? formatNumber(value) : value}</div></div>;
+}
+
+function unverifiedRouteCount(result: NonNullable<DirectSchoolJobRecord["result"]>) {
+  return Number(result.summary.route_measurement_review_count || 0) + Number(result.summary.route_measurement_failed_count || 0);
+}
+
+function coverageText(result: NonNullable<DirectSchoolJobRecord["result"]>, t: (key: string) => string) {
+  return `${t("Verified routes")}: ${formatNumber(result.summary.route_measurement_verified_count)} / ${formatNumber(result.summary.route_measurement_total_count)} · ${t("Awaiting review")}: ${formatNumber(result.summary.route_measurement_review_count)} · ${t("Measurement unavailable")}: ${formatNumber(result.summary.route_measurement_failed_count)}`;
+}
+
+function reviewReason(code: string, t: (key: string) => string) {
+  const labels: Record<string, string> = {
+    provider_distance_disagreement: "AMap distance differs substantially from the OSRM reference; this does not prove the AMap route is wrong.",
+    large_direct_detour_needs_review: "Driving distance is unusually long relative to straight-line distance. Verify roads and pickup access.",
+  };
+  return t(labels[code] || code);
+}
+
+function currentRideText(row: DirectSchoolStopResult, t: (key: string) => string) {
+  const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
+  const parts = Number.isFinite(row.estimated_current_ride_min) ? [minutes(row.estimated_current_ride_min)] : [];
+  pending.forEach((c) => parts.push(`${c.route_id}: ${Number.isFinite(c.provisional_current_ride_min) ? `${minutes(c.provisional_current_ride_min)} (${t("Unverified reference")})` : t("Measurement unavailable")} · ${(c.review_codes || []).map((code) => reviewReason(code, t)).join("; ") || c.measurement_error || t("Awaiting review")}`));
+  return parts.join("; ") || "-";
+}
+
+function CurrentRideMetric({ row }: { row: DirectSchoolStopResult }) {
+  const t = useT();
+  const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
+  if (!pending.length) return <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} />;
+  return <div className="min-w-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
+    <div>{t("Current route ride")}</div>
+    {Number.isFinite(row.estimated_current_ride_min) ? <div className="mt-1 font-semibold">{minutes(row.estimated_current_ride_min)}</div> : null}
+    {pending.map((c) => <div key={`${c.route_id}-${c.stop_sequence}`} className="mt-1 break-words">
+      <strong>{row.route_ids.length > 1 ? `${c.route_id}: ` : ""}{Number.isFinite(c.provisional_current_ride_min) ? minutes(c.provisional_current_ride_min) : t("Measurement unavailable")}</strong>
+      <div>{t(Number.isFinite(c.provisional_current_ride_min) ? "Unverified reference" : "Awaiting review")}</div>
+    </div>)}
+    <div className="mt-1 break-words" title={currentRideText(row, t)}>{t("Review reason")}: {t(pending.some((c) => c.review_codes?.some((code) => code === "provider_distance_disagreement" || code === "large_direct_detour_needs_review")) ? "Route distance needs review" : "Incomplete route evidence")}</div>
+  </div>;
+}
+
+function RouteMeasurementCoverage({ result }: { result: NonNullable<DirectSchoolJobRecord["result"]> }) {
+  const t = useT();
+  const pending = result.routes.filter((r) => r.measurement_status && r.measurement_status !== "verified");
+  return <section className={cn("border-l-2 pl-3 text-sm", unverifiedRouteCount(result) > 0 ? "border-amber-500 text-amber-900" : "border-primary text-muted-foreground")}>
+    <strong>{coverageText(result, t)}</strong>
+    {unverifiedRouteCount(result) > 0 ? <><p className="mt-1 text-xs">{t("Unverified routes are excluded from route compliance and removal conclusions.")}</p>
+      <details className="mt-2"><summary className="cursor-pointer">{t("Review reason")} · {pending.map((r) => String(r.route_id)).join(", ")}</summary>
+        <ul className="mt-2 space-y-2 text-xs">{pending.map((r) => <li key={String(r.route_id)}><strong>{String(r.route_id)}</strong>: {Array.isArray(r.review_issues) && r.review_issues.length ? r.review_issues.map((i: {code?: string; leg_index?: number}) => `${Number.isInteger(i.leg_index) ? `${t("Segment")} ${Number(i.leg_index) + 1}: ` : ""}${reviewReason(String(i.code), t)}`).join("; ") : String(r.error || t("Measurement unavailable"))}</li>)}</ul>
+      </details></> : null}
+  </section>;
 }
 
 function MiniMetric({ label, value, tone = "neutral" }: { label: string; value: string; tone?: "neutral" | "warning" | "danger" }) {

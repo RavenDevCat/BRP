@@ -1,6 +1,19 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Completed with review": "已完成，有待复核项",
+    "Verified routes": "路线测算已验证",
+    "Awaiting review": "待复核",
+    "Measurement unavailable": "测算不可用",
+    "Unverified reference": "仅供复核，未验证",
+    "Review reason": "复核原因",
+    "Segment": "路段",
+    "Partial": "部分完成",
+    "Route distance needs review": "路线距离待核实",
+    "Incomplete route evidence": "路线证据不完整",
+    "Unverified routes are excluded from route compliance and removal conclusions.": "未验证路线不纳入路线达标和减人结论，当前结论不代表全部路线。",
+    "AMap distance differs substantially from the OSRM reference; this does not prove the AMap route is wrong.": "高德距离与OSRM参考差异较大，不代表高德路线一定错误，请核对实际道路及接送入口。",
+    "Driving distance is unusually long relative to straight-line distance. Verify roads and pickup access.": "驾车距离相对直线距离异常偏长，请核对道路和接送入口。",
     "Coordinates are resolved; check the pickup entrance or road side. The saved location has not been moved.": "地址已定位，请核对接送入口或道路侧向。已保存的位置未被移动。",
     "Measurement status": "测算状态",
     "{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing.": "{count} 条路线测算不完整。证据缺失的总时间和站点时刻不作为有效结果展示。",

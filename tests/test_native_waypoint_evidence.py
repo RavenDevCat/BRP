@@ -119,15 +119,39 @@ def test_single_vertex_one_metre_arrival_keeps_native_cost_without_interpolation
     assert legs[0]["native_step_end"] == 1
 
 
-def test_provider_step_geometry_gap_cannot_be_bridged_to_make_verified_leg():
+def test_provider_step_gap_keeps_native_metrics_without_bridging_map():
     path = native_path()
     first = deepcopy(path["steps"][0])
     first["navi"] = {}
     first["polyline"] = "121.4,31.2;121.4005,31.2005"
     path["steps"].insert(0, first)
     path["distance"], path["cost"]["duration"] = "1000", "720"
-    with pytest.raises(ValueError, match="geometry"):
-        evidence._native_waypoint_legs(path, [A, B, C])
+    planner = Planner(path)
+    state = {"api_call_limit": 1}
+    result = measure(planner, state=state)
+    assert result["status"] == "verified" and not result["issues"]
+    assert result["duration_s"] == 720 and result["distance_m"] == 1000
+    assert result["leg_durations_s"] == [360, 360]
+    assert result["geometry_status"] == "discontinuous"
+    assert result["geometry_diagnostics"][0]["gap_m"] > 50
+    assert len(result["geometry_segments"]) == 3
+    a, b = result["geometry_diagnostics"][0]["from"], result["geometry_diagnostics"][0]["to"]
+    assert not any(x == a and y == b for segment in result["geometry_segments"] for x, y in zip(segment, segment[1:]))
+    assert state["api_calls"] == 1 and len(planner.calls) == 1
+    from route_measurement_view import evidence_notice
+    assert evidence_notice(result) == ""
+
+
+def test_geometry_gap_does_not_clear_wrong_waypoint_or_missing_time():
+    path = native_path()
+    path["steps"][0]["polyline"] = "121.4,31.2;121.42,31.22"
+    result = measure(Planner(path))
+    assert result["status"] == "needs_review"
+    assert "destination_road_snap_needs_review" in {i["code"] for i in result["issues"]}
+    path["steps"][0]["cost"] = {}
+    result = measure(Planner(path))
+    assert result["status"] != "verified"
+    assert result["continuous_measurement"]["status"] == "unavailable"
 
 
 def test_recovery_cache_does_not_change_direct_pair_cache_or_saved_evidence():

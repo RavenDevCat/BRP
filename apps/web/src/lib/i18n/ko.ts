@@ -1,6 +1,11 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Travel time unavailable": "탑승 시간 미확보",
+    "Routes measured": "시간 측정 완료 노선",
+    "Classification is incomplete for this route.": "이 노선의 시간 초과 분류가 아직 완료되지 않았습니다.",
+    "Affected routes are excluded from compliance and removal totals; other results remain available.": "해당 노선은 시간 준수 및 제외 인원 집계에서 제외되며 나머지 결과는 사용할 수 있습니다.",
+    "Travel time unavailable; this route's time-window result is incomplete.": "탑승 시간이 확보되지 않아 이 노선의 시간창 결과가 미완료 상태입니다.",
     "Completed with review": "완료, 검토 필요",
     "Verified routes": "검증된 노선",
     "Awaiting review": "검토 대기",

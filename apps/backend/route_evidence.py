@@ -24,7 +24,7 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-route-evidence-v6"
+EVIDENCE_VERSION = "amap-route-evidence-v7"
 CACHE_MAX_AGE_SECONDS = 600
 CONTEXT_GEOMETRY_TOLERANCE_M = 1.0
 DISTANCE_WARNING_CODES = frozenset({
@@ -43,6 +43,11 @@ def _classify_findings(evidence: dict[str, Any]) -> dict[str, Any]:
         leg["issues"] = [code for code in codes if code not in DISTANCE_WARNING_CODES]
     evidence["status"] = ("unavailable" if not evidence["complete"] else
                           "needs_review" if evidence["issues"] else "verified")
+    evidence["geometry_diagnostics"] = [
+        {**deepcopy(item), "leg_index": leg["leg_index"]}
+        for leg in evidence["legs"] for item in leg.get("geometry_diagnostics") or []
+    ]
+    evidence["geometry_status"] = "discontinuous" if evidence["geometry_diagnostics"] else "complete"
     return evidence
 
 
@@ -78,6 +83,34 @@ def fetch_amap_leg(planner: Any, points: list[tuple[float, float]]) -> dict[str,
     return fetch_amap_itinerary(planner, points)
 
 
+def _native_step_geometry(steps: list[dict[str, Any]], start: int = 0) -> dict[str, Any]:
+    """Keep provider step gaps separate from metrics and never bridge them on maps."""
+    geometry: list[list[float]] = []
+    segments: list[list[list[float]]] = []
+    diagnostics: list[dict[str, Any]] = []
+    for index, step in enumerate(steps, start):
+        trace = _geometry({"steps": [step]})
+        # Missing traces cannot establish the approach or waypoint correspondence.
+        if not trace or len(trace) == 1 and float(step.get("step_distance", 0)) > 1:
+            raise ValueError("Incomplete native step geometry")
+        gap = distance_m(tuple(reversed(geometry[-1])), tuple(reversed(trace[0]))) if geometry else 0
+        if not segments or gap > 50:
+            segments.append([])
+        if gap > 50:
+            diagnostics.append({"code": "native_step_geometry_gap", "step_index": index,
+                                "gap_m": gap, "from": geometry[-1], "to": trace[0]})
+        for pair in trace:
+            if not geometry or geometry[-1] != pair:
+                geometry.append(pair)
+            if not segments[-1] or segments[-1][-1] != pair:
+                segments[-1].append(pair)
+    if len(geometry) == 1:
+        geometry.append(list(geometry[0]))
+    return {"geometry": geometry,
+            "geometry_segments": [segment for segment in segments if len(segment) >= 2],
+            "geometry_diagnostics": diagnostics}
+
+
 def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]]) -> list[dict[str, Any]]:
     """Split only at provider navigation boundaries, never by distance ratios."""
     steps = path.get("steps") or []
@@ -97,22 +130,11 @@ def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]
         distances = [float(step["step_distance"]) for step in segment]
         if not all(math.isfinite(value) and value >= 0 for value in durations + distances):
             raise ValueError("Invalid native step metrics")
-        geometry: list[list[float]] = []
-        for step in segment:
-            trace = _geometry({"steps": [step]})
-            # AMap can emit a one-coordinate, one-metre arrival instruction.
-            if (not trace or len(trace) == 1 and float(step["step_distance"]) > 1
-                    or geometry and distance_m(tuple(reversed(geometry[-1])), tuple(reversed(trace[0]))) > 50):
-                raise ValueError("Incomplete native step geometry")
-            for pair in trace:
-                if not geometry or geometry[-1] != pair:
-                    geometry.append(pair)
+        drawing = _native_step_geometry(segment, start)
         if sum(distances) <= 0 or sum(durations) <= 0:
             raise ValueError("Ambiguous zero-length native waypoint leg")
-        if len(geometry) == 1:
-            geometry.append(list(geometry[0]))
         legs.append({"duration_s": sum(durations), "distance_m": sum(distances),
-                     "geometry": geometry, "native_step_start": start, "native_step_end": end,
+                     **drawing, "native_step_start": start, "native_step_end": end,
                      "boundary_action": actions[end], "native_steps": deepcopy(segment),
                      "origin": list(points[index]), "destination": list(points[index + 1])})
         start = end + 1
@@ -137,6 +159,8 @@ def fetch_amap_itinerary(planner: Any, points: list[tuple[float, float]]) -> dic
     result = {**stats, "geometry": geometry, "request": params,
               "roads": [str(step.get("road_name") or step.get("road") or "")
                         for step in path.get("steps") or []]}
+    if len(points) == 2:
+        result.update(_native_step_geometry(path.get("steps") or []))
     if len(points) > 2:
         try:
             result["waypoint_legs"] = _native_waypoint_legs(path, points)
@@ -289,8 +313,12 @@ def _recover_continuous_legs(planner: Any, points: list[tuple[float, float]], ca
                    "osrm_reference_duration_s": original.get("osrm_reference_duration_s")}
             leg["issues"] = _leg_issues(leg, leg["osrm_reference_distance_m"])
             issues.extend({"leg_index": index, "code": code} for code in leg["issues"])
-            if corrected and distance_m(tuple(reversed(corrected[-1]["geometry"][-1])), tuple(reversed(leg["geometry"][0]))) > 50:
-                issues.append({"leg_index": index, "code": "stop_road_continuity_needs_review"})
+            if corrected:
+                gap = distance_m(tuple(reversed(corrected[-1]["geometry"][-1])), tuple(reversed(leg["geometry"][0])))
+                if gap > 50:
+                    leg.setdefault("geometry_diagnostics", []).append({
+                        "code": "native_waypoint_geometry_gap", "gap_m": gap,
+                        "from": corrected[-1]["geometry"][-1], "to": leg["geometry"][0]})
             corrected.append(leg)
         return corrected, issues, {**recovery, "status": "applied", "reason": "provider_continuous_approach"}
     except Exception as exc:
@@ -443,7 +471,8 @@ def _measure_adjacent_route(
         "measurement_started_at": min((leg["called_at"] for leg in legs), default=None),
         "duration_s": sum(leg["duration_s"] for leg in legs) if complete else None,
         "distance_m": sum(leg["distance_m"] for leg in legs) if complete else None,
-        "geometry": geometry, "geometry_segments": [leg["geometry"] for leg in legs],
+        "geometry": geometry, "geometry_segments": [segment for leg in legs
+            for segment in leg.get("geometry_segments", [leg["geometry"]])],
         "leg_durations_s": [leg["duration_s"] for leg in legs],
         "leg_distances_m": [leg["distance_m"] for leg in legs],
     }
@@ -520,7 +549,8 @@ def measure_amap_route(
                       "measurement_started_at": min(leg["called_at"] for leg in legs),
                       "duration_s": sum(leg["duration_s"] for leg in legs),
                       "distance_m": sum(leg["distance_m"] for leg in legs), "geometry": geometry,
-                      "geometry_segments": [leg["geometry"] for leg in legs],
+                      "geometry_segments": [segment for leg in legs
+                          for segment in leg.get("geometry_segments", [leg["geometry"]])],
                       "leg_durations_s": [leg["duration_s"] for leg in legs],
                       "leg_distances_m": [leg["distance_m"] for leg in legs]}
             _classify_findings(result)

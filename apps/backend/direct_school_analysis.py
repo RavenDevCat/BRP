@@ -441,7 +441,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 7,
+        "analysis_version": 8,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -649,6 +649,7 @@ def run_direct_school_analysis(
                     "live_to_osrm_ratio": round(direct_duration_s / osrm_duration_s, 3) if osrm_duration_s > 0 else None,
                     "road_to_straight_ratio": round((direct_distance_m / 1000.0) / straight_km, 3) if straight_km > 0 else None,
                     "direct_geometry": live.get("geometry") if live.get("evidence_version") else osrm.get("geometry") or [],
+                    "direct_geometry_segments": live.get("geometry_segments") if live.get("evidence_version") else None,
                     "direct_snap_connectors": [] if live.get("evidence_version") else osrm.get("snap_connectors") or [],
                     "direct_geometry_source": live.get("source") if live.get("evidence_version") else osrm.get("coordinate_source") or "plot_wgs84",
                     "route_evidence": live if live.get("evidence_version") else None,
@@ -1218,6 +1219,7 @@ def aggregate_direct_school_results(records: list[dict[str, Any]]) -> dict[str, 
 def build_direct_school_workbook(
     record: dict[str, Any],
     multi_day: dict[str, Any] | None = None,
+    *, include_diagnostics: bool = False,
 ) -> bytes:
     result = present_direct_school_result(record.get("result"))
     if not result:
@@ -1383,7 +1385,8 @@ def build_direct_school_workbook(
     )
 
     quality_rows = [
-        [item.get("scope"), item.get("route_id"), item.get("address"), item.get("error")]
+        [item.get("scope"), item.get("route_id"), item.get("address"),
+         item.get("error") if include_diagnostics else "Travel time unavailable; affected results are incomplete / \u4e58\u8f66\u65f6\u95f4\u6682\u672a\u53d6\u5f97\uff0c\u6d89\u53ca\u7684\u7ed3\u679c\u5c1a\u4e0d\u5b8c\u6574"]
         for item in list(result.get("errors") or [])
     ]
     _write_readable_table(
@@ -1481,6 +1484,10 @@ def build_direct_school_workbook(
     from io import BytesIO
 
     output = BytesIO()
+    if not include_diagnostics:
+        for name in ("Route Evidence", "Route Warnings", "Unverified Ride References", "Route Measurement Review"):
+            if name in workbook.sheetnames:
+                workbook.remove(workbook[name])
     workbook.save(output)
     return output.getvalue()
 

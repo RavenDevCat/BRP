@@ -7,6 +7,19 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-10
 
+### Route Drawing And Business Results
+
+- A gap between navigation-step polylines in one AMap response no longer blocks
+  otherwise valid native timing or student classification. Stop correspondence,
+  missing metrics, totals and cross-request approach checks remain enforced.
+- Maps and map exports preserve separate trace segments without inventing a
+  connector. Provider durations, distances and stop sequence are unchanged.
+- Internal drawing/distance diagnostics stay in saved evidence rather than
+  ordinary cards, map notices or statistical exports. Genuinely unavailable
+  timing is still identified with its affected routes and passengers.
+- New evidence v7 and Direct-to-School analysis v8 apply to manual and scheduled
+  runs. Historical results are preserved; rerun to apply the new policy.
+
 ### Nonblocking Route Distance Warnings
 
 - Complete AMap measurements with distance-only discrepancies remain usable in

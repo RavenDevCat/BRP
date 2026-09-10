@@ -101,7 +101,7 @@ def test_legacy_views_keep_the_same_contract_and_never_mutate_saved_routes(route
     else:
         assert view["limit_stop_order"] == 0
     if expected["duration_s"] is None or expected["distance_m"] is None:
-        assert "needs review" in measurement_note(view)
+        assert "Travel time unavailable" in measurement_note(view)
 
 
 @pytest.mark.parametrize("module_name", ["client_runtime", "BusingProblem"])

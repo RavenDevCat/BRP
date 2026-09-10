@@ -452,7 +452,7 @@ def test_legacy_exports_use_saved_segments_and_visible_review_notes(module_name,
     path = tmp_path / f"{module_name}.html"
     module.render_map(points, [route], str(path))
     html = path.read_text(encoding="utf-8")
-    assert "Route measurement needs review" in html
+    assert "Travel time unavailable" in html
     assert "Duration: Not available" in html
     assert "Distance: Not available" in html
     assert "Duration: 12m" not in html

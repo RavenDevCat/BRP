@@ -52,6 +52,24 @@ def points():
             for i, p in enumerate([C, A, B])]
 
 
+class GapPlanner(WarningPlanner):
+    def amap_request_json(self, endpoint, params, limiter):
+        payload = super().amap_request_json(endpoint, params, limiter)
+        path = payload["route"]["paths"][0]
+        step = path["steps"][0]
+        a, b = [list(map(float, pair.split(","))) for pair in step["polyline"].split(";")]
+        before = [x + (y - x) * .1 for x, y in zip(a, b)]
+        after = [x + (y - x) * .9 for x, y in zip(a, b)]
+        first = deepcopy(step)
+        first["polyline"] = ";".join(",".join(map(str, p)) for p in [a, before])
+        first["navi"] = {}
+        step["polyline"] = ";".join(",".join(map(str, p)) for p in [after, b])
+        first["cost"]["duration"] = step["cost"]["duration"] = str(float(step["cost"]["duration"]) / 2)
+        first["step_distance"] = step["step_distance"] = "700"
+        path["steps"].insert(0, first)
+        return payload
+
+
 def test_native_warning_metrics_geometry_and_calls_are_preserved():
     state = {"api_call_limit": 1, "expected_leg_distances_m": [400, 400]}
     result = evidence.measure_amap_route(WarningPlanner(), [A, B, C], {}, state)
@@ -81,7 +99,7 @@ def test_final_gate_uses_time_not_warning_and_preserves_assignment(monkeypatch, 
     rows, unavailable = core._scenario_time_impact_rows(scenario, points(), config)
     assert unavailable == 0 and [r["offset_s"] for r in rows] == [-3720, -2460]
     assert route_display_metrics(route)["duration_s"] == 3720
-    assert "Suspected detour" in measurement_note(route)
+    assert "Suspected detour" not in measurement_note(route)
 
 
 @pytest.mark.parametrize("problem", ["snap", "missing", "shorter", "continuity"])
@@ -117,21 +135,22 @@ def test_fleet_and_insert_keep_warning_separate_from_feasibility(monkeypatch):
             "routes": [route], "route_rows": [{"cluster_id": "G01"}]}
     service._attach_fleet_route_measurements(plan, routing)
     assert route["final_route_traffic_gate"]["status"] == "passed"
-    assert "Suspected detour" in measurement_note(route)
+    assert "Suspected detour" not in measurement_note(route)
     measured = api._insert_route_measurement(ordered, "China", {})
     assert measured["provider_verified"] and measured["duration_s"] == 3600
-    assert "Suspected detour" in measured["display_geometry_message"]
+    assert not measured["display_geometry_message"]
     assert "amap_final_validation_unavailable" not in measured["warnings"]
 
 
 @pytest.mark.parametrize("scheduled", [False, True])
-def test_runner_classification_removal_and_export_use_warning_measurements(monkeypatch, scheduled, tmp_path):
+@pytest.mark.parametrize("gap", [False, True])
+def test_runner_classification_removal_and_export_use_warning_measurements(monkeypatch, scheduled, gap, tmp_path):
     from test_direct_school_analysis import prepared_payload
     runner = importlib.import_module("backend_job_runner")
     prepared = prepared_payload()
     for point, pos in zip(prepared["original_points"], [C, A, B]):
         point.update(lat=pos[0], lng=pos[1], plot_lat=pos[0], plot_lng=pos[1], provider="amap", **PRECISE_PICKUP)
-    monkeypatch.setattr(core, "load_legacy_planner", lambda: WarningPlanner())
+    monkeypatch.setattr(core, "load_legacy_planner", lambda: GapPlanner() if gap else WarningPlanner())
     monkeypatch.setattr(analysis, "_osrm_leg", lambda *args: {"distance_m": 400, "duration_s": 100})
     state = {"record": {"job_id": "warning-runner", "status": "queued", "prepared_payload": prepared,
         "scheduled_start_at": "2026-09-10T23:00:00+00:00" if scheduled else None,
@@ -143,10 +162,14 @@ def test_runner_classification_removal_and_export_use_warning_measurements(monke
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "warning-runner"])
     assert runner.main() == 0
     result = state["record"]["result"]
-    assert result["analysis_version"] == 7 and result["routes"][0]["status"] == "resolved"
+    assert result["analysis_version"] == 8 and result["routes"][0]["status"] == "resolved"
     assert result["summary"]["route_measurement_verified_count"] == 1
     assert result["summary"]["route_measurement_review_count"] == 0
     assert result["measurement_warnings"]
+    if gap:
+        assert result["routes"][0]["route_evidence"]["geometry_diagnostics"]
+        assert len(result["routes"][0]["route_evidence"]["geometry_segments"]) == 3
+        assert len(result["stops"][0]["direct_geometry_segments"]) == 2
     rows = {row["address"]: row for row in result["stops"]}
     assert rows["Far stop"]["estimated_current_ride_min"] == 62
     assert rows["Near stop"]["estimated_current_ride_min"] == 41
@@ -154,9 +177,10 @@ def test_runner_classification_removal_and_export_use_warning_measurements(monke
     assert rows["Near stop"]["operational_category"] == "within_limit"
     assert result["route_window_analysis"][0]["status"] != "data_review"
     book = load_workbook(BytesIO(analysis.build_direct_school_workbook(state["record"])))
-    assert "Route Warnings" in book.sheetnames
-    assert any("Warning only" in str(c.value) for row in book["Route Evidence"] for c in row)
-    assert book["Route Warnings"].max_row > 4
+    assert "Route Warnings" not in book.sheetnames
+    assert "Route Evidence" not in book.sheetnames
+    diagnostic = load_workbook(BytesIO(analysis.build_direct_school_workbook(state["record"], include_diagnostics=True)))
+    assert diagnostic["Route Warnings"].max_row > 4
     before = deepcopy(result)
     assert present_direct_school_result(result) == result and result == before
     (tmp_path / "warning-record.json").write_text(json.dumps({**state["record"], "multi_day": {"run_count": 0, "stops": []}}))
@@ -186,3 +210,22 @@ def test_automatic_budget_does_not_skip_complete_warning_route(monkeypatch):
     assert details["amap_route_measured_count"] == 1
     assert details["minutes"] == 62
     assert details["amap_route_duration_minutes"] == 62
+
+
+@pytest.mark.parametrize("module_name", ["BusingProblem", "client_runtime"])
+def test_legacy_map_export_does_not_reconnect_intra_leg_gap(module_name, tmp_path):
+    service = importlib.import_module("backend_service")
+    module = core.load_legacy_planner() if module_name == "BusingProblem" else service._client_module("client_runtime")
+    saved = evidence.measure_amap_route(GapPlanner(), [A, B, C], {}, {"api_call_limit": 1})
+    route = {"route_id": "R1", "nodes": [0, 1, 2], "time_s": 3720, "distance_m": 2800,
+             "stop_service_time_s": 120, "vehicle_id": 1, "bus_type_name": "Bus", "load": 2,
+             "bus_capacity": 42, "route_evidence": saved}
+    original = deepcopy(route)
+    stops = [{"plot_lat": p[0], "plot_lng": p[1], "address": f"Stop {i}", "passenger_count": 1}
+             for i, p in enumerate([A, B, C])]
+    file = tmp_path / f"{module_name}.html"
+    module.render_map(stops, [route], str(file))
+    markup = file.read_text()
+    assert markup.count("L.polyline(") == 6
+    assert "native_step_geometry_gap" not in markup and "Suspected detour" not in markup
+    assert route == original

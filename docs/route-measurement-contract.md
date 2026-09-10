@@ -55,6 +55,33 @@ prove that an accepted building/POI is the operator's intended pickup entrance.
 
 ## Snapshot
 
+### Drawing Integrity Is Not Measurement Integrity
+
+Evidence v7 records `geometry_diagnostics` separately from blocking `issues`.
+A gap between steps in the same native AMap response does not discard native
+time or distance. Ordered arrival boundaries, finite nonnegative step metrics,
+positive leg totals, whole-route reconciliation and pickup/arrival road-snap
+checks still apply. Missing traces that prevent waypoint correspondence remain
+blocking, as do unproven joins between independently requested route chunks.
+This policy does not certify a different road approach or repair provider data.
+
+`geometry_segments` contains independently drawable traces split at gaps over
+50 metres, including inside a single leg. Consumers must not interpret its
+length as the number of stops or time legs, or reconnect these traces for display.
+`legs` and `leg_durations_s` retain the original per-stop timing boundaries.
+The flattened `geometry` remains a legacy inspection/bounds representation;
+maps and map exports use the segmented form. No time/distance is added for a gap.
+Drawing-only gaps do not cause additional provider requests.
+
+Diagnostics remain in saved evidence and are not business classifications.
+Verified routes do not display internal distance/drawing warnings in ordinary
+maps, cards or reports. Truly unavailable timing is described as unavailable,
+with affected routes/passengers, never silently classified as within limit.
+The default statistical workbook omits internal evidence/warning/reference
+sheets; an explicitly requested diagnostic workbook can retain those sheets.
+Historical result classifications are not rewritten on read. New analysis v8
+and evidence v7 require a fresh run or explicit measurement review.
+
 Each measured route stores `route_evidence` with version, provider, status,
 measurement time range, completeness, ordered legs, totals, geometry segments,
 quality issues, and optional continuous-waypoint comparisons. Each leg retains

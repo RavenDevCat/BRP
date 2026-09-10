@@ -2633,7 +2633,7 @@ def render_map(
 
     for route_index, route in enumerate(routes):
         color = colors[route_index % len(colors)]
-        segments = [leg["geometry"] for leg in route.get("leg_details", []) if len(leg.get("geometry") or []) >= 2]
+        segments = route.get("drawing_segments", [leg["geometry"] for leg in route.get("leg_details", []) if len(leg.get("geometry") or []) >= 2])
         for geometry in segments:
             folium.PolyLine(geometry, color="#ffffff", weight=9, opacity=0.9).add_to(fmap)
             folium.PolyLine(

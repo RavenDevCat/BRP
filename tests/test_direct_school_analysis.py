@@ -125,7 +125,7 @@ def test_runner_retains_provisional_values_without_removal_or_trusted_time(monke
     monkeypatch.setattr(backend_service, '_direct_school_compatible_records', lambda *_a, **_k: [])
     public = backend_service._direct_school_public_record(state['record'], user_email='test@example.test', include_all=False)
     assert public['result'] == result
-    book = load_workbook(BytesIO(analysis.build_direct_school_workbook(state['record'])))
+    book = load_workbook(BytesIO(analysis.build_direct_school_workbook(state['record'], include_diagnostics=True)))
     assert book['Unverified Ride References']['F5'].value > 0
     assert book['Student Classification']['G5'].value is None
 
@@ -197,7 +197,7 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     )
 
     assert result["status"] == "complete"
-    assert result["analysis_version"] == 7
+    assert result["analysis_version"] == 8
     assert result["summary"]["address_count"] == 2
     assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")
@@ -571,6 +571,7 @@ def test_excel_export_contains_required_analysis_sheets() -> None:
     body = analysis.build_direct_school_workbook(
         record,
         {"samples": [{"job_id": "job-1", "stop_key": "far", "address": "Far stop"}]},
+        include_diagnostics=True,
     )
     workbook = load_workbook(BytesIO(body))
 
@@ -644,7 +645,7 @@ def test_export_keeps_pre_request_review_evidence_and_missing_values():
         "routes": [{"route_id": "R1", "route_evidence": snapshot}],
         "route_window_analysis": [{"route_id": "R1", "status": "data_review", "original_riders": 2}],
     }}
-    workbook = load_workbook(BytesIO(analysis.build_direct_school_workbook(record)))
+    workbook = load_workbook(BytesIO(analysis.build_direct_school_workbook(record, include_diagnostics=True)))
     review_row = next(row for row in workbook["Operational Summary"].iter_rows() if row[0].value == "Data review / 数据复核")
     assert review_row[2].value == review_row[3].value == 2
     assert "not counted as within limit" in review_row[6].value

@@ -99,7 +99,7 @@ def test_missing_or_invalid_measurements_do_not_reuse_planning_values(change):
     assert all(stop["scheduled_time_minutes"] is None and stop["cumulative_duration_s"] is None for stop in data["stops"])
     wb = openpyxl.load_workbook(BytesIO(fleet.build_generated_plan_workbook_bytes(original)))
     assert wb["Route Measurements"]["B2"].value is None
-    assert "needs review" in wb["Route Measurements"]["H2"].value
+    assert "Travel time unavailable" in wb["Route Measurements"]["H2"].value
     assert all(row[-1] is None for row in list(wb["current_plan_assignments"].values)[1:])
     if change == "provider_missing":
         assert data["routes"][0]["geometry"] == [] and data["routes"][0]["geometry_segments"] == []
@@ -221,4 +221,4 @@ def test_actual_folium_html_export_keeps_saved_measurements_and_no_live_io(monke
     if valid:
         assert fleet.runtime.seconds_to_human(420) in html
     else:
-        assert "Not available" in html and "needs review" in html
+        assert "Not available" in html and "Travel time unavailable" in html

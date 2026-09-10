@@ -1,6 +1,11 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Travel time unavailable": "乘车时间暂未取得",
+    "Routes measured": "已取得时间的路线",
+    "Classification is incomplete for this route.": "该线路的超时分类尚不完整。",
+    "Affected routes are excluded from compliance and removal totals; other results remain available.": "相关线路暂不计入达标与减人结论，其他结果仍可使用。",
+    "Travel time unavailable; this route's time-window result is incomplete.": "乘车时间暂未取得，该线路的时间窗结论尚不完整。",
     "Completed with review": "已完成，有待复核项",
     "Verified routes": "路线测算已验证",
     "Awaiting review": "待复核",

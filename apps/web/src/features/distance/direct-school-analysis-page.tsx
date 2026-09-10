@@ -1059,6 +1059,7 @@ function downloadDirectSchoolMapHtml(
     <div class="metric danger"><span id="directLabel"></span><strong id="directValue"></strong></div>
     <div class="metric warning"><span id="routeLabel"></span><strong id="routeValue"></strong></div>
     <p class="meta">${htmlEscape(coverageText(result, t))}</p>
+    ${(result.measurement_warnings || []).length ? `<p class="meta">${htmlEscape(t("Suspected detour; provider measurements remain in use."))}</p><ul>${(result.measurement_warnings || []).map(w => `<li>${htmlEscape(`${w.route_id || ""} ${t(w.stage || "")} ${w.address || ""} · ${t("Segment")} ${w.leg_index + 1}: ${reviewReason(w.code, t)}`)}</li>`).join("")}</ul>` : ""}
     ${unverifiedRouteCount(result) > 0 ? `<p class="meta warning">${htmlEscape(t("Unverified routes are excluded from route compliance and removal conclusions."))}</p>` : ""}
     ${reviewRiders > 0 ? `<div class="metric warning"><span>${htmlEscape(t("Students awaiting classification"))}</span><strong>${reviewRiders}</strong></div><p class="meta">${htmlEscape(t("Missing measurements are not counted as within limit."))}</p>` : ""}
     ${result.provider === "amap" && result.analysis_version < 6 ? `<p class="meta">${htmlEscape(t("Historical result: map and timing were not saved as one measurement. Rerun to verify."))}</p>` : ""}
@@ -1424,13 +1425,15 @@ function currentRideText(row: DirectSchoolStopResult, t: (key: string) => string
   const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
   const parts = Number.isFinite(row.estimated_current_ride_min) ? [minutes(row.estimated_current_ride_min)] : [];
   pending.forEach((c) => parts.push(`${c.route_id}: ${Number.isFinite(c.provisional_current_ride_min) ? `${minutes(c.provisional_current_ride_min)} (${t("Unverified reference")})` : t("Measurement unavailable")} · ${(c.review_codes || []).map((code) => reviewReason(code, t)).join("; ") || c.measurement_error || t("Awaiting review")}`));
+  (row.route_contexts || []).forEach(c => (c.measurement_warnings || []).forEach(w => parts.push(`${c.route_id}: ${t("Suspected detour")} · ${t("Segment")} ${w.leg_index + 1}: ${reviewReason(w.code, t)}`)));
   return parts.join("; ") || "-";
 }
 
 function CurrentRideMetric({ row }: { row: DirectSchoolStopResult }) {
   const t = useT();
   const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
-  if (!pending.length) return <MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} />;
+  const hasWarning = (row.route_contexts || []).some(c => c.measurement_warnings?.length);
+  if (!pending.length) return <div className="min-w-0" title={currentRideText(row, t)}><MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={hasWarning || operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} />{hasWarning ? <p className="mt-1 text-xs text-amber-800">{t("Suspected detour")}</p> : null}</div>;
   return <div className="min-w-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
     <div>{t("Current route ride")}</div>
     {Number.isFinite(row.estimated_current_ride_min) ? <div className="mt-1 font-semibold">{minutes(row.estimated_current_ride_min)}</div> : null}
@@ -1445,8 +1448,13 @@ function CurrentRideMetric({ row }: { row: DirectSchoolStopResult }) {
 function RouteMeasurementCoverage({ result }: { result: NonNullable<DirectSchoolJobRecord["result"]> }) {
   const t = useT();
   const pending = result.routes.filter((r) => r.measurement_status && r.measurement_status !== "verified");
-  return <section className={cn("border-l-2 pl-3 text-sm", unverifiedRouteCount(result) > 0 ? "border-amber-500 text-amber-900" : "border-primary text-muted-foreground")}>
+  const warnings = result.measurement_warnings || [];
+  return <section className={cn("border-l-2 pl-3 text-sm", unverifiedRouteCount(result) > 0 || warnings.length > 0 ? "border-amber-500 text-amber-900" : "border-primary text-muted-foreground")}>
     <strong>{coverageText(result, t)}</strong>
+    {warnings.length ? <details className="mt-2"><summary className="cursor-pointer">{t("Suspected detour")} · {warnings.length}</summary>
+      <p className="mt-1 text-xs">{t("Suspected detour; provider measurements remain in use.")}</p>
+      <ul className="mt-2 space-y-2 text-xs">{warnings.map((w, index) => <li key={index}>{w.route_id} · {t(w.stage || "")} {w.address} · {t("Segment")} {w.leg_index + 1}: {reviewReason(w.code, t)}</li>)}</ul>
+    </details> : null}
     {unverifiedRouteCount(result) > 0 ? <><p className="mt-1 text-xs">{t("Unverified routes are excluded from route compliance and removal conclusions.")}</p>
       <details className="mt-2"><summary className="cursor-pointer">{t("Review reason")} · {pending.map((r) => String(r.route_id)).join(", ")}</summary>
         <ul className="mt-2 space-y-2 text-xs">{pending.map((r) => <li key={String(r.route_id)}><strong>{String(r.route_id)}</strong>: {Array.isArray(r.review_issues) && r.review_issues.length ? r.review_issues.map((i: {code?: string; leg_index?: number}) => `${Number.isInteger(i.leg_index) ? `${t("Segment")} ${Number(i.leg_index) + 1}: ` : ""}${reviewReason(String(i.code), t)}`).join("; ") : String(r.error || t("Measurement unavailable"))}</li>)}</ul>

@@ -2826,6 +2826,8 @@ def _insert_route_measurement(
 
     china = country_key in {"CHINA", "CN", "中国", "中华人民共和国"}
     verified = route_evidence.get("status") == "verified" and route_evidence.get("complete") is True and not route_evidence.get("issues")
+    if route_evidence:
+        display_message = backend_service.evidence_notice(route_evidence)
     if china and not verified:
         if "amap_final_validation_unavailable" not in warnings:
             warnings.append("amap_final_validation_unavailable")

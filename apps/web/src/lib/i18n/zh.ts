@@ -1292,4 +1292,6 @@ const zh: Translations = {
     "Export statistics": "导出统计结果",
 };
 
+zh["Suspected detour"] = "疑似绕行";
+zh["Suspected detour; provider measurements remain in use."] = "疑似绕行；仍使用高德完整测量值计算，距离差异不代表路线已被证明错误。";
 export default zh;

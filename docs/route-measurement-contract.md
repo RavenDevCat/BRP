@@ -70,16 +70,27 @@ flattening for bounds and compatibility, not proof of junction continuity.
 
 Quality states are independent of time-window acceptance:
 
-- `verified`: complete data and no unresolved quality guard.
+- `verified`: complete data and no unresolved integrity guard. Separate `warnings`
+  may flag distance discrepancies without blocking use of provider measurements.
 - `needs_review`: pickup precision is unverified, or returned metrics have an
-  unresolved detour, endpoint snap or junction guard. Available metrics are not certified input
+  unresolved endpoint snap or junction guard. Available metrics are not certified input
   for acceptance or removal recommendations.
 - `unavailable`: missing/invalid data or request budget exhausted; route totals
   are not certified and must not be filled by scaled OSRM values.
 
-Endpoint deviations, implausibly short lengths, material distance disagreement,
-and large detours trigger review. Each pair gets at most two attempts. A failed
-attempt is counted. An anomaly is a review signal, not proof of illegal driving.
+Endpoint deviations and implausibly short lengths still trigger integrity review.
+`provider_distance_disagreement` and `large_direct_detour_needs_review` are stored
+in `warnings`, not blocking `issues`, at both route and leg levels. They neither
+trigger another identical pair request nor prevent final time-window validation,
+automatic time-budget measurement, student classification or removal checks.
+Complete AMap time/distance and geometry stay unchanged; OSRM never replaces them.
+Each pair still gets at most two attempts for non-diagnostic failures.
+
+Evidence v6 and Direct-to-School analysis v7 mark this policy boundary. Do not
+silently promote old saved review records or recalculate their conclusions on
+read. Generate a new analysis/review result to apply the policy; old complete
+distance-only captures may retain explicitly unverified presentation references.
+Warnings remain visible on route maps and in exported segment evidence.
 
 Pair queries can reset the approach direction at a stop. Questionable junctions
 receive up to four three-point continuous-waypoint comparison requests per

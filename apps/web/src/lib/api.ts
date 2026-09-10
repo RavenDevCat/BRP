@@ -308,6 +308,7 @@ export type RouteEvidence = {
     duration_s?: number | null;
     distance_m?: number | null;
     issues?: Array<{ leg_index: number; code: string }>;
+    warnings?: Array<{ leg_index: number; code: string }>;
 };
 
 export type JobMapRoute = {
@@ -733,7 +734,16 @@ export type DirectSchoolPreview = {
     };
 };
 
+export type MeasurementWarning = {
+    code: string;
+    leg_index: number;
+    stage?: string;
+    route_id?: string;
+    address?: string;
+};
+
 export type DirectSchoolStopResult = {
+    measurement_warnings?: MeasurementWarning[];
     stop_key: string;
     country?: string;
     city?: string;
@@ -777,6 +787,7 @@ export type DirectSchoolStopResult = {
         stop_sequence?: number;
         riders?: number;
         measurement_status?: string;
+        measurement_warnings?: MeasurementWarning[];
         measurement_error?: string;
         measurement_called_at?: string;
         review_codes?: string[];
@@ -828,6 +839,7 @@ export type DirectSchoolRouteWindowResult = {
 };
 
 export type DirectSchoolAnalysisResult = {
+    measurement_warnings?: MeasurementWarning[];
     analysis_version: number;
     analysis_type: "direct_school";
     status: string;

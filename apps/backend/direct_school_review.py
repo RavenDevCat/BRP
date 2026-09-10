@@ -49,11 +49,27 @@ def present_direct_school_result(raw):
         return result
     coverage = route_coverage(result)
     result.setdefault("summary", {}).update(coverage)
+    warnings = []
+    snapshots = [("Direct", ", ".join(stop.get("route_ids") or []), stop.get("address"), stop.get("route_evidence"))
+                 for stop in result.get("stops") or []]
+    snapshots.extend(("Current route", route.get("route_id"), "", route.get("route_evidence"))
+                     for route in result.get("routes") or [])
+    for route in result.get("route_window_analysis") or []:
+        snapshots.extend((stage, route.get("route_id"), "", route.get(key)) for stage, key in (
+            ("After first removal", "post_primary_evidence"), ("Final", "final_evidence")))
+    for stage, route_id, address, snapshot in snapshots:
+        snapshot = snapshot or {}
+        if snapshot.get("status") == "verified" and snapshot.get("complete") is True and not snapshot.get("issues"):
+            warnings.extend({**deepcopy(item), "stage": stage, "route_id": route_id, "address": address}
+                            for item in snapshot.get("warnings") or [])
+    result["measurement_warnings"] = warnings
+    result["summary"]["measurement_warning_count"] = len(warnings)
     if result.get("status") in {"complete", "partial"} and (
             coverage["route_measurement_review_count"] or coverage["route_measurement_failed_count"]):
         result["status"] = "partial"
     contexts = {}
     for stop in result.get("stops") or []:
+        stop["measurement_warnings"] = deepcopy((stop.get("route_evidence") or {}).get("warnings") or [])
         for context in stop.get("route_contexts") or []:
             contexts.setdefault(str(context.get("route_id")), []).append(context)
     dwell = (result.get("parameters") or {}).get("stop_service_minutes")
@@ -61,6 +77,9 @@ def present_direct_school_result(raw):
     for route in result.get("routes") or []:
         if route.get("status") == "resolved":
             route["measurement_status"] = "verified"
+            for context in contexts.get(str(route.get("route_id")), []):
+                context["measurement_status"] = "verified"
+                context["measurement_warnings"] = deepcopy((route.get("route_evidence") or {}).get("warnings") or [])
             continue
         evidence = review_measurement(route)
         state = "needs_review" if evidence else "unavailable"

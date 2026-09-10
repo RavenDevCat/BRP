@@ -197,7 +197,7 @@ def test_analysis_builds_three_step_operational_conclusion(monkeypatch) -> None:
     )
 
     assert result["status"] == "complete"
-    assert result["analysis_version"] == 6
+    assert result["analysis_version"] == 7
     assert result["summary"]["address_count"] == 2
     assert result["summary"]["provider_api_calls"] == 4
     far = next(row for row in result["stops"] if row["address"] == "Far stop")

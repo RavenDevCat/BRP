@@ -7,6 +7,22 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-10
 
+### Nonblocking Route Distance Warnings
+
+- Complete AMap measurements with distance-only discrepancies remain usable in
+  final solver acceptance, automatic route budgets, Fleet/Insert measurements,
+  per-student ride-time classification and route-removal recalculation.
+- Suspected detours are separate warnings with segment reasons, not proof of
+  incorrect navigation. Provider time, distance, geometry and stop order are
+  retained; OSRM never supplies replacement accepted values.
+- Missing segments, mismatched boundaries, road-snap and continuity failures
+  remain blocking. Time-window overruns still fail final acceptance.
+- New measurements use evidence v6; new Direct-to-School runs use analysis v7,
+  including scheduled runs. Existing history and removal conclusions are not
+  rewritten; rerun or create a separate measurement review to apply the policy.
+- Map details and statistical exports retain warning reasons independently of
+  numeric measurements and compliance outcomes.
+
 ### Direct-to-School Measurement Review
 
 - Separate complete provider captures awaiting distance review from unavailable

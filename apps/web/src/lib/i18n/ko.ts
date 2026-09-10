@@ -1466,4 +1466,6 @@ const ko: Translations = {
     "Export statistics": "통계 결과 내보내기",
 };
 
+ko["Suspected detour"] = "우회 의심";
+ko["Suspected detour; provider measurements remain in use."] = "우회 의심: 완전한 경로 측정값은 계속 계산에 사용됩니다. 거리 차이만으로 경로 오류가 입증되지는 않습니다.";
 export default ko;

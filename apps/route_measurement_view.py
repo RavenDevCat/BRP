@@ -76,18 +76,39 @@ def measured_route_views(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return views
 
 
+def evidence_notice(evidence: dict[str, Any]) -> str:
+    if evidence.get("status") != "verified" or evidence.get("complete") is not True or evidence.get("issues"):
+        codes = "; ".join(str(item.get("code") or "unknown") for item in evidence.get("issues") or [])
+        return "Route measurement needs review; time-window compliance is not verified." + (" " + codes if codes else "")
+    warnings = evidence.get("warnings") or []
+    if not warnings:
+        return ""
+    labels = {"provider_distance_disagreement": "AMap distance differs from the OSRM reference",
+              "large_direct_detour_needs_review": "driving distance is unusually long relative to straight-line distance"}
+    details = "; ".join("Segment " + str(item["leg_index"] + 1) + ": " + labels.get(item["code"], item["code"])
+                        for item in warnings if isinstance(item.get("leg_index"), int))
+    return "Suspected detour; provider measurements remain in use. " + details
+
+
 def measurement_note(route: dict[str, Any]) -> str:
     evidence = dict(route.get("route_evidence") or {})
     gate = dict(route.get("final_route_traffic_gate") or route.get("am_arrival_gate") or {})
     metrics = route_display_metrics(route)
     if metrics["source"] == "unavailable" or metrics["duration_s"] is None or metrics["distance_m"] is None:
-        return "Route measurement needs review; time-window compliance is not verified."
+        codes = "; ".join(str(item.get("code") or "unknown") for item in evidence.get("issues") or [])
+        return "Route measurement needs review; time-window compliance is not verified." + (" " + codes if codes else "")
     if gate.get("status") == "failed":
-        return "Measured route exceeds the time window."
-    if metrics["source"] == "measurement":
-        if evidence.get("called_at"):
-            return "Measured at: " + str(evidence["called_at"])
-        return "Measured route: saved road evidence."
+        note = "Measured route exceeds the time window."
+    elif metrics["source"] == "measurement":
+        note = ("Measured at: " + str(evidence["called_at"]) if evidence.get("called_at")
+                else "Measured route: saved road evidence.")
+    else:
+        note = ""
+    if note:
+        notice = evidence_notice(evidence) if evidence else ""
+        if notice:
+            note += " " + notice
+        return note
     if metrics["source"] == "historical_measurement":
         return "Historical measurement: map and timing were not saved as one measurement."
     return "Planning reference: estimated route, not a verified measurement."

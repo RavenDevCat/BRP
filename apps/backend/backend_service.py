@@ -144,7 +144,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
 
 
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
-from route_measurement_view import route_display_metrics, scenario_display_summary
+from route_measurement_view import route_display_metrics, scenario_display_summary, evidence_notice
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -5727,10 +5727,7 @@ def _build_job_map_payload(
             display_geometry = list(evidence.get("geometry") or [])
             geometry = display_geometry
             display_geometry_source = str(evidence.get("source") or "amap_adjacent_legs")
-            display_geometry_message = (
-                "Route measurement needs review; time-window compliance is not verified."
-                if evidence.get("status") != "verified" else ""
-            )
+            display_geometry_message = evidence_notice(evidence)
             display_duration_s = _float_or_none(evidence.get("duration_s"))
             display_distance_m = _float_or_none(evidence.get("distance_m"))
         elif use_amap_display_geometry:

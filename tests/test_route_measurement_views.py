@@ -39,6 +39,14 @@ CASES = [
      {"duration_s": None, "distance_m": None, "source": "unavailable"}),
     ({"stop_service_time_s": 60, "route_evidence": {"status": "verified", "complete": True, "duration_s": 600, "distance_m": 1500, "issues": [{"code": "inconsistent"}]}},
      {"duration_s": None, "distance_m": None, "source": "unavailable"}),
+    ({"stop_service_time_s": 60, "route_evidence": {"status": "verified", "complete": True,
+      "duration_s": 600, "distance_m": 1500, "issues": [],
+      "warnings": [{"code": "provider_distance_disagreement", "leg_index": 0}]}},
+     {"duration_s": 660, "distance_m": 1500, "source": "measurement"}),
+    ({"route_evidence": {"status": "verified", "complete": True,
+      "duration_s": 600, "distance_m": 1500, "issues": [],
+      "warnings": [{"code": "provider_distance_disagreement", "leg_index": 0}]}},
+     {"duration_s": None, "distance_m": 1500, "source": "measurement"}),
 ]
 
 

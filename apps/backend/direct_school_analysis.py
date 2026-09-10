@@ -331,7 +331,7 @@ class FreshRouteProvider:
         if not result:
             evidence = dict(self.state.get("last_route_evidence") or {})
             codes = sorted({str(item.get("code")) for item in evidence.get("issues") or []})
-            raise RuntimeError("Route measurement needs review: " + (", ".join(codes) or "provider unavailable"))
+            raise RuntimeError("Route measurement incomplete or inconsistent: " + (", ".join(codes) or "provider unavailable"))
         return {
             **dict(result),
             "provider": self.provider,
@@ -441,7 +441,7 @@ def _base_result(
     errors: list[dict[str, Any]],
 ) -> dict[str, Any]:
     return {
-        "analysis_version": 6,
+        "analysis_version": 7,
         "analysis_type": "direct_school",
         "status": "running",
         "generated_at": utc_now_iso(),
@@ -1419,6 +1419,10 @@ def build_direct_school_workbook(
             leg_index = _safe_int(leg.get("leg_index"))
             issues = ", ".join(str(item.get("code")) for item in snapshot.get("issues") or []
                                if item.get("leg_index") == leg_index)
+            warnings = ", ".join(str(item.get("code")) for item in snapshot.get("warnings") or []
+                                 if item.get("leg_index") == leg_index)
+            if warnings:
+                issues += ("; " if issues else "") + "Warning only / \u4ec5\u63d0\u9192: " + warnings
             evidence_rows.append([
                 stage, route_id, address, leg_index + 1, snapshot.get("status"),
                 _safe_float(leg.get("duration_s")) / 60, _safe_float(leg.get("distance_m")) / 1000,
@@ -1440,6 +1444,24 @@ def build_direct_school_workbook(
          "OSRM metres / 参考米", "Captured / 测算时间", "Origin GCJ02 lat,lng", "Destination GCJ02 lat,lng", "Review / 复核"],
         evidence_rows, [24, 18, 42, 12, 20, 18, 18, 18, 18, 26, 30, 30, 50],
     )
+
+    warning_rows = [[item.get("stage"), item.get("route_id"), item.get("address"),
+                     _safe_int(item.get("leg_index")) + 1,
+                     ("AMap distance differs from OSRM / \u9ad8\u5fb7\u8ddd\u79bb\u4e0eOSRM\u53c2\u8003\u5dee\u5f02\u8f83\u5927"
+                      if item.get("code") == "provider_distance_disagreement" else
+                      "Driving distance is long relative to straight distance / \u884c\u8f66\u8ddd\u79bb\u76f8\u5bf9\u76f4\u7ebf\u8ddd\u79bb\u504f\u957f"),
+                     "Warning only; provider values used / \u4ec5\u63d0\u9192\uff0c\u4ecd\u4f7f\u7528\u9ad8\u5fb7\u6d4b\u91cf\u503c"]
+                    for item in result.get("measurement_warnings") or []]
+    if warning_rows:
+        _write_readable_table(workbook.create_sheet("Route Warnings"),
+            "Suspected Detours / \u7591\u4f3c\u7ed5\u884c",
+            "Complete measurements remain in use. A distance discrepancy does not prove a routing error. / \u5b8c\u6574\u6d4b\u91cf\u4ecd\u53c2\u4e0e\u8ba1\u7b97\uff0c\u8ddd\u79bb\u5dee\u5f02\u4e0d\u4ee3\u8868\u5df2\u8bc1\u660e\u8def\u7ebf\u9519\u8bef\u3002",
+            ["Stage / \u9636\u6bb5", "Route / \u8def\u7ebf", "Address / \u5730\u5740", "Segment / \u8def\u6bb5", "Reason / \u539f\u56e0", "Effect / \u5f71\u54cd"],
+            warning_rows, [24, 16, 42, 14, 64, 58])
+        for cells in workbook["Route Warnings"].iter_rows(min_row=5):
+            for cell in cells:
+                cell.fill = PatternFill("solid", fgColor="FFF8E1")
+                cell.font = Font(name="Calibri", size=11, color="92400E")
 
     daily_rows = [
         [

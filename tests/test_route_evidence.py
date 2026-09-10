@@ -112,10 +112,11 @@ def test_short_leg_detour_under_old_three_km_threshold_is_reviewed_not_replaced(
     def fetch(planner, points):
         return {**leg(planner, points), "distance_m": 1400}
     result = measure([A, B], state=state, fetch=fetch)
-    assert result["status"] == "needs_review"
+    assert result["status"] == "verified"
     assert result["distance_m"] == 1400
-    assert state["api_calls"] == 2
-    assert "provider_distance_disagreement" in result["legs"][0]["issues"]
+    assert state["api_calls"] == 1
+    assert result["issues"] == []
+    assert "provider_distance_disagreement" in result["legs"][0]["warnings"]
     assert result["legs"][0]["osrm_reference_distance_m"] == 300
 
 
@@ -216,8 +217,9 @@ def test_matching_continuous_turn_does_not_clear_independent_detour_or_distance_
     result = evidence._measure_adjacent_route(object(), [A, B, A], {},
         {"api_call_limit": 5, "expected_leg_distances_m": [300, 300]}, fetch_leg=fetch, fetch_context=context)
     assert result["context_checks"][0]["resolution"]["status"] == "confirmed"
-    assert result["status"] == "needs_review"
-    assert {item["code"] for item in result["issues"]} == {"provider_distance_disagreement", "large_direct_detour_needs_review"}
+    assert result["status"] == "verified"
+    assert result["issues"] == []
+    assert {item["code"] for item in result["warnings"]} == {"provider_distance_disagreement", "large_direct_detour_needs_review"}
 
 
 def test_identical_unordered_loop_in_reverse_direction_cannot_confirm_turn():

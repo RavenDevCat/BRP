@@ -102,8 +102,9 @@ def test_continuous_recovery_uses_native_response_whether_longer_or_shorter(dura
 def test_native_recovery_keeps_independent_detour_warning():
     result = measure(Planner(native_path(distances=(400, 2400))))
     assert result["source"] == "amap_continuous_waypoint_legs"
-    assert result["status"] == "needs_review"
-    assert {i["code"] for i in result["issues"]} == {"large_direct_detour_needs_review"}
+    assert result["status"] == "verified"
+    assert result["issues"] == []
+    assert {i["code"] for i in result["warnings"]} == {"large_direct_detour_needs_review"}
 
 
 def test_single_vertex_one_metre_arrival_keeps_native_cost_without_interpolation():

@@ -24,9 +24,26 @@ except ImportError:
     )
 
 
-EVIDENCE_VERSION = "amap-route-evidence-v5"
+EVIDENCE_VERSION = "amap-route-evidence-v6"
 CACHE_MAX_AGE_SECONDS = 600
 CONTEXT_GEOMETRY_TOLERANCE_M = 1.0
+DISTANCE_WARNING_CODES = frozenset({
+    "provider_distance_disagreement", "large_direct_detour_needs_review",
+})
+
+
+def _classify_findings(evidence: dict[str, Any]) -> dict[str, Any]:
+    """Distance heuristics flag investigation, not measurement integrity failures."""
+    findings = evidence["issues"]
+    evidence["warnings"] = [item for item in findings if item["code"] in DISTANCE_WARNING_CODES]
+    evidence["issues"] = [item for item in findings if item["code"] not in DISTANCE_WARNING_CODES]
+    for leg in evidence["legs"]:
+        codes = leg.get("issues") or []
+        leg["warnings"] = [code for code in codes if code in DISTANCE_WARNING_CODES]
+        leg["issues"] = [code for code in codes if code not in DISTANCE_WARNING_CODES]
+    evidence["status"] = ("unavailable" if not evidence["complete"] else
+                          "needs_review" if evidence["issues"] else "verified")
+    return evidence
 
 
 def distance_m(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -340,7 +357,7 @@ def _measure_adjacent_route(
                     }
                     attempts.append({"called_at": called_at, "duration_s": leg["duration_s"],
                                      "distance_m": leg["distance_m"], "issues": _leg_issues(leg, reference)})
-                    if not attempts[-1]["issues"] or attempt == 1:
+                    if not set(attempts[-1]["issues"]) - DISTANCE_WARNING_CODES or attempt == 1:
                         break
                 except Exception as exc:
                     # Provider exceptions can include request URLs and keys.
@@ -434,6 +451,7 @@ def _measure_adjacent_route(
         evidence["continuous_recovery"] = recovery
     if comparison is not None:
         evidence["adjacent_comparison"] = comparison
+    _classify_findings(evidence)
     state["last_route_evidence"] = evidence
     return evidence
 
@@ -505,6 +523,7 @@ def measure_amap_route(
                       "geometry_segments": [leg["geometry"] for leg in legs],
                       "leg_durations_s": [leg["duration_s"] for leg in legs],
                       "leg_distances_m": [leg["distance_m"] for leg in legs]}
+            _classify_findings(result)
             state["last_route_evidence"] = result
             return result
         start = end - 3

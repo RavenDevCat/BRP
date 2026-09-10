@@ -113,11 +113,13 @@ automatic time-budget measurement, student classification or removal checks.
 Complete AMap time/distance and geometry stay unchanged; OSRM never replaces them.
 Each pair still gets at most two attempts for non-diagnostic failures.
 
-Evidence v6 and Direct-to-School analysis v7 mark this policy boundary. Do not
+Distance-warning separation was introduced in evidence v6 and analysis v7;
+the current drawing/business presentation boundary is evidence v7 and analysis v8. Do not
 silently promote old saved review records or recalculate their conclusions on
 read. Generate a new analysis/review result to apply the policy; old complete
 distance-only captures may retain explicitly unverified presentation references.
-Warnings remain visible on route maps and in exported segment evidence.
+Warnings remain in saved diagnostic evidence and explicitly requested diagnostic
+exports, not ordinary route-map notices or business workbooks.
 
 Pair queries can reset the approach direction at a stop. Questionable junctions
 receive up to four three-point continuous-waypoint comparison requests per

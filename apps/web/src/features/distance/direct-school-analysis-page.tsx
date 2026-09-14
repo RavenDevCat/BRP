@@ -505,7 +505,7 @@ function DirectSchoolResultView({ record, exportUrl, corrected }: { record: Dire
     <ResultSummary record={record} exportUrl={exportUrl} />
     <AddressClassificationBoard rows={filteredStops} allRows={result.stops} selectedStopKey={selectedStop?.stop_key || ""}
       filter={classificationFilter} search={searchText} onFilter={setClassificationFilter} onSearch={setSearchText} onSelect={selectStop} />
-    <div className="grid min-w-0 gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4">
       <DirectSchoolMap result={result} selectedStop={selectedStop} selectionRevision={selectionRevision} onSelect={selectStop} />
       <DistanceScatter rows={result.stops} selectedStopKey={selectedStop?.stop_key || ""} onSelect={selectStop} />
     </div>

@@ -623,7 +623,7 @@ export function InteractiveRouteMap({
             className={cn(
                 fullscreen
                     ? "relative overflow-hidden border-0 bg-transparent"
-                    : "grid h-[960px] grid-rows-[320px_minmax(0,1fr)] overflow-hidden border border-border bg-surface lg:h-[clamp(560px,calc(100vh-220px),760px)] lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-1",
+                    : "grid min-w-0 grid-cols-[minmax(0,1fr)] h-[960px] grid-rows-[320px_minmax(0,1fr)] overflow-hidden border border-border bg-surface lg:h-[clamp(560px,calc(100vh-220px),760px)] lg:grid-cols-[320px_minmax(0,1fr)] lg:grid-rows-1",
                 fullscreen
                     ? "h-full min-h-0 rounded-none"
                     : "min-h-[560px] rounded-md",

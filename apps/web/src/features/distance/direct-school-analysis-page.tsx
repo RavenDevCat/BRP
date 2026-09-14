@@ -923,7 +923,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
     mapRef.current.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 80, duration: 350, maxZoom: 14 });
   }, [school.lat, school.lng, selectedStop, selectionRevision, mapMode]);
 
-  if (mapMode === "current") return <Card>
+  if (mapMode === "current") return <Card className="min-w-0">
     <CardHeader><div className="flex flex-wrap items-center justify-between gap-3">
       {mapTabs}
       <div className="flex min-w-0 flex-wrap items-center gap-2">

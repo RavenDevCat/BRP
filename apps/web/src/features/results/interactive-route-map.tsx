@@ -186,11 +186,13 @@ export function InteractiveRouteMap({
     fullscreen = false,
     focusKey = "",
     renderStopActions,
+    focusStopId,
 }: {
     data: JobMapData;
     fullscreen?: boolean;
     focusKey?: string;
     renderStopActions?: (stop: JobMapStop) => ReactNode;
+    focusStopId?: string;
 }) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapRef | null>(null);
@@ -211,6 +213,12 @@ export function InteractiveRouteMap({
         () => new Map(data.stops.map((stop) => [stop.id, stop])),
         [data.stops],
     );
+    useEffect(() => {
+        if (focusStopId === undefined) return;
+        const stop = stopsById.get(focusStopId) || null;
+        setSelectedStop(stop);
+        setSelectedRouteId(stop?.route_id || "");
+    }, [focusStopId, stopsById]);
     const selectedRoute = selectedRouteId
         ? routesById.get(selectedRouteId) || null
         : null;

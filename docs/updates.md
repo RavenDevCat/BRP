@@ -5,6 +5,16 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-14
+
+### Direct And Current Route Map Comparison
+
+- Direct-to-School results can switch between the selected address's direct
+  journey and its saved current route, without rerunning measurements.
+- Current routes reuse the Audit Report map, numbered stops and HTML export.
+  Shared addresses offer a route selector and use that route's rider/ride data.
+- Saved geometry segments, timings and classifications remain unchanged.
+
 ## 2026-09-10
 
 ### Route Drawing And Business Results

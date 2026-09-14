@@ -28,7 +28,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { buildDirectSchoolCurrentMap, currentMapStopId } from "./direct-school-current-map";
+import { downloadInteractiveMapHtml } from "@/features/results/job-result-view";
 import {
+  InteractiveRouteMap,
   BRP_MAP_STYLE,
   brpSelectedRouteCasingPaint,
   brpSelectedRouteConnectorPaint,
@@ -825,6 +828,25 @@ function directRouteMapPoints(
 
 function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: { result: NonNullable<DirectSchoolJobRecord["result"]>; selectedStop: DirectSchoolStopResult | null; selectionRevision: number; onSelect: (key: string) => void }) {
   const t = useT();
+  const [mapMode, setMapMode] = useState<"direct" | "current">("direct");
+  const [routePreference, setRoutePreference] = useState("");
+  const routeIds = [...new Set((selectedStop?.route_contexts || []).map(c => c.route_id).filter((id): id is string => Boolean(id)))];
+  const routeId = routeIds.includes(routePreference) ? routePreference : routeIds.includes(selectedStop?.primary_route_id || "") ? selectedStop!.primary_route_id! : routeIds[0] || "";
+  const currentMap = useMemo(() => buildDirectSchoolCurrentMap(result, routeId), [result, routeId]);
+  const focusedContext = selectedStop?.route_contexts?.find(c => c.route_id === routeId);
+  const focusedStopId = selectedStop && focusedContext?.stop_sequence != null ? currentMapStopId(routeId, focusedContext.stop_sequence, selectedStop.stop_key) : "";
+  const mapTabs = <div role="tablist" aria-label={t("Route map")} className="flex min-w-0 flex-wrap gap-1">
+    {(["direct", "current"] as const).map(mode => <button key={mode} type="button" role="tab" id={`school-map-tab-${mode}`} aria-controls={`school-map-panel-${mode}`} aria-selected={mapMode === mode}
+      className={cn("min-h-9 rounded-md px-3 py-2 text-sm font-medium", mapMode === mode ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted")}
+      onClick={() => setMapMode(mode)} onKeyDown={event => {
+        if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) {
+          event.preventDefault();
+          const next = event.key === "Home" ? "direct" : event.key === "End" ? "current" : mode === "direct" ? "current" : "direct";
+          setMapMode(next);
+          window.requestAnimationFrame(() => document.getElementById(`school-map-tab-${next}`)?.focus());
+        }
+      }} tabIndex={mapMode === mode ? 0 : -1}>{t(mode === "direct" ? "Direct route map" : "Current route map")}</button>)}
+  </div>;
   const mapRef = useRef<MapRef | null>(null);
   const school = result.school as { lat?: number; lng?: number; address?: string };
   const visibleStops = useMemo(() => result.stops.filter((row) => Number.isFinite(row.lat) && Number.isFinite(row.lng)), [result.stops]);
@@ -899,13 +921,38 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
     const lngs = routePoints.map((coords) => Number(coords[0]));
     const lats = routePoints.map((coords) => Number(coords[1]));
     mapRef.current.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 80, duration: 350, maxZoom: 14 });
-  }, [school.lat, school.lng, selectedStop, selectionRevision]);
+  }, [school.lat, school.lng, selectedStop, selectionRevision, mapMode]);
+
+  if (mapMode === "current") return <Card>
+    <CardHeader><div className="flex flex-wrap items-center justify-between gap-3">
+      {mapTabs}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        {routeIds.length > 1 ? <select aria-label={t("Route")} className={cn(fieldClassName, "w-auto max-w-full")} value={routeId} onChange={event => setRoutePreference(event.target.value)}>
+          {routeIds.map(id => <option key={id} value={id}>{id}</option>)}
+        </select> : <span className="text-xs text-muted-foreground">{routeId}</span>}
+        <Button variant="secondary" className="h-9" icon={<Download className="h-4 w-4" />} disabled={!currentMap.routes.length}
+          onClick={() => downloadInteractiveMapHtml(currentMap, "Direct-to-School", t("Current route map"), t)}>{t("Export map")}</Button>
+      </div>
+    </div></CardHeader>
+    <CardContent className="p-0" role="tabpanel" id="school-map-panel-current" aria-labelledby="school-map-tab-current">
+      {currentMap.routes.length ? <InteractiveRouteMap data={currentMap} focusKey={`${routeId}:${selectionRevision}`} focusStopId={focusedStopId}
+        renderStopActions={stop => {
+          const row = result.stops.find(candidate => candidate.route_contexts?.some(c => currentMapStopId(c.route_id || "", c.stop_sequence ?? -1, candidate.stop_key) === stop.id));
+          const context = row?.route_contexts?.find(c => c.route_id === routeId && c.stop_sequence === stop.order);
+          return row ? <div className="space-y-2">
+            <MiniMetric label="Current route ride" value={minutes(context?.estimated_current_ride_min ?? undefined)} />
+            <Button variant="secondary" className="h-8 text-xs" onClick={() => { onSelect(row.stop_key); setMapMode("direct"); }}>{t("Direct route map")}</Button>
+          </div> : null;
+        }} /> : <div className="flex min-h-[500px] items-center justify-center p-6 text-sm text-muted-foreground">{t("No saved current route map")}</div>}
+      {currentMap.routes.length > 0 && !currentMap.routes[0].geometry.length ? <p className="px-4 py-2 text-xs text-muted-foreground">{t("No saved route geometry")}</p> : null}
+    </CardContent>
+  </Card>;
 
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <div className="flex items-center gap-2"><MapPinned className="h-4 w-4 text-primary" /><h2 className="text-sm font-semibold">{t("Direct route map")}</h2></div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          {mapTabs}
           <div className="flex min-w-0 items-center justify-end gap-2">
             <span className="hidden max-w-72 truncate text-xs text-muted-foreground md:block">{selectedStop?.address || t("Select an address")}</span>
             <Button variant="secondary" className="h-9 w-9 p-0" title={t("Fit all")} aria-label={t("Fit all")} onClick={fitAll}>
@@ -917,7 +964,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
           </div>
         </div>
       </CardHeader>
-      <CardContent className="p-0">
+      <CardContent className="p-0" role="tabpanel" id="school-map-panel-direct" aria-labelledby="school-map-tab-direct">
         <div className="relative h-[500px] min-h-[500px] overflow-hidden rounded-b-md">
           <MapView
             ref={mapRef}

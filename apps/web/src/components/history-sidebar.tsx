@@ -182,13 +182,14 @@ export function HistorySidebar<T>({
 
   useEffect(() => {
     if (collapsed) return;
-    const handlePointerDown = (event: PointerEvent) => {
+    const handleOutsideClick = (event: MouseEvent) => {
       if (window.innerWidth < 1024) return;
       if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
       onCollapsedChange(true);
     };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    // Wait for activation so collapsing cannot move a control between press and release.
+    document.addEventListener("click", handleOutsideClick);
+    return () => document.removeEventListener("click", handleOutsideClick);
   }, [collapsed, onCollapsedChange]);
 
   const toggleSelected = (id: string) => {

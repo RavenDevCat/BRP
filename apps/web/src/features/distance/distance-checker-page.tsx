@@ -26,6 +26,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { DEFAULT_FINAL_TIMING, FinalTimingOptions } from "@/features/planner/final-timing-options";
 import { useT } from "@/lib/i18n/context";
 
 const fieldClassName =
@@ -96,6 +97,7 @@ function LegacyDistanceCheckerPage({
   const queryClient = useQueryClient();
   const [file, setFile] = useState<File | null>(null);
   const [fileBase64, setFileBase64] = useState("");
+  const [timingConfig, setTimingConfig] = useState(DEFAULT_FINAL_TIMING);
   const [fileError, setFileError] = useState("");
   const [preview, setPreview] = useState<DistanceWorkbookPreview | null>(null);
   const [selectedSheet, setSelectedSheet] = useState("");
@@ -200,6 +202,7 @@ function LegacyDistanceCheckerPage({
         throw new Error(t("Preview a workbook first."));
       }
       return runReferenceDistanceCheck({
+        timing_config: timingConfig,
         file_name: file.name,
         file_base64: fileBase64,
         selected_sheet: selectedSheet,
@@ -229,6 +232,7 @@ function LegacyDistanceCheckerPage({
       }
       const profile = routeCostProfiles[routeCostProfileKey];
       return runCurrentPlanRouteCost({
+        timing_config: timingConfig,
         file_name: file.name,
         file_base64: fileBase64,
         selected_sheet: selectedSheet,
@@ -529,6 +533,8 @@ function LegacyDistanceCheckerPage({
                 <FileSpreadsheet className="h-4 w-4 text-primary" aria-hidden="true" />
                 <h2 className="text-sm font-semibold">{t("Workbook")}</h2>
               </div>
+              <FinalTimingOptions value={timingConfig} onChange={setTimingConfig}
+                eligible={activeTool === "route_cost" ? routeDefaultCountry === "China" : originCountry === "China" && distanceMode === "road"} />
             </CardHeader>
             <CardContent className="space-y-4">
               <label className="flex min-h-28 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-border bg-muted/60 px-4 py-6 text-center transition hover:border-primary/60 hover:bg-muted">

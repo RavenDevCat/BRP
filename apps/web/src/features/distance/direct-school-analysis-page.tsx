@@ -56,6 +56,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatNumber } from "@/lib/format";
+import { GoogleValidationControls } from "@/features/planner/google-validation-controls";
 import { useT } from "@/lib/i18n/context";
 
 type ClassificationFilter = "all" | "direct_over_limit" | "route_only_over_limit" | "additional_window_candidate" | "within_limit" | "data_review";
@@ -338,6 +339,9 @@ export function DirectSchoolAnalysisPage() {
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-3">
+                  <GoogleValidationControls config={config} scheduled={scheduled}
+                    available={featuresQuery.data?.google_final_validation?.available === true}
+                    onChange={updateConfig} />
                   <Field label="Analysis direction">
                     <select
                       className={fieldClassName}

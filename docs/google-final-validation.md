@@ -5,8 +5,25 @@
 The task configuration `final_time_validation_mode` is `legacy` by default.
 Legacy routing, upload preview, and independent planning tools retain their
 existing providers. `google` enables an isolated final validation adapter for
-China Route Audit tasks; it does not replace geocoding or the solver matrix.
+China Route Audit, Fleet, Direct-to-School, Route Insert, and road-time tools;
+it does not replace geocoding or the solver matrix.
 It is not enabled for Korea. A frontend switch selects the mode per task.
+The shared `final_timing.FinalTimingContext` supplies native receipts to the
+independent business adapters. Full historical revalidation preserves the
+provider and reserves both the review allowance and shared Google quota before
+each call. Isolated legacy road correction is not used for Google source runs.
+
+Reference Distance uses the configured earliest departure as a fixed departure.
+Route tools use arrival-window validation for AM and fixed departure for PM.
+Pure distances and fuel arithmetic retain their previous basis; road-time
+exports identify Google time and OSRM distance/cost separately. A Google time
+does not certify an OSRM geometry. Receipt fields preserve both sources.
+
+Audit excludes initial boarding from route dwell, matching its existing model.
+Direct-to-School and Fleet retain their own stop-service conventions. Insert
+preserves the saved baseline dwell and adds only the new stops' configured dwell.
+Zero-rider service stops remain service stops. Native stop schedules must use
+the receipt's actual departure, not a reconstructed default arrival time.
 
 Google mode requires `validation_service_date`. Scheduled submissions freeze
 their scheduled date. Submission assigns a server-generated `validation_budget_id`;
@@ -70,6 +87,10 @@ SQLite databases. It is not a general operating-system network sandbox.
 
 `tests/google_validation_preview.tsx` exercises the actual frontend control in
 an isolated fixture. It does not submit tasks or call mapping providers.
+`tests/test_google_timing_entrypoints.py` adds synthetic end-to-end classification,
+removal, insertion, Fleet map/export and full-review worker tests, including
+persistent review budgets and preservation of source records. Disabled rollout
+must reject every optional entrypoint before file preparation or paid routing.
 
 Offline tests and a frontend build do not establish real-route acceptance.
 Before activation, verify complete task execution, restart/retry accounting,

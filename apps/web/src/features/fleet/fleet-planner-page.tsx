@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DEFAULT_FINAL_TIMING, FinalTimingOptions } from "@/features/planner/final-timing-options";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, Loader2, Map, MapPinned, Maximize2, Plus, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
@@ -64,6 +65,7 @@ type PreviewVariables = {
 };
 
 export function FleetPlannerPage() {
+  const [timingConfig, setTimingConfig] = useState(DEFAULT_FINAL_TIMING);
   const t = useT();
   const queryClient = useQueryClient();
   const [market, setMarket] = useState<FleetMarket>("KR");
@@ -212,6 +214,7 @@ export function FleetPlannerPage() {
         throw new Error(t("Build clusters before running route preview."));
       }
       return buildFleetPlannerRoutePreview({
+        timing_config: { ...timingConfig, service_direction: routeDirection === "to_school" ? "To School" : "From School" },
         market,
         mode,
         monitor_seats: monitorSeats,
@@ -239,6 +242,7 @@ export function FleetPlannerPage() {
         throw new Error(t("Run demand geocode before building a global plan."));
       }
       return buildFleetPlannerGlobalPlan({
+        timing_config: { ...timingConfig, service_direction: globalDirection === "to_school" ? "To School" : "From School" },
         market,
         mode,
         monitor_seats: monitorSeats,
@@ -684,6 +688,7 @@ export function FleetPlannerPage() {
                     <h2 className="text-sm font-semibold">{t("Run workflow")}</h2>
                   </div>
                   <div className="flex flex-1 flex-col justify-center space-y-3 pt-3">
+                    <FinalTimingOptions value={timingConfig} onChange={setTimingConfig} eligible={market === "CN"} />
                     {previewMutation.error ? <InlineError message={(previewMutation.error as Error).message} /> : null}
                     {geocodeMutation.error ? <InlineError message={(geocodeMutation.error as Error).message} /> : null}
                     {clusterMutation.error ? <InlineError message={(clusterMutation.error as Error).message} /> : null}

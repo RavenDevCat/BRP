@@ -702,7 +702,17 @@ export type DistanceCheckerHistoryCreateResponse = {
 
 export type DistanceCheckerToolMode = "reference" | "route_cost";
 
+export type FinalTimingConfig = {
+    final_time_validation_mode?: "legacy" | "google";
+    validation_service_date?: string;
+    time_window_start: string;
+    time_window_end: string;
+    service_direction: "To School" | "From School";
+};
+
 export type DirectSchoolAnalysisConfig = {
+    final_time_validation_mode?: "legacy" | "google";
+    validation_service_date?: string;
     service_direction: "To School" | "From School";
     stop_service_minutes: number;
     time_window_start: string;
@@ -1041,6 +1051,7 @@ export type RouteInsertAdvisorCapabilities = {
 };
 
 export type RouteInsertAdvisorProposalRequest = {
+    timing_config?: FinalTimingConfig;
     file_name?: string;
     file_base64?: string;
     source?: {
@@ -1509,6 +1520,7 @@ export function previewDistanceWorkbook(payload: {
 }
 
 export function runReferenceDistanceCheck(payload: {
+    timing_config?: FinalTimingConfig;
     file_name: string;
     file_base64: string;
     selected_sheet: string;
@@ -1530,6 +1542,7 @@ export function runReferenceDistanceCheck(payload: {
 }
 
 export function runCurrentPlanRouteCost(payload: {
+    timing_config?: FinalTimingConfig;
     file_name: string;
     file_base64: string;
     selected_sheet: string;
@@ -1752,6 +1765,7 @@ export function buildFleetPlannerClusters(payload: {
 }
 
 export function buildFleetPlannerRoutePreview(payload: {
+    timing_config?: FinalTimingConfig;
     market: "KR" | "CN";
     mode: "balanced" | "cost_saver" | "comfort_saver";
     monitor_seats: number;
@@ -1776,6 +1790,7 @@ export function buildFleetPlannerRoutePreview(payload: {
 }
 
 export function buildFleetPlannerGlobalPlan(payload: {
+    timing_config?: FinalTimingConfig;
     market: "KR" | "CN";
     mode: "balanced" | "cost_saver" | "comfort_saver";
     monitor_seats: number;

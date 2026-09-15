@@ -625,6 +625,13 @@ def _handle_distance_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]
 
 
 def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
+    import final_timing
+    timing_config = final_timing.prepare({**dict(payload.get("timing_config") or {}), "timing_policy": "fixed_departure"})
+    if final_timing.is_google(timing_config):
+        final_timing.require_china(dict(payload.get("origin") or {}).get("country"))
+        if payload.get("distance_mode") == "straight_line":
+            raise ValueError("Straight-line distance has no traffic-time validation")
+    timing_context = final_timing.FinalTimingContext(timing_config) if final_timing.is_google(timing_config) else None
     distance_tool = _distance_tool_module()
     origin = dict(payload.get("origin") or {})
     origin_country = str(origin.get("country") or "").strip()
@@ -692,6 +699,7 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
             origin_record=origin_row,
             origin_point=dict(origin_row["point"]),
             distance_mode=distance_mode,
+            **({"timing_context": timing_context} if timing_context is not None else {}),
         )
         records = _dataframe_records(results_df)
         ok_count = sum(1 for row in records if str(row.get("status")) == "ok")
@@ -736,6 +744,11 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
+    import final_timing
+    timing_config = final_timing.prepare(payload.get("timing_config") or {})
+    if final_timing.is_google(timing_config):
+        final_timing.require_china(payload.get("default_country"))
+    timing_context = final_timing.FinalTimingContext(timing_config) if final_timing.is_google(timing_config) else None
     distance_tool = _distance_tool_module()
     default_city = str(payload.get("default_city") or "").strip()
     default_country = str(payload.get("default_country") or "").strip()
@@ -805,6 +818,7 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
                 geocoded_rows,
                 diesel_price_per_liter=diesel_price_per_liter,
                 fuel_efficiency_km_per_liter=fuel_efficiency_km_per_liter,
+                **({"timing_context": timing_context} if timing_context is not None else {}),
             )
         )
         route_records = _dataframe_records(route_results_df)
@@ -1151,8 +1165,15 @@ def _fleet_traffic_context(
 
 
 def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, Any]:
+    import final_timing
+    timing_config = final_timing.prepare(payload.get("timing_config") or {})
+    if final_timing.is_google(timing_config):
+        final_timing.require_china(payload.get("market"))
+    timing_context = final_timing.FinalTimingContext(timing_config) if final_timing.is_google(timing_config) else None
     demand_clustering = _client_module("demand_clustering")
     demand_routing = _client_module("demand_routing")
+    if timing_context:
+        timing_context.config["service_direction"] = _service_direction_label(str(payload.get("service_direction") or "to_school"))
     market = str(payload.get("market") or "KR").strip().upper()
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
@@ -1178,7 +1199,11 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
         traffic_profile_name=str(traffic_context["traffic_profile_name"]),
         traffic_profile_context=str(traffic_context["traffic_profile_context"]),
     )
+    measured = timing_context is not None
+    if measured:
+        _attach_fleet_route_measurements(route_preview, demand_routing, measurement_provider=timing_context)
     overlong_route_ids = {
+        # Final Google timing, when selected, also controls this split decision.
         str(row.get("cluster_id", "")).strip()
         for row in list(route_preview.get("route_rows") or [])
         if max_route_duration_minutes
@@ -1186,6 +1211,7 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
         > float(max_route_duration_minutes)
     }
     if overlong_route_ids:
+        measured = False
         refined_cluster_result = demand_clustering.split_cluster_result_by_route_limit(
             cluster_result,
             overlong_route_ids,
@@ -1207,7 +1233,8 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
         )
 
     return _route_plan_response(
-        route_preview, workbook_file_name="fleet_planner_generated_plan.xlsx"
+        route_preview, workbook_file_name="fleet_planner_generated_plan.xlsx",
+        timing_context=timing_context, already_measured=measured
     )
 
 
@@ -1220,10 +1247,12 @@ def _service_direction_label(service_direction: str) -> str:
 
 
 def _route_plan_response(
-    route_preview: dict[str, Any], *, workbook_file_name: str
+    route_preview: dict[str, Any], *, workbook_file_name: str,
+    timing_context: Any = None, already_measured: bool = False
 ) -> dict[str, Any]:
     demand_routing = _client_module("demand_routing")
-    _attach_fleet_route_measurements(route_preview, demand_routing)
+    if not already_measured:
+        _attach_fleet_route_measurements(route_preview, demand_routing, measurement_provider=timing_context)
     route_preview = demand_routing.fleet_route_display_view(route_preview)
     workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
     map_data = demand_routing.build_route_preview_map_data(
@@ -1259,6 +1288,8 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
     routes = list(route_preview.get("routes") or [])
     rows = {str(row.get("cluster_id")): row for row in route_preview.get("route_rows") or []}
     provider = measurement_provider
+    from final_timing import FinalTimingContext
+    google_mode = isinstance(provider, FinalTimingContext)
     unavailable = "AMap measurement unavailable"
     try:
         if provider is None:
@@ -1269,15 +1300,28 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
     for route in routes:
         ordered = list(route.get("ordered_points") or [])
         if not preserve_saved_dwell:
-            route["stop_service_time_s"] = max(0, len(ordered) - 1) * demand_routing.DEFAULT_STOP_DWELL_SECONDS
+            dwell = float(provider.config.get("stop_service_minutes", demand_routing.DEFAULT_STOP_DWELL_SECONDS/60))*60 if google_mode else demand_routing.DEFAULT_STOP_DWELL_SECONDS
+            route["stop_service_time_s"] = max(0, len(ordered) - 1) * dwell
         elif not isinstance(route.get("stop_service_time_s"), (float, int)) or isinstance(route.get("stop_service_time_s"), bool) or not math.isfinite(route["stop_service_time_s"]) or route["stop_service_time_s"] < 0:
             raise ValueError("Saved Fleet stop-service time is required for remeasurement.")
         evidence: dict[str, Any] = {}
         try:
             if provider is None:
                 raise RuntimeError(unavailable)
-            evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []))
+            if google_mode:
+                service_count = sum(not bool(point.get("is_depot")) for point in ordered)
+                if not service_count:
+                    service_count = max(1, len(ordered)-1)
+                direction = str(summary.get("service_direction") or "to_school")
+                school_index = 0 if direction == "from_school" else len(ordered)-1
+                dwell = [0 if index == school_index else route["stop_service_time_s"]/max(1, len(ordered)-1)
+                         for index in range(len(ordered))]
+                evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []), dwell_s=dwell)
+            else:
+                evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []))
         except RuntimeError as exc:
+            if google_mode:
+                raise
             if provider:
                 evidence = deepcopy(provider.state.get("last_route_evidence") or {})
             route.setdefault("warnings", []).append(str(exc))
@@ -1323,7 +1367,18 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
             row["distance_km"] = round(metrics["distance_m"] / 1000, 2) if metrics["distance_m"] is not None else None
             row["warnings"] = "; ".join(route.get("warnings") or [])
     summary["route_measurement_review_count"] = review_count
-    summary["traffic_profile_context"] = "AMap measurements captured for this plan"
+    if google_mode:
+        summary["validation_config"] = provider.config
+        summary["traffic_profile_context"] = "Google measurements captured for this plan"
+        for route in routes:
+            evidence = route.get("route_evidence") or {}
+            gate = route.get("final_route_traffic_gate") or {}
+            gate["provider"] = "google_routes"
+            gate["validation_service_date"] = provider.config["validation_service_date"]
+            gate["passes"] = bool(gate.get("passes")) and bool(evidence.get("time_window_passes"))
+            gate["status"] = "passed" if gate["passes"] else "failed"
+    else:
+        summary["traffic_profile_context"] = "AMap measurements captured for this plan"
     summary.update(demand_routing.fleet_route_display_view(route_preview)["summary"])
 
 
@@ -1367,7 +1422,14 @@ def _hydrate_fleet_planner_history_record(record: dict[str, Any]) -> dict[str, A
 
 
 def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    import final_timing
+    timing_config = final_timing.prepare(payload.get("timing_config") or {})
+    if final_timing.is_google(timing_config):
+        final_timing.require_china(payload.get("market"))
+    timing_context = final_timing.FinalTimingContext(timing_config) if final_timing.is_google(timing_config) else None
     demand_global_optimizer = _client_module("demand_global_optimizer")
+    if timing_context:
+        timing_context.config["service_direction"] = _service_direction_label(str(payload.get("service_direction") or "to_school"))
     market = str(payload.get("market") or "KR").strip().upper()
     mode = str(payload.get("mode") or "balanced").strip()
     monitor_seats = int(payload.get("monitor_seats") or 0)
@@ -1397,7 +1459,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         traffic_profile_context=str(traffic_context["traffic_profile_context"]),
     )
     return _route_plan_response(
-        global_plan, workbook_file_name="fleet_planner_global_plan.xlsx"
+        global_plan, workbook_file_name="fleet_planner_global_plan.xlsx", timing_context=timing_context
     )
 
 
@@ -2653,6 +2715,10 @@ def _direct_school_preview_from_prepared(
 
 
 def _handle_direct_school_submit(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    import final_timing
+    requested = final_timing.prepare(payload.get("analysis_config") or {},
+        service_date=payload.get("scheduled_date") if payload.get("scheduled_job") else None)
+    payload = {**payload, "analysis_config": requested}
     source_label, current_plan, prepared_payload, prep_summary = _prepare_direct_school_upload(payload)
     analysis_config = _direct_school_analysis_config(payload, current_plan)
     scheduled_requested = bool(payload.get("scheduled_job"))

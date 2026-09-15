@@ -190,6 +190,9 @@ class GoogleRoutesClient:
         self.calls += 1
         success = False
         try:
+            reserve_attempt = getattr(self, "reserve_attempt", None)
+            if reserve_attempt is not None and not reserve_attempt():
+                raise ValidationUnavailable("google_review_budget_or_claim_unavailable")
             if self.transport is not None:
                 payload = self.transport(body)
             else:
@@ -314,7 +317,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                 raise ValidationUnavailable("google_wgs84_coordinates_required")
             coords.append(location({"latLng": {"latitude": point["plot_lat"], "longitude": point["plot_lng"]}}))
         stop_dwell = float(config.stop_service_minutes)*60
-        dwell = [stop_dwell if int(node) != 0 else 0 for node in nodes]
+        # Audit starts after origin boarding; only subsequent service stops add dwell.
+        dwell = [stop_dwell if index > 0 and int(node) != 0 else 0 for index, node in enumerate(nodes)]
         saved_dwell = float(route.get("stop_service_time_s", sum(dwell)))
         if abs(saved_dwell-sum(dwell)) > 1:
             raise ValidationUnavailable("google_dwell_contract_mismatch")
@@ -337,6 +341,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                     "evidence_version": EVIDENCE_VERSION, "complete": True, "issues": [],
                     "geometry": result.legs[0]["geometry"] if len(result.legs) == 1 else [],
                     "legs": deepcopy(result.legs),
+                    "leg_durations_s": [leg["duration_s"] for leg in result.legs],
+                    "leg_distances_m": [leg["distance_m"] for leg in result.legs],
                     "duration_s": result.drive_s, "distance_m": verification["verified_distance_m"],
                     "geometry_segments": [x["geometry"] for x in result.legs],
                     "called_at": session.client.now().isoformat(), "departure_time": result.departure.isoformat(),

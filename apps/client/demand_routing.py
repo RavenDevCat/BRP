@@ -371,6 +371,16 @@ def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
             route["ordered_points"] = _annotate_ordered_points_with_schedule(points, legs,
                 route_duration_s=evidence["duration_s"], service_direction=str(summary.get("service_direction") or "to_school"),
                 dwell_seconds=route["stop_service_time_s"] / (len(points) - 1))
+            if evidence.get("provider") == "google_routes":
+                elapsed = 0.0
+                dwell = evidence["dwell_by_stop_s"]
+                for index, point in enumerate(route["ordered_points"]):
+                    if index:
+                        elapsed += dwell[index-1] + legs[index-1]["duration_s"]
+                    minutes = evidence["departure_minutes"] + elapsed/60
+                    point.update(scheduled_time_minutes=minutes, scheduled_time_label=_format_clock_minutes(minutes),
+                                 scheduled_offset_s=elapsed, schedule_anchor_kind="departure",
+                                 schedule_anchor_label=_format_clock_minutes(evidence["departure_minutes"]))
         elif metrics["source"] != "planning_reference" or metrics["duration_s"] is None or metrics["distance_m"] is None:
             for point in points:
                 for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):

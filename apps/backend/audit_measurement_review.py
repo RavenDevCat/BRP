@@ -149,14 +149,20 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
             or isinstance(used, bool) or not isinstance(used, int) or not 0 <= used <= limit):
         raise ValueError("Invalid persisted provider budget or usage.")
     config = core.build_planner_config(request["full_input"]["config"])
-    inner = provider_factory("amap", departure_time=None, api_call_limit=request["provider_call_limit"])
-    inner.state = reviews.ReviewCallState({**inner.state, "api_calls": int(record.get("api_calls") or 0)},
-        lambda count: store.reserve_route_measurement_calls(rid, token, count))
-    provider = FullReviewProvider(inner,
-        read_snapshot=lambda key: store.get_review_measurement_snapshot(rid, token, key),
-        write_snapshot=lambda key, value: store.save_review_measurement_snapshot(rid, token, key, value), check_active=check_active)
+    import final_timing
+    google_mode = final_timing.is_google(request["full_input"]["config"])
+    if google_mode:
+        inner = provider = final_timing.review_context(request["full_input"]["config"], store, record, token, check_active)
+        config._google_validation_session = provider.session
+    else:
+        inner = provider_factory("amap", departure_time=None, api_call_limit=request["provider_call_limit"])
+        inner.state = reviews.ReviewCallState({**inner.state, "api_calls": int(record.get("api_calls") or 0)},
+            lambda count: store.reserve_route_measurement_calls(rid, token, count))
+        provider = FullReviewProvider(inner,
+            read_snapshot=lambda key: store.get_review_measurement_snapshot(rid, token, key),
+            write_snapshot=lambda key, value: store.save_review_measurement_snapshot(rid, token, key, value), check_active=check_active)
     route_limit_s = core.effective_route_duration_limit_minutes(config) * 60
-    planner = SimpleNamespace(AMAP_KEY=getattr(inner.planner, "AMAP_KEY", ""),
+    planner = SimpleNamespace(AMAP_KEY=getattr(getattr(inner, "planner", None), "AMAP_KEY", ""),
         MAX_ROUTE_DURATION_SECONDS=route_limit_s,
         _BRP_FINAL_ROUTE_TRAFFIC_GATE_DURATION_SECONDS=route_limit_s,
         _BRP_RUNTIME_PROFILE={})
@@ -183,7 +189,7 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
             scenario.update(scenario_status="unresolved", unresolved_reason="No saved candidate to remeasure.")
             continue
         core.attach_final_route_traffic_gate(planner, scenario, scenario["points"], config,
-            request["full_input"]["input_records"], key, measurement_provider=provider, check_canceled=check_active)
+            request["full_input"]["input_records"], key, measurement_provider=None if google_mode else provider, check_canceled=check_active)
         if scenario["traffic_gate"].get("status") in {"disabled", "not_applicable"}:
             scenario["traffic_gate"].update(status="unavailable", reason="correction_requires_live_measurements",
                 unavailable_route_count=len(scenario["routes"]))
@@ -195,6 +201,8 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
                     "status": "needs_review", "complete": False, "geometry": [], "legs": [],
                     "duration_s": None, "distance_m": None, "issues": [{"code": "measurement_unavailable"}]}
         output["provider_api_calls"] = int(provider.state["api_calls"])
+        if google_mode:
+            output["provider_api_calls"] = provider.session.client.calls
         output["audit_result"] = _native_result(structured, config)
         checkpoint(deepcopy(output))
     current = structured["current_plan"]

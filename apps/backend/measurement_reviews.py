@@ -74,8 +74,8 @@ def source_route_scopes(record: dict[str, Any]) -> list[dict[str, Any]]:
     kind = str(dict(record.get("metadata") or {}).get("job_kind") or "route_audit")
     scopes = []
     if kind == "direct_school_analysis":
-        if result.get("provider") != "amap":
-            raise ValueError("Historical road remeasurement currently requires a China AMap source.")
+        if result.get("provider") not in {"amap", "google_routes"}:
+            raise ValueError("Historical road remeasurement requires a supported China source.")
         prepared = dict(record.get("prepared_payload") or {})
         current = dict(prepared.get("current_plan") or {})
         lookup = analysis._point_lookup(list(prepared.get("input_records") or []),
@@ -180,6 +180,12 @@ def historical_risk_summary(record: dict[str, Any]) -> dict[str, Any]:
 def build_review_request(record: dict[str, Any], route_keys: list[str], *,
                          requested_by: str, request_key: str,
                          provider_call_limit: int = 100) -> dict[str, Any]:
+    saved_result = dict(record.get("result") or {})
+    configs = [record.get("config"), saved_result.get("parameters"), saved_result.get("planner_config"),
+               dict(saved_result.get("structured_results") or {}).get("planner_config")]
+    if saved_result.get("provider") == "google_routes" or any(
+            dict(config or {}).get("final_time_validation_mode") == "google" for config in configs):
+        raise ValueError("Google results require full same-provider revalidation, not isolated legacy road correction.")
     if str(record.get("status") or "") not in {"succeeded", "failed"} or not record.get("result"):
         raise ValueError("A historical review requires a finished saved result.")
     if not record.get("job_id") or not requested_by.strip() or not 1 <= len(request_key) <= 80:

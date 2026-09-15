@@ -518,6 +518,7 @@ def build_distance_result_dataframe(
     origin_record: dict[str, Any],
     origin_point: dict[str, Any],
     distance_mode: str,
+    timing_context: Any = None,
 ) -> pd.DataFrame:
     enriched_df = source_df.copy()
     enriched_df["_source_excel_row"] = [row["source_excel_row"] for row in input_rows]
@@ -534,6 +535,12 @@ def build_distance_result_dataframe(
             int(row["source_excel_row"]): metric
             for row, metric in zip(road_metric_queue, road_metrics)
         }
+        if timing_context is not None:
+            for row in road_metric_queue:
+                key = int(row["source_excel_row"])
+                evidence = timing_context.route([origin_point, dict(row["point"])])
+                road_metric_by_row[key] = {**road_metric_by_row[key], "duration_s": evidence["duration_s"],
+                                           "timing_evidence": evidence}
 
     result_rows: list[dict[str, Any]] = []
     for geocoded_row in geocoded_rows:
@@ -588,7 +595,14 @@ def build_distance_result_dataframe(
             }
         )
 
+    if timing_context is not None:
+        for row in result_rows:
+            evidence = road_metric_by_row.get(row["source_excel_row"], {}).get("timing_evidence")
+            row["time_provider"] = "google_routes" if evidence else None
+            row["distance_provider"] = "osrm" if distance_mode == "road" else "straight_line"
+            row["timing_evidence"] = json.dumps(evidence, ensure_ascii=False) if evidence else None
     result_df = enriched_df.merge(
+        # Distance stays on the existing basis; Google supplies a separate timing receipt.
         pd.DataFrame(result_rows),
         how="left",
         left_on="_source_excel_row",
@@ -603,6 +617,7 @@ def build_current_plan_route_cost_dataframe(
     *,
     diesel_price_per_liter: float,
     fuel_efficiency_km_per_liter: float,
+    timing_context: Any = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     geocoded_by_row = {
         int(row.get("source_excel_row", 0) or 0): dict(row)
@@ -628,7 +643,16 @@ def build_current_plan_route_cost_dataframe(
         skip_diesel_cost = is_electric_bus_type(route_bus_type)
         valid_rows = [row for row in ordered_rows if row.get("status") == "ok" and row.get("point")]
         failed_count = len(ordered_rows) - len(valid_rows)
+        if timing_context is not None and failed_count:
+            raise ValueError("All route stops must resolve before Google timing validation")
+        if timing_context is not None and len(valid_rows) < 2:
+            raise ValueError("Google route timing requires at least two resolved stops")
         leg_metrics = compute_osrm_route_leg_metrics([dict(row["point"]) for row in valid_rows]) if len(valid_rows) >= 2 else []
+        evidence = None
+        if timing_context is not None and len(valid_rows) >= 2:
+            evidence = timing_context.route([dict(row["point"]) for row in valid_rows], reference_legs=leg_metrics)
+            leg_metrics = [{**metric, "duration_s": native["duration_s"]}
+                           for metric, native in zip(leg_metrics, evidence["legs"])]
         total_distance_m = 0.0
         total_duration_s = 0.0
         for leg_index, (from_row, to_row, metric) in enumerate(zip(valid_rows[:-1], valid_rows[1:], leg_metrics), start=1):
@@ -652,6 +676,11 @@ def build_current_plan_route_cost_dataframe(
             )
 
         total_distance_km = total_distance_m / 1000.0
+        if timing_context is not None:
+            for row in leg_result_rows:
+                if row["route_id"] == route_id:
+                    row["time_provider"] = "google_routes"
+                    row["distance_provider"] = "osrm"
         fuel_liters = None if skip_diesel_cost else (total_distance_km / fuel_efficiency_km_per_liter if fuel_efficiency_km_per_liter > 0 else 0.0)
         fuel_cost = None if fuel_liters is None else fuel_liters * diesel_price_per_liter
         route_result_rows.append(
@@ -665,6 +694,8 @@ def build_current_plan_route_cost_dataframe(
                 "drive_legs": len(leg_metrics),
                 "route_distance_km": round(total_distance_km, 3),
                 "route_duration_min": round(total_duration_s / 60.0, 1),
+                **({"time_provider": "google_routes", "distance_cost_provider": "osrm",
+                    "timing_evidence": json.dumps(evidence, ensure_ascii=False)} if timing_context is not None else {}),
                 "estimated_diesel_liters": round(fuel_liters, 2) if fuel_liters is not None else None,
                 "estimated_one_way_fuel_cost": round(fuel_cost, 2) if fuel_cost is not None else None,
             }

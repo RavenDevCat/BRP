@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { DEFAULT_FINAL_TIMING, FinalTimingOptions } from "@/features/planner/final-timing-options";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
@@ -134,6 +135,7 @@ export function RouteInsertAdvisorPage() {
   const [fileBase64, setFileBase64] = useState("");
   const [fileError, setFileError] = useState("");
   const [addresses, setAddresses] = useState("");
+  const [timingConfig, setTimingConfig] = useState(DEFAULT_FINAL_TIMING);
   const [country, setCountry] = useState("China");
   const [city, setCity] = useState("Shanghai");
   const [walkingThreshold, setWalkingThreshold] = useState("500");
@@ -199,6 +201,7 @@ export function RouteInsertAdvisorPage() {
   const result = historyResult;
   const canRun = Boolean(fileBase64 && addresses.trim() && !proposalMutation.isPending);
   const requestPayload = (): RouteInsertAdvisorProposalRequest => ({
+    timing_config: timingConfig,
     file_name: file?.name || "workbook.xlsx",
     file_base64: fileBase64,
     new_stops: addresses,
@@ -296,6 +299,7 @@ export function RouteInsertAdvisorPage() {
       <section className="rounded-md border border-border bg-surface shadow-sm">
         <div className="border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">{t("New student insertion")}</h2>
+          <FinalTimingOptions value={timingConfig} onChange={setTimingConfig} eligible={country === "China"} />
         </div>
         <form
           className="grid gap-4 p-4 lg:grid-cols-[1fr_320px]"

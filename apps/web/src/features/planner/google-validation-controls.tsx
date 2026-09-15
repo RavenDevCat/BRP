@@ -2,10 +2,10 @@ import type { PlannerConfigPayload } from "@/lib/api";
 import { useT } from "@/lib/i18n/context";
 
 type Props = {
-  config: PlannerConfigPayload;
+  config: Pick<PlannerConfigPayload, "final_time_validation_mode" | "validation_service_date">;
   available: boolean;
   scheduled: boolean;
-  onChange: (patch: Partial<PlannerConfigPayload>) => void;
+  onChange: (patch: Pick<PlannerConfigPayload, "final_time_validation_mode" | "validation_service_date">) => void;
 };
 
 export function GoogleValidationControls({ config, available, scheduled, onChange }: Props) {

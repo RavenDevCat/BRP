@@ -181,8 +181,8 @@ def scenario_setup(client):
         validation_budget_id="test-task", service_direction="To School", stop_service_minutes=1)
     config._google_validation_session = g.ValidationSession(client)
     points = [{"plot_lat": p[0], "plot_lng": p[1], "passenger_count": 1} for p in POINTS]
-    scenario = {"routes": [{"route_id": "R1", "nodes": [1, 2, 0], "time_s": 1320,
-        "stop_service_time_s": 120, "leg_details": [{"duration_s": 600}, {"duration_s": 600}]}]}
+    scenario = {"routes": [{"route_id": "R1", "nodes": [1, 2, 0], "time_s": 1260,
+        "stop_service_time_s": 60, "leg_details": [{"duration_s": 600}, {"duration_s": 600}]}]}
     return config, points, scenario
 
 def test_gate_native_evidence_and_time_impact_source(client):
@@ -227,9 +227,9 @@ def test_native_shared_map_and_export_contract(client, monkeypatch):
     core.attach_final_route_traffic_gate(object(), scenario, points, config, [{"country": "China"}], "Current")
     views = importlib.import_module("route_measurement_view")
     assert views.route_display_metrics(scenario["routes"][0]) == {
-        "duration_s": 1320, "distance_m": 2000, "source": "measurement"}
+        "duration_s": 1260, "distance_m": 2000, "source": "measurement"}
     rendered = views.measured_route_views(scenario["routes"])
-    assert rendered[0]["time_s"] == 1320
+    assert rendered[0]["time_s"] == 1260
     assert len(rendered[0]["drawing_segments"]) == 2
     service = importlib.import_module("backend_service")
     def forbidden(*args, **kwargs): raise AssertionError("Map tried AMap fallback")
@@ -242,7 +242,7 @@ def test_native_shared_map_and_export_contract(client, monkeypatch):
     assert error is None
     assert data["routes"][0]["display_geometry_source"] == "google_routes"
     assert data["routes"][0]["evidence_status"] == "verified"
-    assert data["routes"][0]["duration_s"] == 1320
+    assert data["routes"][0]["duration_s"] == 1260
     assert data["summary"]["measurement_unavailable_route_count"] == 0
 
 
@@ -251,6 +251,7 @@ def test_pm_dwell_and_legacy_window(client):
     config.service_direction = "From School"
     config.time_window_start, config.time_window_end = "15:40", "17:40"
     scenario["routes"][0]["nodes"] = [0, 1, 2]
+    scenario["routes"][0]["stop_service_time_s"] = 120
     gate = core.attach_final_route_traffic_gate(object(), scenario, points, config, [{"country": "China"}], "Protected")
     assert gate["status"] == "passed"
     assert scenario["routes"][0]["final_route_traffic_gate"]["verified_departure_label"] == "15:40"
@@ -265,7 +266,7 @@ def test_google_window_is_authoritative_without_changing_legacy():
 
 def test_configured_grace_is_preserved(client, monkeypatch):
     config, points, scenario = scenario_setup(client)
-    config.time_window_end = "06:51"
+    config.time_window_end = "06:50"
     scenario["routes"][0]["time_s"] = 1320
     monkeypatch.setattr(core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 1)
     gate = core.attach_final_route_traffic_gate(object(), scenario, points, config, [{"country": "China"}], "Current")

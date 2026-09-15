@@ -220,12 +220,30 @@ def run_side_review(store: Any, record: dict, token: str, *, provider_factory: C
         if not store.route_measurement_claim_active(review_id, token):
             raise reviews.ReviewClaimLost("Review is no longer active.")
     active()
-    inner = provider_factory("amap", departure_time=None, api_call_limit=request["provider_call_limit"])
-    inner.state = reviews.ReviewCallState({**inner.state, "api_calls": int(record.get("api_calls") or 0)},
-        lambda count: store.reserve_route_measurement_calls(review_id, token, count))
-    provider = FullReviewProvider(inner, check_active=active,
-        read_snapshot=lambda key: store.get_review_measurement_snapshot(review_id, token, key),
-        write_snapshot=lambda key, value: store.save_review_measurement_snapshot(review_id, token, key, value))
+    import final_timing
+    full_input = request["full_input"]
+    if request["mode"] == "full_fleet":
+        configs = [dict(plan.get("summary") or {}).get("validation_config", {}) for field in PLAN_FIELDS
+                   if (plan := full_input.get(field)) and plan.get("routes")]
+    else:
+        configs = [row["measurement_inputs"]["config"] for scenario in full_input["route_insert_result"].get("scenarios") or []
+                   for row in scenario["selected_plan"].get("affected_routes") or []]
+    google_mode = any(final_timing.is_google(config) for config in configs)
+    if google_mode:
+        if not all(final_timing.is_google(config) for config in configs):
+            raise ValueError("A correction cannot mix legacy and Google source plans")
+        def comparison_policy(config):
+            return {key: value for key, value in final_timing.snapshot(config).items() if key != "validation_budget_id"}
+        if any(comparison_policy(config) != comparison_policy(configs[0]) for config in configs[1:]):
+            raise ValueError("Google correction plans must share one timing context")
+        inner = provider = final_timing.review_context(configs[0], store, record, token, active)
+    else:
+        inner = provider_factory("amap", departure_time=None, api_call_limit=request["provider_call_limit"])
+        inner.state = reviews.ReviewCallState({**inner.state, "api_calls": int(record.get("api_calls") or 0)},
+            lambda count: store.reserve_route_measurement_calls(review_id, token, count))
+        provider = FullReviewProvider(inner, check_active=active,
+            read_snapshot=lambda key: store.get_review_measurement_snapshot(review_id, token, key),
+            write_snapshot=lambda key, value: store.save_review_measurement_snapshot(review_id, token, key, value))
     native = deepcopy(request["full_input"])
     output = {key: request[key] for key in ("review_version", "source_job_id", "source_tool_key", "source_run_id", "source_result_digest", "full_input_digest", "mode")}
     output.update(scope=request["mode"] + "_result", status="running", routes=[], native_result=native,
@@ -305,8 +323,13 @@ def _run_insert(native: dict, request: dict, provider: Any, measured: dict, acti
                 "leg_distances_m": evidence.get("leg_distances_m") or [] if valid else [], "provider_verified": valid}
         saved = previous["affected_routes"][0]["measurement_inputs"]
         config = {**saved["config"], "stop_service_minutes": saved["inserted_stop_dwell_s"] / 60}
+        import final_timing
+        cache = {}
+        if isinstance(provider, final_timing.FinalTimingContext):
+            config = {**config, **provider.config}
+            cache[("google_final_timing", config["validation_budget_id"])] = provider
         plan, map_data = api._insert_build_selected_plan(base_map, deepcopy(previous["actions"]),
-            country="China", constraints={}, suggested_config=config, measurement_cache={}, measure_route=measure)
+            country="China", constraints={}, suggested_config=config, measurement_cache=cache, measure_route=measure)
         scenario.update(selected_plan=plan, selected_map_data=map_data)
         by_route = {row["route_id"]: row for row in plan["affected_routes"]}
         for recommendation in scenario.get("recommendations") or []:

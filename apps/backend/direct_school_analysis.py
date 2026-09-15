@@ -134,7 +134,11 @@ def _measure_active_route(
             _osrm_leg(origin, destination, runtime["osrm_cache"])
             for origin, destination in zip(active_points[:-1], active_points[1:])
         ] if "osrm_cache" in runtime else None
-        live = _route_with_stop_boundaries(provider, active_points, reference_legs=references)
+        from final_timing import FinalTimingContext
+        live = (provider.route(active_points, reference_legs=references,
+                dwell_s=[0 if bool(ordered[index].get("is_depot")) else stop_service_minutes*60 for index in active_indexes])
+                if isinstance(provider, FinalTimingContext) else
+                _route_with_stop_boundaries(provider, active_points, reference_legs=references))
         drive_s = _safe_float(live.get("duration_s"))
         distance_m = _safe_float(live.get("distance_m"))
         called_at = live.get("called_at")
@@ -353,6 +357,9 @@ def _route_with_stop_boundaries(
     *,
     reference_legs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from final_timing import FinalTimingContext
+    if isinstance(provider, FinalTimingContext):
+        return provider.route(points, reference_legs=reference_legs)
     if isinstance(provider, FreshRouteProvider):
         return provider.route(points, reference_legs=reference_legs)
     adjacent_route = getattr(provider, "route_via_adjacent_legs", None)
@@ -473,6 +480,7 @@ def run_direct_school_analysis(
     resume_result: dict[str, Any] | None = None,
     provider_factory: Callable[..., FreshRouteProvider] | None = None,
     check_canceled: Callable[[], None] | None = None,
+    timing_context: Any = None,
 ) -> dict[str, Any]:
     config = _analysis_config(analysis_config)
     input_records = [dict(item) for item in list(prepared_payload.get("input_records") or [])]
@@ -489,11 +497,22 @@ def run_direct_school_analysis(
             departure_time = datetime.fromisoformat(str(scheduled_start_at).replace("Z", "+00:00"))
         except ValueError:
             departure_time = None
-    provider = (provider_factory or FreshRouteProvider)(
-        provider_name,
-        departure_time=departure_time,
-        api_call_limit=int(config["provider_call_limit"]),
-    )
+    from final_timing import FinalTimingContext, is_google, require_china
+    google_mode = is_google(config)
+    if google_mode:
+        for record in input_records:
+            require_china(record.get("country"))
+        if provider_factory is not None:
+            raise RuntimeError("Google mode requires its native timing context")
+        provider = timing_context or FinalTimingContext(config, check_canceled=check_canceled)
+        if not isinstance(provider, FinalTimingContext):
+            raise RuntimeError("Native Google timing context required")
+        provider_name = provider.provider
+        # Do not reuse historical timestamps or partially verified classifications.
+        resume_result = None
+    else:
+        provider = (provider_factory or FreshRouteProvider)(
+            provider_name, departure_time=departure_time, api_call_limit=int(config["provider_call_limit"]))
     lookup = _point_lookup(input_records, points)
     school_record = input_records[0]
     school_point = _lookup_point(school_record, lookup)
@@ -657,12 +676,16 @@ def run_direct_school_analysis(
             )
             if config["service_direction"] == "To School":
                 latest_arrival = _clock_minutes(config.get("time_window_end"), 8 * 60)
-                row["latest_direct_departure"] = _clock_label(latest_arrival - direct_duration_s / 60.0)
+                departure = live["departure_minutes"] if google_mode else latest_arrival - direct_duration_s / 60.0
+                row["latest_direct_departure"] = _clock_label(departure)
             else:
                 departure = _clock_minutes(config.get("from_school_departure_time"), 15 * 60 + 40)
-                row["estimated_direct_arrival"] = _clock_label(departure + direct_duration_s / 60.0)
+                arrival = live["arrival_minutes"] if google_mode else departure + direct_duration_s / 60.0
+                row["estimated_direct_arrival"] = _clock_label(arrival)
         except Exception as exc:
             row["provider_status"] = "failed"
+            if google_mode:
+                raise
             row["route_evidence"] = deepcopy(provider.state.get("last_route_evidence"))
             row["quality_status"] = "provider_failed"
             row["operational_category"] = "data_review"
@@ -698,7 +721,9 @@ def run_direct_school_analysis(
             ]
             osrm_drive_s = sum(_safe_float(leg.get("duration_s")) for leg in leg_details)
             osrm_distance_m = sum(_safe_float(leg.get("distance_m")) for leg in leg_details)
-            live = _route_with_stop_boundaries(provider, resolved_points, reference_legs=leg_details)
+            live = (provider.route(resolved_points, reference_legs=leg_details,
+                    dwell_s=[0 if bool(stop.get("is_depot")) else float(config["stop_service_minutes"])*60 for stop in ordered])
+                    if google_mode else _route_with_stop_boundaries(provider, resolved_points, reference_legs=leg_details))
             live_drive_s = _safe_float(live.get("duration_s"))
             live_distance_m = _safe_float(live.get("distance_m"))
             service_stop_count = sum(1 for stop in ordered if not bool(stop.get("is_depot")))
@@ -770,6 +795,8 @@ def run_direct_school_analysis(
                     }
                 )
         except Exception as exc:
+            if google_mode:
+                raise
             route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
                                   "route_evidence": deepcopy(provider.state.get("last_route_evidence"))})
             errors.append({"scope": "current_route", "route_id": route_id, "error": str(exc)})
@@ -996,6 +1023,8 @@ def run_direct_school_analysis(
             )
             additional_occurrences.extend(additional_entries)
         except Exception as exc:
+            if google_mode:
+                raise
             route_window_analysis.append(
                 {
                     "route_id": route_id,

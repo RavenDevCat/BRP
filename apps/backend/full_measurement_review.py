@@ -143,7 +143,7 @@ class FullReviewProvider(analysis.FreshRouteProvider):
 
 def _verified(value: dict[str, Any], point_count: int) -> bool:
     if not (value.get("evidence_version") == EVIDENCE_VERSION and value.get("status") == "verified"
-            and value.get("provider") == "amap" and not value.get("issues")
+            and value.get("provider") in {"amap", "google_routes"} and not value.get("issues")
             and value.get("complete") is True and len(value.get("legs") or []) == point_count - 1
             and len(value.get("leg_durations_s") or []) == point_count - 1
             and reviews._number(value.get("duration_s")) is not None
@@ -193,9 +193,12 @@ def run_full_review(store: Any, record: dict[str, Any], token: str, *,
             check_active=check_active)
 
     config = {**request["full_input"]["analysis_config"], "provider_call_limit": limit}
+    import final_timing
+    google_context = final_timing.review_context(config, store, record, token, check_active) if final_timing.is_google(config) else None
     # Derived classifications are rerun; only fresh, review-owned road measurements survive a pause.
     result = analysis.run_direct_school_analysis(deepcopy(request["full_input"]["prepared_payload"]), config,
-        run_seed=request["request_key"], provider_factory=factory, check_canceled=check_active,
+        run_seed=request["request_key"], provider_factory=None if google_context else factory, check_canceled=check_active,
+        **({"timing_context": google_context} if google_context else {}),
         checkpoint=lambda partial: checkpoint(_envelope(request, partial, int(partial["progress"]["provider_api_calls"]))))
     check_active()
     output = _envelope(request, result, int(result["summary"]["provider_api_calls"]))

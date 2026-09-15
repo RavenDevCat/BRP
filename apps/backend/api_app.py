@@ -2917,6 +2917,16 @@ def _insert_build_selected_plan(
 
     merged_config = dict(suggested_config)
     merged_config.update({key: value for key, value in constraints.items() if value not in (None, "")})
+    import final_timing
+    timing_context = None
+    if final_timing.is_google(merged_config):
+        final_timing.require_china(country)
+        context_key = ("google_final_timing", merged_config.get("validation_budget_id"))
+        if measurement_cache is None:
+            measurement_cache = {}
+        if context_key not in measurement_cache:
+            measurement_cache[context_key] = final_timing.FinalTimingContext(merged_config)
+        timing_context = measurement_cache[context_key]
     window_s = _insert_time_window_seconds(merged_config)
     dwell_minutes = _insert_float(merged_config.get("stop_service_minutes"))
     dwell_s = max(0.0, (1.0 if dwell_minutes is None else dwell_minutes) * 60.0)
@@ -2942,7 +2952,23 @@ def _insert_build_selected_plan(
             _insert_coord_payload(stop, country, str(dict(stop).get("city") or ""))
             for stop in route_stops
         ]
-        if insert_actions or provider_required:
+        base_service_s = _insert_float(route.get("stop_service_time_s"))
+        if base_service_s is None:
+            base_service_s = max(0, _insert_int(route.get("stop_count"), 0)) * dwell_s
+        selected_service_s = base_service_s + len(insert_actions)*dwell_s
+        if timing_context is not None:
+            service_count = sum(not bool(stop.get("is_depot")) for stop in route_stops)
+            if service_count == 0:
+                raise ValueError("Route has no service stops")
+            saved_stop_dwell = base_service_s/service_count
+            base_dwell = [0 if stop.get("is_depot") else saved_stop_dwell for stop in route_stops]
+            existing_ids = {str(stop.get("id")) for stop in route_stops}
+            selected_dwell = [0 if stop.get("is_depot") else saved_stop_dwell
+                if str(stop.get("id")) in existing_ids else dwell_s for stop in sequence]
+            base_measurement = final_timing.insert_measurement(timing_context, base_points, base_dwell)
+            selected_measurement = (final_timing.insert_measurement(timing_context, route_points, selected_dwell)
+                                    if insert_actions else deepcopy(base_measurement))
+        elif insert_actions or provider_required:
             base_measurement = measure_route(
                 base_points, country, measurement_cache
             )
@@ -2979,6 +3005,8 @@ def _insert_build_selected_plan(
         base_total_s = _insert_optional_sum([base_measurement.get("duration_s"), base_service_s])
         selected_total_s = _insert_optional_sum([selected_measurement.get("duration_s"), selected_service_s])
         time_window_ok = (window_s is None or selected_total_s <= window_s) if selected_total_s is not None else None
+        if timing_context is not None:
+            time_window_ok = bool(time_window_ok and selected_measurement["route_evidence"]["time_window_passes"])
         action_ok = all(bool(item.get("feasible")) for item in route_actions)
         provider_ok = not provider_required or bool(selected_measurement.get("provider_verified") and base_measurement.get("provider_verified"))
         route_feasible = action_ok and time_window_ok is True and provider_ok
@@ -3003,7 +3031,9 @@ def _insert_build_selected_plan(
                     "inserted_stop_dwell_s": dwell_s,
                     "base_dwell_source": "saved_route" if _insert_float(route.get("stop_service_time_s")) is not None else "configured_stop_count",
                     "window_limit_s": window_s, "config": {key: deepcopy(merged_config.get(key)) for key in
-                        ("service_direction", "time_window_start", "time_window_end", "from_school_departure_time", "stop_service_minutes", "stop_limit")},
+                        ("service_direction", "time_window_start", "time_window_end", "from_school_departure_time", "stop_service_minutes", "stop_limit",
+                         "final_time_validation_mode", "validation_service_date", "validation_budget_id")
+                        if key not in {"final_time_validation_mode", "validation_service_date", "validation_budget_id"} or key in merged_config},
                 },
                 "capacity_before": _insert_int(route.get("load"), 0),
                 "capacity_after": load_after,
@@ -3082,6 +3112,20 @@ def _insert_build_selected_plan(
             }
         )
         map_routes.append(map_route)
+        if timing_context is not None:
+            evidence = selected_measurement["route_evidence"]
+            map_route["final_route_traffic_gate"].update(provider="google_routes",
+                verified_departure_minutes=evidence["departure_minutes"],
+                verified_arrival_minutes=evidence["arrival_minutes"],
+                validation_service_date=evidence["validation_config"]["validation_service_date"],
+                policy_version=evidence["policy_version"], passes=bool(time_window_ok))
+            elapsed = 0.0
+            for order, stop in enumerate([stop for stop in map_stops if stop["route_id"] == route_id]):
+                if order:
+                    elapsed += evidence["dwell_by_stop_s"][order-1] + evidence["legs"][order-1]["duration_s"]
+                minutes = evidence["departure_minutes"] + elapsed/60
+                stop["scheduled_time_minutes"] = minutes
+                stop["scheduled_time_label"] = backend_service._format_clock_minutes(minutes)
 
         if insert_actions:
             old_geometry = list(base_measurement.get("display_geometry") or base_measurement.get("geometry") or [])
@@ -3188,6 +3232,11 @@ def _insert_build_selected_plan(
 def _build_route_insert_proposals(
     job_record: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
+    import final_timing
+    inherited = final_timing.snapshot(dict(job_record.get("config") or {}))
+    requested = {**inherited, **dict(payload.get("timing_config") or {})}
+    timing_config = final_timing.prepare(requested)
+    payload = {**payload, "_suggested_config": {**dict(payload.get("_suggested_config") or {}), **timing_config}}
     source = dict(payload.get("source") or {})
     scenario_key = str(
         payload.get("scenario_key") or source.get("scenario_key") or "current_plan"

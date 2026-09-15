@@ -57,6 +57,7 @@ export type ProviderStatusResponse = {
 };
 
 export type DeploymentFeatures = {
+    google_final_validation?: { available: boolean; reason: string | null };
     language_switch_enabled: boolean;
     scheduled_jobs_enabled: boolean;
     available_languages?: string[];
@@ -512,6 +513,8 @@ export type JobMapData = {
 };
 
 export type PlannerConfigPayload = {
+    final_time_validation_mode?: "legacy" | "google";
+    validation_service_date?: string;
     large_bus_name: string;
     mid_bus_name: string;
     small_bus_name: string;

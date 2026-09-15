@@ -1,6 +1,9 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Google time validation": "Google 시간 검증",
+    "Service date": "운행 날짜",
+    "Google validation is not available on this deployment.": "이 환경에서는 Google 시간 검증을 사용할 수 없습니다.",
     "Travel time unavailable": "탑승 시간 미확보",
     "Routes measured": "시간 측정 완료 노선",
     "Classification is incomplete for this route.": "이 노선의 시간 초과 분류가 아직 완료되지 않았습니다.",

@@ -1993,6 +1993,8 @@ def _current_plan_preview_map(
     config_payload: dict[str, Any],
     auto_route_budget: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any] | None, str | None]:
+    if config_payload.get("final_time_validation_mode") == "google":
+        config_payload = {**config_payload, "final_time_validation_mode": "legacy"}
     points = [dict(item) for item in list(prepared_payload.get("original_points") or [])]
     if not points:
         return None, "No geocoded points are available for map preview."
@@ -2759,8 +2761,11 @@ def _handle_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[str, Any]:
+    from google_final_validation import prepare_submission
+    google_config = prepare_submission(dict(payload.get("config") or {}),
+        payload.get("scheduled_date") if payload.get("scheduled_job") else None)
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
-    config_payload = _planner_config_payload(dict(payload.get("config") or {}))
+    config_payload = _planner_config_payload(google_config)
     input_records = [
         dict(item) for item in list(current_plan.get("input_records") or [])
     ]
@@ -3106,6 +3111,7 @@ def _google_geocode_usage_payload() -> dict[str, Any]:
 
 
 def _deployment_features_payload() -> dict[str, Any]:
+    from google_final_validation import availability
     root_text = str(BASE_DIR).replace("\\", "/").lower()
     if "/staging/" in root_text:
         available_languages = ["en", "ko", "zh"]
@@ -3117,6 +3123,7 @@ def _deployment_features_payload() -> dict[str, Any]:
         "language_switch_enabled": ENABLE_LANGUAGE_SWITCH,
         "available_languages": available_languages,
         "scheduled_jobs_enabled": SCHEDULED_JOBS_ENABLED,
+        "google_final_validation": availability(),
     }
 
 

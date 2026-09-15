@@ -13,6 +13,7 @@ import {
   TRAFFIC_PROFILE_OPTIONS,
 } from "@/features/planner/config";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
+import { GoogleValidationControls } from "./google-validation-controls";
 import {
   clearGeocodeCache,
   getDeploymentFeatures,
@@ -598,6 +599,12 @@ export function NewJobPage() {
               ) : null}
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+                <div className="md:col-span-2 xl:col-span-6">
+                  <GoogleValidationControls config={config}
+                    available={featuresQuery.data?.google_final_validation?.available === true}
+                    scheduled={scheduledJobsEnabled && scheduledJob}
+                    onChange={updateUserConfig} />
+                </div>
                 <Field label="Window Start">
                   <input
                     className={fieldClassName}

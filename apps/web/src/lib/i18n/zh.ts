@@ -1,6 +1,9 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Google time validation": "Google 时间验证",
+    "Service date": "服务日期",
+    "Google validation is not available on this deployment.": "当前环境尚未开放 Google 时间验证。",
     "Travel time unavailable": "乘车时间暂未取得",
     "Routes measured": "已取得时间的路线",
     "Classification is incomplete for this route.": "该线路的超时分类尚不完整。",

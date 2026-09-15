@@ -51,6 +51,10 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
     from BusingProblem import transpose_matrix
     from json_cache_store import clear_json_object, load_json_object, save_json_object
 import requests
+try:
+    from . import google_final_validation
+except ImportError:
+    import google_final_validation
 from amap_geocode_quality import GeocodePrecisionError, annotate_amap_pickup, require_amap_pickup_precision
 
 try:
@@ -357,6 +361,9 @@ KOREA_TRAFFIC_METRO_CITY_ALIASES = {
 }
 @dataclass
 class PlannerConfig:
+    final_time_validation_mode: str = "legacy"
+    validation_service_date: str = ""
+    validation_budget_id: str = ""
     large_bus_name: str = "Large Bus"
     mid_bus_name: str = "Mid Bus"
     small_bus_name: str = "Small Bus"
@@ -563,6 +570,7 @@ def normalize_traffic_profile_name(profile_name: str | None) -> str:
 
 def build_planner_config(config_payload: dict[str, Any] | None = None) -> PlannerConfig:
     """Build one validated config for HTTP, worker, and history paths."""
+    google_final_validation.validate_config(dict(config_payload or {}))
     defaults = PlannerConfig()
     allowed_fields = {field.name for field in fields(PlannerConfig)}
     payload = {
@@ -657,7 +665,11 @@ def build_planner_config(config_payload: dict[str, Any] | None = None) -> Planne
     if not math.isfinite(comfort) or not 0.1 <= comfort <= 1:
         raise ValueError("comfort_load_factor must be between 0.1 and 1.")
     payload["comfort_load_factor"] = comfort
+    if payload.get("final_time_validation_mode") == "google":
+        payload["to_school_arrival_time"] = payload.get("time_window_end", defaults.time_window_end)
+        payload["from_school_departure_time"] = payload.get("time_window_start", defaults.time_window_start)
     return PlannerConfig(**payload)
+
 
 
 def _traffic_float(value: Any) -> float | None:
@@ -1015,6 +1027,11 @@ def resolve_final_route_traffic_policy(
 ) -> TrafficPolicy:
     country, city = infer_traffic_location(input_records)
     country_label = str(country or "").strip().upper()
+    if getattr(_config, "final_time_validation_mode", "legacy") == "google":
+        state = google_final_validation.availability()
+        return TrafficPolicy(provider="google_routes", country=country, city=city,
+            final_validation_enabled=True, final_validation_applicable=country_label == "CHINA",
+            unavailable_reason=state["reason"])
     if country_label == "CHINA":
         provider = "amap"
     elif country_label == "SOUTH KOREA":
@@ -1049,6 +1066,12 @@ def _attach_final_route_traffic_gate_impl(
     check_canceled: Any | None = None,
 ) -> dict[str, Any]:
     service_direction = normalize_service_direction(config.service_direction)
+    if getattr(config, "final_time_validation_mode", "legacy") == "google":
+        return google_final_validation.attach_gate(planner, scenario, points, config,
+            input_records, scenario_label, check_canceled=check_canceled,
+            measurement_provider=measurement_provider,
+            grace_seconds=(AM_ARRIVAL_GATE_GRACE_MINUTES if service_direction == "To School"
+                           else PM_ROUTE_GATE_GRACE_MINUTES)*60)
     is_to_school = service_direction == "To School"
     earliest_departure_minutes, latest_arrival_minutes = _to_school_time_window(config)
     from_school_departure_minutes, from_school_latest_minutes = _from_school_time_window(config)
@@ -2566,6 +2589,12 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
             "matrix_candidate_radius_km": float(config.matrix_candidate_radius_km),
         },
     }
+    if config.final_time_validation_mode == "google":
+        payload["google_validation"] = {
+            "mode": "google", "service_date": config.validation_service_date,
+            "policy": google_final_validation.POLICY_VERSION,
+            "budget_id": config.validation_budget_id,
+        }
     return json.dumps(payload, ensure_ascii=False, sort_keys=True)
 
 
@@ -3748,7 +3777,7 @@ def calibrate_scheduled_current_plan_traffic(
         "api_calls": int(gate.get("api_calls", 0) or 0),
         "cache_hits": int(gate.get("cache_hits", 0) or 0),
     }
-    if provider not in {"amap", "kakao_navi"}:
+    if provider not in {"amap", "kakao_navi", "google_routes"}:
         return {**evidence, "status": "not_applicable", "reason": "unsupported_final_route_traffic_provider"}
     if evidence["gate_status"] not in {"passed", "failed"}:
         return {**evidence, "status": "unavailable", "reason": "current_plan_traffic_gate_unavailable"}
@@ -7283,6 +7312,16 @@ def _build_final_time_impact_validator(
     config: PlannerConfig,
     threshold_minutes: float,
 ) -> Any:
+    def require_same_source(scenario):
+        if config.final_time_validation_mode != "google":
+            return
+        for route in scenario.get("routes") or []:
+            gate = route.get("final_route_traffic_gate") or {}
+            if (gate.get("provider") != "google_routes"
+                    or gate.get("validation_service_date") != config.validation_service_date
+                    or gate.get("policy_version") != google_final_validation.POLICY_VERSION):
+                raise google_final_validation.ValidationUnavailable("google_time_impact_source_mismatch")
+    require_same_source(current_plan_scenario)
     current_rows, current_unavailable_route_count = _scenario_time_impact_rows(
         current_plan_scenario,
         original_points,
@@ -7296,6 +7335,7 @@ def _build_final_time_impact_validator(
     service_direction = normalize_service_direction(config.service_direction)
 
     def validate(scenario: dict[str, Any], scenario_points: list[dict[str, Any]]) -> dict[str, Any]:
+        require_same_source(scenario)
         candidate_rows, unavailable_route_count = _scenario_time_impact_rows(
             scenario,
             scenario_points,
@@ -7563,6 +7603,13 @@ def run_backend_planner_with_prepared_data(
     input_records = _normalize_input_records(prepared_payload.get("input_records") or [])
     if not input_records:
         raise ValueError("Prepared payload does not contain any input records.")
+    if config.final_time_validation_mode == "google":
+        google_final_validation.require_available()
+        google_final_validation.service_window(config)
+        if not config.validation_budget_id:
+            raise google_final_validation.ValidationUnavailable("google_budget_identity_missing")
+        if any(str(row.get("country", "")).upper() != "CHINA" for row in input_records):
+            raise google_final_validation.ValidationUnavailable("google_country_not_enabled")
 
     planner = load_legacy_planner()
     _apply_config(planner, config, input_records)

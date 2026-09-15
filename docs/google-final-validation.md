@@ -48,6 +48,14 @@ existing non-Google map, and retention/export terms require explicit acceptance
 before real activation. Do not copy existing runtime environments into tests.
 No production migration or deployment is implied by this implementation.
 
+An existing Google key may be bound to the dedicated Routes setting after an
+explicit operator decision. Key presence and a working geocoding relay do not
+prove Routes permission. Verify an actual Compute Routes request through the
+intended egress before enabling rollout. A relay exposing only geocoding cannot
+forward Routes requests without a separately implemented and tested interface.
+HTTP 403 alone does not distinguish service activation, key restrictions, or
+other project access conditions. Keep rollout disabled until access is verified.
+
 ## Timing and Evidence
 
 The Google endpoint is Routes API Compute Routes. Requests keep stop order and
@@ -91,6 +99,11 @@ an isolated fixture. It does not submit tasks or call mapping providers.
 removal, insertion, Fleet map/export and full-review worker tests, including
 persistent review budgets and preservation of source records. Disabled rollout
 must reject every optional entrypoint before file preparation or paid routing.
+`tests/test_google_solver_lifecycle.py` runs the real OR-Tools new-Audit pipeline
+against synthetic matrices and Google responses. It covers AM/PM, scheduled
+execution, all three plan variants, and an initial measured overrun triggering
+the existing outer replan before a later validated solution. No live provider
+request or production runtime store is used by these tests.
 
 Offline tests and a frontend build do not establish real-route acceptance.
 Before activation, verify complete task execution, restart/retry accounting,

@@ -75,6 +75,31 @@ def test_fleet_native_timing_reaches_map_and_schedule(context, monkeypatch, dire
     assert calls == context.state["api_calls"]
 
 @pytest.mark.parametrize("kind", ["walk_to_stop", "insert_stop"])
+def test_insert_submission_preserves_source_direction_and_off_settings(context, monkeypatch, kind):
+    from test_route_insert_measurements import source
+    base = {"service_direction": "From School", "time_window_start": "15:40", "time_window_end": "17:40"}
+    enabled = kind == "insert_stop"
+    requested = {**CONFIG, "final_time_validation_mode": "google" if enabled else "legacy"}
+    monkeypatch.setattr(timing, "prepare", lambda config: {**config, "validation_budget_id": "new-budget"})
+    monkeypatch.setattr(api, "_insert_geocode_stops", lambda *a: ([], []))
+    monkeypatch.setattr(api, "_refine_insert_proposals_with_osrm", lambda *a, **k: None)
+    monkeypatch.setattr(api, "_insert_scenario_selections", lambda *a: [[]])
+    class Captured(Exception): pass
+    def capture(*args, **kwargs):
+        actual = kwargs["suggested_config"]
+        if enabled:
+            assert actual["service_direction"] == "From School"
+            assert actual["validation_budget_id"] == "new-budget"
+            assert actual["time_window_start"] == CONFIG["time_window_start"]
+        else:
+            assert actual == base
+        raise Captured()
+    monkeypatch.setattr(api, "_insert_build_selected_plan", capture)
+    with pytest.raises(Captured):
+        api._build_route_insert_proposals({"config": {"service_direction": "To School"}}, {
+            "_map_data": source(), "_suggested_config": base, "timing_config": requested, "new_stops": []})
+
+@pytest.mark.parametrize("kind", ["walk_to_stop", "insert_stop"])
 def test_insert_baseline_and_candidate_share_google_context(context, monkeypatch, kind):
     from test_route_insert_measurements import source, action
     monkeypatch.setattr(api, "_insert_route_measurement", lambda *a, **k: pytest.fail("legacy final call reached"))

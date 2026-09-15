@@ -3233,10 +3233,17 @@ def _build_route_insert_proposals(
     job_record: dict[str, Any], payload: dict[str, Any]
 ) -> dict[str, Any]:
     import final_timing
-    inherited = final_timing.snapshot(dict(job_record.get("config") or {}))
-    requested = {**inherited, **dict(payload.get("timing_config") or {})}
-    timing_config = final_timing.prepare(requested)
-    payload = {**payload, "_suggested_config": {**dict(payload.get("_suggested_config") or {}), **timing_config}}
+    requested = dict(payload.get("timing_config") or {})
+    suggested = dict(payload.get("_suggested_config") or {})
+    google_mode = final_timing.is_google(requested)
+    if google_mode:
+        inherited = {**dict(job_record.get("config") or {}), **suggested}
+        requested = {**final_timing.snapshot(inherited), **requested,
+                     "service_direction": inherited.get("service_direction", requested.get("service_direction", "To School"))}
+        suggested.update(final_timing.prepare(requested))
+        payload = {**payload, "_suggested_config": suggested}
+    elif suggested.get("final_time_validation_mode") == "google":
+        payload = {**payload, "_suggested_config": {**suggested, "final_time_validation_mode": "legacy"}}
     source = dict(payload.get("source") or {})
     scenario_key = str(
         payload.get("scenario_key") or source.get("scenario_key") or "current_plan"
@@ -3250,6 +3257,8 @@ def _build_route_insert_proposals(
 
     constraints = dict(payload.get("constraints") or {})
     default_country = str(constraints.get("country") or payload.get("country") or "China").strip()
+    if google_mode:
+        final_timing.require_china(default_country)
     default_city = str(constraints.get("city") or payload.get("city") or "Shanghai").strip()
     walking_threshold_m = max(0.0, _insert_float(constraints.get("walking_threshold_m")) or 500.0)
     proposal_limit = max(1, min(100, _insert_int(constraints.get("proposal_limit"), 50)))

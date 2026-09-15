@@ -273,3 +273,41 @@ def test_configured_grace_is_preserved(client, monkeypatch):
     assert gate["status"] == "passed"
     assert gate["max_time_window_overrun_minutes"] == 1
     assert scenario["routes"][0]["final_route_traffic_gate"]["grace_minutes"] == 1
+
+
+@pytest.mark.parametrize("direction", ["To School", "From School"])
+def test_native_schedule_and_export_preserve_boarding_semantics(client, direction):
+    import io
+    from openpyxl import load_workbook
+    service = importlib.import_module("backend_service")
+    config, points, scenario = scenario_setup(client)
+    config.service_direction = direction
+    if direction == "From School":
+        config.time_window_start, config.time_window_end = "15:40", "17:40"
+        scenario["routes"][0].update(nodes=[0, 1, 2], stop_service_time_s=120)
+    core.attach_final_route_traffic_gate(object(), scenario, points, config, [{"country": "China"}], "Current")
+    scenario["points"] = [{**p, "node_id": i, "lat": p["plot_lat"], "lng": p["plot_lng"],
+                           "is_depot": i == 0, "passenger_count": 0 if i == 0 else 1,
+                           "address": f"Synthetic {i}", "country": "China", "city": "Shanghai"}
+                          for i, p in enumerate(points)]
+    result = {"service_direction": direction, "planner_config": config.__dict__,
+              "structured_results": {"current_plan": scenario}}
+    job = {"config": config.__dict__, "result": result}
+    mapped, error = service._build_job_map_payload(job, "current_plan", "current_plan_map", attach_impact=False)
+    assert error is None
+    stops = sorted(mapped["stops"], key=lambda stop: stop["order"])
+    gate = scenario["routes"][0]["final_route_traffic_gate"]
+    if direction == "To School":
+        # Pickup is boarding start; final gate departure is after origin boarding.
+        assert stops[0]["scheduled_time_minutes"] + 1 == gate["verified_departure_minutes"]
+        assert stops[1]["scheduled_time_minutes"] == gate["verified_departure_minutes"] + 10
+        assert stops[-1]["scheduled_time_minutes"] == gate["verified_arrival_minutes"]
+    else:
+        assert stops[0]["scheduled_time_minutes"] == gate["verified_departure_minutes"]
+        assert stops[1]["scheduled_time_minutes"] == gate["verified_departure_minutes"] + 10
+        assert stops[-1]["scheduled_time_minutes"] + 1 == gate["verified_arrival_minutes"]
+    exported, error = service._build_scenario_template_export(job, "current_plan")
+    assert error is None
+    rows = list(load_workbook(io.BytesIO(exported), read_only=True)["current_plan_assignments"].iter_rows(values_only=True))
+    index = rows[0].index("new pick up/drop off time")
+    assert [row[index] for row in rows[1:]] == [stop["scheduled_time_label"] for stop in stops]

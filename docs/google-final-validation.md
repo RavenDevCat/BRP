@@ -84,6 +84,15 @@ No production geocoding or business service needs a restart to install it.
 
 ## Timing and Evidence
 
+Audit pickup timestamps denote the start of boarding. The final-gate vehicle
+departure excludes origin boarding, matching the existing solver convention.
+With a one-minute dwell, a 07:52 pickup and a 07:53 verified departure are
+consistent. Intermediate boarding is included once; AM school arrival follows
+the verified arrival. In PM, stop labels denote arrival before that stop's dwell;
+the final gate includes completion of the final stop service. Map and template
+export timestamps must preserve the same convention, not force every pickup or
+drop-off label to equal the vehicle departure or service-completion label.
+
 The Google endpoint is Routes API Compute Routes. Requests keep stop order and
 use DRIVE with TRAFFIC_AWARE_OPTIMAL. Native per-leg durations, distances, snaps,
 and geometry are validated together. They are never represented as measurements

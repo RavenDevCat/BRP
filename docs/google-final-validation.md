@@ -56,6 +56,32 @@ forward Routes requests without a separately implemented and tested interface.
 HTTP 403 alone does not distinguish service activation, key restrictions, or
 other project access conditions. Keep rollout disabled until access is verified.
 
+### Restricted Routes Relay
+
+`BRP_GOOGLE_ROUTES_RELAY_URL` selects the separate Routes relay, and
+`BRP_GOOGLE_ROUTES_RELAY_TOKEN` authenticates the caller. Unset relay configuration
+retains the direct Google transport. Invalid configured relay settings fail
+closed; they never trigger direct or legacy fallback. HTTP is allowed only for
+explicit private/loopback IP addresses over an operator-protected network;
+otherwise use HTTPS. Relay URLs cannot include credentials, paths or queries.
+
+Deploy `ops/relay/google_routes_relay.py` separately from the geocoding service.
+Its only routing endpoint is POST `/compute-routes`; destination, field mask,
+driving policy and stop-order preservation are fixed. It requires a dedicated
+Google key binding, bearer token and `BRP_GOOGLE_ROUTES_RELAY_QUOTA_DB`.
+The relay's own persistent cap is supplementary egress protection, not an
+additional paid allowance or a replacement for the client's authoritative
+task/day/month/campaign reservation. Failed attempts are not refunded and HTTP
+redirects and automatic retries are disabled. The relay's success counter means
+a native HTTP response, while the client also validates geometry and leg data.
+
+The relay permits at most 200 attempts per task and 500 per day/month/campaign.
+`BRP_GOOGLE_ROUTES_RELAY_CAMPAIGN_LIMIT` may lower its campaign ceiling, never
+raise it above 500. Private deployments must preserve both stores. Keep tokens
+out of logs and browser settings. `run_google_routes_relay.ps1 -EnvFile ...`
+uses an explicitly selected private runtime and environment file on Windows.
+No production geocoding or business service needs a restart to install it.
+
 ## Timing and Evidence
 
 The Google endpoint is Routes API Compute Routes. Requests keep stop order and

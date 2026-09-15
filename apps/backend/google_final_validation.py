@@ -14,17 +14,15 @@ import requests
 try:
     from .quota_store_sqlite import SqliteQuotaStore
     from .route_evidence import EVIDENCE_VERSION
+    from .google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 except ImportError:
     from quota_store_sqlite import SqliteQuotaStore
     from route_evidence import EVIDENCE_VERSION
+    from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
 POLICY_VERSION = "google-final-v1"
-ENDPOINT = "https://routes.googleapis.com/directions/v2:computeRoutes"
 PILOT_TOTAL_LIMIT = 500
 TZ = ZoneInfo("Asia/Shanghai")
-FIELDS = ",".join(("routes.duration", "routes.distanceMeters", "routes.legs.duration",
-                   "routes.legs.distanceMeters", "routes.legs.startLocation",
-                   "routes.legs.endLocation", "routes.legs.polyline", "fallbackInfo"))
 
 
 class ValidationUnavailable(RuntimeError):
@@ -52,7 +50,11 @@ def availability():
     for name, reason in checks:
         if os.environ.get(name, "").lower() != "true":
             return {"available": False, "reason": reason}
-    if not os.environ.get("BRP_GOOGLE_ROUTES_API_KEY", "").strip():
+    try:
+        relay = relay_url()
+    except ValueError:
+        return {"available": False, "reason": "google_relay_configuration_invalid"}
+    if not relay and not os.environ.get("BRP_GOOGLE_ROUTES_API_KEY", "").strip():
         return {"available": False, "reason": "google_key_missing"}
     if not os.environ.get("BRP_GOOGLE_FINAL_QUOTA_DB", "").strip():
         return {"available": False, "reason": "google_budget_store_missing"}
@@ -196,9 +198,7 @@ class GoogleRoutesClient:
             if self.transport is not None:
                 payload = self.transport(body)
             else:
-                response = requests.post(ENDPOINT, json=body, headers={
-                    "X-Goog-Api-Key": os.environ["BRP_GOOGLE_ROUTES_API_KEY"],
-                    "X-Goog-FieldMask": FIELDS}, timeout=(5, 25), allow_redirects=False)
+                response = post_routes(body, self.budget_id)
                 if response.status_code != 200:
                     raise ValidationUnavailable(f"google_http_{response.status_code}")
                 payload = response.json()

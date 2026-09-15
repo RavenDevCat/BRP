@@ -27,13 +27,13 @@ def test_new_audit_real_solver_lifecycle(client, monkeypatch, tmp_path, directio
     monkeypatch.setattr(google, "session_for", lambda config: session)
     monkeypatch.setattr(core, "OUTPUT_DIR", tmp_path / "outputs")
     legacy = core.load_legacy_planner()
-    legacy.SOLVER_TIME_LIMIT_SECONDS = 1
+    monkeypatch.setattr(legacy, "SOLVER_TIME_LIMIT_SECONDS", 1)
     def matrix(points):
         n = len(points)
         return ([[0 if a == b else 600 for b in range(n)] for a in range(n)],
                 [[0 if a == b else 1000 for b in range(n)] for a in range(n)])
-    legacy.build_osrm_full_matrix = matrix
-    legacy.seed_edge_metrics = matrix
+    monkeypatch.setattr(legacy, "build_osrm_full_matrix", matrix)
+    monkeypatch.setattr(legacy, "seed_edge_metrics", matrix)
     monkeypatch.setattr(core, "load_legacy_planner", lambda: legacy)
     points = [{"node_id": i, "country": "China", "city": "Shanghai", "address": f"Synthetic {i}",
                "lat": lat, "lng": lng, "plot_lat": lat, "plot_lng": lng,

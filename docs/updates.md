@@ -7,6 +7,16 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-16
 
+### Google Pickup And Failure Diagnostics
+
+- Google timing uses available school entrances without overwriting confirmed
+  gates, shared geocode caches or Google-OFF behavior.
+- Failed Direct-to-School runs retain completed measurements and identify the
+  failing address, endpoint and offset. Incomplete Google runs cannot masquerade
+  as complete reports or exports.
+- Google controls show remaining monthly requests; Direct-to-School previews
+  distinguish minimum initial requests from additional prediction work.
+
 ### Google Final Timing Monthly Budget
 
 - Google final timing uses a shared 10,000-attempt calendar-month ceiling in

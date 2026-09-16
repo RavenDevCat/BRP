@@ -732,6 +732,8 @@ export type DirectSchoolPreview = {
         unique_address_count: number;
         route_count: number;
         estimated_logical_provider_calls: number;
+        google_minimum_with_dwell?: number;
+        google_minimum_without_dwell?: number;
         service_stop_count?: number;
         assignment_count?: number;
     };
@@ -1166,6 +1168,10 @@ export function getWorkbookTemplateUrl() {
 
 export function getDemandTemplateUrl() {
     return `${API_BASE_URL}/fleet-planner/demand-template`;
+}
+
+export function getGoogleValidationQuota() {
+    return apiFetch<{ available: boolean; quota: { month: string; timezone: string; limit: number; used: number; remaining: number } | null }>("/google-validation/quota");
 }
 
 export async function listJobs() {

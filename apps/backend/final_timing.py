@@ -52,6 +52,8 @@ class FinalTimingContext:
 
     def route(self, points, *, reference_legs=None, dwell_s=None):
         self.state.pop("last_route_evidence", None)
+        from google_pickup_points import normalize_point, describe_failure
+        points = [normalize_point(point) for point in points]
         coords = []
         for point in points:
             require_china(point.get("country", "China"))
@@ -75,6 +77,9 @@ class FinalTimingContext:
         try:
             measured = self.session.validate(coords, dwell, self.earliest, self.latest,
                                              estimate, arrival_anchored)
+        except google.ValidationUnavailable as exc:
+            describe_failure(exc, points)
+            raise
         finally:
             self.state["api_calls"] = self.session.client.calls
         legs = deepcopy(measured.legs)
@@ -91,7 +96,8 @@ class FinalTimingContext:
             "arrival_minutes": (measured.arrival-self.earliest.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60,
             "stop_service_time_s": measured.dwell_s, "dwell_by_stop_s": dwell,
             "time_window_passes": measured.arrival <= self.latest,
-            "policy_version": google.POLICY_VERSION, "validation_config": deepcopy(self.config)}
+            "policy_version": google.POLICY_VERSION, "validation_config": deepcopy(self.config),
+            "requested_waypoints": deepcopy(points)}
         self.state["last_route_evidence"] = evidence
         return evidence
 

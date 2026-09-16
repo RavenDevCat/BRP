@@ -1,16 +1,22 @@
 import type { PlannerConfigPayload } from "@/lib/api";
+import { getGoogleValidationQuota } from "@/lib/api";
+import { useQuery } from "@tanstack/react-query";
 import { useT } from "@/lib/i18n/context";
 
 type Props = {
   config: Pick<PlannerConfigPayload, "final_time_validation_mode" | "validation_service_date" | "timing_policy" | "service_direction" | "time_window_start" | "time_window_end">;
   available: boolean;
   scheduled: boolean;
+  minimumCalls?: number;
   onChange: (patch: Partial<Omit<Props["config"], "service_direction">>) => void;
 };
 
-export function GoogleValidationControls({ config, available, scheduled, onChange }: Props) {
+export function GoogleValidationControls({ config, available, scheduled, minimumCalls, onChange }: Props) {
   const t = useT();
   const enabled = config.final_time_validation_mode === "google";
+  const quotaQuery = useQuery({ queryKey: ["google-validation-quota"], queryFn: getGoogleValidationQuota,
+    enabled: enabled && available, refetchInterval: 30000 });
+  const quota = quotaQuery.data?.quota;
   const fixed = config.service_direction === "From School" || config.timing_policy === "fixed_departure";
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border py-3">
@@ -54,6 +60,9 @@ export function GoogleValidationControls({ config, available, scheduled, onChang
           <dt>{t("Execution")}</dt><dd>{t(scheduled ? "Scheduled" : "Run now")}</dd>
           <dt>{t("Prediction")}</dt><dd className="break-words">{config.validation_service_date || t("Service date")} · {config.time_window_start} → {config.time_window_end}</dd>
           <dt>{t("Prediction mode")}</dt><dd>{t(fixed ? "Fixed departure" : "Reverse from arrival")}</dd>
+          <dt>{t("Monthly requests remaining")}</dt><dd>{quota ? `${quota.remaining.toLocaleString()} / ${quota.limit.toLocaleString()} (${quota.month})` : "-"}</dd>
+          {minimumCalls != null ? <><dt>{t("Minimum initial requests")}</dt><dd className={quota && minimumCalls > quota.remaining ? "text-destructive" : ""}>{minimumCalls.toLocaleString()}</dd>
+            <dt>{t("Additional predictions")}</dt><dd>{t("Charged to the same monthly allowance")}</dd></> : null}
         </dl>
       </div> : null}
     </div>

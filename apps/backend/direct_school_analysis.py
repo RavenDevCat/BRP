@@ -470,6 +470,20 @@ def _base_result(
     }
 
 
+def google_request_estimate(current_plan, dwell_minutes):
+    from google_final_validation import ValidationSession
+    groups = defaultdict(list)
+    unique = set()
+    for stop in current_plan.get("stops") or []:
+        groups[str(stop.get("route_id") or "").strip()].append(stop)
+        if not stop.get("is_depot"):
+            unique.add(_address_key(stop))
+    route_calls = {route_id: ValidationSession.call_count(stops,
+        [0 if stop.get("is_depot") else float(dwell_minutes)*60 for stop in stops])
+        for route_id, stops in groups.items()}
+    return {"minimum_calls": len(unique)+sum(route_calls.values()), "route_calls": route_calls}
+
+
 def run_direct_school_analysis(
     prepared_payload: dict[str, Any],
     analysis_config: dict[str, Any] | None = None,
@@ -500,6 +514,8 @@ def run_direct_school_analysis(
     from final_timing import FinalTimingContext, is_google, require_china
     google_mode = is_google(config)
     if google_mode:
+        from google_pickup_points import normalize_point
+        points = [normalize_point(point) for point in points]
         for record in input_records:
             require_china(record.get("country"))
         if provider_factory is not None:
@@ -610,13 +626,15 @@ def run_direct_school_analysis(
         "in_run_reuse_count": int(provider.state.get("cache_hits", 0)),
     }
     osrm_cache: dict[str, dict[str, Any]] = {}
+    route_results: list[dict[str, Any]] = []
+    route_window_analysis: list[dict[str, Any]] = []
 
     def save_checkpoint() -> None:
         if not checkpoint:
             return
         public_rows = [{key: value for key, value in row.items() if key != "_point"} for row in rows]
         checkpoint(
-            _base_result(
+            {**_base_result(
                 config=config,
                 provider=provider_name,
                 school=school,
@@ -625,15 +643,14 @@ def run_direct_school_analysis(
                 logical_call_estimate=logical_call_estimate,
                 progress=deepcopy(progress),
                 errors=deepcopy(errors),
-            )
+            ), "routes": deepcopy(route_results), "route_window_analysis": deepcopy(route_window_analysis)}
         )
 
     direct_order = _rotate(rows, run_seed or scheduled_start_at or utc_now_iso())
     if google_mode:
-        route_call_costs = {route_id: provider.session.call_count(route_stops,
-            [0 if stop.get("is_depot") else float(config["stop_service_minutes"])*60 for stop in route_stops])
-            for route_id, route_stops in route_groups.items()}
-        mandatory_calls = len(rows) + sum(route_call_costs.values())
+        estimate = google_request_estimate(current_plan, config["stop_service_minutes"])
+        route_call_costs = estimate["route_calls"]
+        mandatory_calls = estimate["minimum_calls"]
         if not provider.session.client.can_afford(mandatory_calls):
             from google_final_validation import ValidationUnavailable
             raise ValidationUnavailable("google_budget_insufficient_for_direct_and_current_routes")
@@ -696,6 +713,14 @@ def run_direct_school_analysis(
         except Exception as exc:
             row["provider_status"] = "failed"
             if google_mode:
+                details = dict(getattr(exc, "details", {}) or {})
+                details.update(scope="direct_route", stop_key=row["stop_key"], route_ids=row["route_ids"])
+                details.setdefault("address", row["address"])
+                exc.details = details
+                row.update(quality_status="provider_failed", operational_category="data_review", reasons=[str(exc)])
+                errors.append({"error": str(exc), **details})
+                progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
+                save_checkpoint()
                 raise
             row["route_evidence"] = deepcopy(provider.state.get("last_route_evidence"))
             row["quality_status"] = "provider_failed"
@@ -708,7 +733,6 @@ def run_direct_school_analysis(
         save_checkpoint()
 
     progress["phase"] = "current_routes"
-    route_results: list[dict[str, Any]] = []
     route_contexts_by_stop: dict[str, list[dict[str, Any]]] = defaultdict(list)
     route_runtime: dict[str, dict[str, Any]] = {}
     route_order = _rotate(sorted(route_groups), f"route|{run_seed or scheduled_start_at or ''}")
@@ -809,6 +833,10 @@ def run_direct_school_analysis(
                 )
         except Exception as exc:
             if google_mode:
+                exc.details = {**getattr(exc, "details", {}), "route_id": route_id, "scope": "current_route"}
+                errors.append({"error": str(exc), **exc.details})
+                progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
+                save_checkpoint()
                 raise
             route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
                                   "route_evidence": deepcopy(provider.state.get("last_route_evidence"))})
@@ -892,7 +920,6 @@ def run_direct_school_analysis(
 
     progress["phase"] = "route_window_recovery"
     route_window_min = _window_duration_minutes(config)
-    route_window_analysis: list[dict[str, Any]] = []
     additional_occurrences: list[dict[str, Any]] = []
     route_results_by_id = {str(item.get("route_id") or ""): item for item in route_results}
     for route_id in sorted(route_groups):
@@ -1037,6 +1064,10 @@ def run_direct_school_analysis(
             additional_occurrences.extend(additional_entries)
         except Exception as exc:
             if google_mode:
+                exc.details = {**getattr(exc, "details", {}), "route_id": route_id, "scope": "route_window_recovery"}
+                errors.append({"error": str(exc), **exc.details})
+                progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
+                save_checkpoint()
                 raise
             route_window_analysis.append(
                 {
@@ -1052,6 +1083,8 @@ def run_direct_school_analysis(
             errors.append({"scope": "route_window_recovery", "route_id": route_id, "error": str(exc)})
         progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
         progress["in_run_reuse_count"] = int(provider.state.get("cache_hits", 0))
+        if google_mode:
+            save_checkpoint()
 
     additional_by_stop: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in additional_occurrences:
@@ -1264,7 +1297,9 @@ def build_direct_school_workbook(
     *, include_diagnostics: bool = False,
 ) -> bytes:
     result = present_direct_school_result(record.get("result"))
-    if not result:
+    if (not result or (result.get("provider") == "google_routes" and (
+            record.get("status") in {"failed", "canceled", "running", "queued", "scheduled"}
+            or result.get("status") in {"partial", "running", "failed"}))):
         raise ValueError("Direct-to-school analysis result is not available.")
     conclusion = dict(result.get("operational_conclusion") or _legacy_operational_conclusion(result))
     parameters = dict(result.get("parameters") or {})

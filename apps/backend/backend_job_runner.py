@@ -200,7 +200,12 @@ def main() -> int:
             return 0
         job_record["status"] = "failed"
         job_record["finished_at"] = utc_now_iso()
-        job_record["result"] = result
+        job_record["result"] = result if result is not None else job_record.get("result")
+        if (job_record.get("metadata", {}).get("analysis_config", {}).get("final_time_validation_mode") == "google"
+                and isinstance(job_record.get("result"), dict)):
+            job_record["result"]["status"] = "failed"
+        if getattr(exc, "details", None):
+            job_record.setdefault("metadata", {})["failure_details"] = exc.details
         job_record["error"] = str(exc)
         job_record["traceback"] = traceback.format_exc()
         job_record["worker_pid"] = None

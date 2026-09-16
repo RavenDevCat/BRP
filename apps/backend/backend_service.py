@@ -1317,6 +1317,10 @@ def _attach_fleet_route_measurements(route_preview: dict[str, Any], demand_routi
                 dwell = [0 if index == school_index else route["stop_service_time_s"]/max(1, len(ordered)-1)
                          for index in range(len(ordered))]
                 evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []), dwell_s=dwell)
+                ordered = [{**point, "lat": point["plot_lat"], "lng": point["plot_lng"],
+                            "coordinate_system": "WGS84"}
+                           if point.get("pickup_entrance_source") == "provider_entr_location" else point
+                           for point in evidence.get("requested_waypoints", ordered)]
             else:
                 evidence = provider.route(ordered, reference_legs=list(route.get("leg_details") or []))
         except RuntimeError as exc:
@@ -2691,6 +2695,7 @@ def _direct_school_preview_from_prepared(
     route_legs = sum(max(0, len(route.get("nodes") or []) - 1) for route in current_plan.get("routes") or [])
     school = _direct_school_school_point(current_plan, prepared_payload)
     school_record = dict(list(current_plan.get("input_records") or [{}])[0])
+    from direct_school_analysis import google_request_estimate
     return {
         "source_label": source_label,
         "selected_sheet": "current_plan_assignments",
@@ -2700,6 +2705,8 @@ def _direct_school_preview_from_prepared(
             "unique_address_count": unique_stop_count,
             "route_count": route_count,
             "estimated_logical_provider_calls": unique_stop_count + (route_legs or service_stop_count) + service_stop_count * 2,
+            "google_minimum_with_dwell": google_request_estimate(current_plan, 1)["minimum_calls"],
+            "google_minimum_without_dwell": google_request_estimate(current_plan, 0)["minimum_calls"],
             "route_recovery_call_budget": route_count + service_stop_count,
         },
         "school": {
@@ -2722,6 +2729,13 @@ def _handle_direct_school_submit(payload: dict[str, Any], user_email: str) -> di
     source_label, current_plan, prepared_payload, prep_summary = _prepare_direct_school_upload(payload)
     analysis_config = _direct_school_analysis_config(payload, current_plan)
     scheduled_requested = bool(payload.get("scheduled_job"))
+    if final_timing.is_google(analysis_config):
+        from google_final_validation import monthly_budget
+        from direct_school_analysis import google_request_estimate
+        budget = monthly_budget()
+        minimum = google_request_estimate(current_plan, analysis_config["stop_service_minutes"])["minimum_calls"]
+        if minimum > budget["remaining"]:
+            raise ValueError(f"Google monthly budget exceeded: minimum {minimum}, remaining {budget['remaining']} / {budget['limit']} ({budget['month']}).")
     if scheduled_requested and not SCHEDULED_JOBS_ENABLED:
         raise ValueError("Scheduled jobs are not enabled for this deployment.")
     scheduled_start_at = None

@@ -122,6 +122,33 @@ non-convergence do not silently become successful legacy validation.
 
 ## Request Budget
 
+The shared Google controls show current monthly remaining attempts. Direct-to-School
+upload previews also show the minimum initial direct-plus-current-route requests,
+calculated by the same rolling-dwell rules as execution. Additional prediction
+rounds and removal checks consume the same monthly allowance. Submit and worker
+preflight enforce the remaining budget; the estimate is not a completion guarantee.
+
+## Pickup Resolution And Failed Runs
+
+Google timing uses explicit school POI entrance coordinates when available and
+plausible, instead of a campus centroid. The normalization is local to Google
+execution and never edits geocode caches or historical inputs. Operator-confirmed
+points, explicit named gates and existing entrance selections take precedence.
+The same resolver is used by Audit and the shared final-timing context; evidence
+retains the requested waypoints and entrance provenance. Google-native terminal
+coordinates still undergo the unchanged 100 m snap check and cross-request joins
+retain their 30 m check. No missing road segment or duration is fabricated.
+
+Failed Direct-to-School jobs retain checkpointed measurements as incomplete, not
+accepted business results. They cannot export a completed Google report. Failure
+metadata identifies the point, endpoint, route context, requested/returned WGS84
+coordinates and measured offset when provided by the validator. The UI shows
+a readable explanation, affected address and offset. Reads/exports make no paid
+calls. Retained checkpoints are diagnostic evidence, not an automatic promise
+to resume or reuse traffic predictions from a different departure time.
+
+## Budget Accounting
+
 Every attempt reserves persistent quota before the request. Failed or timed-out
 calls are not refunded, and there are no automatic HTTP retries. The only usage
 ceiling is 10,000 requests per calendar month, using the request execution time

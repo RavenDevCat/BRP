@@ -1,6 +1,19 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Google navigation endpoint is too far from the requested stop.": "Google 导航落点与接送站位置偏差过大。",
+    "Google arrival and departure paths do not meet at this stop.": "Google 返回的进站与出站路径未在该站衔接。",
+    "Monthly requests remaining": "本月剩余调用",
+    "Minimum initial requests": "首轮最低调用",
+    "Additional predictions": "追加测算",
+    "Charged to the same monthly allowance": "计入同一月度额度",
+    "Navigation endpoint": "导航落点",
+    "Origin": "起点",
+    "Destination": "终点",
+    "Stop connection": "站点衔接",
+    "Endpoint offset": "落点偏差",
+    "Result status": "结果状态",
+    "Incomplete; completed measurements retained": "未完成；已完成的测量已保留",
     "Google time validation": "Google 时间验证",
     "Service date": "服务日期",
     "Google validation is not available on this deployment.": "当前环境尚未开放 Google 时间验证。",

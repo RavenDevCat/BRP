@@ -20,13 +20,16 @@ except ImportError:
     from route_evidence import EVIDENCE_VERSION
     from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
-POLICY_VERSION = "google-final-v2"
+POLICY_VERSION = "google-final-v3"
 from google_routes_quota import DEFAULT_LIMITS, MONTHLY_LIMIT, quota_periods
 TZ = ZoneInfo("Asia/Shanghai")
 
 
 class ValidationUnavailable(RuntimeError):
     """No verified Google result; never equivalent to a constraint violation."""
+    def __init__(self, code, *, details=None):
+        super().__init__(code)
+        self.details = {"code": code, **(details or {})}
 
 
 def validate_config(payload):
@@ -61,6 +64,15 @@ def availability():
     if not os.environ.get("BRP_GOOGLE_FINAL_QUOTA_DB", "").strip():
         return {"available": False, "reason": "google_budget_store_missing"}
     return {"available": True, "reason": None}
+
+
+def monthly_budget():
+    require_available()
+    now = datetime.now(TZ)
+    store = SqliteQuotaStore(Path(os.environ["BRP_GOOGLE_FINAL_QUOTA_DB"]))
+    used = store.get_usage("google_routes", "compute_routes_pro", "month", now.strftime("%Y-%m"))["attempted"]
+    return {"month": now.strftime("%Y-%m"), "timezone": "Asia/Shanghai",
+            "limit": MONTHLY_LIMIT, "used": used, "remaining": max(0, MONTHLY_LIMIT-used)}
 
 
 def require_available():
@@ -133,8 +145,13 @@ def parse_response(payload, points):
         measured = []
         for index, leg in enumerate(legs):
             start, end = location(leg["startLocation"]), location(leg["endLocation"])
-            if meters(start, points[index]) > 100 or meters(end, points[index+1]) > 100:
-                raise ValidationUnavailable("google_pickup_snap_mismatch")
+            for endpoint, point_index, returned in (("start", index, start), ("end", index+1, end)):
+                gap = meters(returned, points[point_index])
+                if gap > 100:
+                    raise ValidationUnavailable("google_pickup_snap_mismatch", details={
+                        "leg_index": index, "point_index": point_index, "endpoint": endpoint,
+                        "requested_coordinate": list(points[point_index]), "returned_coordinate": list(returned),
+                        "snap_distance_m": round(gap, 2), "limit_m": 100})
             geometry = leg["polyline"]["geoJsonLinestring"]["coordinates"]
             if len(geometry) < 2:
                 raise ValidationUnavailable("google_geometry_missing")
@@ -259,9 +276,20 @@ class ValidationSession:
             # Rolling leg departures include dwell. Never stitch a fabricated road.
             for i in range(len(points)-1):
                 clock += timedelta(seconds=dwell[i])
-                leg = self.client.route(points[i:i+2], clock)[0]
+                try:
+                    leg = self.client.route(points[i:i+2], clock)[0]
+                except ValidationUnavailable as exc:
+                    if "point_index" in exc.details:
+                        exc.details["point_index"] += i
+                    exc.details["leg_index"] = i
+                    raise
                 if legs and meters(legs[-1]["end"], leg["start"]) > 30:
-                    raise ValidationUnavailable("google_cross_request_join_mismatch")
+                    raise ValidationUnavailable("google_cross_request_join_mismatch", details={
+                        "point_index": i, "leg_index": i, "endpoint": "join",
+                        "requested_coordinate": list(points[i]),
+                        "previous_end_coordinate": list(legs[-1]["end"]),
+                        "returned_coordinate": list(leg["start"]),
+                        "snap_distance_m": round(meters(legs[-1]["end"], leg["start"]), 2), "limit_m": 30})
                 legs.append(leg)
                 clock += timedelta(seconds=leg["duration_s"])
         return Measurement(departure, legs, sum(dwell))
@@ -369,9 +397,10 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
     for index, route in enumerate(scenario.get("routes") or []):
         session.client.check_canceled()
         nodes = list(route.get("nodes") or [])
+        from google_pickup_points import normalize_point, describe_failure
+        request_points = [normalize_point(points[int(node)]) for node in nodes]
         coords = []
-        for node in nodes:
-            point = points[int(node)]
+        for point in request_points:
             # Plot coordinates are normalized WGS84 by the existing input pipeline.
             if point.get("plot_lat") is None or point.get("plot_lng") is None:
                 raise ValidationUnavailable("google_wgs84_coordinates_required")
@@ -383,7 +412,11 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
         session.client.protected_calls -= session.call_count(coords, dwell)
         if abs(saved_dwell-sum(dwell)) > 1:
             raise ValidationUnavailable("google_dwell_contract_mismatch")
-        result = session.validate(coords, dwell, earliest, latest, float(route.get("time_s", 0)), arrival_anchored)
+        try:
+            result = session.validate(coords, dwell, earliest, latest, float(route.get("time_s", 0)), arrival_anchored)
+        except ValidationUnavailable as exc:
+            describe_failure(exc, request_points, route_id=route.get("route_id") or route.get("id") or f"Bus {index+1}")
+            raise
 
         overrun = max(0, (result.arrival-latest).total_seconds())
         passed = overrun <= grace_seconds
@@ -408,7 +441,7 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                     "duration_s": result.drive_s, "distance_m": verification["verified_distance_m"],
                     "geometry_segments": [x["geometry"] for x in result.legs],
                     "called_at": session.client.now().isoformat(), "departure_time": result.departure.isoformat(),
-                    "policy_version": POLICY_VERSION}
+                    "policy_version": POLICY_VERSION, "requested_waypoints": deepcopy(request_points)}
         updates.append((route, verification, evidence, result))
         gate["checked_route_count"] += 1
         if not passed:
@@ -417,6 +450,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
         gate["max_estimated_arrival_delay_minutes"] = max(gate["max_estimated_arrival_delay_minutes"], overrun/60)
     # Publish an entire scenario atomically, never half Google and half legacy.
     for route, verification, evidence, result in updates:
+        for node, point in zip(route.get("nodes") or [], evidence["requested_waypoints"]):
+            points[int(node)].update(point)
         route["final_route_traffic_gate"], route["route_evidence"] = verification, evidence
         route["traffic_time_source"] = "google_routes"
         if to_school:

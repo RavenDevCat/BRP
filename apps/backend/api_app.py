@@ -1706,6 +1706,13 @@ def direct_school_preview(
     )
 
 
+@_api_route("GET", "/google-validation/quota", dependencies=[Depends(require_authorized_request)])
+def google_validation_quota() -> JSONResponse:
+    from google_final_validation import monthly_budget, availability
+    state = availability()
+    return _json_response(200, {**state, "quota": monthly_budget() if state["available"] else None})
+
+
 @_api_route(
     "POST",
     "/distance-checker/direct-school/jobs",
@@ -2957,6 +2964,12 @@ def _insert_build_selected_plan(
             base_service_s = max(0, _insert_int(route.get("stop_count"), 0)) * dwell_s
         selected_service_s = base_service_s + len(insert_actions)*dwell_s
         if timing_context is not None:
+            from google_pickup_points import normalize_point
+            base_points = [normalize_point(point) for point in base_points]
+            route_points = [normalize_point(point) for point in route_points]
+            sequence = [{**stop, "lat": point["plot_lat"], "lng": point["plot_lng"]}
+                        if point.get("pickup_entrance_source") == "provider_entr_location" else stop
+                        for stop, point in zip(sequence, route_points)]
             service_count = sum(not bool(stop.get("is_depot")) for stop in route_stops)
             if service_count == 0:
                 raise ValueError("Route has no service stops")

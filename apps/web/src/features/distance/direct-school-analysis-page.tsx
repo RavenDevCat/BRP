@@ -227,7 +227,7 @@ export function DirectSchoolAnalysisPage() {
 
   const selectedRecord = detailQuery.data || null;
   const rawResult = selectedRecord?.result;
-  const result = rawResult && Array.isArray(rawResult.stops) && !isActiveStatus(selectedRecord?.status) ? rawResult : null;
+  const result = rawResult && Array.isArray(rawResult.stops) && selectedRecord?.status === "succeeded" ? rawResult : null;
   const scheduledEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
 
   return (
@@ -343,6 +343,7 @@ export function DirectSchoolAnalysisPage() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   <GoogleValidationControls config={config} scheduled={scheduled}
+                    minimumCalls={previewMutation.data?.summary[config.stop_service_minutes > 0 ? "google_minimum_with_dwell" : "google_minimum_without_dwell"]}
                     available={featuresQuery.data?.google_final_validation?.available === true}
                     onChange={updateConfig} />
                   <Field label="Analysis direction">
@@ -433,7 +434,7 @@ export function DirectSchoolAnalysisPage() {
                   <Field label="Custom Job Name">
                     <input className={fieldClassName} value={customName} placeholder={t("Student travel-time review")} onChange={(event) => setCustomName(event.target.value)} />
                   </Field>
-                  {previewMutation.data ? (
+                  {previewMutation.data && config.final_time_validation_mode !== "google" ? (
                     <div className="rounded-md border border-border bg-muted/50 p-3">
                       <div className="text-xs text-muted-foreground">{t("Estimated provider requests")}</div>
                       <div className="mt-1 text-xl font-semibold">{formatNumber(previewMutation.data.summary.estimated_logical_provider_calls)}</div>
@@ -1399,13 +1400,24 @@ function MultiDayPanel({ record }: { record: DirectSchoolJobRecord }) {
 function PendingResult({ record }: { record: DirectSchoolJobRecord }) {
   const t = useT();
   const progress = record.result?.progress;
+  const failure = record.metadata?.failure_details as { address?: string; route_id?: string; route_ids?: string[]; endpoint?: string; snap_distance_m?: number; limit_m?: number } | undefined;
   return (
     <Card>
       <CardContent className="flex min-h-48 flex-col items-center justify-center gap-3 text-center">
         {record.status === "failed" ? <AlertTriangle className="h-7 w-7 text-destructive" /> : <Loader2 className="h-7 w-7 animate-spin text-primary" />}
         <div className="text-base font-semibold">{t(statusLabel(record.status))}</div>
         {progress ? <div className="text-sm text-muted-foreground">{formatNumber(progress.completed)} / {formatNumber(progress.total)} · {formatNumber(progress.provider_api_calls)} {t("provider calls")}</div> : null}
-        {record.error ? <InlineError message={record.error} /> : null}
+        {record.error ? <InlineError message={record.error === "google_pickup_snap_mismatch"
+          ? t("Google navigation endpoint is too far from the requested stop.")
+          : record.error === "google_cross_request_join_mismatch"
+            ? t("Google arrival and departure paths do not meet at this stop.") : record.error} /> : null}
+        {failure ? <dl className="grid w-full max-w-xl min-w-0 grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-left text-sm">
+          <dt>{t("Route")}</dt><dd className="min-w-0 break-words">{failure.route_id || failure.route_ids?.join(", ") || "-"}</dd>
+          <dt>{t("Address")}</dt><dd className="min-w-0 break-words">{failure.address || "-"}</dd>
+          <dt>{t("Navigation endpoint")}</dt><dd>{t(failure.endpoint === "start" ? "Origin" : failure.endpoint === "end" ? "Destination" : "Stop connection")}</dd>
+          {failure.snap_distance_m != null ? <><dt>{t("Endpoint offset")}</dt><dd>{formatNumber(failure.snap_distance_m)} m / {failure.limit_m} m</dd></> : null}
+          <dt>{t("Result status")}</dt><dd>{t("Incomplete; completed measurements retained")}</dd>
+        </dl> : null}
       </CardContent>
     </Card>
   );

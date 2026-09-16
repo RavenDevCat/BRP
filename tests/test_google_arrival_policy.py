@@ -1,4 +1,8 @@
 from datetime import timedelta, datetime
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -92,3 +96,24 @@ def test_cancel_is_not_swallowed_after_feasible_result(client):
     client.check_canceled = canceled
     with pytest.raises(InterruptedError):
         run(client, [100])
+
+def test_fresh_worker_import_order_supports_quota_headroom(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "PYTHONPATH": str(root / "apps/backend")}
+    program = '''
+import backend_job_runner
+import google_final_validation as g
+from pathlib import Path
+import sys
+store = g.SqliteQuotaStore(Path(sys.argv[1]))
+store.reserve_usage("google_routes", "compute_routes_pro", [("task", "worker", 2)], headroom=1)
+assert store.get_usage("google_routes", "compute_routes_pro", "task", "worker")["attempted"] == 1
+try:
+    store.reserve_usage("google_routes", "compute_routes_pro", [("task", "worker", 2)], headroom=1)
+except RuntimeError:
+    pass
+else:
+    raise AssertionError("headroom was ignored")
+'''
+    subprocess.run([sys.executable, "-c", program, str(tmp_path / "worker-quota.sqlite")],
+                   env=env, cwd=root, check=True, timeout=60, capture_output=True, text=True)

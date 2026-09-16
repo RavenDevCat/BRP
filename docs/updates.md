@@ -21,9 +21,14 @@ runtime architecture, or recommended rerun guidance changed.
   reference coordinates remain visible and operator confirmations take priority.
 - Google timing uses available school entrances without overwriting confirmed
   gates, shared geocode caches or Google-OFF behavior.
-- Failed Direct-to-School runs retain completed measurements and identify the
-  failing address, endpoint and offset. Incomplete Google runs cannot masquerade
-  as complete reports or exports.
+-- Direct-to-School isolates Google endpoint mismatches to the affected
+  measurements and continues other routes. Results and exports explicitly mark
+  partial coverage; missing times never count as compliant or justify removals.
+  Authentication, quota, cancellation and other global failures still stop the
+  task and retain checkpoints; unfinished or failed tasks cannot export reports.
+- The private Google relay validates optional pickup-stop and heading hints and
+  address waypoints. Ordinary timing requests remain coordinate-based; these
+  options do not automatically retry, relocate stops or relax endpoint checks.
 - Google controls show remaining monthly requests; Direct-to-School previews
   distinguish minimum initial requests from additional prediction work.
 

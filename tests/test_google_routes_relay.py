@@ -150,3 +150,61 @@ def test_direct_transport_preserved(monkeypatch, envelope):
     monkeypatch.setattr(requests, "post", post)
     assert transport.post_routes(envelope["request"], "budget") == "direct"
     assert len(calls) == 1
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_vehicle_stopover_forwarded_without_changing_coordinates(cfg, envelope, monkeypatch, enabled):
+    from copy import deepcopy
+    envelope["request"]["intermediates"] = [deepcopy(envelope["request"]["origin"])]
+    points = [envelope["request"]["origin"], *envelope["request"]["intermediates"], envelope["request"]["destination"]]
+    for point in points:
+        point["vehicleStopover"] = enabled
+    expected = deepcopy(envelope["request"])
+    calls = []
+    def upstream(url, kwargs):
+        calls.append(kwargs["json"])
+        assert kwargs["json"] == expected
+        return SimpleNamespace(status_code=200, json=lambda: response(body_points(expected)))
+    fake_session(monkeypatch, upstream)
+    result = TestClient(relay.create_app(cfg)).post("/compute-routes", json=envelope, headers=auth())
+    assert result.status_code == 200 and len(calls) == 1
+    assert usage(cfg)["attempted"] == 1
+
+@pytest.mark.parametrize("field,value", [("vehicleStopover", 1), ("vehicleStopover", "true"),
+    ("vehicleStopover", None), ("sideOfRoad", True), ("placeId", "unexpected")])
+def test_waypoint_extensions_fail_closed(cfg, envelope, monkeypatch, field, value):
+    fake_session(monkeypatch, lambda *args: pytest.fail("Invalid waypoint reached Google"))
+    envelope["request"]["origin"][field] = value
+    result = TestClient(relay.create_app(cfg)).post("/compute-routes", json=envelope, headers=auth())
+    assert result.status_code == 400
+    assert usage(cfg)["attempted"] == 0
+
+@pytest.mark.parametrize("heading", [0, 338, 359])
+def test_valid_heading_preserved(envelope, heading):
+    envelope["request"]["origin"]["location"]["heading"] = heading
+    _, body = relay.validate_request(envelope)
+    assert body["origin"]["location"]["heading"] == heading
+
+def test_address_waypoint_preserves_exact_request(envelope):
+    envelope["request"]["origin"] = {"address": "Shanghai, test pickup", "vehicleStopover": True}
+    _, body = relay.validate_request(envelope)
+    assert body["origin"] == envelope["request"]["origin"]
+
+@pytest.mark.parametrize("address", ["", " ", "x"*501, 12, None])
+def test_invalid_address_rejected(cfg, envelope, monkeypatch, address):
+    fake_session(monkeypatch, lambda *args: pytest.fail("Invalid address reached Google"))
+    envelope["request"]["origin"] = {"address": address}
+    result = TestClient(relay.create_app(cfg)).post("/compute-routes", json=envelope, headers=auth())
+    assert result.status_code == 400
+
+def test_ambiguous_location_and_address_rejected(envelope):
+    envelope["request"]["origin"]["address"] = "Shanghai, test pickup"
+    with pytest.raises(ValueError, match="invalid_waypoint"):
+        relay.validate_request(envelope)
+
+@pytest.mark.parametrize("heading", [-1, 360, True, 2.5, "338", None])
+def test_invalid_heading_rejected_without_charge(cfg, envelope, monkeypatch, heading):
+    fake_session(monkeypatch, lambda *args: pytest.fail("Invalid heading reached Google"))
+    envelope["request"]["origin"]["location"]["heading"] = heading
+    result = TestClient(relay.create_app(cfg)).post("/compute-routes", json=envelope, headers=auth())
+    assert result.status_code == 400
+    assert usage(cfg)["attempted"] == 0

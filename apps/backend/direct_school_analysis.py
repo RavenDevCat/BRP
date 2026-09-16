@@ -470,6 +470,12 @@ def _base_result(
     }
 
 
+def _isolatable_google_pickup_error(exc):
+    # Only a local endpoint mismatch is recoverable; quota, auth and cancellation remain fatal.
+    from google_final_validation import ValidationUnavailable
+    return isinstance(exc, ValidationUnavailable) and str(exc) == "google_pickup_snap_mismatch"
+
+
 def google_request_estimate(current_plan, dwell_minutes):
     from google_final_validation import ValidationSession
     groups = defaultdict(list)
@@ -721,7 +727,11 @@ def run_direct_school_analysis(
                 errors.append({"error": str(exc), **details})
                 progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
                 save_checkpoint()
-                raise
+                if not _isolatable_google_pickup_error(exc):
+                    raise
+                progress["completed"] += 1
+                save_checkpoint()
+                continue
             row["route_evidence"] = deepcopy(provider.state.get("last_route_evidence"))
             row["quality_status"] = "provider_failed"
             row["operational_category"] = "data_review"
@@ -836,6 +846,12 @@ def run_direct_school_analysis(
                 exc.details = {**getattr(exc, "details", {}), "route_id": route_id, "scope": "current_route"}
                 errors.append({"error": str(exc), **exc.details})
                 progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
+                if _isolatable_google_pickup_error(exc):
+                    route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
+                                          "failure_details": deepcopy(exc.details)})
+                    progress["completed"] += 1
+                    save_checkpoint()
+                    continue
                 save_checkpoint()
                 raise
             route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
@@ -1067,6 +1083,13 @@ def run_direct_school_analysis(
                 exc.details = {**getattr(exc, "details", {}), "route_id": route_id, "scope": "route_window_recovery"}
                 errors.append({"error": str(exc), **exc.details})
                 progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
+                if _isolatable_google_pickup_error(exc):
+                    route_window_analysis.append({"route_id": route_id, "status": "data_review",
+                        "window_limit_min": route_window_min, "original_duration_min": original.get("total_duration_min"),
+                        "original_riders": original.get("riders"), "error": str(exc),
+                        "failure_details": deepcopy(exc.details)})
+                    save_checkpoint()
+                    continue
                 save_checkpoint()
                 raise
             route_window_analysis.append(
@@ -1196,6 +1219,7 @@ def run_direct_school_analysis(
         errors=errors,
     )
     result["status"] = "partial" if errors else "complete"
+    result["measurement_attempts_complete"] = True
     result["completed_at"] = utc_now_iso()
     result["routes"] = sorted(route_results, key=lambda row: str(row.get("route_id") or ""))
     result["route_window_analysis"] = route_window_analysis
@@ -1299,7 +1323,8 @@ def build_direct_school_workbook(
     result = present_direct_school_result(record.get("result"))
     if (not result or (result.get("provider") == "google_routes" and (
             record.get("status") in {"failed", "canceled", "running", "queued", "scheduled"}
-            or result.get("status") in {"partial", "running", "failed"}))):
+            or result.get("status") in {"running", "failed"}
+            or (result.get("status") == "partial" and result.get("measurement_attempts_complete") is not True)))):
         raise ValueError("Direct-to-school analysis result is not available.")
     conclusion = dict(result.get("operational_conclusion") or _legacy_operational_conclusion(result))
     parameters = dict(result.get("parameters") or {})
@@ -1329,6 +1354,9 @@ def build_direct_school_workbook(
         "Direction / 方向", result.get("service_direction"),
         "Status / 状态", result.get("status"),
     ])
+    if result.get("provider") == "google_routes" and result.get("status") == "partial":
+        summary_sheet.append(["Partial forecast / 部分预测",
+            "Unavailable measurements are excluded from compliance conclusions. / 缺失测算不视为达标，详见数据质量表。"])
     summary_sheet.append([
         "Student trip limit / 学生单程阈值", conclusion.get("duration_limit_min"),
         "Route window / 路线时间窗", conclusion.get("route_window_min"),

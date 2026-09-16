@@ -43,11 +43,21 @@ def validate_request(payload):
     if not isinstance(intermediates, list) or len(intermediates) > 25:
         raise ValueError("invalid_waypoints")
     for point in [body["origin"], *intermediates, body["destination"]]:
-        if not isinstance(point, dict) or set(point) != {"location"}:
+        if (not isinstance(point, dict) or len(set(point) & {"location", "address"}) != 1
+                or set(point) - {"location", "address", "vehicleStopover"}):
             raise ValueError("invalid_waypoint")
+        if "vehicleStopover" in point and type(point["vehicleStopover"]) is not bool:
+            raise ValueError("invalid_vehicle_stopover")
+        if "address" in point:
+            address = point["address"]
+            if not isinstance(address, str) or not address.strip() or len(address) > 500:
+                raise ValueError("invalid_address")
+            continue
         loc = point["location"]
-        if not isinstance(loc, dict) or set(loc) != {"latLng"}:
+        if not isinstance(loc, dict) or "latLng" not in loc or set(loc) - {"latLng", "heading"}:
             raise ValueError("invalid_location")
+        if "heading" in loc and (type(loc["heading"]) is not int or not 0 <= loc["heading"] < 360):
+            raise ValueError("invalid_heading")
         coords = loc["latLng"]
         if not isinstance(coords, dict) or set(coords) != {"latitude", "longitude"}:
             raise ValueError("invalid_coordinates")

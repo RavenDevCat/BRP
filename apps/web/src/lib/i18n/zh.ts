@@ -14,6 +14,8 @@ const zh: Translations = {
     "Endpoint offset": "落点偏差",
     "Result status": "结果状态",
     "Incomplete; completed measurements retained": "未完成；已完成的测量已保留",
+    "Run new forecast": "重新测算预测",
+    "Some Google route measurements are unavailable. Verified results remain available; missing values are not counted as within limit.": "部分 Google 路线测算不可用。已验证结果仍可使用；缺失值不计为达标。",
     "Google time validation": "Google 时间验证",
     "Service date": "服务日期",
     "Google validation is not available on this deployment.": "当前环境尚未开放 Google 时间验证。",

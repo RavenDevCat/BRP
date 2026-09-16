@@ -104,8 +104,9 @@ def test_direct_failure_checkpoint_records_failed_point(context,monkeypatch):
         raise g.ValidationUnavailable('google_pickup_snap_mismatch',details={'point_index':0,'address':'Failed stop','endpoint':'start','snap_distance_m':238})
     monkeypatch.setattr(context,'route',fail)
     checkpoints=[]
-    with pytest.raises(g.ValidationUnavailable):
-        direct.run_direct_school_analysis(payload,CONFIG,timing_context=context,checkpoint=lambda v:checkpoints.append(deepcopy(v)))
+    result=direct.run_direct_school_analysis(payload,CONFIG,timing_context=context,checkpoint=lambda v:checkpoints.append(deepcopy(v)))
+    assert result['status']=='partial' and result['measurement_attempts_complete'] is True
+    assert result['operational_conclusion']['final']['all_measured_routes_within_window'] is False
     assert checkpoints[-1]['errors'][0]['address']=='Failed stop'
     assert checkpoints[-1]['progress']['provider_api_calls']==1
     assert any(s['provider_status']=='failed' for s in checkpoints[-1]['stops'])

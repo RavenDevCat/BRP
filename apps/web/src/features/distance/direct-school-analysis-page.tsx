@@ -463,7 +463,7 @@ export function DirectSchoolAnalysisPage() {
                       <Button type="button" variant="secondary" className="w-full" disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate(selectedRecord.job_id)}>{t("Cancel job")}</Button>
                     ) : null}
                     {selectedRecord.status === "failed" || selectedRecord.result?.status === "partial" ? (
-                      <Button type="button" variant="secondary" className="w-full" disabled={retryMutation.isPending} icon={<RefreshCw className={cn("h-4 w-4", retryMutation.isPending && "animate-spin")} />} onClick={() => retryMutation.mutate(selectedRecord.job_id)}>{t("Retry missing measurements")}</Button>
+                      <Button type="button" variant="secondary" className="w-full" disabled={retryMutation.isPending} icon={<RefreshCw className={cn("h-4 w-4", retryMutation.isPending && "animate-spin")} />} onClick={() => retryMutation.mutate(selectedRecord.job_id)}>{t(selectedRecord.result?.provider === "google_routes" ? "Run new forecast" : "Retry missing measurements")}</Button>
                     ) : null}
                     {result ? (
                       <a className={cn(buttonClassName("secondary"), "w-full")} href={getDirectSchoolAnalysisExportUrl(selectedRecord.job_id)}>
@@ -553,6 +553,11 @@ function ResultSummary({ record, exportUrl }: { record: DirectSchoolJobRecord; e
       </CardHeader>
       <CardContent className="space-y-4">
         <RouteMeasurementCoverage result={result} />
+        {result.provider === "google_routes" && result.status === "partial" ? (
+          <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-900">
+            {t("Some Google route measurements are unavailable. Verified results remain available; missing values are not counted as within limit.")}
+          </div>
+        ) : null}
         {reviewRiders > 0 ? (
           <div role="status" className="border-l-2 border-amber-500 pl-3 text-sm text-amber-900">
             <strong>{t("Students awaiting classification")}: {formatNumber(reviewRiders)} {t("out of")} {formatNumber(totalRiders)}</strong>

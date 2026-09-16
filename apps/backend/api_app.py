@@ -3032,8 +3032,8 @@ def _insert_build_selected_plan(
                     "base_dwell_source": "saved_route" if _insert_float(route.get("stop_service_time_s")) is not None else "configured_stop_count",
                     "window_limit_s": window_s, "config": {key: deepcopy(merged_config.get(key)) for key in
                         ("service_direction", "time_window_start", "time_window_end", "from_school_departure_time", "stop_service_minutes", "stop_limit",
-                         "final_time_validation_mode", "validation_service_date", "validation_budget_id")
-                        if key not in {"final_time_validation_mode", "validation_service_date", "validation_budget_id"} or key in merged_config},
+                         "final_time_validation_mode", "validation_service_date", "validation_budget_id", "timing_policy")
+                        if key not in {"final_time_validation_mode", "validation_service_date", "validation_budget_id", "timing_policy"} or key in merged_config},
                 },
                 "capacity_before": _insert_int(route.get("load"), 0),
                 "capacity_after": load_after,

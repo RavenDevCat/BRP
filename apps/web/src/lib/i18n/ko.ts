@@ -1480,3 +1480,8 @@ const ko: Translations = {
 ko["Suspected detour"] = "우회 의심";
 ko["Suspected detour; provider measurements remain in use."] = "우회 의심: 완전한 경로 측정값은 계속 계산에 사용됩니다. 거리 차이만으로 경로 오류가 입증되지는 않습니다.";
 export default ko;
+ko["Time zone"] = "시간대";
+ko["Prediction mode"] = "예측 모드";
+ko["Prediction"] = "예측 시간";
+ko["Reverse from arrival"] = "도착 시간에서 역산";
+ko["Fixed departure"] = "고정 출발 시간";

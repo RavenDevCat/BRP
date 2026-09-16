@@ -20,7 +20,7 @@ except ImportError:
     from route_evidence import EVIDENCE_VERSION
     from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
-POLICY_VERSION = "google-final-v1"
+POLICY_VERSION = "google-final-v2"
 PILOT_TOTAL_LIMIT = 500
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -34,6 +34,8 @@ def validate_config(payload):
     if mode not in {"legacy", "google"}:
         raise ValueError("final_time_validation_mode must be legacy or google.")
     if mode == "google":
+        if payload.get("timing_policy", "arrival_anchored") not in {"arrival_anchored", "fixed_departure"}:
+            raise ValueError("timing_policy must be arrival_anchored or fixed_departure.")
         value = payload.get("validation_service_date", "")
         if value:
             try:
@@ -73,7 +75,8 @@ def prepare_submission(payload, service_date=None):
         return payload
     require_available()
     result = dict(payload)
-    result["validation_service_date"] = str(service_date or result.get("validation_service_date") or "")
+    result["validation_service_date"] = str(result.get("validation_service_date") or service_date or "")
+    result.setdefault("timing_policy", "arrival_anchored" if result.get("service_direction", "To School") == "To School" else "fixed_departure")
     start, end = service_window(result)
     if end <= datetime.now(timezone.utc):
         raise ValidationUnavailable("google_service_window_in_past")
@@ -165,6 +168,19 @@ class GoogleRoutesClient:
         self.budget_id, self.store, self.limits = budget_id, store, limits
         self.transport, self.now, self.check_canceled = transport, now, check_canceled
         self.calls = 0
+        self.protected_calls = 0
+        self.request_headroom = 0
+
+    def periods(self):
+        now = self.now().astimezone(TZ)
+        return [("task", self.budget_id, self.limits[0]),
+                ("day", now.date().isoformat(), self.limits[1]),
+                ("month", now.strftime("%Y-%m"), self.limits[2]),
+                ("campaign", "google-final-pilot-v1", PILOT_TOTAL_LIMIT)]
+
+    def can_afford(self, count, reserve=0):
+        return all(limit <= 0 or self.store.get_usage("google_routes", "compute_routes_pro", kind, key)["attempted"]
+                   + count + reserve <= limit for kind, key, limit in self.periods())
 
     def route(self, points, departure):
         self.check_canceled()
@@ -187,8 +203,12 @@ class GoogleRoutesClient:
                 "optimizeWaypointOrder": False, "polylineEncoding": "GEO_JSON_LINESTRING"}
         self.store.reserve_rate_limit("google-final-routes", 2.0)
         self.check_canceled()
-        self.store.reserve_usage("google_routes", "compute_routes_pro", periods,
-                                 sku_estimate="compute_routes_pro", provider_label="Google Routes")
+        try:
+            self.store.reserve_usage("google_routes", "compute_routes_pro", periods,
+                                     headroom=self.request_headroom,
+                                     sku_estimate="compute_routes_pro", provider_label="Google Routes")
+        except RuntimeError as exc:
+            raise ValidationUnavailable("google_budget_cap: " + str(exc)) from None
         self.calls += 1
         success = False
         try:
@@ -251,23 +271,59 @@ class ValidationSession:
                 clock += timedelta(seconds=leg["duration_s"])
         return Measurement(departure, legs, sum(dwell))
 
+    @staticmethod
+    def call_count(points, dwell):
+        return 1 if not any(dwell) and len(points) <= 27 else len(points)-1
+
     def validate(self, points, dwell, earliest, latest, estimate_s, to_school, grace_seconds=0):
         if len(points) < 2 or len(dwell) != len(points) or any(x < 0 or not math.isfinite(x) for x in dwell):
             raise ValidationUnavailable("google_itinerary_invalid")
         if not math.isfinite(estimate_s) or estimate_s < 0:
             raise ValidationUnavailable("google_estimate_invalid")
         candidate = max(earliest, latest-timedelta(seconds=estimate_s)) if to_school else earliest
-        visited = set()
-        for _ in range(self.max_rounds):
+        visited, best, late_bound = set(), None, None
+        calls = self.call_count(points, dwell)
+        for _ in range(min(4, self.max_rounds)):
+            self.client.check_canceled()
             if candidate in visited:
                 break
+            # Optional later departures cannot consume the remaining mandatory work
+            # or the allowance for one corrective round. Each request still charges atomically.
+            reserve = self.client.protected_calls + (calls if best is not None else 0)
+            if not self.client.can_afford(calls, reserve):
+                if best is not None:
+                    return best
+                raise ValidationUnavailable("google_budget_insufficient_for_complete_round")
             visited.add(candidate)
-            result = self.measure(points, candidate, dwell)
-            if result.arrival <= latest+timedelta(seconds=grace_seconds) or not to_school:
+            previous_headroom = self.client.request_headroom
+            self.client.request_headroom = reserve
+            try:
+                result = self.measure(points, candidate, dwell)
+            except ValidationUnavailable:
+                self.client.check_canceled()
+                if best is not None:
+                    return best
+                raise
+            finally:
+                self.client.request_headroom = previous_headroom
+            if not to_school:
                 return result
-            if candidate == earliest:
-                return result
-            candidate = max(earliest, latest-timedelta(seconds=result.drive_s+result.dwell_s))
+            early_s = (latest-result.arrival).total_seconds()
+            if early_s >= 0:
+                if best is None or result.departure > best.departure:
+                    best = result
+                if early_s <= 180:
+                    return best
+                candidate = result.departure + timedelta(seconds=early_s-120)
+            else:
+                late_bound = candidate if late_bound is None else min(late_bound, candidate)
+                if candidate == earliest:
+                    return best or result
+                candidate = max(earliest, result.departure+timedelta(seconds=early_s))
+            if best is not None and late_bound is not None and not best.departure < candidate < late_bound:
+                candidate = best.departure + (late_bound-best.departure)/2
+        if best is not None:
+            return best
         raise ValidationUnavailable("google_departure_validation_not_converged")
 
 
@@ -295,6 +351,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
         session.client.check_canceled = check_canceled
     before = session.client.calls
     to_school = config.service_direction == "To School"
+    arrival_anchored = to_school and config.timing_policy != "fixed_departure"
+    grace_seconds = 0  # Google success never includes a late-arrival grace period.
     gate = {"enabled": True, "scenario": scenario_label, "provider": "google_routes",
             "gate_type": "arrival_window" if to_school else "route_duration",
             "service_direction": config.service_direction, "country": "China", "city": "",
@@ -302,8 +360,15 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
             "checked_route_count": 0, "failed_route_count": 0, "failed_route_ids": [],
             "unavailable_route_count": 0, "cache_hits": 0, "max_estimated_arrival_delay_minutes": 0,
             "max_time_window_overrun_minutes": 0, "target_duration_minutes": (latest-earliest).total_seconds()/60,
-            "validation_service_date": config.validation_service_date, "policy_version": POLICY_VERSION}
+            "validation_service_date": config.validation_service_date, "policy_version": POLICY_VERSION,
+            "timing_policy": config.timing_policy}
     updates = []
+    pending_calls = sum(session.call_count(route.get("nodes") or [],
+        [float(config.stop_service_minutes)*60 if i > 0 and int(node) != 0 else 0
+         for i, node in enumerate(route.get("nodes") or [])]) for route in scenario.get("routes") or [])
+    if not session.client.can_afford(pending_calls):
+        raise ValidationUnavailable("google_budget_insufficient_for_scenario")
+    session.client.protected_calls = pending_calls
     def minute(value):
         return (value-earliest.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60
     for index, route in enumerate(scenario.get("routes") or []):
@@ -320,9 +385,11 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
         # Audit starts after origin boarding; only subsequent service stops add dwell.
         dwell = [stop_dwell if index > 0 and int(node) != 0 else 0 for index, node in enumerate(nodes)]
         saved_dwell = float(route.get("stop_service_time_s", sum(dwell)))
+        session.client.protected_calls -= session.call_count(coords, dwell)
         if abs(saved_dwell-sum(dwell)) > 1:
             raise ValidationUnavailable("google_dwell_contract_mismatch")
-        result = session.validate(coords, dwell, earliest, latest, float(route.get("time_s", 0)), to_school, grace_seconds)
+        result = session.validate(coords, dwell, earliest, latest, float(route.get("time_s", 0)), arrival_anchored)
+
         overrun = max(0, (result.arrival-latest).total_seconds())
         passed = overrun <= grace_seconds
         route_id = str(route.get("route_id") or route.get("id") or f"Bus {index+1}")
@@ -336,7 +403,7 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
             "verified_arrival_label": result.arrival.strftime("%H:%M"),
             "time_window_overrun_minutes": overrun/60, "estimated_arrival_delay_minutes": overrun/60,
             "gate_type": gate["gate_type"], "validation_service_date": config.validation_service_date,
-            "policy_version": POLICY_VERSION, "grace_minutes": grace_seconds/60}
+            "policy_version": POLICY_VERSION, "grace_minutes": 0, "timing_policy": config.timing_policy}
         evidence = {"provider": "google_routes", "source": "google_routes", "status": "verified",
                     "evidence_version": EVIDENCE_VERSION, "complete": True, "issues": [],
                     "geometry": result.legs[0]["geometry"] if len(result.legs) == 1 else [],

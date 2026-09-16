@@ -515,6 +515,7 @@ export type JobMapData = {
 export type PlannerConfigPayload = {
     final_time_validation_mode?: "legacy" | "google";
     validation_service_date?: string;
+    timing_policy?: "arrival_anchored" | "fixed_departure";
     large_bus_name: string;
     mid_bus_name: string;
     small_bus_name: string;
@@ -705,6 +706,7 @@ export type DistanceCheckerToolMode = "reference" | "route_cost";
 export type FinalTimingConfig = {
     final_time_validation_mode?: "legacy" | "google";
     validation_service_date?: string;
+    timing_policy?: "arrival_anchored" | "fixed_departure";
     time_window_start: string;
     time_window_end: string;
     service_direction: "To School" | "From School";
@@ -713,6 +715,7 @@ export type FinalTimingConfig = {
 export type DirectSchoolAnalysisConfig = {
     final_time_validation_mode?: "legacy" | "google";
     validation_service_date?: string;
+    timing_policy?: "arrival_anchored" | "fixed_departure";
     service_direction: "To School" | "From School";
     stop_service_minutes: number;
     time_window_start: string;

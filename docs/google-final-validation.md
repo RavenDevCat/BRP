@@ -13,8 +13,12 @@ independent business adapters. Full historical revalidation preserves the
 provider and reserves both the review allowance and shared Google quota before
 each call. Isolated legacy road correction is not used for Google source runs.
 
-Reference Distance uses the configured earliest departure as a fixed departure.
-Route tools use arrival-window validation for AM and fixed departure for PM.
+The Google panel selects `timing_policy`: `arrival_anchored` (AM default) or
+`fixed_departure`. In fixed mode, `time_window_start` is the exact departure,
+not an earliest bound. PM always uses fixed departure. Reference Distance
+supports the selected policy and retains fixed departure for older callers
+that do not send a policy. The shared panel shows service date, Asia/Shanghai
+timezone, mode and prediction interval independently of task execution timing.
 Pure distances and fuel arithmetic retain their previous basis; road-time
 exports identify Google time and OSRM distance/cost separately. A Google time
 does not certify an OSRM geometry. Receipt fields preserve both sources.
@@ -25,8 +29,9 @@ preserves the saved baseline dwell and adds only the new stops' configured dwell
 Zero-rider service stops remain service stops. Native stop schedules must use
 the receipt's actual departure, not a reconstructed default arrival time.
 
-Google mode requires `validation_service_date`. Scheduled submissions freeze
-their scheduled date. Submission assigns a server-generated `validation_budget_id`;
+Google mode requires `validation_service_date`. An explicit prediction date is
+never overwritten by a scheduled execution date. Older scheduled callers that
+omit it retain the scheduled-date default. Submission assigns a server-generated `validation_budget_id`;
 persisted retries share that budget. Past departure times are rejected, not
 silently moved to another date. Current baseline and candidate timing must have
 the same Google provider, service date, and policy before time-impact comparison.
@@ -99,10 +104,18 @@ and geometry are validated together. They are never represented as measurements
 of the AMap geometry. Stop service time is counted once. Nonzero dwell requires
 rolling leg requests so each leg uses its actual departure time.
 
-AM validation queries a departure, evaluates arrival, and can query a revised
-departure up to four rounds. Only a queried departure can pass. The existing
-arrival grace and outer solver replan remain applicable. PM begins at the
-configured window start. Missing native legs, inconsistent totals, invalid
+Arrival mode seeds departure from OSRM drive time plus the adapter's dwell
+model. It queries that departure and evaluates the measured arrival. Late
+arrival triggers an earlier prediction; Google mode has no late-arrival grace.
+An arrival up to three minutes early is accepted. An earlier arrival may trigger
+a later prediction targeting two minutes early, subject to quota. A measured
+late/feasible bracket bounds oscillation. At most four complete rounds are run.
+Only a queried departure can pass; no global latest-departure optimum is claimed.
+An optional refinement failure or exhausted allowance retains the latest
+already-verified feasible departure. Cancellation is never swallowed. Without
+a feasible receipt, unavailable data cannot become success; a measured overrun
+still reaches the existing solver gate/replan. Fixed mode never shifts departure.
+Missing native legs, inconsistent totals, invalid
 coordinates, excessive endpoint gaps, quota exhaustion, cancellation, and
 non-convergence do not silently become successful legacy validation.
 
@@ -119,7 +132,22 @@ Four validation rounds do not mean four requests: dwell can require one request
 per leg, multiplied by rounds, baseline routes, candidates, and outer replans.
 The pilot must be sized from these actual attempts, not final route count.
 
+Each round is preflighted at its actual request cost. Audit scenario validation
+and Direct-to-School reserve headroom for the remaining initial measurements;
+optional later-departure exploration also leaves one corrective round. Each
+request atomically checks that headroom without charging it as an API attempt.
+This does not guarantee that an entire solver search fits its budget: additional
+candidates/recovery work still need allowance, and concurrent jobs may exhaust
+the global cap. Saved feasible receipts remain usable without another call.
+Direct-to-School's provider call limit can lower, but never raise, its Google cap.
+Map reads and exports consume no prediction requests.
+
 ## Verification
+
+`tests/test_google_arrival_policy.py` covers the three-minute boundary, two-minute
+target, late correction, fixed departure, oscillation, saved feasible receipts,
+cancellation and atomic quota headroom. The solver lifecycle tests exercise
+both policies without paid calls.
 
 `tests/test_google_final_validation.py` covers configuration, quotas, native
 evidence, cancellation, rolling dwell, reverse validation, mode isolation,

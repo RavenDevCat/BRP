@@ -60,13 +60,15 @@ def test_disabled_legacy_submission_unchanged():
     payload = {"stop_service_minutes": 1}
     assert g.prepare_submission(payload) is payload
 
-def test_server_freezes_scheduled_date_and_new_budget(monkeypatch):
+def test_prediction_date_is_independent_of_execution_date(monkeypatch):
     monkeypatch.setattr(g, "require_available", lambda: None)
     payload = {"final_time_validation_mode": "google", "validation_budget_id": "user-supplied",
                "validation_service_date": "2030-01-01", "time_window_start": "06:30", "time_window_end": "08:00"}
     first = g.prepare_submission(payload, "2031-01-02")
     second = g.prepare_submission(payload, "2031-01-03")
-    assert first["validation_service_date"] == "2031-01-02"
+    assert first["validation_service_date"] == second["validation_service_date"] == "2030-01-01"
+    old_scheduled = {key: value for key, value in payload.items() if key != "validation_service_date"}
+    assert g.prepare_submission(old_scheduled, "2031-01-02")["validation_service_date"] == "2031-01-02"
     assert first["validation_budget_id"] != second["validation_budget_id"] != "user-supplied"
     assert payload["validation_service_date"] == "2030-01-01"
 
@@ -162,7 +164,8 @@ def test_reverse_departure_returns_queried_time(client):
     client.transport = transport
     result = g.ValidationSession(client).validate(POINTS[:2], [0, 0], start, start+timedelta(hours=1.5), 1800, True)
     assert result.departure in times and result.arrival <= start+timedelta(hours=1.5)
-    assert len(times) == 2
+    assert len(times) == 3
+    assert (start+timedelta(hours=1.5)-result.arrival).total_seconds() == 120
 
 def test_earliest_infeasible_is_failed_measurement_not_fake_pass(client):
     client.transport = lambda body: response(body_points(body), 7200)
@@ -264,15 +267,15 @@ def test_google_window_is_authoritative_without_changing_legacy():
     assert core.build_planner_config({**payload, "final_time_validation_mode": "google"}).to_school_arrival_time == "08:15"
 
 
-def test_configured_grace_is_preserved(client, monkeypatch):
+def test_google_lateness_does_not_inherit_legacy_grace(client, monkeypatch):
     config, points, scenario = scenario_setup(client)
     config.time_window_end = "06:50"
     scenario["routes"][0]["time_s"] = 1320
     monkeypatch.setattr(core, "AM_ARRIVAL_GATE_GRACE_MINUTES", 1)
     gate = core.attach_final_route_traffic_gate(object(), scenario, points, config, [{"country": "China"}], "Current")
-    assert gate["status"] == "passed"
+    assert gate["status"] == "failed"
     assert gate["max_time_window_overrun_minutes"] == 1
-    assert scenario["routes"][0]["final_route_traffic_gate"]["grace_minutes"] == 1
+    assert scenario["routes"][0]["final_route_traffic_gate"]["grace_minutes"] == 0
 
 
 @pytest.mark.parametrize("direction", ["To School", "From School"])

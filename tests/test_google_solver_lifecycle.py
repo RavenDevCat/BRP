@@ -10,7 +10,8 @@ import planner_core as core
 @pytest.mark.parametrize("direction", ["To School", "From School"])
 @pytest.mark.parametrize("scheduled", [False, True])
 @pytest.mark.parametrize("slow_first_candidate", [False, True])
-def test_new_audit_real_solver_lifecycle(client, monkeypatch, tmp_path, direction, scheduled, slow_first_candidate):
+@pytest.mark.parametrize("timing_policy", ["arrival_anchored", "fixed_departure"])
+def test_new_audit_real_solver_lifecycle(client, monkeypatch, tmp_path, direction, scheduled, slow_first_candidate, timing_policy):
     monkeypatch.setattr(google, "require_available", lambda: None)
     phase = {"slow": False, "injected": False}
     original_gate = core.attach_final_route_traffic_gate
@@ -48,6 +49,7 @@ def test_new_audit_real_solver_lifecycle(client, monkeypatch, tmp_path, directio
             "fleet": [{"bus_type": "Small Bus", "seat_count": 19}]}}
     config = core.PlannerConfig(final_time_validation_mode="google", validation_service_date="2030-01-02",
         validation_budget_id="test-task", service_direction=direction, minimum_vehicle_reduction=0,
+        timing_policy=timing_policy,
         time_window_start="06:30" if direction == "To School" else "15:40",
         time_window_end="08:00" if direction == "To School" else "17:10",
         large_bus_max_count=0, mid_bus_max_count=0, small_bus_max_count=1, reserved_express_buses=0)

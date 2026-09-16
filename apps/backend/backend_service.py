@@ -626,7 +626,7 @@ def _handle_distance_workbook_preview(payload: dict[str, Any]) -> dict[str, Any]
 
 def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
     import final_timing
-    timing_config = final_timing.prepare({**dict(payload.get("timing_config") or {}), "timing_policy": "fixed_departure"})
+    timing_config = final_timing.prepare({"timing_policy": "fixed_departure", **dict(payload.get("timing_config") or {})})
     if final_timing.is_google(timing_config):
         final_timing.require_china(dict(payload.get("origin") or {}).get("country"))
         if payload.get("distance_mode") == "straight_line":

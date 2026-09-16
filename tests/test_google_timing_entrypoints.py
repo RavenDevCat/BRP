@@ -34,7 +34,8 @@ def test_context_keeps_native_evidence_and_dwell(context):
     assert value["leg_durations_s"] == [600, 600]
     assert value["validation_config"] == CONFIG
     assert value["geometry"] == [] and len(value["geometry_segments"]) == 2
-    assert context.state["api_calls"] == 2
+    assert context.state["api_calls"] == 4
+    assert (context.latest-google.datetime.fromisoformat(value["arrival_time"])).total_seconds() == 120
 
 def test_declared_gcj_is_converted_once(context):
     from amap_driving import wgs84_to_gcj02
@@ -114,11 +115,15 @@ def test_insert_baseline_and_candidate_share_google_context(context, monkeypatch
     assert map_data["routes"][0]["final_route_traffic_gate"]["provider"] == "google_routes"
     assert map_data["stops"][0]["scheduled_time_minutes"] == row["route_evidence"]["departure_minutes"]
 
-def test_direct_school_full_classification_and_export_use_google(context, monkeypatch):
+@pytest.mark.parametrize("policy", ["arrival_anchored", "fixed_departure"])
+def test_direct_school_full_classification_and_export_use_google(context, monkeypatch, policy):
     from test_direct_school_analysis import prepared_payload, fake_osrm
     monkeypatch.setattr(direct, "_osrm_leg", fake_osrm)
     monkeypatch.setattr(direct, "FreshRouteProvider", lambda *a, **k: pytest.fail("legacy provider reached"))
-    result = direct.run_direct_school_analysis(prepared_payload(), {**CONFIG, "far_duration_minutes": 60})
+    result = direct.run_direct_school_analysis(prepared_payload(), {**CONFIG, "timing_policy": policy, "far_duration_minutes": 60})
+    if policy == "fixed_departure":
+        assert all(row["route_evidence"]["departure_minutes"] == 390 for row in result["stops"])
+        assert result["routes"][0]["route_evidence"]["departure_minutes"] == 390
     assert result["provider"] == "google_routes" and result["status"] == "complete"
     assert result["summary"]["failed_count"] == 0
     assert result["routes"][0]["route_evidence"]["stop_service_time_s"] == 120

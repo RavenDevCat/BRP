@@ -507,6 +507,8 @@ def run_direct_school_analysis(
         provider = timing_context or FinalTimingContext(config, check_canceled=check_canceled)
         if not isinstance(provider, FinalTimingContext):
             raise RuntimeError("Native Google timing context required")
+        client = provider.session.client
+        client.limits = (min(client.limits[0], int(config["provider_call_limit"])), *client.limits[1:])
         provider_name = provider.provider
         # Do not reuse historical timestamps or partially verified classifications.
         resume_result = None
@@ -629,7 +631,18 @@ def run_direct_school_analysis(
         )
 
     direct_order = _rotate(rows, run_seed or scheduled_start_at or utc_now_iso())
+    if google_mode:
+        route_call_costs = {route_id: provider.session.call_count(route_stops,
+            [0 if stop.get("is_depot") else float(config["stop_service_minutes"])*60 for stop in route_stops])
+            for route_id, route_stops in route_groups.items()}
+        mandatory_calls = len(rows) + sum(route_call_costs.values())
+        if not provider.session.client.can_afford(mandatory_calls):
+            from google_final_validation import ValidationUnavailable
+            raise ValidationUnavailable("google_budget_insufficient_for_direct_and_current_routes")
+        provider.session.client.protected_calls = mandatory_calls
     for row in direct_order:
+        if google_mode:
+            provider.session.client.protected_calls -= 1
         if check_canceled:
             check_canceled()
         if row.get("provider_status") == "resolved":
@@ -679,7 +692,7 @@ def run_direct_school_analysis(
                 departure = live["departure_minutes"] if google_mode else latest_arrival - direct_duration_s / 60.0
                 row["latest_direct_departure"] = _clock_label(departure)
             else:
-                departure = _clock_minutes(config.get("from_school_departure_time"), 15 * 60 + 40)
+                departure = live["departure_minutes"] if google_mode else _clock_minutes(config.get("from_school_departure_time"), 15 * 60 + 40)
                 arrival = live["arrival_minutes"] if google_mode else departure + direct_duration_s / 60.0
                 row["estimated_direct_arrival"] = _clock_label(arrival)
         except Exception as exc:
@@ -702,6 +715,8 @@ def run_direct_school_analysis(
     route_runtime: dict[str, dict[str, Any]] = {}
     route_order = _rotate(sorted(route_groups), f"route|{run_seed or scheduled_start_at or ''}")
     for route_id in route_order:
+        if google_mode:
+            provider.session.client.protected_calls -= route_call_costs[route_id]
         if check_canceled:
             check_canceled()
         ordered = sorted(route_groups[route_id], key=lambda item: _safe_int(item.get("stop_sequence")))
@@ -1337,6 +1352,9 @@ def build_direct_school_workbook(
         ("Trip direction / 测算方向", result.get("service_direction"), "Direction used for live map measurements / 实时地图测算方向"),
         ("Student trip time limit (min) / 学生单程时间上限（分钟）", parameters.get("far_duration_minutes"), "Applied to both direct-trip and current-route rider classification / 用于直达及当前路线乘车分类"),
         ("Route operating window / 路线运行时间窗", f"{parameters.get('time_window_start')} - {parameters.get('time_window_end')}", "Configured route operating interval / 运行时配置的路线运行时间窗"),
+        *([("Prediction date / 预测日期", parameters.get("validation_service_date"), "Asia/Shanghai (UTC+08:00)"),
+           ("Prediction mode / 预测模式", parameters.get("timing_policy", "arrival_anchored"), "Google final timing / Google 最终时间校验")]
+          if parameters.get("final_time_validation_mode") == "google" else []),
         ("Per-stop dwell time (min) / 每站停靠时间（分钟）", parameters.get("stop_service_minutes"), "Added for each service stop / 每个服务站点计入"),
     ]
     for row in parameter_rows:

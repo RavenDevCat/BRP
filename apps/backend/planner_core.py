@@ -364,6 +364,7 @@ class PlannerConfig:
     final_time_validation_mode: str = "legacy"
     validation_service_date: str = ""
     validation_budget_id: str = ""
+    timing_policy: str = "arrival_anchored"
     large_bus_name: str = "Large Bus"
     mid_bus_name: str = "Mid Bus"
     small_bus_name: str = "Small Bus"
@@ -2592,6 +2593,7 @@ def build_planner_cache_key(input_records: list[dict[str, Any]], config: Planner
     if config.final_time_validation_mode == "google":
         payload["google_validation"] = {
             "mode": "google", "service_date": config.validation_service_date,
+            "timing_policy": config.timing_policy,
             "policy": google_final_validation.POLICY_VERSION,
             "budget_id": config.validation_budget_id,
         }
@@ -7319,6 +7321,7 @@ def _build_final_time_impact_validator(
             gate = route.get("final_route_traffic_gate") or {}
             if (gate.get("provider") != "google_routes"
                     or gate.get("validation_service_date") != config.validation_service_date
+                    or gate.get("timing_policy", "arrival_anchored") != config.timing_policy
                     or gate.get("policy_version") != google_final_validation.POLICY_VERSION):
                 raise google_final_validation.ValidationUnavailable("google_time_impact_source_mismatch")
     require_same_source(current_plan_scenario)

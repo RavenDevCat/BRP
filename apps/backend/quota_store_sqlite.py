@@ -216,6 +216,7 @@ class SqliteQuotaStore:
         periods: list[tuple[str, str, int]],
         *,
         count: int = 1,
+        headroom: int = 0,
         provider_label: str = "",
         sku_estimate: str = "",
     ) -> dict[str, Any]:
@@ -237,7 +238,7 @@ class SqliteQuotaStore:
                     (normalized_provider, normalized_counter, period_type, period_key),
                 ).fetchone()
                 attempted = int(row["attempted"] or 0) if row else 0
-                if limit > 0 and attempted + count > limit:
+                if limit > 0 and attempted + count + max(0, headroom) > limit:
                     raise RuntimeError(
                         f"{provider_label or provider} {period_type} usage cap would be exceeded: "
                         f"{attempted}+{count}>{limit}"

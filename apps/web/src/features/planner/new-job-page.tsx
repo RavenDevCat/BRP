@@ -303,7 +303,8 @@ export function NewJobPage() {
   );
   const routeBudgetAutoRetrying = routeBudgetShouldRetry && routeBudgetRetryAttempts < ROUTE_BUDGET_AUTO_RETRY_LIMIT;
   const routeBudgetRetryExhausted = routeBudgetShouldRetry && !routeBudgetAutoRetrying;
-  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && !busy);
+  const predictionReady = config.final_time_validation_mode !== "google" || Boolean(config.validation_service_date);
+  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && predictionReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
     fileBase64 &&
@@ -605,7 +606,7 @@ export function NewJobPage() {
                     scheduled={scheduledJobsEnabled && scheduledJob}
                     onChange={updateUserConfig} />
                 </div>
-                <Field label="Window Start">
+                {config.final_time_validation_mode !== "google" && <><Field label="Window Start">
                   <input
                     className={fieldClassName}
                     type="time"
@@ -620,7 +621,7 @@ export function NewJobPage() {
                     value={config.time_window_end}
                     onChange={(event) => updateUserConfig({ time_window_end: event.target.value })}
                   />
-                </Field>
+                </Field></>}
                 <Field label="Stops Limit">
                   <input
                     className={fieldClassName}

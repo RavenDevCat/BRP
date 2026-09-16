@@ -1306,3 +1306,8 @@ const zh: Translations = {
 zh["Suspected detour"] = "疑似绕行";
 zh["Suspected detour; provider measurements remain in use."] = "疑似绕行；仍使用高德完整测量值计算，距离差异不代表路线已被证明错误。";
 export default zh;
+zh["Time zone"] = "时区";
+zh["Prediction mode"] = "预测模式";
+zh["Prediction"] = "预测时间";
+zh["Reverse from arrival"] = "按到校时间倒推";
+zh["Fixed departure"] = "固定发车时间";

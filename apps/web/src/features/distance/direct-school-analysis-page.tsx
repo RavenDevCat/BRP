@@ -218,7 +218,10 @@ export function DirectSchoolAnalysisPage() {
   }
 
   function updateConfig(patch: Partial<DirectSchoolAnalysisConfig>) {
-    setConfig((current) => ({ ...current, ...patch }));
+    setConfig((current) => ({ ...current, ...patch,
+      ...(current.service_direction === "From School" && patch.time_window_start
+        ? { from_school_departure_time: patch.time_window_start } : {}),
+    }));
     createMutation.reset();
   }
 
@@ -360,7 +363,7 @@ export function DirectSchoolAnalysisPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <NumberField label="Student trip time limit (min)" value={config.far_duration_minutes} min={1} step={5} onChange={(value) => updateConfig({ far_duration_minutes: value })} />
                     <NumberField label="Per-stop dwell time (min)" value={config.stop_service_minutes} min={0} step={0.5} onChange={(value) => updateConfig({ stop_service_minutes: value })} />
-                    <Field label="Route operating window start">
+                    {config.final_time_validation_mode !== "google" && <><Field label="Route operating window start">
                       <input type="time" className={fieldClassName} value={config.time_window_start} onChange={(event) => updateConfig({
                         time_window_start: event.target.value,
                         ...(config.service_direction === "From School" ? { from_school_departure_time: event.target.value } : {}),
@@ -368,7 +371,7 @@ export function DirectSchoolAnalysisPage() {
                     </Field>
                     <Field label="Route operating window end">
                       <input type="time" className={fieldClassName} value={config.time_window_end} onChange={(event) => updateConfig({ time_window_end: event.target.value })} />
-                    </Field>
+                    </Field></>}
                   </div>
                   <p className="text-xs leading-5 text-muted-foreground">
                     {t("The student trip time limit applies to both direct and current-route travel. Route recovery uses the operating window below, while distance is reported only.")}
@@ -441,7 +444,8 @@ export function DirectSchoolAnalysisPage() {
                   <Button
                     type="button"
                     className="w-full"
-                    disabled={!previewMutation.data || createMutation.isPending || (scheduled && !scheduledDates.length)}
+                    disabled={!previewMutation.data || createMutation.isPending || (scheduled && !scheduledDates.length)
+                      || (config.final_time_validation_mode === "google" && (!config.validation_service_date || config.time_window_start >= config.time_window_end))}
                     icon={createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : scheduled ? <CalendarDays className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                     onClick={() => createMutation.mutate()}
                   >

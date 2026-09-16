@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
 from google_routes_transport import ENDPOINT, FIELDS
 from quota_store_sqlite import SqliteQuotaStore
+from google_routes_quota import quota_periods
 
 PROVIDER = "google_routes_relay"
 COUNTER = "compute_routes_pro"
@@ -68,14 +69,10 @@ class RelayConfig:
         if not self.token or not self.key or not path:
             raise RuntimeError("Routes relay requires a key, token and dedicated quota path")
         self.store = SqliteQuotaStore(path)
-        self.limit = int(os.environ.get("BRP_GOOGLE_ROUTES_RELAY_CAMPAIGN_LIMIT", "500"))
-        if not 1 <= self.limit <= 500:
-            raise RuntimeError("Routes relay campaign limit must be 1..500")
 
     def forward(self, budget, body):
         now = datetime.now(ZoneInfo("Asia/Shanghai"))
-        periods = [("task", budget, 200), ("day", now.date().isoformat(), 500),
-                   ("month", now.strftime("%Y-%m"), 500), ("campaign", "google-final-pilot-v1", self.limit)]
+        periods = quota_periods(budget, now)
         self.store.reserve_rate_limit("google-final-routes", 2.0)
         self.store.reserve_usage(PROVIDER, COUNTER, periods, sku_estimate=COUNTER)
         succeeded = False

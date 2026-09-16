@@ -175,7 +175,9 @@ def run_full_review(store: Any, record: dict[str, Any], token: str, *,
         raise ValueError("Full correction input or contract changed.")
     used = int(record.get("api_calls") or 0)
     limit = request["provider_call_limit"]
-    if not 0 <= used <= limit:
+    import final_timing
+    google_mode = final_timing.is_google(request["full_input"]["analysis_config"])
+    if used < 0 or (not google_mode and used > limit):
         raise ValueError("Invalid persisted provider usage.")
 
     def check_active():
@@ -193,8 +195,7 @@ def run_full_review(store: Any, record: dict[str, Any], token: str, *,
             check_active=check_active)
 
     config = {**request["full_input"]["analysis_config"], "provider_call_limit": limit}
-    import final_timing
-    google_context = final_timing.review_context(config, store, record, token, check_active) if final_timing.is_google(config) else None
+    google_context = final_timing.review_context(config, store, record, token, check_active) if google_mode else None
     # Derived classifications are rerun; only fresh, review-owned road measurements survive a pause.
     result = analysis.run_direct_school_analysis(deepcopy(request["full_input"]["prepared_payload"]), config,
         run_seed=request["request_key"], provider_factory=None if google_context else factory, check_canceled=check_active,

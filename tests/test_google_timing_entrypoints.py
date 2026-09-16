@@ -188,7 +188,8 @@ def test_closed_deployment_rejects_before_upload_or_routing(monkeypatch, handler
 
 
 @pytest.mark.parametrize("tool", ["audit", "direct", "fleet_planner", "route_insert_advisor"])
-def test_google_full_review_uses_same_provider_and_persistent_review_budget(context, monkeypatch, tmp_path, tool):
+@pytest.mark.parametrize("prior_calls", [0, 501])
+def test_google_full_review_uses_same_provider_and_persistent_review_budget(context, monkeypatch, tmp_path, tool, prior_calls):
     import measurement_reviews as reviews
     from runtime_store_sqlite import SqliteRuntimeStore
     from test_full_measurement_review import osrm
@@ -224,6 +225,10 @@ def test_google_full_review_uses_same_provider_and_persistent_review_budget(cont
                     route["measurement_inputs"]["config"].update(fields)
         row = side_tests.create(store, original, tool)
     saved = deepcopy(store.get_job("source") if tool in {"audit", "direct"} else store.get_side_tool_run(tool, original["run_id"]))
+    # Google reviews ignore the legacy per-review cap, including resumed usage.
+    with store.connect() as conn:
+        conn.execute("UPDATE route_measurement_reviews SET api_calls=?, request_json=json_set(request_json, '$.provider_call_limit', 1) WHERE review_id=?",
+                     (prior_calls, row["review_id"]))
     if tool in {"audit", "direct"}:
         with pytest.raises(ValueError, match="full same-provider"):
             reviews.build_review_request(original, ["any"], requested_by="test@example.test", request_key="partial")

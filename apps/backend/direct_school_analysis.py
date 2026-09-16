@@ -507,8 +507,6 @@ def run_direct_school_analysis(
         provider = timing_context or FinalTimingContext(config, check_canceled=check_canceled)
         if not isinstance(provider, FinalTimingContext):
             raise RuntimeError("Native Google timing context required")
-        client = provider.session.client
-        client.limits = (min(client.limits[0], int(config["provider_call_limit"])), *client.limits[1:])
         provider_name = provider.provider
         # Do not reuse historical timestamps or partially verified classifications.
         resume_result = None

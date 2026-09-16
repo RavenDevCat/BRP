@@ -145,12 +145,13 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
             raise reviews.ReviewClaimLost("Audit review is no longer running.")
     check_active()
     used, limit = record.get("api_calls", 0), request.get("provider_call_limit")
-    if (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= reviews.MAX_REVIEW_CALLS
-            or isinstance(used, bool) or not isinstance(used, int) or not 0 <= used <= limit):
-        raise ValueError("Invalid persisted provider budget or usage.")
-    config = core.build_planner_config(request["full_input"]["config"])
     import final_timing
     google_mode = final_timing.is_google(request["full_input"]["config"])
+    if (isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= reviews.MAX_REVIEW_CALLS
+            or isinstance(used, bool) or not isinstance(used, int) or used < 0
+            or (not google_mode and used > limit)):
+        raise ValueError("Invalid persisted provider budget or usage.")
+    config = core.build_planner_config(request["full_input"]["config"])
     if google_mode:
         inner = provider = final_timing.review_context(request["full_input"]["config"], store, record, token, check_active)
         config._google_validation_session = provider.session

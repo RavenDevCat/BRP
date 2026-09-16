@@ -606,7 +606,8 @@ class SqliteRuntimeStore:
             return conn.execute("UPDATE route_measurement_reviews SET worker_pid = ? WHERE review_id = ? AND worker_token = ?",
                                 (worker_pid, review_id, worker_token)).rowcount == 1
 
-    def reserve_route_measurement_calls(self, review_id: str, worker_token: str, amount: int) -> bool:
+    def reserve_route_measurement_calls(self, review_id: str, worker_token: str, amount: int,
+                                       *, enforce_limit: bool = True) -> bool:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount < 1:
             raise ValueError("Call reservation must be a positive integer.")
         self.initialize()
@@ -614,8 +615,8 @@ class SqliteRuntimeStore:
             return conn.execute(
                 """UPDATE route_measurement_reviews SET api_calls = api_calls + ?
                    WHERE review_id = ? AND worker_token = ? AND status = 'running'
-                     AND api_calls + ? <= json_extract(request_json, '$.provider_call_limit')""",
-                (amount, review_id, worker_token, amount),
+                     AND (? = 0 OR api_calls + ? <= json_extract(request_json, '$.provider_call_limit'))""",
+                (amount, review_id, worker_token, int(enforce_limit), amount),
             ).rowcount == 1
 
     def pause_route_measurement_review(self, review_id: str, *, yielding: bool = False) -> bool:

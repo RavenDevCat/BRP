@@ -29,7 +29,6 @@ def cfg(monkeypatch, tmp_path):
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_TOKEN", "test-relay-token")
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_API_KEY", "test-google-key")
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_QUOTA_DB", str(tmp_path / "relay.sqlite"))
-    monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_CAMPAIGN_LIMIT", "3")
     cfg = relay.RelayConfig()
     monkeypatch.setattr(cfg.store, "reserve_rate_limit", lambda *args: None)
     return cfg
@@ -102,11 +101,16 @@ def test_failures_charged_once_without_sensitive_errors(cfg, envelope, monkeypat
     assert usage(cfg)["failed"] == 1 and usage(cfg)["attempted"] == 1 and len(calls) == 1
 
 def test_relay_quota_persists_across_restart(cfg, envelope, monkeypatch):
-    cfg.store.reserve_usage(relay.PROVIDER, relay.COUNTER, [("campaign", "google-final-pilot-v1", 3)], count=3)
+    from google_routes_quota import MONTHLY_LIMIT
+    from zoneinfo import ZoneInfo
+    month = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m")
+    cfg.store.reserve_usage(relay.PROVIDER, relay.COUNTER, [("month", month, MONTHLY_LIMIT)], count=MONTHLY_LIMIT)
     restarted = relay.RelayConfig()
     monkeypatch.setattr(restarted.store, "reserve_rate_limit", lambda *args: None)
+    fake_session(monkeypatch, lambda *args: pytest.fail("Exhausted month reached Google"))
     result = TestClient(relay.create_app(restarted)).post("/compute-routes", json=envelope, headers=auth())
-    assert result.status_code == 429 and usage(restarted)["attempted"] == 3
+    assert result.status_code == 429
+    assert restarted.store.get_usage(relay.PROVIDER, relay.COUNTER, "month", month)["attempted"] == MONTHLY_LIMIT
 
 def test_client_relay_no_google_key_or_proxy_leak(monkeypatch, envelope):
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_URL", "http://127.0.0.1:8813")

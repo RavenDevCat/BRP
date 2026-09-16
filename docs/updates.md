@@ -5,6 +5,19 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-16
+
+### Google Final Timing Monthly Budget
+
+- Google final timing uses a shared 10,000-attempt calendar-month ceiling in
+  Asia/Shanghai. Task, daily and lifetime pilot ceilings no longer apply.
+- Preflight includes existing monthly usage; estimates exactly at the ceiling
+  are allowed. Atomic runtime checks still prevent concurrent work and extra
+  prediction rounds from exceeding the month limit. Failed attempts count.
+- Existing counters and historical results are preserved. The private Routes
+  relay uses the same policy; Google-OFF provider budgets remain unchanged.
+- Previously budget-blocked jobs are not automatically rerun.
+
 ## 2026-09-14
 
 ### Direct And Current Route Map Comparison

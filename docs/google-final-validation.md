@@ -80,9 +80,10 @@ task/day/month/campaign reservation. Failed attempts are not refunded and HTTP
 redirects and automatic retries are disabled. The relay's success counter means
 a native HTTP response, while the client also validates geometry and leg data.
 
-The relay permits at most 200 attempts per task and 500 per day/month/campaign.
-`BRP_GOOGLE_ROUTES_RELAY_CAMPAIGN_LIMIT` may lower its campaign ceiling, never
-raise it above 500. Private deployments must preserve both stores. Keep tokens
+Both client and relay enforce 10,000 attempts per calendar month in Asia/Shanghai.
+There is no task, day or lifetime campaign call ceiling. The retired
+`BRP_GOOGLE_ROUTES_RELAY_CAMPAIGN_LIMIT` setting is ignored. Preserve both stores
+so the current month's existing attempts remain charged. Keep tokens
 out of logs and browser settings. `run_google_routes_relay.ps1 -EnvFile ...`
 uses an explicitly selected private runtime and environment file on Windows.
 No production geocoding or business service needs a restart to install it.
@@ -122,10 +123,15 @@ non-convergence do not silently become successful legacy validation.
 ## Request Budget
 
 Every attempt reserves persistent quota before the request. Failed or timed-out
-calls are not refunded, and there are no automatic HTTP retries. Default limits
-are 200 requests per task, 500 per day, 500 per month, and a fixed 500-request
-pilot campaign. The pilot does not reset automatically. Do not delete the quota
-database or change campaign identity to obtain more calls. Rate is at most two
+calls are not refunded, and there are no automatic HTTP retries. The only usage
+ceiling is 10,000 requests per calendar month, using the request execution time
+in Asia/Shanghai, not the future service date. Preflight compares the estimated
+calls plus already attempted calls with this ceiling; equality is permitted.
+Atomic per-request checks prevent retries, extra rounds or concurrent tasks from
+exceeding it. Task, day and campaign counters remain for attribution only.
+Legacy provider_call_limit settings do not restrict Google jobs or reviews;
+Google-OFF provider budgets are unchanged. Do not delete the quota database.
+The new month starts a new counter without removing history. Rate is at most two
 requests per second through the shared quota store.
 
 Four validation rounds do not mean four requests: dwell can require one request

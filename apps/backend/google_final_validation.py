@@ -21,7 +21,7 @@ except ImportError:
     from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
 POLICY_VERSION = "google-final-v2"
-PILOT_TOTAL_LIMIT = 500
+from google_routes_quota import DEFAULT_LIMITS, MONTHLY_LIMIT, quota_periods
 TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -161,9 +161,11 @@ def parse_response(payload, points):
 
 
 class GoogleRoutesClient:
-    def __init__(self, budget_id, store, limits=(200, 500, 500), *, transport=None,
+    def __init__(self, budget_id, store, limits=DEFAULT_LIMITS, *, transport=None,
                  now=lambda: datetime.now(timezone.utc), check_canceled=lambda: None):
-        if not budget_id or any(limit <= 0 or limit > PILOT_TOTAL_LIMIT for limit in limits):
+        if (not budget_id or len(limits) != 3
+                or any(type(limit) is not int or not 0 <= limit <= MONTHLY_LIMIT for limit in limits)
+                or limits[2] == 0):
             raise ValidationUnavailable("google_budget_invalid")
         self.budget_id, self.store, self.limits = budget_id, store, limits
         self.transport, self.now, self.check_canceled = transport, now, check_canceled
@@ -172,11 +174,7 @@ class GoogleRoutesClient:
         self.request_headroom = 0
 
     def periods(self):
-        now = self.now().astimezone(TZ)
-        return [("task", self.budget_id, self.limits[0]),
-                ("day", now.date().isoformat(), self.limits[1]),
-                ("month", now.strftime("%Y-%m"), self.limits[2]),
-                ("campaign", "google-final-pilot-v1", PILOT_TOTAL_LIMIT)]
+        return quota_periods(self.budget_id, self.now(), self.limits)
 
     def can_afford(self, count, reserve=0):
         return all(limit <= 0 or self.store.get_usage("google_routes", "compute_routes_pro", kind, key)["attempted"]
@@ -189,10 +187,7 @@ class GoogleRoutesClient:
             raise ValidationUnavailable("google_departure_in_past")
         if self.transport is None:
             require_available()
-        periods = [("task", self.budget_id, self.limits[0]),
-                   ("day", now.astimezone(TZ).date().isoformat(), self.limits[1]),
-                   ("month", now.astimezone(TZ).strftime("%Y-%m"), self.limits[2]),
-                   ("campaign", "google-final-pilot-v1", PILOT_TOTAL_LIMIT)]
+        periods = quota_periods(self.budget_id, now, self.limits)
         def waypoint(point):
             return {"location": {"latLng": {"latitude": point[0], "longitude": point[1]}}}
         if not 2 <= len(points) <= 27:

@@ -26,13 +26,12 @@ def prepare(config, *, service_date=None):
 
 
 def review_context(config, store, record, token, check_active):
-    request = record["request"]
     context = FinalTimingContext({**config, "validation_budget_id": "review-"+record["review_id"]},
                                  check_canceled=check_active)
     client = context.session.client
     client.calls = int(record.get("api_calls") or 0)
-    client.limits = (min(client.limits[0], int(request["provider_call_limit"])), *client.limits[1:])
-    client.reserve_attempt = lambda: store.reserve_route_measurement_calls(record["review_id"], token, 1)
+    client.reserve_attempt = lambda: store.reserve_route_measurement_calls(
+        record["review_id"], token, 1, enforce_limit=False)
     context.state["api_calls"] = client.calls
     return context
 

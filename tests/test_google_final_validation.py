@@ -122,8 +122,8 @@ def test_task_cap_survives_client_restart(client):
         restart.route(POINTS, NOW+timedelta(days=1))
     assert restart.calls == 0
 
-def test_campaign_cap_shared_across_jobs(client):
-    client.store.reserve_usage("google_routes", "compute_routes_pro", [("campaign", "google-final-pilot-v1", 500)], count=500)
+def test_month_cap_shared_across_jobs(client):
+    client.store.reserve_usage("google_routes", "compute_routes_pro", [("month", "2030-01", 10000)], count=10000)
     with pytest.raises(RuntimeError, match="cap"):
         client.route(POINTS, NOW+timedelta(days=1))
     assert client.store.get_usage("google_routes", "compute_routes_pro", "task", "test-task")["attempted"] == 0

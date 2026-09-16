@@ -16,6 +16,9 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Google Pickup And Failure Diagnostics
 
+- Bus-stop precision requires a station POI identity; a station-like geocode
+  label or nearby shop cannot be treated as a confirmed bus platform. Existing
+  reference coordinates remain visible and operator confirmations take priority.
 - Google timing uses available school entrances without overwriting confirmed
   gates, shared geocode caches or Google-OFF behavior.
 - Failed Direct-to-School runs retain completed measurements and identify the

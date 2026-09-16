@@ -20,7 +20,7 @@ REQUEST = ROAD_A + ROAD_B + BUS
 
 
 def poi(name=REQUEST, location="121.430,31.200", **extra):
-    return {"name": name, "location": location, "adcode": "310105", "pname": "\u4e0a\u6d77\u5e02",
+    return {"id": f"test-{name}-{location}", "name": name, "location": location, "adcode": "310105", "pname": "\u4e0a\u6d77\u5e02",
             "address": ROAD_A, "type": BUS, **extra}
 
 

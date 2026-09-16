@@ -110,6 +110,13 @@ def amap_candidate_issues(requested: str, candidate: dict[str, Any], *, poi: boo
         issues.append("requested_road_not_preserved")
     requested_compact = _compact(requested)
     is_bus_stop = bool(re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", requested_compact))
+    if is_bus_stop:
+        # A matching formatted geocode is not proof of a specific bus platform.
+        if not poi or not (candidate.get("id") or candidate.get("amap_poi_id")):
+            issues.append("bus_stop_identity_unconfirmed")
+        poi_type = str(candidate.get("amap_poi_type") or candidate.get("type") or "")
+        if poi and poi_type and not re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", poi_type):
+            issues.append("requested_bus_stop_type_not_preserved")
     if poi and is_bus_stop and any(_compact(road) not in _compact(name) for road in roads):
         issues.append("requested_bus_stop_name_not_preserved")
     if poi and is_bus_stop and len(roads) >= 2:

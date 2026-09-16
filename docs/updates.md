@@ -5,6 +5,15 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-16
+
+### History Loading And Navigation
+
+- Direct-to-School history reads compact summaries instead of loading every
+  saved route geometry. Workspace membership queries no longer repeat that work.
+- Opening a collapsed history sidebar stays open; outside clicks still close
+  it. Historical task results and ownership remain unchanged.
+
 ## 2026-09-14
 
 ### Direct And Current Route Map Comparison

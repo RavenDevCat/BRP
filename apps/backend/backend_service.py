@@ -2434,12 +2434,12 @@ def _list_route_audit_jobs(*, user_email: str, include_all: bool) -> list[dict[s
 
 def _direct_school_jobs(*, user_email: str, include_all: bool) -> list[dict[str, Any]]:
     summaries: list[dict[str, Any]] = []
-    for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all):
-        if _job_kind(entry) != DIRECT_SCHOOL_JOB_KIND:
-            continue
+    entries = [entry for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all)
+               if _job_kind(entry) == DIRECT_SCHOOL_JOB_KIND]
+    results = JOB_STORE.get_job_result_summaries([str(entry["job_id"]) for entry in entries])
+    for entry in entries:
         job_id = str(entry.get("job_id") or "").strip()
-        record = JOB_STORE.get_job(job_id) if job_id else None
-        result = dict((record or {}).get("result") or {})
+        result = results.get(job_id, {})
         summary = dict(result.get("summary") or {})
         summary.update(route_coverage(result))
         summaries.append(
@@ -3697,6 +3697,9 @@ class JobStore:
                     user_email=user_email, include_all=include_all
                 )
             )
+
+    def get_job_result_summaries(self, job_ids: list[str]) -> dict[str, dict[str, Any]]:
+        return _runtime_sqlite_store().get_job_result_summaries(job_ids)
 
     def list_queued_jobs(self) -> list[dict[str, Any]]:
         with self.lock:

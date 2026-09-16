@@ -184,6 +184,8 @@ export function HistorySidebar<T>({
     if (collapsed) return;
     const handlePointerDown = (event: PointerEvent) => {
       if (window.innerWidth < 1024) return;
+      // React can replace the clicked button when opening the collapsed rail.
+      if (rootRef.current && event.composedPath().includes(rootRef.current)) return;
       if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
       onCollapsedChange(true);
     };

@@ -806,6 +806,45 @@ class SqliteRuntimeStore:
             rows = conn.execute(sql, params).fetchall()
         return [self._job_summary_from_row(row) for row in rows]
 
+    def get_job_result_summaries(self, job_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Project list-only fields without loading route geometry into Python."""
+        self.initialize()
+        results: dict[str, dict[str, Any]] = {}
+        ids = list(dict.fromkeys(job_ids))
+        with self.connect() as conn:
+            for offset in range(0, len(ids), 500):
+                batch = ids[offset:offset + 500]
+                placeholders = ",".join("?" for _ in batch)
+                rows = conn.execute(f"""
+                    SELECT job_id, json_extract(record_json, '$.result.status') AS result_status,
+                        json_extract(record_json, '$.result.summary') AS result_summary,
+                        (SELECT json_group_array(json_object(
+                            'status', json_extract(value, '$.status'),
+                            'route_evidence', json_object(
+                                'complete', json_type(value, '$.route_evidence.complete'),
+                                'provider', json_extract(value, '$.route_evidence.provider'),
+                                'source', json_extract(value, '$.route_evidence.source'),
+                                'issues', json_extract(value, '$.route_evidence.issues'),
+                                'leg_durations_s', json_extract(value, '$.route_evidence.leg_durations_s'),
+                                'leg_distances_m', json_extract(value, '$.route_evidence.leg_distances_m'),
+                                'point_count', json_extract(value, '$.route_evidence.point_count'),
+                                'duration_s', json_extract(value, '$.route_evidence.duration_s'),
+                                'distance_m', json_extract(value, '$.route_evidence.distance_m'))))
+                         FROM json_each(json_extract(record_json, '$.result.routes'))) AS routes
+                    FROM jobs WHERE job_id IN ({placeholders})
+                """, batch).fetchall()
+                for row in rows:
+                    routes = json_loads(row["routes"], [])
+                    for route in routes:
+                        evidence = route["route_evidence"]
+                        evidence["complete"] = evidence["complete"] == "true"
+                    results[row["job_id"]] = {
+                        "status": row["result_status"],
+                        "summary": json_loads(row["result_summary"], {}),
+                        "routes": routes,
+                    }
+        return results
+
     def delete_job(self, job_id: str) -> bool:
         self.initialize()
         with self.connect() as conn:

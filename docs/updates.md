@@ -7,6 +7,13 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-16
 
+### History Loading And Navigation
+
+- Direct-to-School history reads compact summaries instead of loading every
+  saved route geometry. Workspace membership queries no longer repeat that work.
+- Opening a collapsed history sidebar stays open; outside clicks still close
+  it. Historical task results and ownership remain unchanged.
+
 ### Google Pickup And Failure Diagnostics
 
 - Google timing uses available school entrances without overwriting confirmed

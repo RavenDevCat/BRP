@@ -355,9 +355,9 @@ def _history_entries_for_scope(
             user_email=context.email, include_all=context.is_admin
         )
     if scope == "distance_direct_school":
-        return backend_service._direct_school_jobs(
+        return [entry for entry in backend_service.JOB_STORE.list_jobs(
             user_email=context.email, include_all=context.is_admin
-        )
+        ) if backend_service._job_kind(entry) == backend_service.DIRECT_SCHOOL_JOB_KIND]
     if scope == "fleet_planner":
         return backend_service.FLEET_PLANNER_HISTORY_STORE.list(
             user_email=context.email, include_all=context.is_admin

@@ -20,6 +20,9 @@ from runtime_store_sqlite import SqliteRuntimeStore  # noqa: E402
 
 
 class FakeJobStore:
+    def get_job_result_summaries(self, job_ids: list[str]) -> dict[str, dict[str, Any]]:
+        return {job_id: self.records[job_id].get("result") or {} for job_id in job_ids if job_id in self.records}
+
     def __init__(self) -> None:
         self.records: dict[str, dict[str, Any]] = {}
         self.deep_records: dict[str, dict[str, Any]] = {}

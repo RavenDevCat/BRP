@@ -753,9 +753,14 @@ def run_direct_school_analysis(
             check_canceled()
         ordered = sorted(route_groups[route_id], key=lambda item: _safe_int(item.get("stop_sequence")))
         route_points = [_lookup_point(stop, lookup) for stop in ordered]
+        route_counts = {
+            "riders": sum(max(0, _safe_int(stop.get("passenger_count"))) for stop in ordered),
+            "stop_count": sum(1 for stop in ordered if not bool(stop.get("is_depot"))),
+        }
+
         if any(point is None for point in route_points):
             error = "One or more route stops could not be geocoded."
-            route_results.append({"route_id": route_id, "status": "partial", "error": error})
+            route_results.append({"route_id": route_id, **route_counts, "status": "partial", "error": error})
             errors.append({"scope": "current_route", "route_id": route_id, "error": error})
             progress["completed"] += 1
             save_checkpoint()
@@ -847,14 +852,14 @@ def run_direct_school_analysis(
                 errors.append({"error": str(exc), **exc.details})
                 progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
                 if _isolatable_google_pickup_error(exc):
-                    route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
+                    route_results.append({"route_id": route_id, **route_counts, "status": "failed", "error": str(exc),
                                           "failure_details": deepcopy(exc.details)})
                     progress["completed"] += 1
                     save_checkpoint()
                     continue
                 save_checkpoint()
                 raise
-            route_results.append({"route_id": route_id, "status": "failed", "error": str(exc),
+            route_results.append({"route_id": route_id, **route_counts, "status": "failed", "error": str(exc),
                                   "route_evidence": deepcopy(provider.state.get("last_route_evidence"))})
             errors.append({"scope": "current_route", "route_id": route_id, "error": str(exc)})
         progress["completed"] += 1

@@ -45,6 +45,16 @@ def test_bad_pickup_does_not_poison_other_routes(context, monkeypatch, failure_s
     if failure_scope != 'direct':
         assert routes['R1'].get('total_duration_min') is None
         assert routes['R1'].get('geometry') in (None, [])
+    if failure_scope != 'direct':
+        expected = sum(s['passenger_count'] for s in payload['current_plan']['stops'] if s['route_id'] == 'R1')
+        assert routes['R1']['riders'] == expected
+        assert routes['R1']['stop_count'] == sum(not s.get('is_depot', False) for s in payload['current_plan']['stops'] if s['route_id'] == 'R1')
+        window = next(r for r in result['route_window_analysis'] if r['route_id'] == 'R1')
+        assert window['original_riders'] == expected
+        exported = next(r for r in direct._route_outcome_rows(result) if r[0] == 'R1')
+        assert exported[1] == expected
+        assert exported[3] is None
+
     if failure_scope != 'current':
         assert rows['Far stop'].get('direct_duration_min') is None
     record = {'job_id': 'partial-test', 'status': 'succeeded', 'result': result}

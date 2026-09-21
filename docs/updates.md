@@ -5,6 +5,17 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-09-21
+
+### Forecast Release Compatibility
+
+- Failed route measurements retain known input rider and stop counts in route
+  summaries and exports. Unavailable travel times remain empty, never zero.
+- Google final timing remains opt-in. Turning it off retains the existing
+  address-resolution policy; the additional mandatory bus-platform POI gate is
+  deferred. Google endpoint checks remain enforced when Google is selected.
+- Partial forecasts identify missing coverage and are not full-route acceptance.
+
 ## 2026-09-16
 
 ### History Loading And Navigation
@@ -16,12 +27,11 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Google Pickup And Failure Diagnostics
 
-- Bus-stop precision requires a station POI identity; a station-like geocode
-  label or nearby shop cannot be treated as a confirmed bus platform. Existing
-  reference coordinates remain visible and operator confirmations take priority.
+- Google-OFF retains the existing shared address-resolution policy. Additional
+  mandatory bus-platform POI restrictions are deferred pending compatibility acceptance.
 - Google timing uses available school entrances without overwriting confirmed
   gates, shared geocode caches or Google-OFF behavior.
--- Direct-to-School isolates Google endpoint mismatches to the affected
+- Direct-to-School isolates Google endpoint mismatches to the affected
   measurements and continues other routes. Results and exports explicitly mark
   partial coverage; missing times never count as compliant or justify removals.
   Authentication, quota, cancellation and other global failures still stop the

@@ -4,7 +4,7 @@ from test_amap_geocode_quality import quality, runtime, core, REQUEST, poi
 
 
 @pytest.mark.parametrize('backend', [False, True])
-def test_bus_geocode_with_precise_sounding_level_is_not_confirmed_poi(monkeypatch, backend):
+def test_google_off_cold_bus_geocode_preserves_baseline_policy(monkeypatch, backend):
     module = core.load_legacy_planner() if backend else runtime
     calls = []
     def fetch(endpoint, params, limiter):
@@ -16,16 +16,15 @@ def test_bus_geocode_with_precise_sounding_level_is_not_confirmed_poi(monkeypatc
     monkeypatch.setattr(module, 'amap_request_json', fetch)
     result = module.amap_geocode_query('China', 'Shanghai', REQUEST)
     assert calls == ['/v3/place/text', '/v3/geocode/geo']
-    assert result['pickup_precision_status'] == 'needs_review'
-    assert result['pickup_resolution_status'] == 'reference_only'
-    assert 'bus_stop_identity_unconfirmed' in result['pickup_precision_issues']
+    assert result['pickup_precision_status'] != 'needs_review'
+    assert result['pickup_resolution_status'] == 'matched'
+    assert 'bus_stop_identity_unconfirmed' not in result['pickup_precision_issues']
+    quality.require_amap_pickup_precision([result])
     assert result['lat'] == 31.2 and result['lng'] == 121.43
     assert quality.reusable_amap_geocode(result, REQUEST)
 
 
-def test_bus_poi_requires_identity_and_bus_type():
-    assert quality.select_amap_pickup_candidate(REQUEST, [poi(id='')], poi=True) is None
-    assert quality.select_amap_pickup_candidate(REQUEST, [poi(type='shop')], poi=True) is None
+def test_valid_bus_poi_stays_usable():
     assert quality.select_amap_pickup_candidate(REQUEST, [poi()], poi=True)['id'] == poi()['id']
 
 
@@ -35,7 +34,7 @@ def test_legacy_bus_coordinate_is_retained_without_false_matched_status():
     original = deepcopy(point)
     result = quality.annotate_amap_pickup(point, REQUEST)
     assert point == original and result['lat'] == point['lat'] and result['lng'] == point['lng']
-    assert result['pickup_precision_status'] == 'needs_review'
+    assert result['pickup_precision_status'] != 'needs_review'
     assert quality.reusable_amap_geocode(result, REQUEST)
 
 

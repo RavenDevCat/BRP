@@ -405,6 +405,7 @@ export function NewJobPage() {
               onAcknowledge={setAddressReviewAcknowledged}
               onClearCache={(item) =>
                 clearAddressCacheMutation.mutate({
+                  provider: item.provider,
                   country: item.country,
                   city: item.city,
                   address: item.address,

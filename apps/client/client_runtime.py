@@ -1263,7 +1263,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
     raise RuntimeError(f"Google geocode failed for {address.strip()}")
 
 
-def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+def geocode_records(input_records: list[dict[str, Any]], *, resolver=None) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     points: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
     changed = False
@@ -1290,7 +1290,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
     failed_keys: set[str] = set()
     for cache_key in ordered_keys:
         record = unique_records[cache_key]
-        point, warning, cache_changed = resolve_geocoded_point(
+        point, warning, cache_changed = (resolver or resolve_geocoded_point)(
             record["country"],
             record["city"],
             record["address"],
@@ -1301,6 +1301,8 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
             resolved_points[cache_key] = point
             continue
         failed_keys.add(cache_key)
+        if resolver is not None and cache_key == ordered_keys[0]:
+            raise RuntimeError("Google could not resolve the school to a specific location. No AMap fallback was used.")
         if warning is not None:
             warnings.append(warning)
 

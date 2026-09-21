@@ -5,3 +5,4 @@ openpyxl
 folium
 requests
 ortools
+filelock>=3.16,<4

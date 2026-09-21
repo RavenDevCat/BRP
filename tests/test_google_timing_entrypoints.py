@@ -82,7 +82,7 @@ def test_insert_submission_preserves_source_direction_and_off_settings(context, 
     enabled = kind == "insert_stop"
     requested = {**CONFIG, "final_time_validation_mode": "google" if enabled else "legacy"}
     monkeypatch.setattr(timing, "prepare", lambda config: {**config, "validation_budget_id": "new-budget"})
-    monkeypatch.setattr(api, "_insert_geocode_stops", lambda *a: ([], []))
+    monkeypatch.setattr(api, "_insert_geocode_stops", lambda *a, **k: ([], []))
     monkeypatch.setattr(api, "_refine_insert_proposals_with_osrm", lambda *a, **k: None)
     monkeypatch.setattr(api, "_insert_scenario_selections", lambda *a: [[]])
     class Captured(Exception): pass

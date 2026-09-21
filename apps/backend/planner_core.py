@@ -4927,7 +4927,13 @@ def prepare_client_payload(
     with redirect_stdout(log_stream), redirect_stderr(log_stream):
         planner.CURRENT_CURRENCY_CODE = planner.determine_currency_code(normalized_records)
         planner.log("[CLIENT] Preparing client-side data before backend submission.")
-        points, geocode_warnings = planner.geocode_records(normalized_records)
+        if config.final_time_validation_mode == "google":
+            import client_runtime
+            from google_geocoding import GoogleGeocodeResolver
+            geocoder = GoogleGeocodeResolver(config.validation_budget_id)
+            points, geocode_warnings = client_runtime.geocode_records(normalized_records, resolver=geocoder.resolve_address)
+        else:
+            points, geocode_warnings = planner.geocode_records(normalized_records)
         planner.log(f"Valid stops: {len(points)} / {len(normalized_records)}")
         original_points = [dict(point) for point in points]
         for idx, point in enumerate(original_points):
@@ -7625,6 +7631,10 @@ def run_backend_planner_with_prepared_data(
 
     original_points = deepcopy(prepared_payload.get("original_points") or [])
     current_plan = deepcopy(prepared_payload.get("current_plan") or {})
+    if config.final_time_validation_mode == "google":
+        from google_final_validation import session_for
+        geocoder = session_for(config).pickups
+        original_points = [geocoder.resolve(point) for point in original_points]
 
     log_stream = _StreamingLogCapture(callback=progress_callback)
     started_at = time.perf_counter()

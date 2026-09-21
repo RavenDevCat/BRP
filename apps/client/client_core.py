@@ -53,6 +53,8 @@ def _should_bypass_env_proxy(hostname: str | None) -> bool:
 
 @dataclass
 class PlannerConfig:
+    final_time_validation_mode: str = "legacy"
+    validation_budget_id: str = ""
     large_bus_name: str = "Large Bus"
     mid_bus_name: str = "Mid Bus"
     small_bus_name: str = "Small Bus"
@@ -694,7 +696,13 @@ def prepare_client_payload(
 
     started_at = time.perf_counter()
     currency_code = runtime.determine_currency_code(normalized_records)
-    original_points, geocode_warnings = runtime.geocode_records(normalized_records)
+    geocoder = None
+    if config.final_time_validation_mode == "google":
+        from google_geocoding import GoogleGeocodeResolver
+        geocoder = GoogleGeocodeResolver(config.validation_budget_id)
+        original_points, geocode_warnings = runtime.geocode_records(normalized_records, resolver=geocoder.resolve_address)
+    else:
+        original_points, geocode_warnings = runtime.geocode_records(normalized_records)
     if progress_callback is not None:
         progress_callback(f"Valid stops: {len(original_points)} / {len(normalized_records)}")
 
@@ -711,6 +719,8 @@ def prepare_client_payload(
         },
         "logs": "",
         "geocode_warnings": geocode_warnings,
+        "geocode_usage": {"provider": "google", "api_calls": geocoder.api_calls,
+                          "cache_hits": geocoder.cache_hits} if geocoder else None,
         "excluded_stops": build_excluded_stops_from_warnings(geocode_warnings),
         "elapsed_seconds": time.perf_counter() - started_at,
     }

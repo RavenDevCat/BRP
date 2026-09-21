@@ -36,6 +36,7 @@ LOCAL_MEASUREMENT_ERRORS = frozenset({
     "google_pickup_snap_mismatch", "google_pickup_identity_unresolved",
     "google_pickup_identity_conflict", "google_geometry_missing",
     "google_geometry_endpoint_mismatch", "google_cross_request_join_mismatch",
+    "google_geocode_unresolved", "google_geocode_ambiguous", "google_geocode_address_required",
 })
 
 
@@ -295,8 +296,8 @@ class ValidationSession:
     """One budget scope for current baseline, candidate search and repairs."""
     def __init__(self, client, max_rounds=4):
         self.client, self.max_rounds = client, max_rounds
-        from google_pickup_points import PickupResolver
-        self.pickups = PickupResolver(check_canceled=lambda: self.client.check_canceled())
+        from google_geocoding import GoogleGeocodeResolver
+        self.pickups = GoogleGeocodeResolver(client.budget_id, check_canceled=lambda: self.client.check_canceled())
 
     def __deepcopy__(self, memo):
         return self

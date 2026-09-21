@@ -16,8 +16,8 @@ PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in
                           "192.168.0.0/16", "100.64.0.0/10", "::1/128"))
 
 
-def relay_url():
-    value = os.environ.get("BRP_GOOGLE_ROUTES_RELAY_URL", "").strip().rstrip("/")
+def relay_url(variable="BRP_GOOGLE_ROUTES_RELAY_URL"):
+    value = os.environ.get(variable, "").strip().rstrip("/")
     if not value:
         return ""
     parsed = urlsplit(value)
@@ -50,3 +50,16 @@ def post_routes(body, budget_id):
     return requests.post(ENDPOINT, json=body, headers={
         "X-Goog-Api-Key": os.environ["BRP_GOOGLE_ROUTES_API_KEY"],
         "X-Goog-FieldMask": FIELDS}, timeout=(5, 25), allow_redirects=False)
+
+
+def post_geocode(params, budget_id):
+    relay = relay_url("BRP_GOOGLE_MODE_GEOCODE_RELAY_URL") or relay_url()
+    with requests.Session() as session:
+        session.trust_env = False
+        if relay:
+            return session.post(relay + "/geocode", json={"budget_id": budget_id, "request": params},
+                headers={"Authorization": "Bearer " + os.environ["BRP_GOOGLE_ROUTES_RELAY_TOKEN"]},
+                timeout=(5, 35), allow_redirects=False)
+        return session.get("https://maps.googleapis.com/maps/api/geocode/json",
+            params={**params, "key": os.environ["BRP_GOOGLE_ROUTES_API_KEY"]},
+            timeout=(5, 25), allow_redirects=False)

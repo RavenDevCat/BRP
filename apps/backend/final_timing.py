@@ -57,6 +57,7 @@ class FinalTimingContext:
             points = self.session.pickups.resolve_points(points)
         finally:
             self.state["pickup_resolution_api_calls"] = self.session.pickups.api_calls
+            self.state["google_geocode_api_calls"] = self.session.pickups.api_calls
         coords = []
         for point in points:
             require_china(point.get("country", "China"))

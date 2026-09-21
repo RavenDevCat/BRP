@@ -673,7 +673,8 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
                     "city": origin_city,
                     "address": origin_address,
                 }
-            ]
+            ],
+            **({"resolver": timing_context.session.pickups.resolve_address} if timing_context else {}),
         )
         origin_row = dict(origin_rows[0])
         if origin_row.get("status") != "ok":
@@ -691,7 +692,8 @@ def _handle_reference_distance_check(payload: dict[str, Any]) -> dict[str, Any]:
             default_city=origin_city,
             default_country=origin_country,
         )
-        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows)
+        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows,
+            **({"resolver": timing_context.session.pickups.resolve_address} if timing_context else {}))
         results_df = distance_tool.build_distance_result_dataframe(
             source_df,
             input_rows,
@@ -811,7 +813,8 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
             default_city=default_city,
             default_country=default_country,
         )
-        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows)
+        geocoded_rows, _ = distance_tool.geocode_records_for_distance_tool(input_rows,
+            **({"resolver": timing_context.session.pickups.resolve_address} if timing_context else {}))
         route_results_df, leg_results_df = (
             distance_tool.build_current_plan_route_cost_dataframe(
                 input_rows,
@@ -1185,6 +1188,9 @@ def _handle_fleet_planner_route_preview(payload: dict[str, Any]) -> dict[str, An
     cluster_result = dict(payload.get("cluster_result") or {})
     if not cluster_result:
         raise ValueError("Build demand clusters before route preview.")
+    if timing_context:
+        from google_geocoding import refresh_fleet_points
+        cluster_result = refresh_fleet_points(cluster_result, timing_context.session.pickups)
 
     traffic_context = _fleet_traffic_context(
         dict(cluster_result),
@@ -1445,6 +1451,9 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
     geocode_result = dict(payload.get("geocode_result") or {})
     if not geocode_result:
         raise ValueError("Run demand geocode before building a global plan.")
+    if timing_context:
+        from google_geocoding import refresh_fleet_points
+        geocode_result = refresh_fleet_points(geocode_result, timing_context.session.pickups)
     traffic_context = _fleet_traffic_context(
         geocode_result,
         service_direction=service_direction,
@@ -2567,6 +2576,9 @@ def _prepare_direct_school_upload(
 ) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any]]:
     client_core, source_label, current_plan = _read_current_plan_upload(payload)
     config_payload = _planner_config_payload(dict(payload.get("config") or {}))
+    timing = dict(payload.get("analysis_config") or {})
+    if timing.get("final_time_validation_mode") == "google":
+        config_payload.update(final_time_validation_mode="google", validation_budget_id=timing.get("validation_budget_id", ""))
     config_payload["service_direction"] = str(
         current_plan.get("service_direction") or config_payload.get("service_direction") or "To School"
     )
@@ -2584,6 +2596,7 @@ def _prepare_direct_school_upload(
         raise ValueError("The workbook has no geocoded service addresses to analyze.")
     return source_label, current_plan, prepared_payload, {
         "geocode_warnings": list(client_prep.get("geocode_warnings") or []),
+        "geocode_usage": client_prep.get("geocode_usage"),
         "excluded_stops": list(client_prep.get("excluded_stops") or []),
         "elapsed_seconds": float(client_prep.get("elapsed_seconds", 0.0) or 0.0),
     }
@@ -3004,6 +3017,9 @@ def _handle_geocode_cache_clear(payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Address is required.")
 
     removed: dict[str, list[str]] = {"client": [], "backend": []}
+    if payload.get("provider") == "google":
+        from google_geocoding import clear_address
+        return clear_address(country, city, address)
     client_core = _client_core_module()
     runtime = getattr(client_core, "runtime", None)
     client_cache = getattr(runtime, "GEOCODE_CACHE", None)

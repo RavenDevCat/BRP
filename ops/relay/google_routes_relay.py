@@ -71,6 +71,20 @@ def validate_request(payload):
     return budget, body
 
 
+def validate_geocode_request(payload):
+    if not isinstance(payload, dict) or set(payload) != {"budget_id", "request"}:
+        raise ValueError("invalid_envelope")
+    budget, body = payload["budget_id"], payload["request"]
+    if not isinstance(budget, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", budget):
+        raise ValueError("invalid_budget_id")
+    if not isinstance(body, dict) or set(body) != {"address", "language", "components", "region"}:
+        raise ValueError("invalid_geocode_fields")
+    if (not isinstance(body["address"], str) or not body["address"].strip() or len(body["address"]) > 600
+            or body["language"] != "zh-CN" or body["components"] != "country:CN" or body["region"] != "cn"):
+        raise ValueError("invalid_geocode_policy")
+    return budget, body
+
+
 class RelayConfig:
     def __init__(self):
         self.token = os.environ.get("BRP_GOOGLE_ROUTES_RELAY_TOKEN", "").strip()
@@ -80,7 +94,7 @@ class RelayConfig:
             raise RuntimeError("Routes relay requires a key, token and dedicated quota path")
         self.store = SqliteQuotaStore(path)
 
-    def forward(self, budget, body):
+    def forward(self, budget, body, *, geocode=False):
         now = datetime.now(ZoneInfo("Asia/Shanghai"))
         periods = quota_periods(budget, now)
         self.store.reserve_rate_limit("google-final-routes", 2.0)
@@ -89,9 +103,13 @@ class RelayConfig:
         try:
             with requests.Session() as session:
                 session.trust_env = False
-                response = session.post(ENDPOINT, json=body, headers={
-                    "X-Goog-Api-Key": self.key, "X-Goog-FieldMask": FIELDS},
-                    timeout=(5, 25), allow_redirects=False)
+                if geocode:
+                    response = session.get("https://maps.googleapis.com/maps/api/geocode/json",
+                        params={**body, "key": self.key}, timeout=(5, 25), allow_redirects=False)
+                else:
+                    response = session.post(ENDPOINT, json=body, headers={
+                        "X-Goog-Api-Key": self.key, "X-Goog-FieldMask": FIELDS},
+                        timeout=(5, 25), allow_redirects=False)
             if response.status_code != 200:
                 # Do not reflect provider messages, request details or credentials.
                 return JSONResponse({"error": "google_upstream_rejected"}, status_code=response.status_code
@@ -123,6 +141,7 @@ def create_app(config=None):
             return JSONResponse({"ok": False, "service": "google-routes-relay"}, status_code=503)
         return {"ok": True, "service": "google-routes-relay"}
 
+    @api.post("/geocode")
     @api.post("/compute-routes")
     async def compute(request: Request, authorization: str = Header(default="")):
         cfg = current()
@@ -135,12 +154,15 @@ def create_app(config=None):
                 return JSONResponse({"error": "request_too_large"}, status_code=413)
         try:
             import json
-            budget, body = validate_request(json.loads(data))
+            geocode = request.url.path == "/geocode"
+            budget, body = (validate_geocode_request if geocode else validate_request)(json.loads(data))
         except (ValueError, TypeError, AttributeError, KeyError):
             return JSONResponse({"error": "invalid_request"}, status_code=400)
         # Requests and SQLite rate reservations are blocking; never block the ASGI loop.
         from starlette.concurrency import run_in_threadpool
         try:
+            if geocode:
+                return await run_in_threadpool(cfg.forward, budget, body, geocode=True)
             return await run_in_threadpool(cfg.forward, budget, body)
         except RuntimeError:
             return JSONResponse({"error": "relay_quota_exhausted"}, status_code=429)

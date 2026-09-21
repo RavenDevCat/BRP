@@ -9,12 +9,20 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Google Service-Point Validation
 
-- Google final timing resolves missing pickup identity at a shared boundary for
-  audit and planning tools. It uses bounded, task-local AMap lookups, retains
-  confirmed overrides, and does not rewrite historical geocode caches.
-- Generic doorstep wording and exact compound addresses can resolve to provider
-  entrances. Ambiguous gates, platforms and landmarks are not chosen by shortest
-  route, search rank, or a relaxed endpoint threshold.
+- Google mode now uses Google Geocoding for addresses as well as Google Routes
+  for final timing. It no longer imports AMap coordinates or entrance overrides
+  into Google requests. Google-off behavior and existing AMap caches are unchanged.
+- Google coordinates have a separate JSON cache keyed by country, city and
+  address. Entries expire after 30 days; expired records are removed before
+  lookup and never used as a fallback. Cache clearing selects the provider.
+- Audit preparation and solving, Direct-to-School, distance/cost, Fleet and
+  insertion timing use the same Google resolution boundary. Old prepared data
+  must be resolved again before Google route validation; map reads never do this.
+- Geocoding and route requests share the monthly Google allowance. Cache hits
+  are free of provider calls. Partial matches, whole-road results and ambiguous
+  locations are not silently accepted as school gates or boarding points.
+- A Google-resolved address still needs native route endpoint validation;
+  switching geocoders does not guarantee a vehicle-accessible pickup entrance.
 - Direct-to-School isolates local identity, geometry and endpoint-connection
   failures. Independent routes can finish; partial coverage remains explicit in
   results and exports. Authentication, quota and systemic failures still stop.

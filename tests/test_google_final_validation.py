@@ -28,7 +28,13 @@ def body_points(body):
     return [g.location(x["location"]) for x in [body["origin"], *body["intermediates"], body["destination"]]]
 
 @pytest.fixture
-def client(tmp_path):
+def client(tmp_path, monkeypatch):
+    # Timing contract tests supply already-resolved points. Native Google
+    # geocoding and its wiring are covered separately in test_google_geocoding.
+    import google_geocoding
+    from google_pickup_points import PickupResolver
+    monkeypatch.setattr(google_geocoding, "GoogleGeocodeResolver",
+                        lambda *args, **kwargs: PickupResolver(**kwargs))
     store = g.SqliteQuotaStore(tmp_path / "quota.sqlite")
     store.reserve_rate_limit = lambda *args: 0
     return g.GoogleRoutesClient("test-task", store, transport=lambda body: response(body_points(body)), now=lambda: NOW)

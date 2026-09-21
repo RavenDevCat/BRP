@@ -457,7 +457,7 @@ def is_electric_bus_type(bus_type: str) -> bool:
     return any(re.search(pattern, normalized) for pattern in electric_patterns)
 
 
-def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+def geocode_records_for_distance_tool(records: list[dict[str, Any]], *, resolver=None) -> tuple[list[dict[str, Any]], bool]:
     resolved_rows: list[dict[str, Any]] = []
     cache_changed = False
     for record in records:
@@ -472,7 +472,7 @@ def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[li
             )
             continue
 
-        point, warning, changed = runtime.resolve_geocoded_point(
+        point, warning, changed = (resolver or runtime.resolve_geocoded_point)(
             str(record.get("country", "")).strip(),
             str(record.get("city", "")).strip(),
             address,

@@ -2051,7 +2051,7 @@ def _insert_stop_inputs(raw_stops: Any) -> list[dict[str, Any]]:
 
 
 def _insert_geocode_stops(
-    stops: list[dict[str, Any]], default_country: str, default_city: str
+    stops: list[dict[str, Any]], default_country: str, default_city: str, *, geocoder=None
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     planner = None
     resolved: list[dict[str, Any]] = []
@@ -2070,16 +2070,23 @@ def _insert_geocode_stops(
                 1,
             ),
         )
-        if lat is None or lng is None:
+        if geocoder is not None or lat is None or lng is None:
             if not address:
                 warnings.append({"index": index, "reason": "missing_address"})
                 continue
             try:
-                planner = planner or backend_service.load_legacy_planner()
-                point = planner.geocode_query(country, city, address)
+                if geocoder is not None:
+                    point = geocoder.resolve({**stop, "country": country, "city": city, "address": address})
+                else:
+                    planner = planner or backend_service.load_legacy_planner()
+                    point = planner.geocode_query(country, city, address)
                 lat = _insert_float(point.get("plot_lat") or point.get("lat"))
                 lng = _insert_float(point.get("plot_lng") or point.get("lng"))
             except Exception as exc:
+                if geocoder is not None:
+                    from google_final_validation import ValidationUnavailable, is_local_measurement_error
+                    if not isinstance(exc, ValidationUnavailable) or not is_local_measurement_error(exc):
+                        raise
                 warnings.append({"index": index, "address": address, "reason": str(exc)})
                 continue
         if lat is None or lng is None:
@@ -3279,11 +3286,20 @@ def _build_route_insert_proposals(
 
     raw_stops = payload.get("new_stops") or payload.get("addresses") or []
     requested_stops = _insert_stop_inputs(raw_stops)
+    geocode_options = {}
+    if google_mode:
+        from google_geocoding import GoogleGeocodeResolver
+        geocode_options["geocoder"] = GoogleGeocodeResolver(suggested.get("validation_budget_id"))
     new_stops, geocode_warnings = _insert_geocode_stops(
-        requested_stops, default_country, default_city
+        requested_stops, default_country, default_city, **geocode_options
     )
 
     stops_by_id = {str(stop.get("id")): dict(stop) for stop in map_data.get("stops") or []}
+    if google_mode:
+        geocoder = geocode_options["geocoder"]
+        stops_by_id = {key: geocoder.resolve({"country": default_country, "city": default_city, **stop})
+                       for key, stop in stops_by_id.items()}
+        map_data = {**map_data, "stops": list(stops_by_id.values())}
     stops_by_route: dict[str, list[dict[str, Any]]] = {}
     for stop in stops_by_id.values():
         stops_by_route.setdefault(str(stop.get("route_id") or ""), []).append(stop)

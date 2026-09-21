@@ -1502,6 +1502,7 @@ export function submitWorkbookJob(payload: {
 }
 
 export function clearGeocodeCache(payload: {
+    provider?: string;
     country?: string;
     city?: string;
     address: string;

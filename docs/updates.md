@@ -9,6 +9,18 @@ runtime architecture, or recommended rerun guidance changed.
 
 ### Google Service-Point Validation
 
+- Google address candidates are checked against requested roads, districts,
+  number/lane kind, landmarks, named gates and bus-platform identity. Partial
+  match is evidence, not an automatic rejection or permission to use a point.
+- Identity-matching candidates are selected before ambiguity checks. Nearby
+  distinct platforms remain ambiguous; unrelated distant results do not block
+  a unique match. No shortest-route or nearest-point candidate substitution.
+- An unresolved address can receive at most two additional identity-preserving
+  Geocoding queries. They share the existing monthly allowance; provider/auth/
+  quota errors are not retried as address failures. Places is not enabled.
+- Cache policy revisions revalidate old points. Accepted identity evidence is
+  retained separately from entrance and route-endpoint verification. Local
+  unresolved results expire after 15 minutes to avoid repeated paid lookups.
 - Google mode now uses Google Geocoding for addresses as well as Google Routes
   for final timing. It no longer imports AMap coordinates or entrance overrides
   into Google requests. Google-off behavior and existing AMap caches are unchanged.

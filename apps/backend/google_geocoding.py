@@ -6,13 +6,16 @@ import os
 from pathlib import Path
 import threading
 import uuid
+from collections import Counter
 
 from filelock import FileLock
 from json_cache_store import load_json_object, save_json_object
 from google_pickup_points import PickupResolver
+from google_address_identity import identity_check, candidate_text, query_variants
 
-POLICY = "google-geocode-v1"
+POLICY = "google-geocode-v2"
 TTL = timedelta(days=30)
+FAILURE_TTL = timedelta(minutes=15)
 _LOCK = threading.RLock()
 
 
@@ -26,9 +29,14 @@ def valid_entry(entry, now):
     try:
         created = datetime.fromisoformat(entry["resolved_at"])
         expires = datetime.fromisoformat(entry["expires_at"])
-        return (entry["policy"] == POLICY and entry["provider"] == "google"
+        limit = FAILURE_TTL if entry.get("state") == "unresolved" else TTL
+        valid = (entry["policy"] == POLICY and entry["provider"] == "google"
                 and entry["coordinate_system"] == "WGS84"
-                and timedelta(0) <= now-created < TTL and now < expires <= created+TTL
+                and timedelta(0) <= now-created < limit and now < expires <= created+limit)
+        if entry.get("state") == "unresolved":
+            return (valid and isinstance(entry.get("details"), dict)
+                    and entry.get("code") in {"google_geocode_unresolved", "google_geocode_ambiguous"})
+        return (valid and entry.get("identity_evidence", {}).get("identity_status") == "matched"
                 and all(type(entry[k]) in (int, float) and math.isfinite(entry[k])
                         and abs(entry[k]) <= bound for k, bound in (("lat", 90), ("lng", 180))))
     except (KeyError, TypeError, ValueError):
@@ -59,29 +67,47 @@ def select_location(payload, country, city, address):
     if status != "OK":
         raise ValidationUnavailable("google_geocode_provider_rejected", details={"provider_status": status})
     accepted = []
+    reasons = Counter()
     for result in payload.get("results") or []:
         geometry = result.get("geometry") or {}
-        if result.get("partial_match") or geometry.get("location_type") not in {
+        if geometry.get("location_type") not in {
                 "ROOFTOP", "RANGE_INTERPOLATED", "GEOMETRIC_CENTER"}:
+            reasons["coarse_geometry"] += 1
             continue
-        if set(result.get("types") or []) & {"country", "locality", "postal_code", "route",
-                                             "administrative_area_level_1", "administrative_area_level_2"}:
+        evidence = identity_check(address, result)
+        if evidence["issues"]:
+            reasons.update(evidence["issues"])
             continue
         location = geometry.get("location") or {}
         try:
             lat, lng = float(location["lat"]), float(location["lng"])
         except (TypeError, ValueError, KeyError):
+            reasons["invalid_coordinate"] += 1
             continue
         if (not all(math.isfinite(v) for v in (lat, lng)) or abs(lat) > 90 or abs(lng) > 180
                 or not runtime.is_plausible_geocode_result(country, city, lat, lng,
-                    result.get("formatted_address", ""), requested_address=address)):
+                    candidate_text(result))):
+            reasons["city_or_coordinate_mismatch"] += 1
             continue
-        accepted.append({"lat": lat, "lng": lng, "google_place_id": str(result.get("place_id") or "")})
+        value = {"lat": lat, "lng": lng, "google_place_id": str(result.get("place_id") or ""),
+                 "identity_evidence": evidence}
+        # Duplicate provider representations are not different entrances. Distinct
+        # POIs remain ambiguous even when nearby; distance is never a ranking score.
+        duplicate = any(meters((lat, lng), (p["lat"], p["lng"])) < 1 and (
+            value["google_place_id"] and value["google_place_id"] == p["google_place_id"] or
+            "street_address" in result.get("types", []) and p.get("street_address")) for p in accepted)
+        if not duplicate:
+            accepted.append({**value, "street_address": "street_address" in result.get("types", [])})
     if not accepted:
-        raise ValidationUnavailable("google_geocode_unresolved")
-    if any(meters((p["lat"], p["lng"]), (accepted[0]["lat"], accepted[0]["lng"])) > 30 for p in accepted[1:]):
-        raise ValidationUnavailable("google_geocode_ambiguous")
-    return accepted[0]
+        raise ValidationUnavailable("google_geocode_unresolved", details={
+            "reason_counts": dict(reasons), "candidate_count": len(payload.get("results") or []),
+            "next_action": "resolve_place_or_entrance_identity"})
+    if len(accepted) > 1:
+        raise ValidationUnavailable("google_geocode_ambiguous", details={
+            "reason_counts": {"multiple_matching_identities": len(accepted)},
+            "matching_place_ids": [p["google_place_id"] for p in accepted],
+            "next_action": "confirm_platform_or_entrance"})
+    return {k: v for k, v in accepted[0].items() if k != "street_address"}
 
 
 def request_geocode(country, city, address, budget_id, check_canceled, counted):
@@ -142,6 +168,33 @@ class GoogleGeocodeResolver(PickupResolver):
         self.cache = {}
         self.api_calls = 0
         self.cache_hits = 0
+        self.negative_cache_hits = 0
+
+    def _resolve_uncached(self, country, city, address):
+        from google_final_validation import ValidationUnavailable, is_local_measurement_error
+        combined = {"status": "OK", "results": []}
+        queries = [address]
+        failure = None
+        for index in range(3):
+            if index >= len(queries):
+                break
+            self.check_canceled()
+            payload = self.lookup(country, city, queries[index], self.budget_id, self.check_canceled, self._count)
+            if payload.get("status") not in {"OK", "ZERO_RESULTS"}:
+                select_location(payload, country, city, address)
+            combined["results"].extend(payload.get("results") or [])
+            try:
+                value = select_location(combined, country, city, address)
+                value["identity_evidence"]["query_attempts"] = index+1
+                return value
+            except ValidationUnavailable as exc:
+                if not is_local_measurement_error(exc):
+                    raise
+                failure = exc
+                failure.details["query_attempts"] = index+1
+                if index == 0:
+                    queries.extend(query_variants(address, city, payload))
+        raise failure
 
     def resolve(self, point):
         import client_runtime as runtime
@@ -158,7 +211,7 @@ class GoogleGeocodeResolver(PickupResolver):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Cross-process lock covers read/resolve/merge/write, preventing lost entries
         # and duplicate paid lookups for simultaneous requests at the same address.
-        with _LOCK, FileLock(str(self.path)+".lock", timeout=60):
+        with _LOCK, FileLock(str(self.path)+".lock", timeout=180):
             now = self.now()
             entries = load_json_object(self.path)
             valid = {k: v for k, v in entries.items() if isinstance(v, dict) and valid_entry(v, now)}
@@ -166,13 +219,17 @@ class GoogleGeocodeResolver(PickupResolver):
                 save_json_object(self.path, valid)
             entry = valid.get(key)
             if entry is None:
-                payload = self.lookup(country, city, address, self.budget_id, self.check_canceled, self._count)
                 try:
-                    location = select_location(payload, country, city, address)
+                    location = self._resolve_uncached(country, city, address)
                 except ValidationUnavailable as exc:
                     from google_final_validation import is_local_measurement_error
                     if is_local_measurement_error(exc):
+                        self.check_canceled()
                         self.cache[key] = (str(exc), deepcopy(exc.details))
+                        valid[key] = {"state": "unresolved", "code": str(exc), "details": deepcopy(exc.details),
+                            "provider": "google", "coordinate_system": "WGS84", "policy": POLICY,
+                            "resolved_at": now.isoformat(), "expires_at": (now+FAILURE_TTL).isoformat()}
+                        save_json_object(self.path, valid)
                     raise
                 self.check_canceled()
                 entry = {**location, "provider": "google", "coordinate_system": "WGS84",
@@ -181,6 +238,9 @@ class GoogleGeocodeResolver(PickupResolver):
                 save_json_object(self.path, valid)
             else:
                 self.cache_hits += 1
+                if entry.get("state") == "unresolved":
+                    self.negative_cache_hits += 1
+                    raise ValidationUnavailable(entry["code"], details=deepcopy(entry["details"]))
         # Never carry AMap provenance/entrance warnings into a Google coordinate.
         cleaned = {k: deepcopy(v) for k, v in point.items()
                    if not k.startswith(("amap_", "pickup_", "geocode_"))
@@ -189,9 +249,10 @@ class GoogleGeocodeResolver(PickupResolver):
                        address=address, requested_address=address, formatted_address=address,
                        lat=entry["lat"], lng=entry["lng"], plot_lat=entry["lat"], plot_lng=entry["lng"],
                        google_place_id=entry["google_place_id"], geocode_status="ok",
-                       pickup_precision_status="matched", pickup_resolution_status="matched",
+                       pickup_precision_status="identity_matched", pickup_resolution_status="identity_matched",
                        pickup_precision_issues=[], google_geocode_resolved_at=entry["resolved_at"],
-                       google_geocode_expires_at=entry["expires_at"], google_geocode_policy=POLICY)
+                       google_geocode_expires_at=entry["expires_at"], google_geocode_policy=POLICY,
+                       google_geocode_identity=deepcopy(entry["identity_evidence"]))
         return cleaned
 
     def resolve_address(self, country, city, address, source_excel_rows=None):

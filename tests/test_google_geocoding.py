@@ -15,7 +15,7 @@ NOW = datetime(2030, 1, 1, tzinfo=timezone.utc)
 
 def payload(lat=31.2, lng=121.4, **extra):
     return {"status": "OK", "results": [{"place_id": "test-place", "types": ["street_address"],
-        "formatted_address": "Shanghai", "geometry": {"location_type": "ROOFTOP",
+        "formatted_address": "Shanghai Test 1", "geometry": {"location_type": "ROOFTOP",
         "location": {"lat": lat, "lng": lng}}, **extra}]}
 
 
@@ -32,7 +32,7 @@ def resolver(tmp_path, monkeypatch):
     monkeypatch.setattr(runtime, "amap_request_json", lambda *a, **k: pytest.fail("AMap called"))
     def lookup(country, city, address, budget, check, count):
         check(); count()
-        return payload()
+        return payload(formatted_address="Shanghai " + address)
     return geo.GoogleGeocodeResolver("unit", lookup=lookup, path=tmp_path/"google.json", now=lambda: NOW)
 
 
@@ -75,7 +75,7 @@ def test_real_street_only_partial_response_is_not_school(resolver):
     resolver.lookup = lambda *a: payload(partial_match=True, types=["route"])
     with pytest.raises(google.ValidationUnavailable, match="unresolved"):
         resolver.resolve(point("School road 2100"))
-    assert not resolver.path.exists()
+    assert next(iter(json.loads(resolver.path.read_text()).values()))["state"] == "unresolved"
 
 
 def test_fleet_regeocodes_without_mutating_uploaded_cluster(resolver):
@@ -93,7 +93,7 @@ def test_expired_cache_is_removed_not_used_on_failure(resolver):
     resolver.lookup = lambda *a: {"status": "ZERO_RESULTS"}
     with pytest.raises(google.ValidationUnavailable, match="unresolved"):
         resolver.resolve(point())
-    assert json.loads(resolver.path.read_text()) == {}
+    assert next(iter(json.loads(resolver.path.read_text()).values()))["state"] == "unresolved"
 
 
 def test_corrupt_wrong_provider_future_cache_not_trusted(resolver):
@@ -108,7 +108,7 @@ def test_corrupt_wrong_provider_future_cache_not_trusted(resolver):
 @pytest.mark.parametrize("value,code", [
     ({"status": "ZERO_RESULTS"}, "unresolved"),
     ({"status": "REQUEST_DENIED"}, "provider_rejected"),
-    (payload(partial_match=True), "unresolved"),
+    (payload(partial_match=True, formatted_address="Different place"), "unresolved"),
     (payload(types=["route"]), "unresolved"),
     (payload(lat=float("nan")), "unresolved"),
 ])
@@ -116,7 +116,10 @@ def test_bad_geocode_never_falls_back_or_caches(resolver, value, code):
     resolver.lookup = lambda *a: value
     with pytest.raises(google.ValidationUnavailable, match=code):
         resolver.resolve(point())
-    assert not resolver.path.exists()
+    if code == "provider_rejected":
+        assert not resolver.path.exists()
+    else:
+        assert next(iter(json.loads(resolver.path.read_text()).values()))["state"] == "unresolved"
 
 
 def test_ambiguous_geocode_local_failure(resolver):
@@ -156,7 +159,8 @@ def test_final_session_wires_google_resolver(resolver, monkeypatch, tmp_path):
         transport=lambda b: response(body_points(b)), now=lambda: NOW)
     session = google.ValidationSession(client)
     assert isinstance(session.pickups, geo.GoogleGeocodeResolver)
-    session.pickups.lookup = lambda country, city, address, *args: payload(lat=31.201 if address == "Other" else 31.2)
+    session.pickups.lookup = lambda country, city, address, *args: payload(
+        lat=31.201 if address == "Other" else 31.2, formatted_address="Shanghai " + address)
     session.pickups.now = lambda: NOW
     points = session.pickups.resolve_points([point(), {**point(), "address": "Other", "requested_address": "Other"}])
     assert points[0]["provider"] == "google"
@@ -186,7 +190,8 @@ def test_unresolved_school_stops_before_paid_passenger_queries(resolver):
                for address in ("School", "Stop 1", "Stop 2")]
     with pytest.raises(RuntimeError, match="school"):
         runtime.geocode_records(records, resolver=resolver.resolve_address)
-    assert calls == ["School"]
+    assert 1 <= len(calls) <= 3 and all("School" in value for value in calls)
+    assert not any("Stop" in value for value in calls)
 
 
 def test_geocode_and_routes_share_monthly_cap(resolver, monkeypatch, tmp_path):

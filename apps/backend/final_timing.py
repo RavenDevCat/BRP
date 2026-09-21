@@ -52,8 +52,11 @@ class FinalTimingContext:
 
     def route(self, points, *, reference_legs=None, dwell_s=None):
         self.state.pop("last_route_evidence", None)
-        from google_pickup_points import normalize_point, describe_failure
-        points = [normalize_point(point) for point in points]
+        from google_pickup_points import describe_failure
+        try:
+            points = self.session.pickups.resolve_points(points)
+        finally:
+            self.state["pickup_resolution_api_calls"] = self.session.pickups.api_calls
         coords = []
         for point in points:
             require_china(point.get("country", "China"))
@@ -82,6 +85,7 @@ class FinalTimingContext:
             raise
         finally:
             self.state["api_calls"] = self.session.client.calls
+            self.state["cache_hits"] = self.session.client.cache_hits
         legs = deepcopy(measured.legs)
         evidence = {"provider": self.provider, "source": self.provider, "status": "verified",
             "evidence_version": google.EVIDENCE_VERSION, "complete": True, "issues": [],
@@ -90,7 +94,7 @@ class FinalTimingContext:
             "leg_distances_m": [leg["distance_m"] for leg in legs],
             "geometry": legs[0]["geometry"] if len(legs) == 1 else [],
             "geometry_segments": [leg["geometry"] for leg in legs],
-            "called_at": self.session.client.now().isoformat(),
+            "called_at": min(leg.get("provider_called_at", self.session.client.now().isoformat()) for leg in legs),
             "departure_time": measured.departure.isoformat(), "arrival_time": measured.arrival.isoformat(),
             "departure_minutes": measured.departure.hour*60+measured.departure.minute+measured.departure.second/60,
             "arrival_minutes": (measured.arrival-self.earliest.replace(hour=0, minute=0, second=0, microsecond=0)).total_seconds()/60,

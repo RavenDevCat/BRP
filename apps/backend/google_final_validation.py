@@ -32,6 +32,17 @@ class ValidationUnavailable(RuntimeError):
         self.details = {"code": code, **(details or {})}
 
 
+LOCAL_MEASUREMENT_ERRORS = frozenset({
+    "google_pickup_snap_mismatch", "google_pickup_identity_unresolved",
+    "google_pickup_identity_conflict", "google_geometry_missing",
+    "google_geometry_endpoint_mismatch", "google_cross_request_join_mismatch",
+})
+
+
+def is_local_measurement_error(exc):
+    return isinstance(exc, ValidationUnavailable) and str(exc) in LOCAL_MEASUREMENT_ERRORS
+
+
 def validate_config(payload):
     mode = payload.get("final_time_validation_mode", "legacy")
     if mode not in {"legacy", "google"}:
@@ -153,19 +164,29 @@ def parse_response(payload, points):
                         "requested_coordinate": list(points[point_index]), "returned_coordinate": list(returned),
                         "snap_distance_m": round(gap, 2), "limit_m": 100})
             geometry = leg["polyline"]["geoJsonLinestring"]["coordinates"]
+            zero_leg = (len(geometry) == 1 and meters(points[index], points[index+1]) < 0.01
+                        and meters(start, end) < 0.01 and seconds(leg["duration"]) == 0
+                        and float(leg.get("distanceMeters", 0)) == 0)
+            if zero_leg:
+                # Repeat the native point for renderers; this represents no road movement.
+                geometry = [geometry[0], geometry[0]]
             if len(geometry) < 2:
-                raise ValidationUnavailable("google_geometry_missing")
+                raise ValidationUnavailable("google_geometry_missing", details={
+                    "leg_index": index, "point_index": index, "geometry_point_count": len(geometry),
+                    "requested_coordinate": list(points[index]),
+                    "returned_coordinate": list(start)})
             for lng, lat in geometry:
                 location({"latLng": {"latitude": lat, "longitude": lng}})
-            distance = float(leg["distanceMeters"])
+            distance = float(leg.get("distanceMeters", 0) if zero_leg else leg["distanceMeters"])
             if not math.isfinite(distance) or distance < 0:
                 raise ValidationUnavailable("google_distance_invalid")
             if meters(tuple(reversed(geometry[0])), start) > 30 or meters(tuple(reversed(geometry[-1])), end) > 30:
                 raise ValidationUnavailable("google_geometry_endpoint_mismatch")
             measured.append({"duration_s": seconds(leg["duration"]), "distance_m": distance,
-                             "start": start, "end": end, "geometry": geometry})
+                             "start": start, "end": end, "geometry": geometry,
+                             **({"zero_length": True} if zero_leg else {})})
         duration = seconds(route["duration"])
-        distance = float(route["distanceMeters"])
+        distance = float(route.get("distanceMeters", 0) if all(x.get("zero_length") for x in measured) else route["distanceMeters"])
         if not math.isfinite(distance) or distance < 0:
             raise ValidationUnavailable("google_distance_invalid")
         if abs(sum(x["duration_s"] for x in measured)-duration) > max(2, len(legs)):
@@ -189,6 +210,8 @@ class GoogleRoutesClient:
         self.calls = 0
         self.protected_calls = 0
         self.request_headroom = 0
+        self.measurements = {}
+        self.cache_hits = 0
 
     def periods(self):
         return quota_periods(self.budget_id, self.now(), self.limits)
@@ -202,6 +225,11 @@ class GoogleRoutesClient:
         now = self.now()
         if departure <= now:
             raise ValidationUnavailable("google_departure_in_past")
+        identity = (tuple(tuple(point) for point in points), departure.isoformat())
+        cached = self.measurements.get(identity)
+        if cached and 0 <= (now-cached[0]).total_seconds() < 600:
+            self.cache_hits += 1
+            return deepcopy(cached[1])
         if self.transport is None:
             require_available()
         periods = quota_periods(self.budget_id, now, self.limits)
@@ -235,8 +263,11 @@ class GoogleRoutesClient:
                     raise ValidationUnavailable(f"google_http_{response.status_code}")
                 payload = response.json()
             result = parse_response(payload, points)
+            for leg in result:
+                leg["provider_called_at"] = now.isoformat()
             self.check_canceled()
             success = True
+            self.measurements[identity] = (now, deepcopy(result))
             return result
         except requests.RequestException:
             raise ValidationUnavailable("google_transport_failed") from None
@@ -264,6 +295,8 @@ class ValidationSession:
     """One budget scope for current baseline, candidate search and repairs."""
     def __init__(self, client, max_rounds=4):
         self.client, self.max_rounds = client, max_rounds
+        from google_pickup_points import PickupResolver
+        self.pickups = PickupResolver(check_canceled=lambda: self.client.check_canceled())
 
     def __deepcopy__(self, memo):
         return self
@@ -373,6 +406,9 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
     if check_canceled is not None:
         session.client.check_canceled = check_canceled
     before = session.client.calls
+    # A new solver gate is a mandatory fresh check, including replanning attempts.
+    # Reuse within side-tool measurements must not hide changed traffic here.
+    session.client.measurements.clear()
     to_school = config.service_direction == "To School"
     arrival_anchored = to_school and config.timing_policy != "fixed_departure"
     grace_seconds = 0  # Google success never includes a late-arrival grace period.
@@ -397,8 +433,13 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
     for index, route in enumerate(scenario.get("routes") or []):
         session.client.check_canceled()
         nodes = list(route.get("nodes") or [])
-        from google_pickup_points import normalize_point, describe_failure
-        request_points = [normalize_point(points[int(node)]) for node in nodes]
+        from google_pickup_points import describe_failure
+        request_points = [points[int(node)] for node in nodes]
+        try:
+            request_points = session.pickups.resolve_points(request_points)
+        except ValidationUnavailable as exc:
+            describe_failure(exc, request_points, route_id=route.get("route_id") or route.get("id") or f"Bus {index+1}")
+            raise
         coords = []
         for point in request_points:
             # Plot coordinates are normalized WGS84 by the existing input pipeline.
@@ -440,7 +481,7 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                     "leg_distances_m": [leg["distance_m"] for leg in result.legs],
                     "duration_s": result.drive_s, "distance_m": verification["verified_distance_m"],
                     "geometry_segments": [x["geometry"] for x in result.legs],
-                    "called_at": session.client.now().isoformat(), "departure_time": result.departure.isoformat(),
+                    "called_at": min(leg.get("provider_called_at", session.client.now().isoformat()) for leg in result.legs), "departure_time": result.departure.isoformat(),
                     "policy_version": POLICY_VERSION, "requested_waypoints": deepcopy(request_points)}
         updates.append((route, verification, evidence, result))
         gate["checked_route_count"] += 1
@@ -461,6 +502,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                 "scheduled_arrival_minutes": verification["verified_arrival_minutes"],
                 "required_departure_minutes": minute(latest-timedelta(seconds=result.drive_s+result.dwell_s))}
     gate["api_calls"] = session.client.calls-before
+    gate["pickup_resolution_api_calls"] = session.pickups.api_calls
+    gate["cache_hits"] = session.client.cache_hits
     gate["max_time_window_overrun_minutes"] = gate["max_estimated_arrival_delay_minutes"]
     gate["status"] = "failed" if gate["failed_route_count"] else "passed" if updates else "unavailable"
     scenario["traffic_gate"] = gate

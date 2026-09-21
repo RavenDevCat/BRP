@@ -471,9 +471,8 @@ def _base_result(
 
 
 def _isolatable_google_pickup_error(exc):
-    # Only a local endpoint mismatch is recoverable; quota, auth and cancellation remain fatal.
-    from google_final_validation import ValidationUnavailable
-    return isinstance(exc, ValidationUnavailable) and str(exc) == "google_pickup_snap_mismatch"
+    from google_final_validation import is_local_measurement_error
+    return is_local_measurement_error(exc)
 
 
 def google_request_estimate(current_plan, dwell_minutes):
@@ -636,6 +635,8 @@ def run_direct_school_analysis(
     route_window_analysis: list[dict[str, Any]] = []
 
     def save_checkpoint() -> None:
+        if google_mode:
+            progress["pickup_resolution_api_calls"] = provider.session.pickups.api_calls
         if not checkpoint:
             return
         public_rows = [{key: value for key, value in row.items() if key != "_point"} for row in rows]
@@ -679,6 +680,13 @@ def run_direct_school_analysis(
         try:
             osrm = _osrm_leg(request_points[0], request_points[1], osrm_cache)
             live = _route_with_stop_boundaries(provider, request_points, reference_legs=[osrm])
+            if google_mode:
+                measured_points = live["requested_waypoints"]
+                service_point = measured_points[0 if config["service_direction"] == "To School" else -1]
+                measured_school = measured_points[-1 if config["service_direction"] == "To School" else 0]
+                row["lat"], row["lng"] = _point_coordinates(service_point)
+                school["lat"], school["lng"] = _point_coordinates(measured_school)
+                row["pickup_resolution_evidence"] = service_point.get("pickup_resolution_evidence")
             straight_km = _haversine_km(_point_coordinates(point), school_coords)  # type: ignore[arg-type]
             direct_distance_m = _safe_float(live.get("distance_m"))
             direct_duration_s = _safe_float(live.get("duration_s"))
@@ -776,6 +784,17 @@ def run_direct_school_analysis(
             live = (provider.route(resolved_points, reference_legs=leg_details,
                     dwell_s=[0 if bool(stop.get("is_depot")) else float(config["stop_service_minutes"])*60 for stop in ordered])
                     if google_mode else _route_with_stop_boundaries(provider, resolved_points, reference_legs=leg_details))
+            if google_mode:
+                resolved_points = live["requested_waypoints"]
+                rows_by_key = {_address_key(row): row for row in rows}
+                for stop, measured_point in zip(ordered, resolved_points):
+                    coordinates = _point_coordinates(measured_point)
+                    if stop.get("is_depot"):
+                        school["lat"], school["lng"] = coordinates
+                    elif _address_key(stop) in rows_by_key:
+                        item = rows_by_key[_address_key(stop)]
+                        item["lat"], item["lng"] = coordinates
+                        item["pickup_resolution_evidence"] = measured_point.get("pickup_resolution_evidence")
             live_drive_s = _safe_float(live.get("duration_s"))
             live_distance_m = _safe_float(live.get("distance_m"))
             service_stop_count = sum(1 for stop in ordered if not bool(stop.get("is_depot")))

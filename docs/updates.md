@@ -7,6 +7,26 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-09-21
 
+### Google Service-Point Validation
+
+- Google final timing resolves missing pickup identity at a shared boundary for
+  audit and planning tools. It uses bounded, task-local AMap lookups, retains
+  confirmed overrides, and does not rewrite historical geocode caches.
+- Generic doorstep wording and exact compound addresses can resolve to provider
+  entrances. Ambiguous gates, platforms and landmarks are not chosen by shortest
+  route, search rank, or a relaxed endpoint threshold.
+- Direct-to-School isolates local identity, geometry and endpoint-connection
+  failures. Independent routes can finish; partial coverage remains explicit in
+  results and exports. Authentication, quota and systemic failures still stop.
+- Coincident coordinates need a consistent service-point identity. A genuine
+  provider zero-distance leg retains dwell and passengers; different entrances
+  cannot silently become a zero-minute trip.
+- Identical side-tool requests can reuse a successful receipt within the task
+  for ten minutes, preserving its measurement timestamp. New solver final gates
+  still force fresh traffic checks, including time-triggered replanning.
+- Google-off behavior is unchanged. This does not certify unresolved pickups or
+  replace Google future traffic with another provider's live travel time.
+
 ### Forecast Release Compatibility
 
 - Failed route measurements retain known input rider and stop counts in route

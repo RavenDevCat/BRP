@@ -193,6 +193,10 @@ class GoogleGeocodeResolver(PickupResolver):
                     raise
                 failure = exc
                 failure.details["query_attempts"] = index+1
+                # Refinements only append candidates. Once two identities match,
+                # another query cannot remove either or establish uniqueness.
+                if str(exc) == "google_geocode_ambiguous":
+                    raise
                 if index == 0:
                     queries.extend(query_variants(address, city, payload))
         raise failure

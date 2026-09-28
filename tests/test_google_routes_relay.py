@@ -26,6 +26,7 @@ def envelope():
 
 @pytest.fixture
 def cfg(monkeypatch, tmp_path):
+    monkeypatch.delenv("BRP_GOOGLE_ROUTES_UPSTREAM_PROXY", raising=False)
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_TOKEN", "test-relay-token")
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_API_KEY", "test-google-key")
     monkeypatch.setenv("BRP_GOOGLE_ROUTES_RELAY_QUOTA_DB", str(tmp_path / "relay.sqlite"))
@@ -208,3 +209,62 @@ def test_invalid_heading_rejected_without_charge(cfg, envelope, monkeypatch, hea
     result = TestClient(relay.create_app(cfg)).post("/compute-routes", json=envelope, headers=auth())
     assert result.status_code == 400
     assert usage(cfg)["attempted"] == 0
+
+
+@pytest.mark.parametrize("value", ["https://127.0.0.1:1234", "http://example.com:1234",
+    "http://10.0.0.1:1234", "http://127.0.0.1", "http://127.0.0.1:0",
+    "http://user:secret@127.0.0.1:1234", "http://127.0.0.1:1234/path",
+    "http://127.0.0.1:1234?token=secret", "http://127.0.0.1:1234#fragment",
+    "http://127.0.0.1:bad", "socks5://127.0.0.1:1234"])
+def test_invalid_upstream_proxy_fails_closed(cfg, monkeypatch, value):
+    monkeypatch.setenv("BRP_GOOGLE_ROUTES_UPSTREAM_PROXY", value)
+    with pytest.raises(RuntimeError, match="explicit loopback"):
+        relay.RelayConfig()
+
+
+@pytest.mark.parametrize("proxy", ["", "http://127.0.0.1:18180", "http://[::1]:18180"])
+@pytest.mark.parametrize("geocode", [False, True])
+def test_explicit_proxy_for_both_apis_preserves_request(cfg, envelope, monkeypatch, proxy, geocode):
+    monkeypatch.setenv("BRP_GOOGLE_ROUTES_UPSTREAM_PROXY", proxy)
+    monkeypatch.setenv("HTTPS_PROXY", "http://unrelated.invalid:80")
+    cfg = relay.RelayConfig()
+    monkeypatch.setattr(cfg.store, "reserve_rate_limit", lambda *args: None)
+    expected = {"https": proxy} if proxy else {}
+    body = {"address": "Shanghai", "language": "zh-CN", "components": "country:CN", "region": "cn"} if geocode else envelope["request"]
+    payload = {"status": "OK", "results": []} if geocode else response(body_points(body))
+    calls = []
+    class Session:
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def send(self, url, **kwargs):
+            calls.append(url)
+            assert self.trust_env is False and self.proxies == expected
+            assert kwargs["allow_redirects"] is False
+            assert kwargs.get("verify", True) is True
+            if geocode:
+                assert url == "https://maps.googleapis.com/maps/api/geocode/json"
+                assert kwargs["params"] == {**body, "key": cfg.key}
+            else:
+                assert url == transport.ENDPOINT and kwargs["json"] == body
+            return SimpleNamespace(status_code=200, json=lambda: payload)
+        post = get = send
+    monkeypatch.setattr(requests, "Session", Session)
+    import json
+    result = cfg.forward("proxy-test", body, geocode=geocode)
+    assert result.status_code == 200 and json.loads(result.body) == json.loads(json.dumps(payload))
+    assert len(calls) == 1 and usage(cfg)["attempted"] == 1
+
+
+def test_proxy_failure_never_retries_direct(cfg, envelope, monkeypatch):
+    monkeypatch.setenv("BRP_GOOGLE_ROUTES_UPSTREAM_PROXY", "http://127.0.0.1:18180")
+    cfg = relay.RelayConfig()
+    monkeypatch.setattr(cfg.store, "reserve_rate_limit", lambda *args: None)
+    calls = []
+    def fail(*args):
+        calls.append(1)
+        raise requests.exceptions.ProxyError("private proxy details")
+    fake_session(monkeypatch, fail)
+    result = cfg.forward("proxy-down", envelope["request"])
+    assert result.status_code == 502 and len(calls) == 1
+    assert b"private proxy details" not in result.body
+    assert usage(cfg)["attempted"] == 1 and usage(cfg)["failed"] == 1

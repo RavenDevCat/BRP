@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hmac
+import ipaddress
 import math
 import os
 from pathlib import Path
 import re
 import sys
 from zoneinfo import ZoneInfo
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Header, Request
 from fastapi.responses import JSONResponse
@@ -23,6 +25,23 @@ from google_routes_quota import quota_periods
 PROVIDER = "google_routes_relay"
 COUNTER = "compute_routes_pro"
 MAX_BODY_BYTES = 16384
+
+
+def upstream_proxy():
+    value = os.environ.get("BRP_GOOGLE_ROUTES_UPSTREAM_PROXY", "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        valid = (parsed.scheme == "http" and parsed.port is not None and parsed.port > 0
+                 and ipaddress.ip_address(parsed.hostname).is_loopback
+                 and not (parsed.username or parsed.password or parsed.path
+                          or parsed.query or parsed.fragment))
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise RuntimeError("Google upstream proxy must be an explicit loopback HTTP endpoint")
+    return value
 
 
 def validate_request(payload):
@@ -92,6 +111,7 @@ class RelayConfig:
         path = os.environ.get("BRP_GOOGLE_ROUTES_RELAY_QUOTA_DB", "").strip()
         if not self.token or not self.key or not path:
             raise RuntimeError("Routes relay requires a key, token and dedicated quota path")
+        self.upstream_proxy = upstream_proxy()
         self.store = SqliteQuotaStore(path)
 
     def forward(self, budget, body, *, geocode=False):
@@ -103,6 +123,8 @@ class RelayConfig:
         try:
             with requests.Session() as session:
                 session.trust_env = False
+                # Only the fixed HTTPS Google endpoints use the configured local tunnel.
+                session.proxies = {"https": self.upstream_proxy} if self.upstream_proxy else {}
                 if geocode:
                     response = session.get("https://maps.googleapis.com/maps/api/geocode/json",
                         params={**body, "key": self.key}, timeout=(5, 25), allow_redirects=False)

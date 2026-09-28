@@ -1,4 +1,4 @@
-"""Opt-in final validation. No import-time I/O and no legacy-provider fallback."""
+"""Opt-in final validation with separately enabled, explicit local road recovery."""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -39,6 +39,8 @@ LOCAL_MEASUREMENT_ERRORS = frozenset({
     "google_geometry_endpoint_mismatch", "google_cross_request_join_mismatch",
     "google_geocode_unresolved", "google_geocode_ambiguous", "google_geocode_address_required",
     "google_coordinate_profile_mismatch",
+    "google_local_timing_geometry_invalid", "google_local_timing_metrics_invalid",
+    "google_local_timing_endpoint_mismatch", "google_local_timing_join_unresolved",
 })
 
 
@@ -415,7 +417,11 @@ def session_for(config):
         require_available()
         client = GoogleRoutesClient(config.validation_budget_id,
                                     SqliteQuotaStore(Path(os.environ["BRP_GOOGLE_FINAL_QUOTA_DB"])))
-        session = ValidationSession(client)
+        if os.environ.get('BRP_GOOGLE_LOCAL_TIME_FALLBACK_ENABLED') == '1':
+            from google_timing_fallback import HybridValidationSession
+            session = HybridValidationSession(client)
+        else:
+            session = ValidationSession(client)
         config._google_validation_session = session
     return session
 
@@ -468,6 +474,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
             raise
         coords = []
         session.client.configure_coordinates(request_points)
+        if hasattr(session, 'bind_pickups'):
+            session.bind_pickups(request_points)
         for point in request_points:
             # Plot coordinates are normalized WGS84 by the existing input pipeline.
             if point.get("plot_lat") is None or point.get("plot_lng") is None:
@@ -511,18 +519,24 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                     "called_at": min(leg.get("provider_called_at", session.client.now().isoformat()) for leg in result.legs), "departure_time": result.departure.isoformat(),
                     "policy_version": POLICY_VERSION, "requested_waypoints": deepcopy(request_points),
                     "coordinate_system": "WGS84", "coordinate_profile": session.client.coordinate_profile}
+        from google_timing_fallback import provenance
+        timing_sources = provenance(result.legs)
+        evidence.update(timing_sources)
+        evidence['geometry_segments'] = [segment for leg in result.legs for segment in leg.get('geometry_segments', [leg['geometry']])]
+        verification.update(timing_sources)
+        verification['verified_source'] = timing_sources['source']
         updates.append((route, verification, evidence, result))
         gate["checked_route_count"] += 1
         if not passed:
             gate["failed_route_count"] += 1
             gate["failed_route_ids"].append(route_id)
         gate["max_estimated_arrival_delay_minutes"] = max(gate["max_estimated_arrival_delay_minutes"], overrun/60)
-    # Publish an entire scenario atomically, never half Google and half legacy.
+    # Publish atomically with explicit per-leg sources, never silent fallback.
     for route, verification, evidence, result in updates:
         for node, point in zip(route.get("nodes") or [], evidence["requested_waypoints"]):
             points[int(node)].update(point)
         route["final_route_traffic_gate"], route["route_evidence"] = verification, evidence
-        route["traffic_time_source"] = "google_routes"
+        route["traffic_time_source"] = evidence['source']
         if to_school:
             route["arrival_reverse_check"] = {**verification, "available": True,
                 "before_earliest_departure": not verification["passes"],
@@ -530,6 +544,9 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                 "scheduled_arrival_minutes": verification["verified_arrival_minutes"],
                 "required_departure_minutes": minute(latest-timedelta(seconds=result.drive_s+result.dwell_s))}
     gate["api_calls"] = session.client.calls-before
+    gate['amap_timing_api_calls'] = getattr(getattr(session, 'fallback', None), 'api_calls', 0)
+    gate['forecast_complete'] = all(evidence['forecast_complete'] for _, _, evidence, _ in updates)
+    gate['fallback_leg_count'] = sum(evidence['fallback_leg_count'] for _, _, evidence, _ in updates)
     gate["google_geocode_api_calls"] = session.pickups.api_calls
     gate["amap_pickup_api_calls"] = getattr(session.pickups, "fallback_api_calls", 0)
     gate["pickup_resolution_api_calls"] = session.pickups.api_calls + gate["amap_pickup_api_calls"]

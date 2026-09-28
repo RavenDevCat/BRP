@@ -638,6 +638,7 @@ def run_direct_school_analysis(
         if google_mode:
             progress["google_geocode_api_calls"] = provider.session.pickups.api_calls
             progress["amap_pickup_api_calls"] = getattr(provider.session.pickups, "fallback_api_calls", 0)
+            progress["amap_timing_api_calls"] = int(provider.state.get("amap_timing_api_calls", 0))
             progress["pickup_resolution_api_calls"] = progress["google_geocode_api_calls"] + progress["amap_pickup_api_calls"]
         if not checkpoint:
             return
@@ -858,8 +859,14 @@ def run_direct_school_analysis(
                     dwell_count = sum(1 for service_index in service_indexes if service_index <= index)
                 ride_s = sum(relevant_leg_durations_s)
                 ride_s += dwell_count * float(config["stop_service_minutes"]) * 60.0
+                timing_provenance = {}
+                if google_mode:
+                    from google_timing_fallback import provenance
+                    legs = live.get("legs") or []
+                    timing_provenance = provenance(legs[index:] if config["service_direction"] == "To School" else legs[:index])
                 route_contexts_by_stop[key].append(
                     {
+                        **timing_provenance,
                         "route_id": route_id,
                         "stop_sequence": _safe_int(stop.get("stop_sequence")),
                         "riders": max(0, _safe_int(stop.get("passenger_count"))),
@@ -1250,6 +1257,10 @@ def run_direct_school_analysis(
     result["routes"] = sorted(route_results, key=lambda row: str(row.get("route_id") or ""))
     result["route_window_analysis"] = route_window_analysis
     result["operational_conclusion"] = operational_conclusion
+    if google_mode:
+        for key in ("amap_timing_api_calls", "amap_pickup_api_calls", "google_geocode_api_calls", "pickup_resolution_api_calls"):
+            result["progress"][key] = int(provider.state.get(key, 0))
+            result["summary"][key] = int(provider.state.get(key, 0))
     result["summary"].update(
         {
             "resolved_count": len(resolved_rows),
@@ -1380,6 +1391,10 @@ def build_direct_school_workbook(
         "Direction / 方向", result.get("service_direction"),
         "Status / 状态", result.get("status"),
     ])
+    if any((row.get("route_evidence") or {}).get("forecast_complete") is False
+           or any(c.get("forecast_complete") is False for c in row.get("route_contexts") or [])
+           for row in result.get("stops") or []):
+        summary_sheet.append(["Timing sources / 耗时来源", _timing_source_label({"forecast_complete": False})])
     if result.get("provider") == "google_routes" and result.get("status") == "partial":
         summary_sheet.append(["Partial forecast / 部分预测",
             "Unavailable measurements are excluded from compliance conclusions. / 缺失测算不视为达标，详见数据质量表。"])
@@ -1513,9 +1528,10 @@ def build_direct_school_workbook(
             "Address / 地址", "Students / 学生", "Routes / 路线", "Operational class / 运营分类",
             "Direct min / 直达分钟", "Direct km / 直达公里", "Current ride min / 当前乘车分钟",
             "Over limit min / 超限分钟", "Additional removal routes / 补充摘站路线", "Captured / 测算时间",
+            "Direct timing source / 直达耗时来源", "Ride timing source / 乘车耗时来源",
         ],
         measurement_rows,
-        [42, 12, 18, 28, 16, 16, 20, 20, 22, 24],
+        [42, 12, 18, 28, 16, 16, 20, 20, 22, 24, 65, 65],
     )
 
     quality_rows = [
@@ -1552,8 +1568,8 @@ def build_direct_school_workbook(
                 "; ".join(str(item.get("code") or "") + (": " + str(item["detail"]) if item.get("detail") else "")
                           for item in route_issues) or "No saved segment measurements / 未保存路段测算",
             ])
-        for leg in snapshot.get("legs") or []:
-            leg_index = _safe_int(leg.get("leg_index"))
+        for position, leg in enumerate(snapshot.get("legs") or []):
+            leg_index = _safe_int(leg.get("leg_index", position))
             issues = ", ".join(str(item.get("code")) for item in snapshot.get("issues") or []
                                if item.get("leg_index") == leg_index)
             warnings = ", ".join(str(item.get("code")) for item in snapshot.get("warnings") or []
@@ -1564,9 +1580,11 @@ def build_direct_school_workbook(
                 stage, route_id, address, leg_index + 1, snapshot.get("status"),
                 _safe_float(leg.get("duration_s")) / 60, _safe_float(leg.get("distance_m")) / 1000,
                 _safe_float(leg.get("straight_distance_m")) / 1000,
-                leg.get("osrm_reference_distance_m"), leg.get("called_at"),
-                ", ".join(str(value) for value in leg.get("origin") or []),
-                ", ".join(str(value) for value in leg.get("destination") or []), issues,
+                leg.get("osrm_reference_distance_m"), leg.get("provider_called_at") or leg.get("called_at"),
+                ", ".join(str(value) for value in leg.get("start") or leg.get("origin_wgs84") or []),
+                ", ".join(str(value) for value in leg.get("end") or leg.get("destination_wgs84") or []), issues,
+                leg.get("timing_provider") or leg.get("provider") or snapshot.get("source"),
+                leg.get("time_basis"), str((leg.get("fallback_reason") or {}).get("code") or ""),
             ])
     if not evidence_rows:
         evidence_rows.append(["All stages / 所有阶段", None, None, None, "not_recorded",
@@ -1575,11 +1593,12 @@ def build_direct_school_workbook(
     _write_readable_table(
         workbook.create_sheet("Route Evidence"),
         "Route Measurement Evidence / 路段测算依据",
-        "Saved AMap segments. Review flags are unresolved checks, not proof of an invalid road. / 高德逐段原始测算；复核标记不代表已证明道路错误。",
+        "Saved provider segments. AMap current-traffic fallback is not Google future-traffic prediction. / 高德实时耗时回退不是 Google 未来交通预测。",
         ["Stage / 阶段", "Route / 路线", "Address / 地址", "Leg / 路段", "Status / 状态",
          "Drive min / 行车分钟", "Distance km / 公里", "Straight km / 直线公里",
-         "OSRM metres / 参考米", "Captured / 测算时间", "Origin GCJ02 lat,lng", "Destination GCJ02 lat,lng", "Review / 复核"],
-        evidence_rows, [24, 18, 42, 12, 20, 18, 18, 18, 18, 26, 30, 30, 50],
+         "OSRM metres / 参考米", "Captured / 测算时间", "Origin WGS84 lat,lng", "Destination WGS84 lat,lng", "Review / 复核",
+         "Timing provider / 测时来源", "Time basis / 时间口径", "Fallback reason / 回退原因"],
+        evidence_rows, [24, 18, 42, 12, 20, 18, 18, 18, 18, 26, 30, 30, 50, 32, 28, 45],
     )
 
     warning_rows = [[item.get("stage"), item.get("route_id"), item.get("address"),
@@ -1743,8 +1762,16 @@ def _address_measurement_rows(result: dict[str, Any]) -> list[list[Any]]:
             _operational_category_label(category), row.get("direct_duration_min"), row.get("direct_distance_km"),
             row.get("estimated_current_ride_min"), None if category == "data_review" else round(over_limit, 2),
             ", ".join(str(item) for item in list(row.get("additional_window_routes") or [])), row.get("provider_called_at"),
+            _timing_source_label(row.get("route_evidence") or {}),
+            "; ".join(f"{c.get('route_id', '')}: {_timing_source_label(c)}" for c in row.get("route_contexts") or []),
         ])
     return rows
+
+
+def _timing_source_label(evidence: dict[str, Any]) -> str:
+    if evidence.get("forecast_complete") is False:
+        return "Includes AMap current traffic; not complete Google future prediction / 含高德实时耗时，非完整 Google 未来预测"
+    return str(evidence.get("source") or ", ".join(evidence.get("timing_sources") or []) or "")
 
 
 def _operational_category_label(value: Any) -> str:

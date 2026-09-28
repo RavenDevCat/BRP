@@ -1,6 +1,7 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Includes AMap current traffic; not a complete Google future forecast.": "含高德实时路况耗时，非完整 Google 未来交通预测。",
     "Google navigation endpoint is too far from the requested stop.": "Google 导航落点与接送站位置偏差过大。",
     "Google arrival and departure paths do not meet at this stop.": "Google 返回的进站与出站路径未在该站衔接。",
     "Monthly requests remaining": "本月剩余调用",

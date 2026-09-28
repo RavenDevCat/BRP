@@ -15,7 +15,7 @@ GEOCODE_PROVENANCE_FIELDS = (
     "pickup_override_revision", "pickup_override_confirmed_at",
     "pickup_entrance_source", "amap_poi_location", "amap_poi_entr_location",
     "pickup_resolution_status",
-    "amap_parent_poi_id",
+    "amap_parent_poi_id", "amap_poi_alias", "amap_parent_address_evidence",
 )
 PRECISE_LEVELS = {"\u95e8\u724c\u53f7", "\u5174\u8da3\u70b9", "\u9053\u8def\u4ea4\u53c9\u53e3", "poi"}
 PRECISE_LEVELS.update({"\u95e8\u5740", "\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9", "\u9053\u8def\u4ea4\u53c9\u8def\u53e3"})
@@ -237,6 +237,56 @@ def require_amap_pickup_precision(points: list[dict[str, Any]]) -> None:
         )
 
 
+def convert_amap_candidate(candidate: dict[str, Any], poi: bool, *, country: str, city: str,
+                           address: str, plausible, to_wgs84) -> dict[str, Any] | None:
+    try:
+        lng, lat = map(float, str(candidate["location"]).split(","))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not (math.isfinite(lat) and math.isfinite(lng) and abs(lat) <= 90 and abs(lng) <= 180):
+        return None
+    name = str(candidate.get("name") or "").strip() if poi else ""
+    actual_address = str(candidate.get("address") or "").strip() if poi else ""
+    formatted = str(candidate.get("formatted_address") or "").strip()
+    if poi:
+        parts = [str(candidate.get(k) or "").strip() for k in ("pname", "cityname", "adname")]
+        formatted = "".join(dict.fromkeys([*parts, actual_address, name]))
+    adcode = str(candidate.get("adcode") or "").strip()
+    if not plausible(country, city, lat, lng, formatted, adcode, requested_address=address):
+        return None
+    entrance_source = ""
+    entrance_location = str(candidate.get("entr_location") or "") if poi else ""
+    if poi and _named_gate_poi(candidate):
+        entrance_source = "named_gate_poi"
+    elif poi and not _gate_tokens(address) and _residential_pickup("", candidate):
+        try:
+            entrance_lng, entrance_lat = map(float, entrance_location.split(","))
+        except (TypeError, ValueError):
+            pass
+        else:
+            if (math.isfinite(entrance_lat) and math.isfinite(entrance_lng)
+                    and abs(entrance_lat) <= 90 and abs(entrance_lng) <= 180
+                    and plausible(country, city, entrance_lat, entrance_lng, formatted, adcode, requested_address=address)):
+                lat, lng = entrance_lat, entrance_lng
+                entrance_source = "provider_entr_location"
+    plot_lat, plot_lng = to_wgs84(lat, lng)
+    return {"provider": "amap", "country": country.strip(), "city": city.strip(),
+            "address": address.strip(), "lat": lat, "lng": lng,
+            "plot_lat": plot_lat, "plot_lng": plot_lng,
+            "formatted_address": formatted, "adcode": adcode,
+            "geocode_level": "poi" if poi else str(candidate.get("level") or ""),
+            "amap_poi_id": str(candidate.get("id") or "").strip() if poi else "",
+            "amap_parent_poi_id": str(candidate.get("parent_id") or "").strip() if poi else "",
+            "amap_poi_name": name, "amap_poi_address": actual_address,
+            "amap_poi_alias": candidate.get("alias", "") if poi and isinstance(candidate.get("alias"), str) else "",
+            "amap_poi_type": str(candidate.get("type") or "") if poi else "",
+            "amap_poi_location": str(candidate.get("location") or "") if poi else "",
+            "amap_poi_entr_location": entrance_location,
+            "pickup_entrance_source": entrance_source,
+            "geocode_quality_version": GEOCODE_QUALITY_VERSION}
+
+
+
 def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
                         city_code: str, geocode_limiter, poi_limiter,
                         plausible, to_wgs84) -> dict[str, Any]:
@@ -247,50 +297,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
         return result
 
     def convert(candidate: dict[str, Any], poi: bool) -> dict[str, Any] | None:
-        try:
-            lng, lat = map(float, str(candidate["location"]).split(","))
-        except (KeyError, TypeError, ValueError):
-            return None
-        if not (math.isfinite(lat) and math.isfinite(lng) and abs(lat) <= 90 and abs(lng) <= 180):
-            return None
-        name = str(candidate.get("name") or "").strip() if poi else ""
-        actual_address = str(candidate.get("address") or "").strip() if poi else ""
-        formatted = str(candidate.get("formatted_address") or "").strip()
-        if poi:
-            parts = [str(candidate.get(k) or "").strip() for k in ("pname", "cityname", "adname")]
-            formatted = "".join(dict.fromkeys([*parts, actual_address, name]))
-        adcode = str(candidate.get("adcode") or "").strip()
-        if not plausible(country, city, lat, lng, formatted, adcode, requested_address=address):
-            return None
-        entrance_source = ""
-        entrance_location = str(candidate.get("entr_location") or "") if poi else ""
-        if poi and _named_gate_poi(candidate):
-            entrance_source = "named_gate_poi"
-        elif poi and not _gate_tokens(address) and _residential_pickup("", candidate):
-            try:
-                entrance_lng, entrance_lat = map(float, entrance_location.split(","))
-            except (TypeError, ValueError):
-                pass
-            else:
-                if (math.isfinite(entrance_lat) and math.isfinite(entrance_lng)
-                        and abs(entrance_lat) <= 90 and abs(entrance_lng) <= 180
-                        and plausible(country, city, entrance_lat, entrance_lng, formatted, adcode, requested_address=address)):
-                    lat, lng = entrance_lat, entrance_lng
-                    entrance_source = "provider_entr_location"
-        plot_lat, plot_lng = to_wgs84(lat, lng)
-        return {"provider": "amap", "country": country.strip(), "city": city.strip(),
-                "address": address.strip(), "lat": lat, "lng": lng,
-                "plot_lat": plot_lat, "plot_lng": plot_lng,
-                "formatted_address": formatted, "adcode": adcode,
-                "geocode_level": "poi" if poi else str(candidate.get("level") or ""),
-                "amap_poi_id": str(candidate.get("id") or "").strip() if poi else "",
-                "amap_parent_poi_id": str(candidate.get("parent_id") or "").strip() if poi else "",
-                "amap_poi_name": name, "amap_poi_address": actual_address,
-                "amap_poi_type": str(candidate.get("type") or "") if poi else "",
-                "amap_poi_location": str(candidate.get("location") or "") if poi else "",
-                "amap_poi_entr_location": entrance_location,
-                "pickup_entrance_source": entrance_source,
-                "geocode_quality_version": GEOCODE_QUALITY_VERSION}
+        return convert_amap_candidate(candidate, poi, country=country, city=city, address=address,
+                                      plausible=plausible, to_wgs84=to_wgs84)
 
     # Named bus stops need their station identity, not an intersection geocode.
     # Preserve a usable geocode if POI lookup fails or leaves road-side ambiguity.

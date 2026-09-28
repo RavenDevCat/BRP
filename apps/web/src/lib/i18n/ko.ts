@@ -1,6 +1,7 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Includes AMap current traffic; not a complete Google future forecast.": "AMap 실시간 교통 시간이 포함되어 있으며, 전체 구간의 Google 미래 교통 예측은 아닙니다.",
     "Google time validation": "Google 시간 검증",
     "Service date": "운행 날짜",
     "Google validation is not available on this deployment.": "이 환경에서는 Google 시간 검증을 사용할 수 없습니다.",

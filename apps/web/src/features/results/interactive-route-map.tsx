@@ -1543,6 +1543,11 @@ export function InteractiveRouteMap({
                                         ? `${selectedRoute.traffic_time_source} timing`
                                         : "Planned route timing"}
                                 </div>
+                                {selectedRoute.route_evidence?.forecast_complete === false ? (
+                                    <div className="mt-2 break-words text-xs text-amber-800">
+                                        {t("Includes AMap current traffic; not a complete Google future forecast.")}
+                                    </div>
+                                ) : null}
                                 {selectedRoute.display_geometry_message ? (
                                     <div role="status" className="mt-2 border-l-2 border-amber-500 pl-2 text-xs text-amber-800">
                                         {t(selectedRoute.display_geometry_message)}

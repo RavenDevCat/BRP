@@ -302,6 +302,10 @@ export type JobMapBounds = {
 };
 
 export type RouteEvidence = {
+    timing_sources?: string[];
+    forecast_complete?: boolean;
+    timing_note?: string;
+    fallback_leg_count?: number;
     evidence_version: string;
     status: "verified" | "needs_review" | "unavailable";
     called_at?: string | null;
@@ -802,6 +806,9 @@ export type DirectSchoolStopResult = {
         geometry: number[][];
     }>;
     route_contexts?: Array<{
+        timing_sources?: string[];
+        forecast_complete?: boolean;
+        timing_note?: string;
         route_id?: string;
         stop_sequence?: number;
         riders?: number;

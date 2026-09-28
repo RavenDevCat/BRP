@@ -187,16 +187,27 @@ class GoogleGeocodeResolver(PickupResolver):
             confirmed = self.fallback.operator_point(point)
             if confirmed is not None:
                 return confirmed
+        selection = None
+        if self.fallback:
+            from google_pickup_intents import selected_address
+            point, selection = selected_address(point, self.path.parent)
         try:
-            result = self._resolve_google(point)
+            if selection:
+                result = self.fallback.resolve(point, 'operator_selected_pickup')
+            else:
+                result = self._resolve_google(point)
         except ValidationUnavailable as exc:
             if self.fallback and str(exc) in {'google_geocode_unresolved', 'google_geocode_ambiguous'}:
-                return self.fallback.resolve(point, exc)
-            raise
-        if self.fallback:
+                result = self.fallback.resolve(point, exc)
+            else:
+                raise
+        if self.fallback and result.get('provider') == 'google':
             result['location_resolution'] = {'source': 'google_geocode', 'coordinate_provider': 'google',
                 'timing_provider': 'google_routes', 'identity_status': 'matched',
                 'route_endpoint_status': 'not_measured', 'policy': POLICY}
+        if selection:
+            result['address'] = point['address']
+            result['location_resolution']['address_selection'] = selection
         return result
 
     def _resolve_uncached(self, country, city, address):

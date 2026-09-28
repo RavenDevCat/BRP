@@ -575,6 +575,7 @@ function ResultSummary({ record, exportUrl }: { record: DirectSchoolJobRecord; e
               <span>{t("Student trip limit")}: <strong className="text-foreground">{formatNumber(conclusion.duration_limit_min)} min</strong></span>
               <span>{t("Route time window")}: <strong className="text-foreground">{formatNumber(conclusion.route_window_min)} min</strong></span>
               <span>{t("Times use the live map provider captured for this run.")}</span>
+              <TimingSourceNote incomplete={result.stops.some(row => row.route_evidence?.forecast_complete === false || row.route_contexts?.some(c => c.forecast_complete === false))} />
             </div>
             <div className="divide-y divide-border rounded-md border border-border">
               <ConclusionStep
@@ -773,7 +774,7 @@ function AddressClassificationBoard({
                 <ClassificationBadge value={operationalCategory(row)} />
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
-                <MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} tone={operationalCategory(row) === "direct_over_limit" ? "danger" : "neutral"} />
+                <div className="min-w-0"><MiniMetric label="Direct" value={metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")} tone={operationalCategory(row) === "direct_over_limit" ? "danger" : "neutral"} /><TimingSourceNote incomplete={row.route_evidence?.forecast_complete === false} /></div>
                 <CurrentRideMetric row={row} />
                 <MiniMetric label="Over limit" value={minutes(largestOverLimit(row))} tone={classificationMetricTone(operationalCategory(row))} />
               </div>
@@ -955,6 +956,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
           const context = row?.route_contexts?.find(c => c.route_id === routeId && c.stop_sequence === stop.order);
           return row ? <div className="space-y-2">
             <MiniMetric label="Current route ride" value={minutes(context?.estimated_current_ride_min ?? undefined)} />
+            <TimingSourceNote incomplete={context?.forecast_complete === false} />
             <Button variant="secondary" className="h-8 text-xs" onClick={() => { onSelect(row.stop_key); setMapMode("direct"); }}>{t("Direct route map")}</Button>
           </div> : null;
         }} /> : <div className="flex min-h-[500px] items-center justify-center p-6 text-sm text-muted-foreground">{t("No saved current route map")}</div>}
@@ -1024,7 +1026,7 @@ function DirectSchoolMap({ result, selectedStop, selectionRevision, onSelect }: 
               </div>
               <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
                 <MiniMetric label="Direct distance km" value={distance(selectedStop.direct_distance_km)} />
-                <MiniMetric label="Direct duration min" value={minutes(selectedStop.direct_duration_min)} tone={selectedCategory === "direct_over_limit" ? "danger" : "neutral"} />
+                <div className="min-w-0"><MiniMetric label="Direct duration min" value={minutes(selectedStop.direct_duration_min)} tone={selectedCategory === "direct_over_limit" ? "danger" : "neutral"} /><TimingSourceNote incomplete={selectedStop.route_evidence?.forecast_complete === false} /></div>
                 <CurrentRideMetric row={selectedStop} />
               </div>
               {selectedStop.route_evidence?.called_at ? <div className="mt-2 text-xs text-muted-foreground">{t("Measured at")}: {formatDateTime(selectedStop.route_evidence.called_at)}</div> : null}
@@ -1056,6 +1058,7 @@ function downloadDirectSchoolMapHtml(
       color: classificationColor(operationalCategory(row)),
       directDistanceKm: row.direct_distance_km,
       directDurationMin: row.direct_duration_min,
+      directTimingNote: row.route_evidence?.forecast_complete === false ? t("Includes AMap current traffic; not a complete Google future forecast.") : "",
       currentRideMin: row.estimated_current_ride_min,
       currentRideText: currentRideText(row, t),
       geometry: row.direct_geometry || [],
@@ -1200,7 +1203,7 @@ function downloadDirectSchoolMapHtml(
       document.getElementById("address").textContent = stop.address;
       document.getElementById("meta").textContent = labels.route + " " + stop.route + " · " + stop.riders + " " + labels.students + (stop.measuredAt ? " · " + new Date(stop.measuredAt).toLocaleString() : "");
       document.getElementById("distanceValue").textContent = Number.isFinite(stop.directDistanceKm) ? stop.directDistanceKm + " km" : "-";
-      document.getElementById("durationValue").textContent = Number.isFinite(stop.directDurationMin) ? stop.directDurationMin + " min" : "-";
+      document.getElementById("durationValue").textContent = (Number.isFinite(stop.directDurationMin) ? stop.directDurationMin + " min" : "-") + (stop.directTimingNote ? " · " + stop.directTimingNote : "");
       document.getElementById("rideValue").textContent = stop.currentRideText;
       if (focus) focusSelected(stop);
     }
@@ -1361,7 +1364,7 @@ function StopDetailTable({ rows, selectedStopKey, onSelect }: { rows: DirectScho
                   <td className="max-w-80 px-3 py-2"><div className="truncate font-medium">{row.address}</div><div className="mt-1 text-xs text-muted-foreground">{row.city}</div></td>
                   <td className="px-3 py-2">{formatNumber(row.riders)}</td>
                   <td className="px-3 py-2">{row.primary_route_id || row.route_ids?.join(", ")}</td>
-                  <td className="whitespace-nowrap px-3 py-2">{metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")}</td>
+                  <td className="min-w-48 max-w-72 px-3 py-2">{metricPair(row.direct_duration_min, "min", row.direct_distance_km, "km")}<TimingSourceNote incomplete={row.route_evidence?.forecast_complete === false} /></td>
                   <td className="min-w-48 max-w-72 whitespace-normal px-3 py-2">{currentRideText(row, t)}</td>
                   <td className="whitespace-nowrap px-3 py-2">{minutes(largestOverLimit(row))}</td>
                   <td className="whitespace-nowrap px-3 py-2">{metricPair(row.osrm_duration_min, "min", row.osrm_distance_km, "km")}</td>
@@ -1491,13 +1494,19 @@ function currentRideText(row: DirectSchoolStopResult, t: (key: string) => string
   const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
   const parts = Number.isFinite(row.estimated_current_ride_min) ? [minutes(row.estimated_current_ride_min)] : [];
   pending.forEach((c) => parts.push(`${c.route_id}: ${t("Travel time unavailable")}`));
+  if ((row.route_contexts || []).some(c => c.forecast_complete === false)) parts.push(t("Includes AMap current traffic; not a complete Google future forecast."));
   return parts.join("; ") || "-";
+}
+
+function TimingSourceNote({ incomplete }: { incomplete: boolean }) {
+  const t = useT();
+  return incomplete ? <div className="mt-1 break-words text-xs leading-4 text-amber-800">{t("Includes AMap current traffic; not a complete Google future forecast.")}</div> : null;
 }
 
 function CurrentRideMetric({ row }: { row: DirectSchoolStopResult }) {
   const t = useT();
   const pending = (row.route_contexts || []).filter((c) => c.measurement_status && c.measurement_status !== "verified");
-  if (!pending.length) return <div className="min-w-0" title={currentRideText(row, t)}><MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} /></div>;
+  if (!pending.length) return <div className="min-w-0" title={currentRideText(row, t)}><MiniMetric label="Current route ride" value={minutes(row.estimated_current_ride_min)} tone={operationalCategory(row) === "route_only_over_limit" ? "warning" : "neutral"} /><TimingSourceNote incomplete={(row.route_contexts || []).some(c => c.forecast_complete === false)} /></div>;
   return <div className="min-w-0 rounded-md border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900">
     <div>{t("Current route ride")}</div>
     {Number.isFinite(row.estimated_current_ride_min) ? <div className="mt-1 font-semibold">{minutes(row.estimated_current_ride_min)}</div> : null}

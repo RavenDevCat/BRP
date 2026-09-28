@@ -9,7 +9,7 @@ from json_cache_store import load_json_object, save_json_object
 from google_pickup_points import normalize_point, _identity_issues, _lookup
 import google_coordinates as coordinates
 
-POLICY = 'verified-google-pickup-fallback-v1'
+POLICY = 'verified-google-pickup-fallback-v3'
 TTL = timedelta(days=7)
 LOCATION_FIELDS = (
     'lat', 'lng', 'plot_lat', 'plot_lng', 'provider', 'coordinate_system',
@@ -76,8 +76,14 @@ def checked(point, candidate, *, operator=False):
             issues.append('provider_poi_identity_missing')
         if candidate.get('geocode_level') not in PRECISE_LEVELS:
             issues.append('coarse_or_unknown_geocode_precision')
-        if issues or candidate.get('pickup_resolution_status') == 'reference_only':
+        # Re-evaluate precision under the current policy instead of retaining a
+        # stale reference-only flag after a precise, named gate is established.
+        if issues:
             raise ValidationUnavailable('google_pickup_identity_unresolved', details={'identity_issues': sorted(set(issues))})
+        if candidate.get('pickup_resolution_status') == 'reference_only':
+            candidate = {**candidate, 'pickup_resolution_status': 'matched',
+                         'pickup_precision_status': 'matched', 'pickup_precision_issues': [],
+                         'pickup_entrance_source': 'provider_named_gate_geocode'}
     location = {k: deepcopy(candidate[k]) for k in (*LOCATION_FIELDS, *GEOCODE_PROVENANCE_FIELDS) if k in candidate}
     for prefix in ('amap_', 'pickup_', 'geocode_', 'google_'):
         point = {k: v for k, v in point.items() if not k.startswith(prefix)}

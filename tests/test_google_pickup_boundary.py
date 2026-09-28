@@ -195,7 +195,7 @@ def test_exact_compound_address_outranks_unit_address_without_cache_write(monkey
     resolved = pickup.PickupResolver().resolve(point)
     assert resolved["amap_poi_id"] == "compound"
     assert resolved["pickup_entrance_source"] == "provider_entr_location"
-    assert len(calls) == 1 and calls[0]["keywords"] == point["address"]
+    assert len(calls) == 1 and calls[0]["keywords"] == "\u4e0a\u6d77\u5e02" + road
     assert raw == original
 
 

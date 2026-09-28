@@ -191,3 +191,109 @@ def test_local_failure_is_not_retried_in_same_solve(resolver):
         with pytest.raises(ValidationUnavailable, match='google_pickup_identity_unresolved'):
             resolver.resolve(point(ADDRESS))
     assert calls == [1]
+
+
+@pytest.mark.parametrize('level', ['\u5174\u8da3\u70b9', '\u95e8\u5740', '\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9'])
+def test_precise_named_gate_geocode_is_not_forced_to_be_a_poi(resolver, level):
+    address = '\u6587\u5b9a\u8def\u5c1a\u6c47\u8c6a\u5ead\u897f\u5317\u95e8'
+    value = {**candidate(address), 'geocode_level': level,
+             'formatted_address': '\u4e0a\u6d77\u5e02\u5f90\u6c47\u533a\u6587\u5b9a\u8def\u5c1a\u6c47\u8c6a\u5ead(\u897f\u5317\u95e8)',
+             'pickup_resolution_status': 'reference_only'}
+    result = checked(point(address), value)
+    assert result['pickup_resolution_status'] == 'matched'
+    assert result['pickup_entrance_source'] == 'provider_named_gate_geocode'
+    assert 'amap_poi_id' not in result
+
+
+@pytest.mark.parametrize('change', [
+    {'geocode_level': '\u4f4f\u5b85\u533a'},
+    {'formatted_address': '\u6d4b\u8bd5\u82b1\u56ed(\u5317\u95e8)'},
+    {'formatted_address': '\u6d4b\u8bd5\u82b1\u56ed'},
+    {'formatted_address': '\u53e6\u4e00\u82b1\u56ed(\u5357\u95e8)'},
+    {'pickup_precision_issues': ['multiple_provider_candidates']},
+])
+def test_gate_identity_conflicts_not_erased(resolver, change):
+    address = '\u6d4b\u8bd5\u82b1\u56ed\u5357\u95e8'
+    value = {**candidate(address), 'geocode_level': '\u5174\u8da3\u70b9', **change}
+    with pytest.raises(ValidationUnavailable):
+        checked(point(address), value)
+
+
+def test_unrelated_bus_stop_cannot_match_landmark_only_query(resolver):
+    address = '\u83b2\u82b1\u56fd\u9645\u5e7f\u573a\u95e8\u53e3\u516c\u4ea4\u7ad9'
+    value = {**candidate('\u6d4b\u8bd5\u8def\u516c\u4ea4\u7ad9'), 'geocode_level': '\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9'}
+    with pytest.raises(ValidationUnavailable):
+        checked(point(address), value)
+
+
+def test_bus_road_pair_with_parenthetical_landmark_keeps_station_identity(resolver):
+    base = '\u660e\u5174\u8def\u65b0\u5357\u8def\u516c\u4ea4\u7ad9'
+    value = {**candidate(base), 'geocode_level': '\u516c\u4ea4\u5730\u94c1\u7ad9\u70b9'}
+    result = checked(point(base+' (\u65b0\u5357\u8def\u58f9\u53f7)'), value)
+    assert result['lat'] == value['lat']
+
+
+def test_exact_site_precedes_a_tenant_or_another_phase():
+    from google_pickup_points import _prefer_exact_site
+    rows = [{'id':'site','name':'\u53e4\u5317\u58f9\u53f7','address':'1099\u5f04'},
+            {'id':'spa','name':'\u53e4\u5317\u58f9\u53f7SPA','address':'1099\u5f04'},
+            {'id':'phase','name':'\u53e4\u5317\u58f9\u53f72\u671f','address':'1099\u5f04'}]
+    assert _prefer_exact_site('\u53e4\u5317\u58f9\u53f7', rows) == rows[:1]
+    # A specified phase or gate must not be reduced to the parent compound.
+    assert _prefer_exact_site('\u53e4\u5317\u58f9\u53f7\u5357\u95e8', rows) == rows
+
+
+def test_phase_notation_does_not_remove_phase_gate_or_zone():
+    from google_pickup_points import _phase_notation
+    assert _phase_notation('Garden\u4e09\u671fA\u533a\u5357\u95e8') == 'Garden3\u671fA\u533a\u5357\u95e8'
+    assert _phase_notation('Garden3\u53f7\u56ed') == 'Garden3\u671f'
+    assert _phase_notation('Garden\u4e8c\u671f') != _phase_notation('Garden3\u53f7\u56ed')
+    assert _phase_notation('Garden\u5341\u4e09\u671f') != _phase_notation('Garden3\u53f7\u56ed')
+
+
+def test_provider_query_preserves_gate_and_uses_known_district():
+    from google_pickup_points import _provider_query_address
+    original = point('\u6d4b\u8bd5\u82b1\u56ed(\u5357\u95e8)')
+    original['formatted_address'] = '\u4e0a\u6d77\u5e02\u95f5\u884c\u533a\u6d4b\u8bd5\u82b1\u56ed'
+    assert _provider_query_address(original) == '\u4e0a\u6d77\u5e02\u95f5\u884c\u533a\u6d4b\u8bd5\u82b1\u56ed\u5357\u95e8'
+    assert original['address'].endswith('(\u5357\u95e8)')
+
+
+def test_provider_query_does_not_duplicate_city_or_discard_roadside():
+    from google_pickup_points import _provider_query_address
+    address = '\u4e0a\u6d77\u5e02\u6d4b\u8bd5\u82b1\u56ed\u5357\u95e8\u5bf9\u9762'
+    assert _provider_query_address(point(address)) == address
+
+
+def test_provider_alias_can_establish_compound_address_with_real_entrance(resolver):
+    address = '\u6d4b\u8bd5\u8def555\u5f04'
+    value = {**candidate(address), 'geocode_level':'poi', 'amap_poi_id':'compound',
+        'amap_poi_name':'\u6d4b\u8bd5\u82b1\u56ed', 'amap_poi_alias':address,
+        'amap_poi_address':'\u53e6\u4e00\u8def', 'formatted_address':'\u6d4b\u8bd5\u82b1\u56ed',
+        'amap_poi_type':'\u4f4f\u5b85\u533a', 'pickup_entrance_source':'provider_entr_location'}
+    result = checked(point(address), value)
+    assert result['amap_poi_alias'] == address
+    with pytest.raises(ValidationUnavailable):
+        checked(point(address), {**value, 'pickup_entrance_source':''})
+    with pytest.raises(ValidationUnavailable):
+        checked(point(address+'\u5357\u95e8'), value)
+
+
+def test_alias_cannot_turn_parent_centroid_into_named_gate(resolver):
+    address = '\u6d4b\u8bd5\u82b1\u56ed\u5357\u95e8'
+    value = {**candidate(address), 'geocode_level':'poi', 'amap_poi_id':'compound',
+        'amap_poi_name':'\u6d4b\u8bd5\u82b1\u56ed', 'amap_poi_alias':address,
+        'formatted_address':'\u6d4b\u8bd5\u82b1\u56ed', 'pickup_entrance_source':''}
+    with pytest.raises(ValidationUnavailable):
+        checked(point(address), value)
+
+
+def test_compound_prefix_does_not_become_part_of_road_name(resolver):
+    name, road = '\u6d4b\u8bd5\u82b1\u56ed', '\u6d4b\u8bd5\u8def555\u5f04'
+    value = {**candidate(road), 'geocode_level':'poi', 'amap_poi_id':'compound',
+        'amap_poi_name':name, 'amap_poi_alias':'\u6d4b\u8bd5\u82b1\u56ed\u516c\u5bd3',
+        'amap_poi_address':road, 'formatted_address':road+name,
+        'amap_poi_type':'\u4f4f\u5b85\u533a', 'pickup_entrance_source':'provider_entr_location'}
+    assert checked(point(name+road), value)['amap_poi_id'] == 'compound'
+    with pytest.raises(ValidationUnavailable):
+        checked(point(name+'\u53e6\u4e00\u8def555\u5f04'), value)

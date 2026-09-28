@@ -61,6 +61,8 @@ class FinalTimingContext:
             self.state["google_geocode_api_calls"] = self.session.pickups.api_calls
         coords = []
         self.session.client.configure_coordinates(points)
+        if hasattr(self.session, 'bind_pickups'):
+            self.session.bind_pickups(points)
         for point in points:
             require_china(point.get("country", "China"))
             if point.get("plot_lat") is not None and point.get("plot_lng") is not None:
@@ -89,6 +91,7 @@ class FinalTimingContext:
         finally:
             self.state["api_calls"] = self.session.client.calls
             self.state["cache_hits"] = self.session.client.cache_hits
+            self.state['amap_timing_api_calls'] = getattr(getattr(self.session, 'fallback', None), 'api_calls', 0)
         legs = deepcopy(measured.legs)
         evidence = {"provider": self.provider, "source": self.provider, "status": "verified",
             "evidence_version": google.EVIDENCE_VERSION, "complete": True, "issues": [],
@@ -107,6 +110,9 @@ class FinalTimingContext:
             "requested_waypoints": deepcopy(points), "coordinate_system": "WGS84",
             "coordinate_profile": self.session.client.coordinate_profile}
         self.state["last_route_evidence"] = evidence
+        from google_timing_fallback import provenance
+        evidence.update(provenance(legs))
+        evidence['geometry_segments'] = [segment for leg in legs for segment in leg.get('geometry_segments', [leg['geometry']])]
         return evidence
 
 
@@ -116,5 +122,6 @@ def insert_measurement(context, points, dwell):
     return {"route_evidence": evidence, "provider_verified": True,
             "duration_s": evidence["duration_s"], "distance_m": evidence["distance_m"],
             "geometry": evidence["geometry"], "display_geometry": evidence["geometry"],
-            "display_geometry_source": "google_routes", "warnings": [],
+            "display_geometry_source": evidence['source'], "warnings": [evidence['timing_note']] if evidence.get('timing_note') else [],
+            "forecast_complete": evidence.get('forecast_complete', True),
             "leg_durations_s": evidence["leg_durations_s"], "leg_distances_m": evidence["leg_distances_m"]}

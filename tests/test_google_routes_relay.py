@@ -268,3 +268,29 @@ def test_proxy_failure_never_retries_direct(cfg, envelope, monkeypatch):
     assert result.status_code == 502 and len(calls) == 1
     assert b"private proxy details" not in result.body
     assert usage(cfg)["attempted"] == 1 and usage(cfg)["failed"] == 1
+
+
+def test_place_id_preserved_without_geocoding_or_coordinate_conversion(cfg, envelope, monkeypatch):
+    envelope['request']['origin'] = {'placeId':'ChIJ4wl_Vc5xsjURxXi92woP6Ds', 'vehicleStopover':True}
+    calls=[]
+    def forward(url, kwargs):
+        calls.append(kwargs['json'])
+        assert kwargs['json'] == envelope['request']
+        return SimpleNamespace(status_code=200,json=lambda:{'routes':[]})
+    fake_session(monkeypatch,forward)
+    result=TestClient(relay.create_app(cfg)).post('/compute-routes',json=envelope,headers=auth())
+    assert result.status_code==200 and len(calls)==1 and usage(cfg)['attempted']==1
+
+
+@pytest.mark.parametrize('value',[None,True,123,'',' ','x y','x\ny','x'*1025])
+def test_invalid_place_id_never_reaches_upstream(cfg,envelope,monkeypatch,value):
+    fake_session(monkeypatch,lambda *args:pytest.fail('Invalid place ID reached Google'))
+    envelope['request']['origin']={'placeId':value}
+    result=TestClient(relay.create_app(cfg)).post('/compute-routes',json=envelope,headers=auth())
+    assert result.status_code==400 and usage(cfg)['attempted']==0
+
+
+def test_place_id_cannot_be_combined_with_address(envelope):
+    envelope['request']['origin']={'placeId':'opaque-id','address':'Shanghai'}
+    with pytest.raises(ValueError,match='invalid_waypoint'):
+        relay.validate_request(envelope)

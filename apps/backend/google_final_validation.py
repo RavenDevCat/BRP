@@ -11,6 +11,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 import requests
+import google_coordinates as coordinates
 try:
     from .quota_store_sqlite import SqliteQuotaStore
     from .route_evidence import EVIDENCE_VERSION
@@ -20,7 +21,7 @@ except ImportError:
     from route_evidence import EVIDENCE_VERSION
     from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
-POLICY_VERSION = "google-final-v3"
+POLICY_VERSION = "google-final-v4-coordinate-frames"
 from google_routes_quota import DEFAULT_LIMITS, MONTHLY_LIMIT, quota_periods
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -37,6 +38,7 @@ LOCAL_MEASUREMENT_ERRORS = frozenset({
     "google_pickup_identity_conflict", "google_geometry_missing",
     "google_geometry_endpoint_mismatch", "google_cross_request_join_mismatch",
     "google_geocode_unresolved", "google_geocode_ambiguous", "google_geocode_address_required",
+    "google_coordinate_profile_mismatch",
 })
 
 
@@ -146,8 +148,9 @@ def location(value):
     return lat, lng
 
 
-def parse_response(payload, points):
+def parse_response(payload, points, *, coordinate_profile=coordinates.WGS84):
     try:
+        payload = coordinates.normalize_response(payload, coordinate_profile)
         if payload.get("fallbackInfo"):
             raise ValidationUnavailable("google_routing_fallback")
         route = payload["routes"][0]
@@ -213,6 +216,13 @@ class GoogleRoutesClient:
         self.request_headroom = 0
         self.measurements = {}
         self.cache_hits = 0
+        self.coordinate_profile = coordinates.WGS84
+
+    def configure_coordinates(self, points):
+        try:
+            self.coordinate_profile = coordinates.profile_for_points(points)
+        except ValueError:
+            raise ValidationUnavailable("google_coordinate_profile_mismatch") from None
 
     def periods(self):
         return quota_periods(self.budget_id, self.now(), self.limits)
@@ -226,7 +236,7 @@ class GoogleRoutesClient:
         now = self.now()
         if departure <= now:
             raise ValidationUnavailable("google_departure_in_past")
-        identity = (tuple(tuple(point) for point in points), departure.isoformat())
+        identity = (self.coordinate_profile, tuple(tuple(point) for point in points), departure.isoformat())
         cached = self.measurements.get(identity)
         if cached and 0 <= (now-cached[0]).total_seconds() < 600:
             self.cache_hits += 1
@@ -235,6 +245,7 @@ class GoogleRoutesClient:
             require_available()
         periods = quota_periods(self.budget_id, now, self.limits)
         def waypoint(point):
+            point = coordinates.to_wire(point, self.coordinate_profile)
             return {"location": {"latLng": {"latitude": point[0], "longitude": point[1]}}}
         if not 2 <= len(points) <= 27:
             raise ValidationUnavailable("google_waypoint_limit")
@@ -263,9 +274,12 @@ class GoogleRoutesClient:
                 if response.status_code != 200:
                     raise ValidationUnavailable(f"google_http_{response.status_code}")
                 payload = response.json()
-            result = parse_response(payload, points)
+            result = parse_response(payload, points, coordinate_profile=self.coordinate_profile)
             for leg in result:
                 leg["provider_called_at"] = now.isoformat()
+                leg["coordinate_system"] = "WGS84"
+                leg["provider_coordinate_system"] = coordinates.wire_system(self.coordinate_profile)
+                leg["coordinate_profile"] = self.coordinate_profile
             self.check_canceled()
             success = True
             self.measurements[identity] = (now, deepcopy(result))
@@ -442,6 +456,7 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
             describe_failure(exc, request_points, route_id=route.get("route_id") or route.get("id") or f"Bus {index+1}")
             raise
         coords = []
+        session.client.configure_coordinates(request_points)
         for point in request_points:
             # Plot coordinates are normalized WGS84 by the existing input pipeline.
             if point.get("plot_lat") is None or point.get("plot_lng") is None:
@@ -483,7 +498,8 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                     "duration_s": result.drive_s, "distance_m": verification["verified_distance_m"],
                     "geometry_segments": [x["geometry"] for x in result.legs],
                     "called_at": min(leg.get("provider_called_at", session.client.now().isoformat()) for leg in result.legs), "departure_time": result.departure.isoformat(),
-                    "policy_version": POLICY_VERSION, "requested_waypoints": deepcopy(request_points)}
+                    "policy_version": POLICY_VERSION, "requested_waypoints": deepcopy(request_points),
+                    "coordinate_system": "WGS84", "coordinate_profile": session.client.coordinate_profile}
         updates.append((route, verification, evidence, result))
         gate["checked_route_count"] += 1
         if not passed:

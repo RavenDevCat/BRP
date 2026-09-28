@@ -12,8 +12,9 @@ from filelock import FileLock
 from json_cache_store import load_json_object, save_json_object
 from google_pickup_points import PickupResolver
 from google_address_identity import identity_check, candidate_text, query_variants
+import google_coordinates as coordinates
 
-POLICY = "google-geocode-v2"
+POLICY = "google-geocode-v3-coordinate-frames"
 TTL = timedelta(days=30)
 FAILURE_TTL = timedelta(minutes=15)
 _LOCK = threading.RLock()
@@ -31,7 +32,7 @@ def valid_entry(entry, now):
         expires = datetime.fromisoformat(entry["expires_at"])
         limit = FAILURE_TTL if entry.get("state") == "unresolved" else TTL
         valid = (entry["policy"] == POLICY and entry["provider"] == "google"
-                and entry["coordinate_system"] == "WGS84"
+                and entry["coordinate_system"] == coordinates.wire_system(entry["coordinate_profile"])
                 and timedelta(0) <= now-created < limit and now < expires <= created+limit)
         if entry.get("state") == "unresolved":
             return (valid and isinstance(entry.get("details"), dict)
@@ -205,6 +206,7 @@ class GoogleGeocodeResolver(PickupResolver):
         if not address or not city:
             raise ValidationUnavailable("google_geocode_address_required")
         key = runtime.geocode_cache_key(country, city, address)
+        profile = coordinates.profile_for(country, city)
         if key in self.cache:
             code, details = self.cache[key]
             raise ValidationUnavailable(code, details=deepcopy(details))
@@ -218,6 +220,8 @@ class GoogleGeocodeResolver(PickupResolver):
             if valid != entries:
                 save_json_object(self.path, valid)
             entry = valid.get(key)
+            if entry is not None and entry["coordinate_profile"] != profile:
+                entry = None
             if entry is None:
                 try:
                     location = self._resolve_uncached(country, city, address)
@@ -227,12 +231,14 @@ class GoogleGeocodeResolver(PickupResolver):
                         self.check_canceled()
                         self.cache[key] = (str(exc), deepcopy(exc.details))
                         valid[key] = {"state": "unresolved", "code": str(exc), "details": deepcopy(exc.details),
-                            "provider": "google", "coordinate_system": "WGS84", "policy": POLICY,
+                            "provider": "google", "coordinate_system": coordinates.wire_system(profile),
+                            "coordinate_profile": profile, "policy": POLICY,
                             "resolved_at": now.isoformat(), "expires_at": (now+FAILURE_TTL).isoformat()}
                         save_json_object(self.path, valid)
                     raise
                 self.check_canceled()
-                entry = {**location, "provider": "google", "coordinate_system": "WGS84",
+                entry = {**location, "provider": "google", "coordinate_system": coordinates.wire_system(profile),
+                         "coordinate_profile": profile,
                          "policy": POLICY, "resolved_at": now.isoformat(), "expires_at": (now+TTL).isoformat()}
                 valid[key] = entry
                 save_json_object(self.path, valid)
@@ -245,9 +251,11 @@ class GoogleGeocodeResolver(PickupResolver):
         cleaned = {k: deepcopy(v) for k, v in point.items()
                    if not k.startswith(("amap_", "pickup_", "geocode_"))
                    and k not in {"lat", "lng", "plot_lat", "plot_lng", "formatted_address", "warning"}}
-        cleaned.update(provider="google", coordinate_system="WGS84", country=country, city=city,
+        plot_lat, plot_lng = coordinates.to_wgs84((entry["lat"], entry["lng"]), profile)
+        cleaned.update(provider="google", coordinate_system=coordinates.wire_system(profile), country=country, city=city,
                        address=address, requested_address=address, formatted_address=address,
-                       lat=entry["lat"], lng=entry["lng"], plot_lat=entry["lat"], plot_lng=entry["lng"],
+                       lat=entry["lat"], lng=entry["lng"], plot_lat=plot_lat, plot_lng=plot_lng,
+                       plot_coordinate_system="WGS84", google_coordinate_profile=profile,
                        google_place_id=entry["google_place_id"], geocode_status="ok",
                        pickup_precision_status="identity_matched", pickup_resolution_status="identity_matched",
                        pickup_precision_issues=[], google_geocode_resolved_at=entry["resolved_at"],

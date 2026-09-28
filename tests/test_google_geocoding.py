@@ -36,19 +36,23 @@ def resolver(tmp_path, monkeypatch):
     return geo.GoogleGeocodeResolver("unit", lookup=lookup, path=tmp_path/"google.json", now=lambda: NOW)
 
 
-def test_same_address_separate_provider_cache_and_no_gcj_conversion(resolver, monkeypatch):
+def test_same_address_separate_provider_cache_and_single_display_conversion(resolver, monkeypatch):
     original = point()
     saved = deepcopy(original)
     monkeypatch.setattr(runtime, "gcj02_to_wgs84", lambda *a: pytest.fail("double conversion"))
     legacy = deepcopy(runtime.GEOCODE_CACHE)
     result = resolver.resolve(original)
     assert original == saved and runtime.GEOCODE_CACHE == legacy
-    assert (result["lat"], result["plot_lat"], result["lng"]) == (31.2, 31.2, 121.4)
-    assert result["provider"] == "google" and result["coordinate_system"] == "WGS84"
+    from google_coordinates import to_wgs84, SHANGHAI
+    assert (result["lat"], result["lng"]) == (31.2, 121.4)
+    assert (result["plot_lat"], result["plot_lng"]) == to_wgs84((31.2, 121.4), SHANGHAI)
+    assert result["provider"] == "google" and result["coordinate_system"] == "GCJ02"
+    assert result["plot_coordinate_system"] == "WGS84"
     assert "amap_poi_id" not in result and "pickup_override_revision" not in result
     assert result["node_id"] == 4 and result["passenger_count"] == 3
     other = resolver.resolve({**original, "passenger_count": 8})
     assert other["passenger_count"] == 8 and resolver.api_calls == 1
+    assert (other["plot_lat"], other["plot_lng"]) == (result["plot_lat"], result["plot_lng"])
     data = json.loads(resolver.path.read_text())
     assert len(data) == 1 and next(iter(data.values()))["provider"] == "google"
     assert "formatted_address" not in next(iter(data.values()))
@@ -61,6 +65,24 @@ def test_cache_shared_across_sessions_but_city_separate(resolver):
     assert new.api_calls == 0
     new.resolve(point(city="Beijing"))
     assert new.api_calls == 1 and len(json.loads(resolver.path.read_text())) == 2
+
+
+def test_old_coordinate_cache_is_not_silently_reinterpreted(resolver):
+    resolver.resolve(point())
+    values = json.loads(resolver.path.read_text())
+    entry = next(iter(values.values()))
+    entry['policy'] = 'google-geocode-v2'
+    entry['coordinate_system'] = 'WGS84'
+    resolver.path.write_text(json.dumps(values))
+    resolver.resolve(point())
+    assert resolver.api_calls == 2
+    assert next(iter(json.loads(resolver.path.read_text()).values()))['coordinate_system'] == 'GCJ02'
+
+
+def test_beijing_retains_existing_wgs84_contract(resolver):
+    result=resolver.resolve(point(city='Beijing'))
+    assert result['coordinate_system']=='WGS84'
+    assert result['lat']==result['plot_lat'] and result['lng']==result['plot_lng']
 
 
 def test_google_clear_does_not_clear_amap(resolver, monkeypatch):

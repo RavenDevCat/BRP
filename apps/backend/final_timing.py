@@ -59,6 +59,7 @@ class FinalTimingContext:
             self.state["pickup_resolution_api_calls"] = self.session.pickups.api_calls
             self.state["google_geocode_api_calls"] = self.session.pickups.api_calls
         coords = []
+        self.session.client.configure_coordinates(points)
         for point in points:
             require_china(point.get("country", "China"))
             if point.get("plot_lat") is not None and point.get("plot_lng") is not None:
@@ -102,7 +103,8 @@ class FinalTimingContext:
             "stop_service_time_s": measured.dwell_s, "dwell_by_stop_s": dwell,
             "time_window_passes": measured.arrival <= self.latest,
             "policy_version": google.POLICY_VERSION, "validation_config": deepcopy(self.config),
-            "requested_waypoints": deepcopy(points)}
+            "requested_waypoints": deepcopy(points), "coordinate_system": "WGS84",
+            "coordinate_profile": self.session.client.coordinate_profile}
         self.state["last_route_evidence"] = evidence
         return evidence
 

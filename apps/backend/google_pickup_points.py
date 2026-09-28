@@ -40,9 +40,17 @@ def _address(point):
     return str(point.get("requested_address") or point.get("address") or "")
 
 
+def _query_address(point):
+    import re
+    import unicodedata
+    address = unicodedata.normalize("NFKC", _address(point))
+    # Parenthetical proximity hints describe surroundings, not a second stop.
+    return re.sub(r"\(\s*\u8fd1[^()]+\)", "", address).strip()
+
+
 def _match_address(point):
     from amap_geocode_quality import _gate_tokens
-    address = _address(point)
+    address = _query_address(point)
     # Generic doorstep wording is not a landmark name; specific gates stay intact.
     return address.removesuffix("\u95e8\u53e3") if not _gate_tokens(address) else address
 
@@ -81,7 +89,15 @@ def _lookup(point, check_canceled, counted):
     attempts = 0
     def request(endpoint, params, limiter):
         nonlocal attempts
-        params = {**params, ("keywords" if endpoint == "/v3/place/text" else "address"): _address(point)}
+        params = {**params, ("keywords" if endpoint == "/v3/place/text" else "address"): _query_address(point)}
+        if endpoint == "/v3/place/text":
+            import re
+            from amap_geocode_quality import _gate_tokens
+            address = _match_address(point)
+            if re.search(r"\u516c\u4ea4(?:\u8f66)?\u7ad9|\u7ad9\u53f0", address):
+                params['types'] = '150700'
+            elif _gate_tokens(address):
+                params['types'] = '150501' if '\u5730\u94c1' in address else '991000|991400'
         # The existing resolver makes at most one POI and one geocode query.
         try:
             check_canceled()
@@ -99,6 +115,8 @@ def _lookup(point, check_canceled, counted):
             if endpoint == "/v3/place/text":
                 from amap_geocode_quality import _compact, _gate_tokens
                 address = _match_address(point)
+                # Empty-id text fallbacks are not entrance or bus-platform POIs.
+                response = {**response, 'pois': [p for p in response.get('pois', []) if p.get('id')]}
                 # An exact compound address outranks units inside that compound;
                 # otherwise retain all candidates so ambiguity is not hidden.
                 exact = [p for p in response.get("pois", [])
@@ -106,6 +124,13 @@ def _lookup(point, check_canceled, counted):
                 if exact and not _gate_tokens(address):
                     response = {**response, "pois": exact}
             return response
+        except runtime.AMapProviderError as exc:
+            if exc.infocode == "30001":
+                # A failed data response is not a successful lookup. The other
+                # endpoint may still resolve this address; otherwise it stays unresolved.
+                raise GeocodePrecisionError("AMap address data response failed (30001)") from exc
+            failures.append(type(exc).__name__)
+            raise
         except Exception as exc:
             failures.append(type(exc).__name__)
             raise
@@ -122,7 +147,7 @@ def _lookup(point, check_canceled, counted):
         raise
     if canceled:
         raise canceled[0]
-    if failures and _identity_issues(result):
+    if failures:
         raise ValidationUnavailable("google_pickup_lookup_unavailable")
     return result
 

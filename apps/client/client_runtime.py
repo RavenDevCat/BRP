@@ -747,6 +747,15 @@ def gcj02_to_wgs84(lat: float, lng: float) -> tuple[float, float]:
     return lat * 2 - mg_lat, lng * 2 - mg_lng
 
 
+class AMapProviderError(RuntimeError):
+    """Provider failure with structured, non-secret diagnostic fields."""
+    def __init__(self, endpoint, info, infocode):
+        self.endpoint = str(endpoint)
+        self.info = str(info)
+        self.infocode = str(infocode)
+        super().__init__(f"AMap request failed: {endpoint} -> {info} ({infocode})")
+
+
 def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimiter) -> dict[str, Any]:
     limiter.wait()
     api_key = require_api_key("AMAP_API_KEY", AMAP_KEY, "AMap")
@@ -760,7 +769,7 @@ def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimite
     if str(payload.get("status")) != "1":
         info = payload.get("info", "UNKNOWN_ERROR")
         infocode = payload.get("infocode", "")
-        raise RuntimeError(f"AMap request failed: {endpoint} -> {info} ({infocode})")
+        raise AMapProviderError(endpoint, info, infocode)
     return payload
 
 

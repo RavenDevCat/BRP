@@ -34,7 +34,7 @@ def client(tmp_path, monkeypatch):
     import google_geocoding
     from google_pickup_points import PickupResolver
     monkeypatch.setattr(google_geocoding, "GoogleGeocodeResolver",
-                        lambda *args, **kwargs: PickupResolver(**kwargs))
+                        lambda *args, allow_verified_fallback=False, **kwargs: PickupResolver(**kwargs))
     store = g.SqliteQuotaStore(tmp_path / "quota.sqlite")
     store.reserve_rate_limit = lambda *args: 0
     return g.GoogleRoutesClient("test-task", store, transport=lambda body: response(body_points(body)), now=lambda: NOW)

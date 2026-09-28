@@ -158,9 +158,9 @@ def request_geocode(country, city, address, budget_id, check_canceled, counted):
 
 
 class GoogleGeocodeResolver(PickupResolver):
-    """Share service-point conflict checks, not AMap lookup or AMap overrides."""
+    """Google-first resolution with an optional verified service-point fallback."""
     def __init__(self, budget_id=None, *, check_canceled=lambda: None, lookup=None,
-                 path=None, now=lambda: datetime.now(timezone.utc)):
+                 path=None, now=lambda: datetime.now(timezone.utc), allow_verified_fallback=False):
         self.budget_id = budget_id or uuid.uuid4().hex
         self.check_canceled = check_canceled
         self.lookup = lookup or request_geocode
@@ -170,6 +170,34 @@ class GoogleGeocodeResolver(PickupResolver):
         self.api_calls = 0
         self.cache_hits = 0
         self.negative_cache_hits = 0
+        self.fallback = None
+        if allow_verified_fallback:
+            from google_pickup_fallback import VerifiedPickupFallback
+            self.fallback = VerifiedPickupFallback(self.path.with_name('google_service_point_cache.json'),
+                lambda: self.check_canceled(), now=now)
+
+    @property
+    def fallback_api_calls(self):
+        return self.fallback.api_calls if self.fallback else 0
+
+    def resolve(self, point):
+        from google_final_validation import ValidationUnavailable
+        self.check_canceled()
+        if self.fallback:
+            confirmed = self.fallback.operator_point(point)
+            if confirmed is not None:
+                return confirmed
+        try:
+            result = self._resolve_google(point)
+        except ValidationUnavailable as exc:
+            if self.fallback and str(exc) in {'google_geocode_unresolved', 'google_geocode_ambiguous'}:
+                return self.fallback.resolve(point, exc)
+            raise
+        if self.fallback:
+            result['location_resolution'] = {'source': 'google_geocode', 'coordinate_provider': 'google',
+                'timing_provider': 'google_routes', 'identity_status': 'matched',
+                'route_endpoint_status': 'not_measured', 'policy': POLICY}
+        return result
 
     def _resolve_uncached(self, country, city, address):
         from google_final_validation import ValidationUnavailable, is_local_measurement_error
@@ -201,7 +229,7 @@ class GoogleGeocodeResolver(PickupResolver):
                     queries.extend(query_variants(address, city, payload))
         raise failure
 
-    def resolve(self, point):
+    def _resolve_google(self, point):
         import client_runtime as runtime
         from google_final_validation import ValidationUnavailable
         self.check_canceled()

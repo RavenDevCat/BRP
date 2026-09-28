@@ -21,7 +21,7 @@ except ImportError:
     from route_evidence import EVIDENCE_VERSION
     from google_routes_transport import ENDPOINT, FIELDS, post_routes, relay_url
 
-POLICY_VERSION = "google-final-v4-coordinate-frames"
+POLICY_VERSION = "google-final-v5-verified-pickups"
 from google_routes_quota import DEFAULT_LIMITS, MONTHLY_LIMIT, quota_periods
 TZ = ZoneInfo("Asia/Shanghai")
 
@@ -195,8 +195,18 @@ def parse_response(payload, points, *, coordinate_profile=coordinates.WGS84):
             raise ValidationUnavailable("google_distance_invalid")
         if abs(sum(x["duration_s"] for x in measured)-duration) > max(2, len(legs)):
             raise ValidationUnavailable("google_duration_reconciliation")
-        if abs(sum(x["distance_m"] for x in measured)-distance) > max(2, len(legs)):
-            raise ValidationUnavailable("google_distance_reconciliation")
+        leg_distance = sum(x["distance_m"] for x in measured)
+        distance_delta = abs(leg_distance-distance)
+        # Preserve provider metrics; bound minor aggregate differences by both
+        # route length (0.1%) and an absolute 20m ceiling. Timing stays strict.
+        distance_tolerance = max(2.0, min(20.0, 2.0*len(legs), distance*0.001))
+        if distance_delta > distance_tolerance:
+            raise ValidationUnavailable("google_distance_reconciliation", details={
+                "route_distance_m": distance, "leg_distance_m": leg_distance,
+                "difference_m": distance_delta, "tolerance_m": distance_tolerance})
+        if distance_delta:
+            measured[0]["distance_reconciliation"] = {"route_distance_m": distance,
+                "leg_distance_m": leg_distance, "difference_m": distance_delta, "tolerance_m": distance_tolerance}
         return measured
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise ValidationUnavailable("google_response_invalid") from exc
@@ -311,7 +321,8 @@ class ValidationSession:
     def __init__(self, client, max_rounds=4):
         self.client, self.max_rounds = client, max_rounds
         from google_geocoding import GoogleGeocodeResolver
-        self.pickups = GoogleGeocodeResolver(client.budget_id, check_canceled=lambda: self.client.check_canceled())
+        self.pickups = GoogleGeocodeResolver(client.budget_id, check_canceled=lambda: self.client.check_canceled(),
+                                             allow_verified_fallback=True)
 
     def __deepcopy__(self, memo):
         return self
@@ -519,7 +530,9 @@ def attach_gate(planner, scenario, points, config, input_records, scenario_label
                 "scheduled_arrival_minutes": verification["verified_arrival_minutes"],
                 "required_departure_minutes": minute(latest-timedelta(seconds=result.drive_s+result.dwell_s))}
     gate["api_calls"] = session.client.calls-before
-    gate["pickup_resolution_api_calls"] = session.pickups.api_calls
+    gate["google_geocode_api_calls"] = session.pickups.api_calls
+    gate["amap_pickup_api_calls"] = getattr(session.pickups, "fallback_api_calls", 0)
+    gate["pickup_resolution_api_calls"] = session.pickups.api_calls + gate["amap_pickup_api_calls"]
     gate["cache_hits"] = session.client.cache_hits
     gate["max_time_window_overrun_minutes"] = gate["max_estimated_arrival_delay_minutes"]
     gate["status"] = "failed" if gate["failed_route_count"] else "passed" if updates else "unavailable"

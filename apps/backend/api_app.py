@@ -3289,7 +3289,7 @@ def _build_route_insert_proposals(
     geocode_options = {}
     if google_mode:
         from google_geocoding import GoogleGeocodeResolver
-        geocode_options["geocoder"] = GoogleGeocodeResolver(suggested.get("validation_budget_id"))
+        geocode_options["geocoder"] = GoogleGeocodeResolver(suggested.get("validation_budget_id"), allow_verified_fallback=True)
     new_stops, geocode_warnings = _insert_geocode_stops(
         requested_stops, default_country, default_city, **geocode_options
     )

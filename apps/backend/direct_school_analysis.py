@@ -636,7 +636,9 @@ def run_direct_school_analysis(
 
     def save_checkpoint() -> None:
         if google_mode:
-            progress["pickup_resolution_api_calls"] = provider.session.pickups.api_calls
+            progress["google_geocode_api_calls"] = provider.session.pickups.api_calls
+            progress["amap_pickup_api_calls"] = getattr(provider.session.pickups, "fallback_api_calls", 0)
+            progress["pickup_resolution_api_calls"] = progress["google_geocode_api_calls"] + progress["amap_pickup_api_calls"]
         if not checkpoint:
             return
         public_rows = [{key: value for key, value in row.items() if key != "_point"} for row in rows]

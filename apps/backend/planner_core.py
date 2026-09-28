@@ -4930,7 +4930,7 @@ def prepare_client_payload(
         if config.final_time_validation_mode == "google":
             import client_runtime
             from google_geocoding import GoogleGeocodeResolver
-            geocoder = GoogleGeocodeResolver(config.validation_budget_id)
+            geocoder = GoogleGeocodeResolver(config.validation_budget_id, allow_verified_fallback=True)
             points, geocode_warnings = client_runtime.geocode_records(normalized_records, resolver=geocoder.resolve_address)
         else:
             points, geocode_warnings = planner.geocode_records(normalized_records)

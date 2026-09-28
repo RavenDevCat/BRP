@@ -699,7 +699,7 @@ def prepare_client_payload(
     geocoder = None
     if config.final_time_validation_mode == "google":
         from google_geocoding import GoogleGeocodeResolver
-        geocoder = GoogleGeocodeResolver(config.validation_budget_id)
+        geocoder = GoogleGeocodeResolver(config.validation_budget_id, allow_verified_fallback=True)
         original_points, geocode_warnings = runtime.geocode_records(normalized_records, resolver=geocoder.resolve_address)
     else:
         original_points, geocode_warnings = runtime.geocode_records(normalized_records)

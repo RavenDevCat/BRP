@@ -1,6 +1,16 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Return scenarios": "返程情景",
+    "Source version": "来源版本",
+    "Morning scenario status": "上午情景状态",
+    "Return timing does not approve the morning plan.": "返程测算不代表上午方案通过约束。",
+    "Waiting for scenario measurement": "等待该情景测算",
+    "Waiting for morning optimization results": "等待上午优化结果",
+    "Return measured after morning completion; actual measurement time applies.": "上午完成后延迟测算返程，以实际测量时间的路况为准。",
+    "Delete both morning and afternoon results? This cannot be undone.": "同时删除关联的上午和下午结果？此操作无法撤销。",
+    "Delete paired results": "删除整组结果",
+    "Delete selected history items and their paired morning/afternoon results? This cannot be undone.": "删除所选历史及其关联的上午、下午结果？此操作无法撤销。",
     "Incomplete measurement; counts cover measured routes only.": "尚有路线未完成测算；时长分类和超时人数仅统计已测路线。",
     "Students over trip limit": "乘车超时人数",
     "Morning to school": "上午去校",

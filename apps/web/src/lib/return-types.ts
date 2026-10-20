@@ -6,6 +6,11 @@ export type ReturnRoute = { route_id: string; status: string; riders: number; st
   distance_m?: number; measured_at?: string; error?: string; provider_route_source?: string; over_limit_riders?: number;
   geometry?: number[][]; geometry_segments?: number[][][]; stops: ReturnStop[] };
 export type ReturnResult = { analysis_kind: "pm_return"; status: string; started_at: string;
+  source_status?: string; scenario_key?: string; error?: string;
   parameters?: { far_duration_minutes?: number };
   routes: ReturnRoute[]; summary: { route_count: number; completed_route_count: number; under_one_hour_count: number; rider_count: number };
+  progress: { completed: number; total: number; provider_api_calls: number } };
+export type ReturnScenarioGroup = { analysis_kind: "pm_return"; analysis_version: 2;
+  status: string; started_at: string; source_job_id: string; source_version: string;
+  delayed: boolean; scheduled_start_at: string; scenarios: Partial<Record<string, ReturnResult>>;
   progress: { completed: number; total: number; provider_api_calls: number } };

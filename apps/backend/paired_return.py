@@ -88,12 +88,14 @@ def create_pair(service, payload, prepared, metadata, owner, morning_at, *, morn
             if morning_config is not None:
                 config.update(service_direction="From School", final_time_validation_mode="legacy")
                 meta["planner_config"] = config
+                meta["return_dependency_status"] = "waiting_for_morning"
             meta["measurement_kind"] = "pm_return"
             meta["analysis_config"].update(service_direction="From School", final_time_validation_mode="legacy",
                                            from_school_departure_time=pm.strftime("%H:%M"))
             meta["analysis_signature"] = service._direct_school_signature(snapshot["current_plan"], meta["analysis_config"])
             meta["scheduled_trigger_label"] = pm.strftime("%H:%M") + " return measurement"
-        record = service.JOB_STORE.create_job(config, snapshot, metadata=meta, owner_email=owner,
+        stored_snapshot = {} if period == "pm" and morning_config is not None else snapshot
+        record = service.JOB_STORE.create_job(config, stored_snapshot, metadata=meta, owner_email=owner,
             status="scheduled", scheduled_start_at=scheduled_at,
             scheduled_trigger_label=meta.get("scheduled_trigger_label") or label, persist=False)
         record["job_id"] = ids[period]
@@ -158,7 +160,7 @@ def route_timings(ordered, evidence, dwell_s, departure):
             "total_duration_s": elapsed, "under_one_hour": elapsed < LIMIT_S, "stops": stops}
 
 
-def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=None, provider_factory=None, now=None):
+def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=None, provider_factory=None, now=None, provider=None):
     import direct_school_analysis as analysis
     if config.get("final_time_validation_mode", "legacy") != "legacy":
         raise ValueError("Return measurements use the existing map provider only.")
@@ -171,8 +173,10 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
     if provider_name != "amap":
         raise ValueError("Return measurements require the China map provider.")
     clock = now or (lambda: datetime.now(timezone.utc))
-    provider = (provider_factory or analysis.FreshRouteProvider)(provider_name,
+    provider = provider or (provider_factory or analysis.FreshRouteProvider)(provider_name,
         departure_time=None, api_call_limit=int(config.get("provider_call_limit", 500)))
+    initial_calls = provider.state.get("api_calls", 0)
+    initial_hits = provider.state.get("cache_hits", 0)
     groups = defaultdict(list)
     for stop in plan["stops"]:
         groups[str(stop["route_id"])].append(stop)
@@ -190,7 +194,7 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
                  "stops": deepcopy(ordered)}
         result["routes"].append(route)
         try:
-            points = [analysis._lookup_point(stop, lookup) for stop in ordered]
+            points = [stop.get("source_point") or analysis._lookup_point(stop, lookup) for stop in ordered]
             if any(point is None for point in points):
                 raise ValueError("One or more return stops could not be geocoded.")
             for stop, point in zip(route["stops"], points):
@@ -214,8 +218,8 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
             "under_one_hour_count": sum(r["under_one_hour"] for r in result["routes"]),
             "rider_count": sum(int(s.get("passenger_count") or 0) for s in plan["stops"])}
         result["progress"] = {"completed": len(result["routes"]), "total": len(groups),
-                              "provider_api_calls": provider.state.get("api_calls", 0),
-                              "in_run_reuse_count": provider.state.get("cache_hits", 0)}
+                              "provider_api_calls": provider.state.get("api_calls", 0) - initial_calls,
+                              "in_run_reuse_count": provider.state.get("cache_hits", 0) - initial_hits}
         if checkpoint:
             checkpoint(deepcopy(result))
     result["status"] = "complete" if all(r["status"] == "resolved" for r in result["routes"]) else "partial"
@@ -228,6 +232,37 @@ def build_return_workbook(record):
     from openpyxl.styles import PatternFill
     result = record.get("result") or {}
     workbook = Workbook()
+    if result.get("scenarios") is not None:
+        from openpyxl import load_workbook
+        overview = workbook.active
+        overview.title = "Scenarios"
+        overview.append(["Source morning job", result.get("source_job_id")])
+        overview.append(["Source version", result.get("source_version")])
+        overview.append(["Scheduled", record.get("scheduled_start_at"), "Measured", result.get("started_at")])
+        overview.append(["Scenario", "Morning status", "Return status", "Routes", "Under 1 hour", "Error"])
+        labels = {"current_plan": "Current", "time_constrained": "Strict", "exception_preserving": "Protected"}
+        for key, scenario in result["scenarios"].items():
+            label = labels[key]
+            overview.append([label, scenario.get("source_status"), scenario.get("status"),
+                             scenario.get("summary", {}).get("route_count"),
+                             scenario.get("summary", {}).get("under_one_hour_count"), scenario.get("error")])
+            child = load_workbook(BytesIO(build_return_workbook({**record, "result": scenario})))
+            for original in child:
+                sheet = workbook.create_sheet(f"{label} {original.title}")
+                for row in original:
+                    for cell in row:
+                        target = sheet.cell(cell.row, cell.column, cell.value)
+                        from copy import copy
+                        target._style = copy(cell._style)
+                sheet.freeze_panes = original.freeze_panes
+                for column, dimension in original.column_dimensions.items():
+                    sheet.column_dimensions[column].width = dimension.width
+        overview.freeze_panes = "A5"
+        for column in overview.columns:
+            overview.column_dimensions[column[0].column_letter].width = 28
+        stream = BytesIO()
+        workbook.save(stream)
+        return stream.getvalue()
     overview = workbook.active
     overview.title = "Return routes"
     overview.append(["Direction / 方向", "From School / 下午返程"])

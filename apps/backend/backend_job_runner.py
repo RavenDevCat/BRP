@@ -149,6 +149,14 @@ def main() -> int:
     try:
         metadata = dict(job_record.get("metadata") or {})
         job_kind = str(metadata.get("job_kind") or "route_audit").strip().lower()
+        from audit_return import bind_morning_scenarios, is_audit_return, run_audit_return
+        if is_audit_return(job_record):
+            if not bind_morning_scenarios(job_record, _runtime_store().get_job):
+                job_record.update(status="scheduled", started_at=None, worker_pid=None, job_slot_path=None)
+                _save_job(job_record)
+                return 0
+            _save_job(job_record)
+            metadata = dict(job_record["metadata"])
         prepared_payload = dict(job_record.get("prepared_payload") or {})
         from paired_return import ensure_return_due, run_return_measurement
         ensure_return_due(metadata)
@@ -166,8 +174,11 @@ def main() -> int:
                 def check_canceled():
                     if _load_job(job_id).get("status") == "canceled":
                         raise RuntimeError("Return measurement was canceled.")
-                result = run_return_measurement(prepared_payload, dict(metadata.get("analysis_config") or {}),
-                    checkpoint=save_checkpoint, check_canceled=check_canceled)
+                if is_audit_return(job_record):
+                    result = run_audit_return(job_record, checkpoint=save_checkpoint, check_canceled=check_canceled)
+                else:
+                    result = run_return_measurement(prepared_payload, dict(metadata.get("analysis_config") or {}),
+                        checkpoint=save_checkpoint, check_canceled=check_canceled)
             else:
                 result = run_direct_school_analysis(
                     prepared_payload,

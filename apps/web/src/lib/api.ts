@@ -1472,7 +1472,7 @@ export function releaseJob(jobId: string) {
 }
 
 export function deleteJob(jobId: string) {
-    return apiFetch<{ deleted: boolean; job_id: string }>(
+    return apiFetch<{ deleted: boolean; job_id: string; deleted_job_ids?: string[] }>(
         `/jobs/${encodeURIComponent(jobId)}`,
         {
             method: "DELETE",

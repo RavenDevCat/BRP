@@ -3846,6 +3846,16 @@ class JobStore:
             records.sort(key=lambda item: str(item.get("created_at") or ""))
             return records
 
+    def _bind_return_dependency_unlocked(self, record, now=None):
+        from audit_return import bind_morning_scenarios
+        try:
+            ready = bind_morning_scenarios(record, self._load_job_unlocked, now=now)
+        except ValueError as exc:
+            record.update(status="failed", error=str(exc), finished_at=utc_now_iso())
+            ready = False
+        self._save_job_unlocked(record["job_id"], record)
+        return ready
+
     def release_due_scheduled_jobs(self) -> list[dict[str, Any]]:
         now = datetime.now(timezone.utc)
         released: list[dict[str, Any]] = []
@@ -3867,6 +3877,8 @@ class JobStore:
                     or dict(record.get("metadata") or {}).get("scheduled_start_at")
                 )
                 if scheduled_at is None or scheduled_at > now:
+                    continue
+                if not self._bind_return_dependency_unlocked(record, now):
                     continue
                 metadata = dict(record.get("metadata") or {})
                 metadata["scheduled_released_at"] = utc_now_iso()
@@ -3890,6 +3902,8 @@ class JobStore:
                 return deepcopy(record)
             if str(record.get("status", "")).strip().lower() != "scheduled":
                 return deepcopy(record)
+            if not self._bind_return_dependency_unlocked(record):
+                return deepcopy(record)
             metadata = dict(record.get("metadata") or {})
             metadata["scheduled_released_at"] = utc_now_iso()
             metadata["scheduled_release_mode"] = str(release_mode or "manual").strip() or "manual"
@@ -3903,6 +3917,14 @@ class JobStore:
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
             return _delete_runtime_job(job_id)
+
+    def delete_jobs(self, job_ids: list[str]) -> list[str]:
+        with self.lock:
+            return _runtime_sqlite_store().delete_jobs(job_ids)
+
+    def prepare_jobs_for_deletion(self, job_ids: list[str]):
+        with self.lock:
+            return _runtime_sqlite_store().prepare_jobs_for_deletion(job_ids)
 
     def reconcile_running_jobs(self) -> None:
         with self.lock:

@@ -42,6 +42,7 @@ export function HistorySidebar<T>({
   onSelectionAction,
   groupScope,
   canDelete = () => true,
+  deleteConfirmation,
   renderItem,
   className = "",
 }: {
@@ -67,6 +68,7 @@ export function HistorySidebar<T>({
   onSelectionAction?: (ids: string[]) => void;
   groupScope?: HistoryGroupScope;
   canDelete?: (item: T) => boolean;
+  deleteConfirmation?: (items: T[]) => string;
   renderItem: (item: T, active: boolean) => ReactNode;
   className?: string;
 }) {
@@ -332,7 +334,7 @@ export function HistorySidebar<T>({
               aria-label={t("Delete history item")}
               disabled={deletingId === id}
               onClick={() => {
-                if (window.confirm(t("Delete this history item? This cannot be undone."))) onDelete(id);
+                if (window.confirm(deleteConfirmation?.([item]) || t("Delete this history item? This cannot be undone."))) onDelete(id);
               }}
             >
               {deletingId === id ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" /> : <Trash2 className="h-4 w-4" aria-hidden="true" />}
@@ -477,7 +479,7 @@ export function HistorySidebar<T>({
                     title={`${t("Delete selected")}${selectedDeletableIds.length ? ` (${selectedDeletableIds.length})` : ""}`}
                     disabled={!selectedDeletableIds.length || bulkDeleting}
                     onClick={() => {
-                      if (selectedDeletableIds.length && window.confirm(t("Delete selected history items? This cannot be undone."))) {
+                      if (selectedDeletableIds.length && window.confirm(deleteConfirmation?.(items.filter(item => selectedDeletableIds.includes(itemId(item)))) || t("Delete selected history items? This cannot be undone."))) {
                         onBulkDelete(selectedDeletableIds);
                         setSelectedIds(new Set());
                         setSelecting(false);

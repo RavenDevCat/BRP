@@ -1184,7 +1184,8 @@ def get_job_export(
     normalized_export_key = str(export_key or "").strip().lower()
     if normalized_export_key == "return-routes":
         if (dict(job_record.get("metadata") or {}).get("measurement_kind") != "pm_return"
-                or not dict(job_record.get("result") or {}).get("routes")):
+                or not (dict(job_record.get("result") or {}).get("routes")
+                        or dict(job_record.get("result") or {}).get("scenarios"))):
             raise BackendHttpError(404, {"error": "Return measurements are not available yet."})
         from paired_return import build_return_workbook
         workbook_bytes, export_error = build_return_workbook(job_record), None
@@ -1627,11 +1628,25 @@ def delete_job(
     _authorized: None = Depends(require_authorized_request),
 ) -> JSONResponse:
     job_record = _job_for_context(job_id, context)
+    return _delete_job_group(job_record, context)
+
+
+def _delete_job_group(job_record, context):
     _require_record_mutation_access(job_record, context)
-    normalized_job_id = str(job_id or "").strip()
-    backend_service._cancel_job(normalized_job_id)
-    backend_service.JOB_STORE.delete_job(normalized_job_id)
-    return _json_response(200, {"deleted": True, "job_id": normalized_job_id})
+    normalized_job_id = job_record["job_id"]
+    if not (job_record.get("metadata") or {}).get("pair_id"):
+        backend_service._cancel_job(normalized_job_id)
+        backend_service.JOB_STORE.delete_job(normalized_job_id)
+        return _json_response(200, {"deleted": True, "job_id": normalized_job_id})
+    from audit_return import related_pair_records
+    try:
+        records = related_pair_records(job_record, backend_service.JOB_STORE.get_job)
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
+    for record in records:
+        _require_record_mutation_access(record, context)
+    deleted = backend_service.JOB_QUEUE.delete_jobs(records)
+    return _json_response(200, {"deleted": True, "job_id": normalized_job_id, "deleted_job_ids": deleted})
 
 
 @_api_route("GET", "/map-tiles/{z}/{x}/{tile_name}")
@@ -1832,11 +1847,7 @@ def delete_direct_school_job(
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
     record = _direct_school_job_for_context(job_id, context)
-    _require_record_mutation_access(record, context)
-    normalized_id = str(job_id or "").strip()
-    backend_service._cancel_job(normalized_id)
-    backend_service.JOB_STORE.delete_job(normalized_id)
-    return _json_response(200, {"deleted": True, "job_id": normalized_id})
+    return _delete_job_group(record, context)
 
 
 @_api_route(

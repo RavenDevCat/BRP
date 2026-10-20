@@ -541,6 +541,23 @@ class JobQueueManager:
             target=self.scheduler_loop, name="brp-job-scheduler", daemon=True
         ).start()
 
+    def delete_jobs(self, records):
+        # Hold the spawn/reaper lock until all linked records have been deleted.
+        with self._worker_state_lock:
+            records, verifications = self.job_store.prepare_jobs_for_deletion([record["job_id"] for record in records])
+            for record in verifications:
+                terminate_worker_process(safe_int(record.get("worker_pid")))
+                self.gate.release(record.get("job_slot_path"), job_id=f"deep:{record['verification_id']}")
+            for record in records:
+                current = self.job_store.get_job(record["job_id"])
+                if current:
+                    terminate_worker_process(safe_int(current.get("worker_pid")))
+                    self.gate.release(current.get("job_slot_path"), job_id=current["job_id"])
+            deleted = self.job_store.delete_jobs([record["job_id"] for record in records])
+            self.gate.cleanup_stale_slots()
+        self.schedule_queued_jobs()
+        return deleted
+
     def cancel_job(self, job_id: str) -> dict[str, Any] | None:
         with self._worker_state_lock:
             job_record = self.job_store.get_job(job_id)

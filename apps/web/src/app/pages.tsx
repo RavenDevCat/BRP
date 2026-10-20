@@ -165,19 +165,12 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
 
     const historyDeleteMutation = useMutation({
         mutationFn: (jobId: string) => deleteJob(jobId),
-        onSuccess: async (_data, deletedJobId) => {
-            const deletedJobIndex = jobs.findIndex(
-                (job) => job.job_id === deletedJobId,
-            );
-            const replacementJobId =
-                deletedJobIndex >= 0
-                    ? (jobs[deletedJobIndex + 1]?.job_id ??
-                        jobs[deletedJobIndex - 1]?.job_id ??
-                        "")
-                    : "";
+        onSuccess: async (data, deletedJobId) => {
+            const deletedIds = new Set(data.deleted_job_ids || [deletedJobId]);
+            const replacementJobId = historyJobs.find(job => !deletedIds.has(job.job_id))?.job_id || "";
             const shouldReplaceSelection =
-                deletedJobId === selectedJobId || deletedJobId === resolvedJobId;
-            queryClient.removeQueries({ queryKey: ["jobs", deletedJobId] });
+                deletedIds.has(selectedJobId || "") || deletedIds.has(resolvedJobId);
+            for (const id of deletedIds) queryClient.removeQueries({ queryKey: ["jobs", id] });
             await queryClient.invalidateQueries({ queryKey: ["jobs"] });
             if (shouldReplaceSelection) {
                 if (replacementJobId) {
@@ -193,10 +186,13 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     });
     const bulkHistoryDeleteMutation = useMutation({
         mutationFn: async (jobIds: string[]) => {
+            const deleted = new Set<string>();
             for (const jobId of jobIds) {
-                await deleteJob(jobId);
+                if (deleted.has(jobId)) continue;
+                const response = await deleteJob(jobId);
+                for (const id of response.deleted_job_ids || [jobId]) deleted.add(id);
             }
-            return jobIds;
+            return [...deleted];
         },
         onSuccess: async (deletedJobIds) => {
             const deletedSet = new Set(deletedJobIds);
@@ -273,6 +269,9 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
             >
                 <HistorySidebar
                     items={historyJobs}
+                    deleteConfirmation={items => items.some(job => job.metadata?.pair_id)
+                        ? t("Delete selected history items and their paired morning/afternoon results? This cannot be undone.")
+                        : t("Delete selected history items? This cannot be undone.")}
                     itemId={(job) => job.job_id}
                     itemName={getJobName}
                     activeId={historyActiveId}
@@ -446,7 +445,8 @@ function JobDetailPanel({ jobId, jobs }: { jobId: string; jobs: Awaited<ReturnTy
     });
     const deleteMutation = useMutation({
         mutationFn: () => deleteJob(jobId),
-        onSuccess: async () => {
+        onSuccess: async (data) => {
+            for (const id of data.deleted_job_ids || [jobId]) queryClient.removeQueries({ queryKey: ["jobs", id] });
             await queryClient.invalidateQueries({ queryKey: ["jobs"] });
             await navigate({ to: "/jobs" });
         },
@@ -628,7 +628,9 @@ function JobDetailPanel({ jobId, jobs }: { jobId: string; jobs: Awaited<ReturnTy
                                     if (
                                         window.confirm(
                                             t(
-                                                "Delete this job from local history? This cannot be undone.",
+                                                job.metadata?.pair_id
+                                                    ? "Delete both morning and afternoon results? This cannot be undone."
+                                                    : "Delete this job from local history? This cannot be undone.",
                                             ),
                                         )
                                     ) {
@@ -636,7 +638,7 @@ function JobDetailPanel({ jobId, jobs }: { jobId: string; jobs: Awaited<ReturnTy
                                     }
                                 }}
                             >
-                                {t("Delete job")}
+                                {t(job.metadata?.pair_id ? "Delete paired results" : "Delete job")}
                             </Button>
                             {!jobIsActive ? (
                                 <div className="text-xs leading-5 text-muted-foreground">

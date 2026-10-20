@@ -868,12 +868,40 @@ class SqliteRuntimeStore:
         return results
 
     def delete_job(self, job_id: str) -> bool:
+        return bool(self.delete_jobs([job_id]))
+
+    def prepare_jobs_for_deletion(self, job_ids: list[str]):
+        """Prevent either service's scheduler claiming members during group deletion."""
+        self.initialize()
+        records, verifications = [], []
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            for job_id in dict.fromkeys(job_ids):
+                row = conn.execute("SELECT record_json FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
+                if not row:
+                    continue
+                record = json_loads(row["record_json"], {})
+                records.append(record)
+                if record.get("status") in {"scheduled", "queued", "running"}:
+                    self.upsert_job(dict(record, status="canceled"), _connection=conn)
+                rows = conn.execute("SELECT record_json FROM deep_verifications WHERE parent_job_id = ?", (job_id,)).fetchall()
+                verifications.extend(json_loads(row["record_json"], {}) for row in rows)
+                conn.execute("""UPDATE deep_verifications SET status='canceled',
+                    record_json=json_set(record_json, '$.status', 'canceled'), updated_at=?
+                    WHERE parent_job_id=? AND status IN ('queued', 'running', 'paused')""", (utc_now_iso(), job_id))
+        return records, verifications
+
+    def delete_jobs(self, job_ids: list[str]) -> list[str]:
         self.initialize()
         with self.connect() as conn:
-            cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
-            if cursor.rowcount:
-                self._delete_history_group_items(conn, ("route_audit",), job_id)
-            return cursor.rowcount > 0
+            conn.execute("BEGIN IMMEDIATE")
+            deleted = []
+            for job_id in dict.fromkeys(job_ids):
+                cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+                if cursor.rowcount:
+                    self._delete_history_group_items(conn, ("route_audit",), job_id)
+                    deleted.append(job_id)
+            return deleted
 
     def copy_route_audit_workspace(self, source_job_id: str, target_job_id: str) -> bool:
         """Place a derived result in the same workspace as its parent job."""

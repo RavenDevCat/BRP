@@ -62,8 +62,8 @@ def test_new_audit_pair_history_permissions_export_and_idempotence(audit_api):
     assert pm["metadata"]["job_kind"] == "route_audit"
     assert pm["metadata"]["analysis_config"]["stop_service_minutes"] == 2
     assert pm["metadata"]["analysis_config"]["final_time_validation_mode"] == "legacy"
-    assert pm["prepared_payload"]["current_plan"]["stops"][0]["is_depot"]
-    assert [s["source_stop_sequence"] for s in pm["prepared_payload"]["current_plan"]["stops"]] == [2, 1, 0]
+    assert pm["prepared_payload"] == {}
+    assert pm["metadata"]["return_dependency_status"] == "waiting_for_morning"
     again = client.post("/api/workbooks/submit", json=payload)
     assert again.status_code == 202
     assert again.json()["paired_jobs"] == pair
@@ -155,6 +155,8 @@ def test_worker_dispatch_and_timing_gate(monkeypatch, period):
     monkeypatch.setattr(runner, "_save_job", lambda record: state.update(deepcopy(record)))
     monkeypatch.setattr(runner, "_release_concurrency_slot", lambda: None)
     monkeypatch.setattr(runner, "_create_automatic_deep_verifications", lambda _: calls.append("deep"))
+    import audit_return
+    monkeypatch.setattr(audit_return, "is_audit_return", lambda _: False)
     monkeypatch.setattr(runner, "_scheduled_final_traffic_validation_error", lambda _: None)
     def audit(*args, **kwargs):
         assert kwargs["require_fresh_final_traffic"] is True

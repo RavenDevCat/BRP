@@ -8,11 +8,43 @@ import { formatDateTime } from "@/lib/format";
 import { useT } from "@/lib/i18n/context";
 import { cn } from "@/lib/cn";
 
-import type { ReturnResult } from "@/lib/return-types";
+import type { ReturnResult, ReturnScenarioGroup } from "@/lib/return-types";
 
 export const returnDuration = (seconds: number | undefined) => seconds == null ? "-" : `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 
-export function PmReturnView({ result, exportUrl }: { result: ReturnResult; exportUrl: string }) {
+const returnScenarios = [
+  ["current_plan", "Current Plan"], ["time_constrained", "Strict Plan"], ["exception_preserving", "Protected Plan"],
+] as const;
+
+export function PmReturnView({ result, exportUrl }: { result: ReturnResult | ReturnScenarioGroup; exportUrl: string }) {
+  const t = useT();
+  const [scenario, setScenario] = useState("current_plan");
+  if (!("scenarios" in result)) return <ReturnScenarioView result={result} exportUrl={exportUrl} />;
+  const selected = result.scenarios[scenario];
+  const label = returnScenarios.find(([key]) => key === scenario)![1];
+  return <section className="min-w-0 space-y-4" aria-label={t("Afternoon return")}>
+    <div role="tablist" aria-label={t("Return scenarios")} className="flex flex-wrap gap-1 border-b border-border">
+      {returnScenarios.map(([key, title]) => <button key={key} type="button" role="tab"
+        aria-selected={scenario === key} onClick={() => setScenario(key)}
+        className={cn("min-h-10 border-b-2 px-3 text-sm", scenario === key ? "border-primary font-semibold text-primary" : "border-transparent text-muted-foreground")}>
+        {t(title)}
+      </button>)}
+    </div>
+    <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
+      <a href={`/jobs/${result.source_job_id}`} className="text-primary underline">{t("Morning to school")}</a>
+      <span>{t("Source version")}: {result.source_version.slice(0, 12)}</span>
+      <span>{t("Provider calls")}: {result.progress.provider_api_calls}</span>
+    </div>
+    {result.delayed ? <p role="status" className="border-l-4 border-amber-500 px-3 py-2 text-sm text-amber-900">{t("Return measured after morning completion; actual measurement time applies.")}</p> : null}
+    {selected?.source_status && selected.source_status !== "passed" ? <p role="status" className="border-l-4 border-amber-500 px-3 py-2 text-sm text-amber-900">
+      {t("Morning scenario status")}: {t(selected.source_status)}. {t("Return timing does not approve the morning plan.")}
+    </p> : null}
+    {selected ? <ReturnScenarioView key={scenario} result={selected} exportUrl={exportUrl} scenarioLabel={t(label)} />
+      : <p role="status" className="py-6 text-sm text-muted-foreground">{t("Waiting for scenario measurement")}</p>}
+  </section>;
+}
+
+function ReturnScenarioView({ result, exportUrl, scenarioLabel }: { result: ReturnResult; exportUrl: string; scenarioLabel?: string }) {
   const t = useT();
   const [onlyShort, setOnlyShort] = useState(false);
   const [selected, setSelected] = useState("");
@@ -47,7 +79,7 @@ export function PmReturnView({ result, exportUrl }: { result: ReturnResult; expo
     if (!context) return;
     context.fillStyle = "#ffffff"; context.fillRect(0, 0, canvas.width, canvas.height);
     context.fillStyle = "#111827"; context.font = "18px sans-serif";
-    context.fillText(`${t("Afternoon return")} · ${t("Under 1 hour")}: ${result.summary.under_one_hour_count}`, 16, 26);
+    context.fillText(`${t("Afternoon return")}${scenarioLabel ? ` - ${scenarioLabel}` : ""} · ${t("Under 1 hour")}: ${result.summary.under_one_hour_count}`, 16, 26);
     context.font = "13px sans-serif";
     context.fillText(`${t("Measured at")}: ${formatDateTime(result.started_at)} · ${t("Current traffic snapshot")}`, 16, 48);
     context.fillStyle = "#059669";
@@ -58,16 +90,17 @@ export function PmReturnView({ result, exportUrl }: { result: ReturnResult; expo
     canvas.toBlob(blob => {
     if (!blob) return;
     const url = URL.createObjectURL(blob);
-    const link = document.createElement("a"); link.href = url; link.download = "afternoon-return-map.png"; link.click();
+    const link = document.createElement("a"); link.href = url; link.download = `afternoon-return-${result.scenario_key || "map"}.png`; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
   };
   return <section className="min-w-0 space-y-4" aria-label={t("Afternoon return")}>
     <header className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-      <div><h2 className="text-base font-semibold">{t("Afternoon return")}</h2>
+      <div><h2 className="text-base font-semibold">{t("Afternoon return")}{scenarioLabel ? ` - ${scenarioLabel}` : ""}</h2>
         <p className="mt-1 text-xs text-muted-foreground">{t("Measured at")}: {formatDateTime(result.started_at)} · {t("Current traffic snapshot")}</p></div>
       <a className={buttonClassName("secondary")} href={exportUrl}><Download className="h-4 w-4" />{t("Export statistics")}</a>
     </header>
+    {result.error ? <p role="alert" className="border-l-4 border-amber-500 px-3 py-2 text-sm text-amber-900">{t(result.error)}</p> : null}
     {result.summary.completed_route_count < result.summary.route_count ? <p role="status" className="border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900">{t("Incomplete measurement; counts cover measured routes only.")}</p> : null}
     <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
       <span>{t("Routes measured")}: <strong>{result.summary.completed_route_count} / {result.summary.route_count}</strong></span>

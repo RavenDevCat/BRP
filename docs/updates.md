@@ -7,6 +7,21 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-10-20
 
+### Audit Return Scenarios And Paired History
+
+- Scheduled Route Audit returns now depend on the completed morning audit.
+  Current, Strict and Protected each receive their own reversed stop sequence,
+  fresh traffic measurement, map, under-one-hour filter and spreadsheet sheets.
+  A rejected morning scenario remains labeled rejected; measuring its return
+  does not make it an approved operating plan. Missing solutions are not replaced.
+- The scheduler waits for the morning result without occupying a worker slot.
+  If the morning completes after the return time, a bounded late measurement
+  is labeled with its actual time. Parent failures prevent return execution.
+- Return results retain a frozen source job and scenario version. Previously
+  saved single-scenario return results remain readable and are not rewritten.
+- Deleting either member of a paired history entry removes the whole pair and
+  stops associated workers. Ordinary unpaired history deletion is unchanged.
+
 ### Workbook Route Measurement Recovery
 
 - Resolved AMap coordinates can be measured even when the pickup entrance still
@@ -41,7 +56,8 @@ runtime architecture, or recommended rerun guidance changed.
 - The default return measurement time is 15:40
   Asia/Shanghai. Existing schedules and historical results are not modified.
 - Afternoon measurement preserves the uploaded routes, vehicles and riders,
-  reverses the stop order, and requests fresh AMap driving routes. It does not
+  for Direct-to-School; Route Audit uses the three completed morning scenarios.
+  It reverses stop order and requests fresh AMap driving routes. It does not
   reverse morning geometry, optimize stops, remove riders or use Google.
 - Return routes strictly below 3,600 seconds, including stop dwell, are green
   in the map, filter, route list and spreadsheet. Partial measurements never

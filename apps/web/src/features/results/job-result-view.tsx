@@ -32,7 +32,7 @@ import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
 import { PmReturnView } from "@/features/distance/pm-return-view";
-import type { ReturnResult } from "@/lib/return-types";
+import type { ReturnResult, ReturnScenarioGroup } from "@/lib/return-types";
 import {
   controlDeepVerification,
   extendDeepVerificationBudget,
@@ -87,12 +87,14 @@ export function JobResultView({ job }: { job: JobRecord }) {
 
 function AuditReturnResult({ job }: { job: JobRecord }) {
   const t = useT();
-  const result = job.result as ReturnResult | null;
+  const result = job.result as ReturnResult | ReturnScenarioGroup | null;
   return <div className="min-w-0 space-y-4">
     {job.error ? <div role="alert" className="rounded-md border border-danger/30 p-4 text-sm text-danger">{t(job.error)}</div> : null}
-    {result?.analysis_kind === "pm_return" && result.routes.length ? (
+    {result?.analysis_kind === "pm_return" && ("scenarios" in result || result.routes.length) ? (
       <PmReturnView result={result} exportUrl={getJobExportUrl(job.job_id, "return-routes")} />
-    ) : <EmptyState title={t("Afternoon return")} detail={t(job.status)} />}
+    ) : <EmptyState title={t("Afternoon return")} detail={t(
+      job.metadata?.return_dependency_status === "waiting_for_morning" && job.status === "scheduled"
+        ? "Waiting for morning optimization results" : job.status)} />}
   </div>;
 }
 

@@ -13,6 +13,25 @@ LIMIT_S = 3600
 MAX_DELAY_S = 15 * 60
 
 
+def return_limit_minutes(value=60):
+    if isinstance(value, bool):
+        raise ValueError("Return duration limit must be between 1 and 240 minutes.")
+    try:
+        minutes = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Return duration limit must be between 1 and 240 minutes.") from exc
+    if not math.isfinite(minutes) or not 1 <= minutes <= 240:
+        raise ValueError("Return duration limit must be between 1 and 240 minutes.")
+    return minutes
+
+
+def under_return_limit(route, threshold_s):
+    duration = route.get("total_duration_s")
+    return (route.get("status") == "resolved" and isinstance(duration, (int, float))
+            and not isinstance(duration, bool) and math.isfinite(duration)
+            and 0 <= duration < threshold_s)
+
+
 def fingerprint(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False,
                                      allow_nan=False).encode()).hexdigest()
@@ -49,6 +68,9 @@ def reverse_payload(prepared):
 
 
 def create_pair(service, payload, prepared, metadata, owner, morning_at, *, morning_config=None):
+    metadata = deepcopy(metadata)
+    metadata["analysis_config"]["return_duration_limit_minutes"] = return_limit_minutes(
+        payload.get("return_duration_limit_minutes", 60))
     submission_id = str(payload.get("submission_id") or fingerprint([
         prepared["current_plan"], metadata["analysis_config"], morning_at,
         payload.get("return_scheduled_time", "15:40"), metadata.get("job_name")])).strip()
@@ -137,7 +159,7 @@ def _number(value):
     return float(value)
 
 
-def route_timings(ordered, evidence, dwell_s, departure):
+def route_timings(ordered, evidence, dwell_s, departure, threshold_s=LIMIT_S):
     legs = [_number(value) for value in evidence.get("leg_durations_s", [])]
     if evidence.get("complete") is not True or len(legs) != len(ordered) - 1:
         raise ValueError("Incomplete native route measurement.")
@@ -157,11 +179,13 @@ def route_timings(ordered, evidence, dwell_s, departure):
         stops.append(stop)
         elapsed += service_s
     return {"drive_duration_s": drive_s, "dwell_duration_s": elapsed - drive_s,
-            "total_duration_s": elapsed, "under_one_hour": elapsed < LIMIT_S, "stops": stops}
+            "total_duration_s": elapsed, "under_one_hour": elapsed < LIMIT_S,
+            "under_duration_limit": elapsed < threshold_s, "stops": stops}
 
 
 def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=None, provider_factory=None, now=None, provider=None):
     import direct_school_analysis as analysis
+    threshold_s = return_limit_minutes(config.get("return_duration_limit_minutes", 60)) * 60
     if config.get("final_time_validation_mode", "legacy") != "legacy":
         raise ValueError("Return measurements use the existing map provider only.")
     plan = prepared["current_plan"]
@@ -183,15 +207,16 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
     result = {"analysis_kind": "pm_return", "analysis_version": VERSION, "service_direction": "From School",
               "provider": provider_name, "status": "running", "started_at": clock().isoformat(),
               "parameters": deepcopy(config), "routes": [], "summary": {}, "progress": {},
-              "timing_basis": "current_traffic_snapshot", "threshold_s": LIMIT_S}
+              "timing_basis": "current_traffic_snapshot", "threshold_s": threshold_s}
     osrm_cache = {}
     for route_id, unordered in groups.items():
         if check_canceled:
             check_canceled()
         ordered = sorted(unordered, key=lambda stop: int(stop["stop_sequence"]))
         route = {"route_id": route_id, "riders": sum(int(s.get("passenger_count") or 0) for s in ordered),
-                 "stop_count": len(ordered) - 1, "status": "failed", "under_one_hour": False,
+                 "stop_count": len(ordered) - 1, "status": "failed", "under_one_hour": False, "under_duration_limit": False,
                  "stops": deepcopy(ordered)}
+        route.update(deepcopy(ordered[0].get("source_route") or {}))
         result["routes"].append(route)
         try:
             points = [stop.get("source_point") or analysis._lookup_point(stop, lookup) for stop in ordered]
@@ -204,7 +229,7 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
             refs = [analysis._osrm_leg(a, b, osrm_cache) for a, b in zip(points, points[1:])]
             measured_at = clock()
             native = analysis._route_with_stop_boundaries(provider, points, reference_legs=refs)
-            timings = route_timings(route["stops"], native, float(config["stop_service_minutes"]) * 60, measured_at)
+            timings = route_timings(route["stops"], native, float(config["stop_service_minutes"]) * 60, measured_at, threshold_s)
             for stop in timings["stops"]:
                 stop["over_limit"] = not stop.get("is_depot") and stop["ride_duration_s"] > float(config.get("far_duration_minutes", 45)) * 60
             timings["over_limit_riders"] = sum(int(s.get("passenger_count") or 0) for s in timings["stops"] if s["over_limit"])
@@ -216,6 +241,7 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
             route.update(error=str(exc), under_one_hour=False)
         result["summary"] = {"route_count": len(groups), "completed_route_count": sum(r["status"] == "resolved" for r in result["routes"]),
             "under_one_hour_count": sum(r["under_one_hour"] for r in result["routes"]),
+            "under_duration_limit_count": sum(under_return_limit(r, threshold_s) for r in result["routes"]),
             "rider_count": sum(int(s.get("passenger_count") or 0) for s in plan["stops"])}
         result["progress"] = {"completed": len(result["routes"]), "total": len(groups),
                               "provider_api_calls": provider.state.get("api_calls", 0) - initial_calls,
@@ -227,10 +253,15 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
     return result
 
 
-def build_return_workbook(record):
+def build_return_workbook(record, duration_limit_minutes=None):
     from openpyxl import Workbook
     from openpyxl.styles import PatternFill
     result = record.get("result") or {}
+    saved_config = (record.get("metadata") or {}).get("analysis_config") or {}
+    minutes = return_limit_minutes(duration_limit_minutes if duration_limit_minutes is not None else
+        (result.get("parameters") or saved_config).get("return_duration_limit_minutes", result.get("threshold_s", LIMIT_S) / 60))
+    threshold_s = minutes * 60
+    limit_label = f"Under {minutes:g} min / 低于{minutes:g}分钟"
     workbook = Workbook()
     if result.get("scenarios") is not None:
         from openpyxl import load_workbook
@@ -239,14 +270,14 @@ def build_return_workbook(record):
         overview.append(["Source morning job", result.get("source_job_id")])
         overview.append(["Source version", result.get("source_version")])
         overview.append(["Scheduled", record.get("scheduled_start_at"), "Measured", result.get("started_at")])
-        overview.append(["Scenario", "Morning status", "Return status", "Routes", "Under 1 hour", "Error"])
+        overview.append(["Scenario", "Morning status", "Return status", "Routes", limit_label, "Error"])
         labels = {"current_plan": "Current", "time_constrained": "Strict", "exception_preserving": "Protected"}
         for key, scenario in result["scenarios"].items():
             label = labels[key]
             overview.append([label, scenario.get("source_status"), scenario.get("status"),
                              scenario.get("summary", {}).get("route_count"),
-                             scenario.get("summary", {}).get("under_one_hour_count"), scenario.get("error")])
-            child = load_workbook(BytesIO(build_return_workbook({**record, "result": scenario})))
+                             sum(under_return_limit(r, threshold_s) for r in scenario.get("routes", [])), scenario.get("error")])
+            child = load_workbook(BytesIO(build_return_workbook({**record, "result": scenario}, minutes)))
             for original in child:
                 sheet = workbook.create_sheet(f"{label} {original.title}")
                 for row in original:
@@ -270,16 +301,16 @@ def build_return_workbook(record):
     overview.append(["Measured / 实际开始", result.get("started_at")])
     overview.append(["Basis / 口径", "Current traffic snapshot; driving + all stop dwell / 实时快照：行车加全部停站时间"])
     overview.append(["Route / 路线", "Status / 状态", "Riders / 人数", "Driving (s) / 行车秒数", "Dwell (s) / 停站秒数",
-                     "Total (s) / 总秒数", "Under 1 hour / 低于1小时", "Measured at / 测算时间", "Provider / 来源"])
+                     "Total (s) / 总秒数", limit_label, "Measured at / 测算时间", "Provider / 来源"])
     stops = workbook.create_sheet("Return stops")
     stops.append(["Route / 路线", "Return order / 返程序号", "Source order / 原序号", "Address / 地址", "Riders / 人数",
                   "Ride (s) / 乘车秒数", "Arrival / 到达时间", "Departure / 离站时间", "Over trip limit / 乘车超时"])
     for route in result.get("routes", []):
         overview.append([route["route_id"], route["status"], route["riders"], route.get("drive_duration_s"),
                          route.get("dwell_duration_s"), route.get("total_duration_s"),
-                         "Yes / 是" if route.get("under_one_hour") else "No / 否" if route["status"] == "resolved" else "Unavailable / 未完成",
+                         "Yes / 是" if under_return_limit(route, threshold_s) else "No / 否" if route["status"] == "resolved" else "Unavailable / 未完成",
                          route.get("measured_at"), route.get("provider_route_source")])
-        if route.get("under_one_hour"):
+        if under_return_limit(route, threshold_s):
             for cell in overview[overview.max_row]:
                 cell.fill = PatternFill("solid", fgColor="DCFCE7")
         for stop in route["stops"]:

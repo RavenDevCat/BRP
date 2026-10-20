@@ -491,6 +491,7 @@ export type JobMapRouteConnector = {
 };
 
 export type JobMapData = {
+    duration_limit_s?: number;
     job_id: string;
     scenario_key: string;
     scenario_name: string;
@@ -1502,6 +1503,7 @@ export function submitWorkbookJob(payload: {
     submission_id?: string;
     paired_return?: boolean;
     return_scheduled_time?: string;
+    return_duration_limit_minutes?: number;
     address_review_acknowledged?: boolean;
 }) {
     return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {

@@ -11,7 +11,7 @@ runtime architecture, or recommended rerun guidance changed.
 
 - Scheduled Route Audit returns now depend on the completed morning audit.
   Current, Strict and Protected each receive their own reversed stop sequence,
-  fresh traffic measurement, map, under-one-hour filter and spreadsheet sheets.
+  fresh traffic measurement, map, configurable-duration filter and spreadsheet sheets.
   A rejected morning scenario remains labeled rejected; measuring its return
   does not make it an approved operating plan. Missing solutions are not replaced.
 - The scheduler waits for the morning result without occupying a worker slot.
@@ -21,6 +21,16 @@ runtime architecture, or recommended rerun guidance changed.
   saved single-scenario return results remain readable and are not rewritten.
 - Deleting either member of a paired history entry removes the whole pair and
   stops associated workers. Ordinary unpaired history deletion is unchanged.
+- Morning and afternoon results share scenario selectors, route colors and the
+  interactive route map, including search, stop selection, context and fullscreen.
+  Return routes below the evaluation window retain their route color and receive
+  an additional highlight.
+- The return evaluation window defaults to 60 minutes and accepts 1 to 240
+  minutes. Scheduled audits save the chosen value. Results can be compared at a
+  different window without changing history, reoptimizing, or remeasuring traffic.
+  Map and spreadsheet exports use that displayed window; equality is not below
+  the limit. This parameter does not change morning solver constraints or the
+  separate student trip-time limit.
 
 ### Workbook Route Measurement Recovery
 

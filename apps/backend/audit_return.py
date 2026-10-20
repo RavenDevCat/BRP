@@ -59,6 +59,16 @@ def scenario_payload(morning, key):
                 "is_depot": bool(point.get("is_depot")),
                 "source_point": point,
                 "source_display_route_id": route.get("display_route_id"),
+                "source_route": {
+                    "route_index": index,
+                    "display_route_id": route.get("display_route_id"),
+                    "source_route_id": route.get("source_route_id"),
+                    "exception_role": route.get("exception_role"),
+                    "route_change_type": route.get("route_change_type"),
+                    "vehicle_id": route.get("vehicle_id"),
+                    "bus_type_name": route.get("bus_type_name") or "",
+                    "bus_capacity": route.get("bus_capacity"),
+                },
             }
             route_stops.append(stop)
         if sum(s["passenger_count"] for s in route_stops if not s["is_depot"]) != int(route["load"]):
@@ -129,6 +139,7 @@ def run_audit_return(record, *, checkpoint=None, check_canceled=None, provider_f
         "source_version": meta["return_source_version"], "source_finished_at": meta["return_source_finished_at"],
         "scheduled_start_at": record["scheduled_start_at"], "delayed": meta.get("return_delayed", False),
         "scenarios": {}, "progress": {},
+        "parameters": deepcopy(config),
     }
 
     def update(key, partial):

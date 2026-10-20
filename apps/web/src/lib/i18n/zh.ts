@@ -1,6 +1,9 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Return duration limit (min)": "返程评估窗口（分钟）",
+    "Return duration limit must be between 1 and 240 minutes.": "返程评估窗口须为1至240分钟。",
+    "Under limit": "低于窗口",
     "Return scenarios": "返程情景",
     "Source version": "来源版本",
     "Morning scenario status": "上午情景状态",

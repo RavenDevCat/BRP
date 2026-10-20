@@ -65,6 +65,7 @@ export function NewJobPage() {
   const [jobCustomName, setJobCustomName] = useState("");
   const [scheduledJob, setScheduledJob] = useState(false);
   const [returnScheduledTime, setReturnScheduledTime] = useState("15:40");
+  const [returnDurationLimit, setReturnDurationLimit] = useState("60");
   const submissionRef = useRef<{ key: string; id: string } | null>(null);
   const [scheduledDates, setScheduledDates] = useState<string[]>([]);
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
@@ -205,7 +206,11 @@ export function NewJobPage() {
         setConfig(submitConfig);
       }
       const dates = scheduledJobsEnabled && scheduledJob ? scheduledDates : [undefined];
-      const submissionKey = JSON.stringify([fileBase64, submitConfig, jobCustomName, returnScheduledTime]);
+      const returnLimit = Number(returnDurationLimit);
+      if (pairedReturn && scheduledJob && (!Number.isFinite(returnLimit) || returnLimit < 1 || returnLimit > 240)) {
+        throw new Error(t("Return duration limit must be between 1 and 240 minutes."));
+      }
+      const submissionKey = JSON.stringify([fileBase64, submitConfig, jobCustomName, returnScheduledTime, returnLimit]);
       if (submissionRef.current?.key !== submissionKey) {
         submissionRef.current = { key: submissionKey, id: crypto.randomUUID() };
       }
@@ -220,6 +225,7 @@ export function NewJobPage() {
           scheduled_date: scheduledDate,
           submission_id: submissionRef.current.id,
           return_scheduled_time: returnScheduledTime,
+          return_duration_limit_minutes: returnLimit,
         });
       }
       if (!lastPayload) {
@@ -588,12 +594,20 @@ export function NewJobPage() {
                     {t(pairedReturn ? "Two measurements per selected date" : "Each selected date creates one scheduled audit.")}
                   </div>
                   {pairedReturn ? (
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <label className="mt-4 block max-w-xs space-y-2 text-xs text-muted-foreground">
                       <span>{t("Afternoon return measurement time")}</span>
                       <input type="time" min="12:00" required value={returnScheduledTime}
                         onChange={(event) => setReturnScheduledTime(event.target.value)}
                         className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
                     </label>
+                    <label className="mt-4 block max-w-xs space-y-2 text-xs text-muted-foreground">
+                      <span>{t("Return duration limit (min)")}</span>
+                      <input type="number" min="1" max="240" step="any" required value={returnDurationLimit}
+                        onChange={(event) => setReturnDurationLimit(event.target.value)}
+                        className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
+                    </label>
+                    </div>
                   ) : null}
                 </div>
               ) : null}

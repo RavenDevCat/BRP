@@ -48,12 +48,8 @@ def test_fleet_planner_inline_and_fullscreen_maps_keep_map_and_workbook_download
 
 
 def test_standalone_route_audit_map_does_not_depend_on_private_tile_or_api_hosts() -> None:
-    source = _source("apps/web/src/features/results/job-result-view.tsx")
-    standalone_builder = _section(
-        source,
-        "function buildStandaloneInteractiveMapHtml",
-        "type MapOutput =",
-    )
+    source = _source("apps/web/src/features/results/route-map-export.ts")
+    standalone_builder = source[source.index("function buildStandaloneInteractiveMapHtml"):]
 
     assert "https://tile.openstreetmap.de/{z}/{x}/{y}.png" in standalone_builder
     forbidden_private_dependencies = (
@@ -68,3 +64,17 @@ def test_standalone_route_audit_map_does_not_depend_on_private_tile_or_api_hosts
     )
     for dependency in forbidden_private_dependencies:
         assert dependency not in standalone_builder
+
+
+def test_return_and_morning_share_map_and_scenario_controls():
+    morning = _source("apps/web/src/features/results/job-result-view.tsx")
+    afternoon = _source("apps/web/src/features/distance/pm-return-view.tsx")
+    for source in (morning, afternoon):
+        assert "<InteractiveRouteMap" in source
+        assert "<ScenarioChoice" in source
+        assert "downloadInteractiveMapHtml" in source
+    assert "react-map-gl" not in afternoon
+    assert "return_duration_limit_minutes=${limit}" in afternoon
+    shared = _source("apps/web/src/features/results/interactive-route-map.tsx")
+    assert 'routeFilter === "under_limit"' in shared
+    assert "data.duration_limit_s" in shared

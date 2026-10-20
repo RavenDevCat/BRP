@@ -84,6 +84,39 @@ def test_schedule_window():
     ensure_current_window({}, NOW)
 
 
+@pytest.mark.parametrize("value", [0, -1, 241, True, None, "", "nan", float("inf")])
+def test_return_limit_validation(value):
+    from paired_return import return_limit_minutes
+    with pytest.raises(ValueError, match="1 and 240"):
+        return_limit_minutes(value)
+
+
+@pytest.mark.parametrize("minutes,total,expected", [(45, 2699.9, True), (45, 2700, False), (90, 3600, True)])
+def test_custom_return_window_and_export(minutes, total, expected):
+    from paired_return import under_return_limit
+    route = {"route_id": "R1", "status": "resolved", "riders": 2, "stops": [],
+             "total_duration_s": total, "under_one_hour": total < 3600}
+    record = {"metadata": {"analysis_config": {"return_duration_limit_minutes": minutes}},
+              "result": {"routes": [route]}}
+    assert under_return_limit(route, minutes * 60) is expected
+    workbook = load_workbook(BytesIO(build_return_workbook(record)))
+    assert workbook["Return routes"]["G5"].value.startswith(f"Under {minutes} min")
+    assert workbook["Return routes"]["G6"].value == ("Yes / 是" if expected else "No / 否")
+    unchanged = deepcopy(record)
+    override = load_workbook(BytesIO(build_return_workbook(record, 1)))
+    assert override["Return routes"]["G6"].value == "No / 否"
+    assert record == unchanged
+    route["status"] = "failed"
+    assert not under_return_limit(route, minutes * 60)
+
+
+def test_route_timings_custom_limit_keeps_legacy_field():
+    timings = route_timings(reverse_payload(source())["current_plan"]["stops"],
+        {"complete": True, "duration_s": 2700, "leg_durations_s": [1000, 1700]}, 60, NOW, 2700)
+    assert timings["under_one_hour"] is True
+    assert timings["under_duration_limit"] is False
+
+
 def record(job_id, signature="same"):
     return {"job_id": job_id, "owner_email": "operator@example.com", "status": "scheduled",
             "metadata": {"pair_request_hash": signature}, "created_at": NOW.isoformat()}

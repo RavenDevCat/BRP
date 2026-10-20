@@ -1179,6 +1179,7 @@ def get_job_export(
     export_key: str,
     context: UserContext = Depends(current_user_context),
     _authorized: None = Depends(require_authorized_request),
+    return_duration_limit_minutes: str | None = None,
 ) -> Response:
     job_record = _job_for_context(job_id, context)
     normalized_export_key = str(export_key or "").strip().lower()
@@ -1188,7 +1189,10 @@ def get_job_export(
                         or dict(job_record.get("result") or {}).get("scenarios"))):
             raise BackendHttpError(404, {"error": "Return measurements are not available yet."})
         from paired_return import build_return_workbook
-        workbook_bytes, export_error = build_return_workbook(job_record), None
+        try:
+            workbook_bytes, export_error = build_return_workbook(job_record, return_duration_limit_minutes), None
+        except ValueError as exc:
+            raise BackendHttpError(422, {"error": str(exc)}) from exc
         filename = f"return_routes_{job_id}.xlsx"
     elif normalized_export_key.startswith("scenario-template-"):
         scenario_key = normalized_export_key[len("scenario-template-") :]

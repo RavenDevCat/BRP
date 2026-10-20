@@ -110,6 +110,35 @@ def test_invalid_pm_time_does_not_create_am(audit_api):
     assert store.list_jobs(include_all=True) == []
 
 
+def test_return_limit_saved_idempotent_and_export_override(audit_api):
+    client, store, payload, _, _ = audit_api
+    payload["return_duration_limit_minutes"] = 45
+    response = client.post("/api/workbooks/submit", json=payload)
+    assert response.status_code == 202, response.text
+    pair = response.json()["paired_jobs"]
+    pm = store.get_job(pair[1]["job_id"])
+    assert pm["metadata"]["analysis_config"]["return_duration_limit_minutes"] == 45
+    assert client.post("/api/workbooks/submit", json=payload).status_code == 202
+    assert client.post("/api/workbooks/submit", json={**payload, "return_duration_limit_minutes": 90}).status_code == 422
+    pm["result"] = {"analysis_kind": "pm_return", "routes": [{"route_id": "R1", "status": "resolved",
+        "riders": 2, "total_duration_s": 3000, "under_one_hour": True, "stops": []}]}
+    store.upsert_job(pm)
+    url = f'/api/jobs/{pm["job_id"]}/exports/return-routes'
+    default = load_workbook(BytesIO(client.get(url).content))
+    assert default["Return routes"]["G6"].value == "No / 否"
+    changed = load_workbook(BytesIO(client.get(url + "?return_duration_limit_minutes=60").content))
+    assert changed["Return routes"]["G6"].value == "Yes / 是"
+    assert client.get(url + "?return_duration_limit_minutes=0").status_code == 422
+    assert store.get_job(pm["job_id"]) == pm
+
+
+@pytest.mark.parametrize("value", [0, 241, "nan", True])
+def test_invalid_return_limit_creates_no_pair(audit_api, value):
+    client, store, payload, _, _ = audit_api
+    assert client.post("/api/workbooks/submit", json={**payload, "return_duration_limit_minutes": value}).status_code == 422
+    assert store.list_jobs(include_all=True) == []
+
+
 @pytest.mark.parametrize("scheduled", [False, True])
 def test_invalid_coordinates_block_real_readiness_before_any_job(audit_api, scheduled):
     client, store, payload, _, prepared = audit_api

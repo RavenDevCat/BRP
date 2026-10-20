@@ -128,17 +128,18 @@ type HoverInfo =
       }
     | null;
 
-type RouteFilter = "all" | "long" | "high_load" | "many_stops";
+type RouteFilter = "all" | "long" | "high_load" | "many_stops" | "under_limit";
 
-function useTranslatedFilterOptions(t: (key: string) => string) {
+function useTranslatedFilterOptions(t: (key: string) => string, durationLimit?: number) {
     return useMemo(
         () => [
             { key: "all" as RouteFilter, label: t("All") },
             { key: "long" as RouteFilter, label: t("Long") },
             { key: "high_load" as RouteFilter, label: t("High load") },
             { key: "many_stops" as RouteFilter, label: t("Many stops") },
+            ...(durationLimit ? [{ key: "under_limit" as RouteFilter, label: `${t("Under limit")} (< ${durationLimit / 60} ${t("min")})` }] : []),
         ],
-        [t],
+        [t, durationLimit],
     );
 }
 
@@ -197,7 +198,7 @@ export function InteractiveRouteMap({
     const containerRef = useRef<HTMLDivElement | null>(null);
     const mapRef = useRef<MapRef | null>(null);
     const t = useT();
-    const filterOptions = useTranslatedFilterOptions(t);
+    const filterOptions = useTranslatedFilterOptions(t, data.duration_limit_s);
     const [selectedRouteId, setSelectedRouteId] = useState<string>("");
     const [selectedStop, setSelectedStop] = useState<JobMapStop | null>(null);
     const [hoverInfo, setHoverInfo] = useState<HoverInfo>(null);
@@ -269,8 +270,9 @@ export function InteractiveRouteMap({
             ).length,
             many_stops: sortedRoutes.filter((route) => route.stop_count >= 8)
                 .length,
+            under_limit: sortedRoutes.filter(route => route.duration_s !== null && route.duration_s < (data.duration_limit_s || 0)).length,
         }),
-        [longRouteThreshold, sortedRoutes],
+        [longRouteThreshold, sortedRoutes, data.duration_limit_s],
     );
     const visibleRoutes = useMemo(() => {
         const normalizedSearch = routeSearch.trim().toLowerCase();
@@ -298,9 +300,12 @@ export function InteractiveRouteMap({
             if (routeFilter === "many_stops") {
                 return route.stop_count >= 8;
             }
+            if (routeFilter === "under_limit") {
+                return route.duration_s !== null && route.duration_s < (data.duration_limit_s || 0);
+            }
             return true;
         });
-    }, [longRouteThreshold, routeFilter, routeSearch, sortedRoutes]);
+    }, [longRouteThreshold, routeFilter, routeSearch, sortedRoutes, data.duration_limit_s]);
     const topImpactedStops = useMemo(
         () =>
             data.stops
@@ -340,6 +345,7 @@ export function InteractiveRouteMap({
                             stop_count: route.stop_count,
                             duration_s: route.duration_s,
                             distance_m: route.distance_m,
+                            under_limit: route.duration_s !== null && route.duration_s < (data.duration_limit_s || 0),
                         },
                         geometry: route.geometry_segments?.length
                             ? { type: "MultiLineString", coordinates: route.geometry_segments }
@@ -347,7 +353,7 @@ export function InteractiveRouteMap({
                     }];
                 }),
         }),
-        [sortedRoutes],
+        [sortedRoutes, data.duration_limit_s],
     );
 
     const routeConnectorFeatures = useMemo<FeatureCollection>(
@@ -869,6 +875,11 @@ export function InteractiveRouteMap({
                                             <RouteLineageBadge route={route} />
                                             <RouteStatusBadge route={route} />
                                         </span>
+                                        {data.duration_limit_s && route.duration_s !== null && route.duration_s < data.duration_limit_s ? (
+                                            <span className="mt-1 inline-block rounded-sm bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
+                                                {t("Under limit")}
+                                            </span>
+                                        ) : null}
                                         <span className="mt-1 block text-xs text-muted-foreground">
                                             {formatNumber(route.load)} {t("riders")} ·{" "}
                                             {formatNumber(route.stop_count)}{" "}
@@ -1053,7 +1064,7 @@ export function InteractiveRouteMap({
                             id="route-casing"
                             type="line"
                             paint={{
-                                "line-color": "#ffffff",
+                                "line-color": data.duration_limit_s ? ["case", ["get", "under_limit"], "#a7f3d0", "#ffffff"] : "#ffffff",
                                 "line-width": selectedRouteId ? 5 : 7,
                                 "line-opacity": selectedRouteId ? 0.18 : 0.75,
                             }}

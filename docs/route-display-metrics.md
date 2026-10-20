@@ -5,7 +5,8 @@
 Coordinate resolution and pickup-entrance confirmation are separate. An older
 cache schema or a coarse provider precision label must not remove an otherwise
 valid, city-matched stop. Reused coordinates stay unchanged; uncertain entrances
-and road sides use the existing address-review warning flow. Invalid coordinates,
+and road sides remain non-blocking location notices, without a required review
+acknowledgement for immediate or scheduled audit submission. Invalid coordinates,
 wrong-city matches and city-centre fallbacks remain blocked.
 
 AMap measurements describe travel between the supplied coordinates, not proof
@@ -243,10 +244,11 @@ until a confirmation UI is added, not mixed into ordinary geocode failure UI.
 ### Test Coverage
 
 Fresh AMap pickup resolution (v6) separates `pickup_resolution_status` from
-coordinate availability. `reference_only` remains visible/cacheable but is
-rejected by the shared route precision guard before provider I/O, unless an
-audited operator confirmation applies. This flag is retained in serialized
-point provenance; cache reuse does not promote it to a measured service stop.
+coordinate availability. `reference_only` remains visible/cacheable and valid
+coordinates can be measured by the shared AMap provider. Entrance uncertainty
+is retained separately in `pickup_precision_reviews`, without suppressing
+complete route measurements. This flag is retained in serialized point
+provenance; successful routing does not confirm the physical pickup entrance.
 Old cache entries without the flag are not automatically reclassified or moved.
 Prepared snapshots retain their original evidence; deployment does not rerun
 them. Re-prepare original inputs explicitly to apply fresh resolution.

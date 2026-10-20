@@ -78,3 +78,5 @@ def test_return_and_morning_share_map_and_scenario_controls():
     shared = _source("apps/web/src/features/results/interactive-route-map.tsx")
     assert 'routeFilter === "under_limit"' in shared
     assert "data.duration_limit_s" in shared
+    assert "route.duration_s >= durationLimit" in shared
+    assert 'durationLimit={data.duration_limit_s}' in shared

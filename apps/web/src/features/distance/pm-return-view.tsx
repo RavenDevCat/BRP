@@ -107,6 +107,8 @@ export function PmReturnView({ result, exportUrl }: { result: ReturnResult | Ret
           <p role="status" className="py-6 text-sm text-muted-foreground">{t("Waiting for scenario measurement")}</p>}
         <div className="flex flex-wrap gap-x-5 gap-y-2 text-xs text-muted-foreground">
           <span>{t("Driving + stop dwell")}</span>
+          {selected ? <span>{t("Students over trip limit")} ({selected.parameters?.far_duration_minutes ?? 45} {t("min")}):
+            {" "}{selected.routes.reduce((count, route) => count + (route.over_limit_riders || 0), 0)}</span> : null}
           {grouped ? <><a className="text-primary underline" href={`/jobs/${result.source_job_id}`}>{t("Morning to school")}</a>
             <span>{t("Source version")}: {result.source_version.slice(0, 12)}</span></> : null}
           <span>{t("Provider calls")}: {result.progress.provider_api_calls}</span>

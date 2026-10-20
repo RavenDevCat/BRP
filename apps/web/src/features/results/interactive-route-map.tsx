@@ -225,11 +225,11 @@ export function InteractiveRouteMap({
         : null;
     const longRouteThreshold = useMemo(
         () =>
-            percentile(
+            data.duration_limit_s ?? percentile(
                 data.routes.map((route) => route.duration_s).filter((value): value is number => value !== null),
                 0.75,
             ),
-        [data.routes],
+        [data.routes, data.duration_limit_s],
     );
     const stopsByRouteId = useMemo(() => {
         const grouped = new Map<string, JobMapStop[]>();
@@ -847,7 +847,7 @@ export function InteractiveRouteMap({
                                             : fullscreen
                                               ? "hover:bg-white/42"
                                               : "hover:bg-muted",
-                                        routeListAccentClass(route),
+                                        routeListAccentClass(route, data.duration_limit_s),
                                     )}
                                     onClick={() => focusRoute(route)}
                                 >
@@ -873,7 +873,7 @@ export function InteractiveRouteMap({
                                                 {routeLabel(route)}
                                             </span>
                                             <RouteLineageBadge route={route} />
-                                            <RouteStatusBadge route={route} />
+                                            <RouteStatusBadge route={route} durationLimit={data.duration_limit_s} />
                                         </span>
                                         {data.duration_limit_s && route.duration_s !== null && route.duration_s < data.duration_limit_s ? (
                                             <span className="mt-1 inline-block rounded-sm bg-emerald-50 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700">
@@ -1342,7 +1342,7 @@ export function InteractiveRouteMap({
                                         {hoveredRoute ? (
                                             <>
                                                 <RouteLineageBadge route={hoveredRoute} />
-                                                <RouteStatusBadge route={hoveredRoute} />
+                                                <RouteStatusBadge route={hoveredRoute} durationLimit={data.duration_limit_s} />
                                             </>
                                         ) : null}
                                     </div>
@@ -1518,7 +1518,7 @@ export function InteractiveRouteMap({
                                         {routeLabel(selectedRoute)}
                                     </div>
                                     <RouteLineageBadge route={selectedRoute} />
-                                    <RouteStatusBadge route={selectedRoute} />
+                                    <RouteStatusBadge route={selectedRoute} durationLimit={data.duration_limit_s} />
                                 </div>
                                 <div className="mt-1 text-xs text-muted-foreground">
                                     {routeVehicleLabel(selectedRoute)}
@@ -1718,7 +1718,7 @@ function routeVehicleLabel(route: JobMapRoute) {
         : vehicle;
 }
 
-function routeStatusLabel(route: JobMapRoute) {
+function routeStatusLabel(route: JobMapRoute, durationLimit = 3600) {
     if (route.evidence_status === "needs_review" || route.evidence_status === "unavailable") return "Needs review";
     if (route.evidence_status === "legacy") return "Historical result";
     if (route.final_route_traffic_gate?.status === "unavailable") return "Needs review";
@@ -1730,13 +1730,13 @@ function routeStatusLabel(route: JobMapRoute) {
     if (loadRatio >= 0.85) {
         return "High load";
     }
-    if (route.duration_s !== null && route.duration_s >= 3600) {
+    if (route.duration_s !== null && route.duration_s >= durationLimit) {
         return "Long";
     }
     return "";
 }
 
-function routeListAccentClass(route: JobMapRoute) {
+function routeListAccentClass(route: JobMapRoute, durationLimit?: number) {
     const changeType = routeChangeType(route);
     if (changeType === "frozen") {
         return "border-l-indigo-400";
@@ -1747,7 +1747,7 @@ function routeListAccentClass(route: JobMapRoute) {
     if (changeType === "retained") {
         return "border-l-slate-300";
     }
-    const status = routeStatusLabel(route);
+    const status = routeStatusLabel(route, durationLimit);
     if (status === "Capacity" || status === "Time window exceeded") {
         return "border-l-rose-300";
     }
@@ -1760,9 +1760,9 @@ function routeListAccentClass(route: JobMapRoute) {
     return "border-l-transparent";
 }
 
-function RouteStatusBadge({ route }: { route: JobMapRoute }) {
+function RouteStatusBadge({ route, durationLimit }: { route: JobMapRoute; durationLimit?: number }) {
     const t = useT();
-    const label = routeStatusLabel(route);
+    const label = routeStatusLabel(route, durationLimit);
     if (!label) {
         return null;
     }

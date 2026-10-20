@@ -151,6 +151,8 @@ def main() -> int:
         job_kind = str(metadata.get("job_kind") or "route_audit").strip().lower()
         prepared_payload = dict(job_record.get("prepared_payload") or {})
         if job_kind == "direct_school_analysis":
+            from paired_return import ensure_current_window, run_return_measurement
+            ensure_current_window(metadata)
             def save_checkpoint(partial_result: dict[str, Any]) -> None:
                 current = _load_job(job_id)
                 if str(current.get("status", "")).strip().lower() == "canceled":
@@ -159,14 +161,21 @@ def main() -> int:
                 current["updated_at"] = utc_now_iso()
                 _save_job(current)
 
-            result = run_direct_school_analysis(
-                prepared_payload,
-                dict(metadata.get("analysis_config") or {}),
-                scheduled_start_at=job_record.get("scheduled_start_at"),
-                run_seed=str(job_record.get("scheduled_start_at") or job_id),
-                checkpoint=save_checkpoint,
-                resume_result=dict(job_record.get("result") or {}),
-            )
+            if metadata.get("measurement_kind") == "pm_return":
+                def check_canceled():
+                    if _load_job(job_id).get("status") == "canceled":
+                        raise RuntimeError("Return measurement was canceled.")
+                result = run_return_measurement(prepared_payload, dict(metadata.get("analysis_config") or {}),
+                    checkpoint=save_checkpoint, check_canceled=check_canceled)
+            else:
+                result = run_direct_school_analysis(
+                    prepared_payload,
+                    dict(metadata.get("analysis_config") or {}),
+                    scheduled_start_at=job_record.get("scheduled_start_at"),
+                    run_seed=str(job_record.get("scheduled_start_at") or job_id),
+                    checkpoint=save_checkpoint,
+                    resume_result=dict(job_record.get("result") or {}),
+                )
         else:
             config = build_planner_config(job_record.get("config") or {})
             if _is_scheduled_job(job_record):

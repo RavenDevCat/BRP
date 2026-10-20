@@ -1,6 +1,22 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Incomplete measurement; counts cover measured routes only.": "측정되지 않은 노선이 있습니다. 시간 분류와 초과 인원은 측정된 노선만 집계합니다.",
+    "Students over trip limit": "탑승 시간 초과 학생",
+    "Morning to school": "오전 등교",
+    "Afternoon return": "오후 귀가",
+    "Afternoon return measurement time": "오후 귀가 측정 시간",
+    "Two measurements per selected date": "선택한 날짜마다 오전 및 오후 측정",
+    "Service period": "운행 시간대",
+    "Current traffic snapshot": "현재 교통 스냅샷",
+    "Under 1 hour": "1시간 미만",
+    "Return route filter": "귀가 노선 필터",
+    "Return routes": "귀가 노선",
+    "No routes under 1 hour": "1시간 미만 노선 없음",
+    "Driving + stop dwell": "주행 + 정차 시간",
+    "Driving": "주행",
+    "min:sec": "분:초",
+    "Scheduled measurement window expired. Create a new measurement; past traffic cannot be replayed.": "예약된 측정 시간이 지났습니다. 새 측정을 만드세요. 과거 교통은 재현할 수 없습니다.",
     "Google time validation": "Google 시간 검증",
     "Service date": "운행 날짜",
     "Google validation is not available on this deployment.": "이 환경에서는 Google 시간 검증을 사용할 수 없습니다.",

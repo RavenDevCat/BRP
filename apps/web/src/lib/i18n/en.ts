@@ -4,6 +4,22 @@ import type { Translations } from "./types";
 // This dictionary exists so every language file follows the same shape
 // and TypeScript can verify that all keys are present.
 const en: Translations = {
+    "Incomplete measurement; counts cover measured routes only.": "Incomplete measurement; counts cover measured routes only.",
+    "Students over trip limit": "Students over trip limit",
+    "Morning to school": "Morning to school",
+    "Afternoon return": "Afternoon return",
+    "Afternoon return measurement time": "Afternoon return measurement time",
+    "Two measurements per selected date": "Two measurements per selected date",
+    "Service period": "Service period",
+    "Current traffic snapshot": "Current traffic snapshot",
+    "Under 1 hour": "Under 1 hour",
+    "Return route filter": "Return route filter",
+    "Return routes": "Return routes",
+    "No routes under 1 hour": "No routes under 1 hour",
+    "Driving + stop dwell": "Driving + stop dwell",
+    "Driving": "Driving",
+    "min:sec": "min:sec",
+    "Scheduled measurement window expired. Create a new measurement; past traffic cannot be replayed.": "Scheduled measurement window expired. Create a new measurement; past traffic cannot be replayed.",
     // Shell / navigation
     "BRP: Bus Route Planner": "BRP: Bus Route Planner",
     "Planning console": "Planning console",

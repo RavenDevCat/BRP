@@ -1,0 +1,11 @@
+export type ReturnStop = { address: string; stop_sequence: number; source_stop_sequence: number;
+  passenger_count: number; is_depot: boolean; lat?: number; lng?: number;
+  ride_duration_s?: number; arrival_at?: string; departure_at?: string; over_limit?: boolean };
+export type ReturnRoute = { route_id: string; status: string; riders: number; stop_count: number;
+  under_one_hour: boolean; total_duration_s?: number; drive_duration_s?: number; dwell_duration_s?: number;
+  distance_m?: number; measured_at?: string; error?: string; provider_route_source?: string; over_limit_riders?: number;
+  geometry?: number[][]; geometry_segments?: number[][][]; stops: ReturnStop[] };
+export type ReturnResult = { analysis_kind: "pm_return"; status: string; started_at: string;
+  parameters?: { far_duration_minutes?: number };
+  routes: ReturnRoute[]; summary: { route_count: number; completed_route_count: number; under_one_hour_count: number; rider_count: number };
+  progress: { completed: number; total: number; provider_api_calls: number } };

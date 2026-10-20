@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode, type WheelEvent as ReactWheelEvent } from "react";
+import { PmReturnView } from "./pm-return-view";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -83,6 +84,8 @@ export function DirectSchoolAnalysisPage() {
   const [customName, setCustomName] = useState("");
   const [scheduled, setScheduled] = useState(false);
   const [scheduledTime, setScheduledTime] = useState("06:30");
+  const [returnTime, setReturnTime] = useState("15:40");
+  const submission = useRef({ settings: "", id: "" });
   const [scheduledDates, setScheduledDates] = useState<string[]>([]);
   const [calendarOpen, setCalendarOpen] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(monthKey(new Date()));
@@ -139,6 +142,10 @@ export function DirectSchoolAnalysisPage() {
         throw new Error(t("Select at least one schedule date."));
       }
       const dates = scheduled ? [...scheduledDates].sort() : [""];
+      const settings = JSON.stringify([fileBase64, config, customName, scheduledTime, returnTime, dates]);
+      if (submission.current.settings !== settings) {
+        submission.current = { settings, id: crypto.randomUUID() };
+      }
       const created = [];
       for (const date of dates) {
         const datedName = scheduled && dates.length > 1 && customName.trim()
@@ -154,6 +161,9 @@ export function DirectSchoolAnalysisPage() {
             scheduled_job: scheduled,
             scheduled_date: date || undefined,
             scheduled_time: scheduled ? scheduledTime : undefined,
+            submission_id: submission.current.id,
+            paired_return: scheduled && config.service_direction === "To School",
+            return_scheduled_time: returnTime,
           }),
         );
       }
@@ -229,15 +239,19 @@ export function DirectSchoolAnalysisPage() {
   const rawResult = selectedRecord?.result;
   const result = rawResult && Array.isArray(rawResult.stops) && selectedRecord?.status === "succeeded" ? rawResult : null;
   const scheduledEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
+  const pairIds = selectedRecord?.metadata?.paired_job_ids as { am: string; pm: string } | undefined;
+  const historyItems = (historyQuery.data || []).filter(job => job.metadata?.period !== "pm"
+    || !(historyQuery.data || []).some(other => other.job_id === (job.metadata?.paired_job_ids as { am?: string } | undefined)?.am));
+  const activeHistoryId = pairIds?.am && historyItems.some(job => job.job_id === pairIds.am) ? pairIds.am : selectedJobId;
 
   return (
     <div className="pb-16 lg:pb-0">
       <div className={cn("grid gap-4 lg:items-start", historyCollapsed ? "lg:grid-cols-[88px_minmax(0,1fr)]" : "lg:grid-cols-[320px_minmax(0,1fr)]")}>
         <HistorySidebar
-          items={historyQuery.data || []}
+          items={historyItems}
           itemId={(job) => job.job_id}
           itemName={(job) => historyName(job)}
-          activeId={selectedJobId || undefined}
+          activeId={activeHistoryId || undefined}
           title={t("Analysis History")}
           emptyMessage={t("Direct-to-School measurements will appear here.")}
           collapsed={historyCollapsed}
@@ -254,7 +268,9 @@ export function DirectSchoolAnalysisPage() {
           onDelete={(jobId) => deleteMutation.mutate([jobId])}
           onBulkDelete={(jobIds) => deleteMutation.mutate(jobIds)}
           groupScope="distance_direct_school"
-          renderItem={(job, active) => <DirectSchoolHistoryItem job={job} active={active} />}
+          renderItem={(job, active) => <DirectSchoolHistoryItem job={job} active={active}
+            partner={(historyQuery.data || []).find(other => other.job_id ===
+              (job.metadata?.paired_job_ids as { pm?: string } | undefined)?.pm && other.job_id !== job.job_id)} />}
           className="min-w-0 lg:sticky lg:top-20 lg:self-start"
         />
 
@@ -319,7 +335,22 @@ export function DirectSchoolAnalysisPage() {
                 </CardContent>
               </Card>
 
-              {result ? (
+              {pairIds ? <div role="tablist" aria-label={t("Service period")} className="flex flex-wrap gap-2 border-b border-border">
+                {(["am", "pm"] as const).map(period => {
+                  const job = (historyQuery.data || []).find(item => item.job_id === pairIds[period]);
+                  return <button key={period} type="button" role="tab" aria-selected={selectedJobId === pairIds[period]}
+                    disabled={!job} onClick={() => setSelectedJobId(pairIds[period])}
+                    className={cn("min-h-10 border-b-2 px-4 text-sm disabled:opacity-40", selectedJobId === pairIds[period] ? "border-primary font-semibold text-primary" : "border-transparent")}>
+                    {t(period === "am" ? "Morning to school" : "Afternoon return")}
+                    {job ? <span className="ml-2 text-xs font-normal">{t(statusLabel(job.status))}</span> : null}
+                  </button>;
+                })}
+              </div> : null}
+              {selectedRecord?.return_result ? <>
+                {selectedRecord.status !== "succeeded" ? <PendingResult record={selectedRecord} /> : null}
+                <PmReturnView key={selectedRecord.job_id} result={selectedRecord.return_result}
+                  exportUrl={getDirectSchoolAnalysisExportUrl(selectedRecord.job_id)} />
+              </> : result ? (
                 <MeasurementReviewWorkspace key={selectedRecord!.job_id} job={selectedRecord!} mode="full_direct_school">
                   {correction => <DirectSchoolResultView key={correction?.review_id || selectedRecord!.job_id}
                     record={correction ? { ...selectedRecord!, result: correction.result!.analysis_result,
@@ -404,6 +435,13 @@ export function DirectSchoolAnalysisPage() {
                         <Field label="Measurement time">
                           <input className={fieldClassName} type="time" value={scheduledTime} onChange={(event) => setScheduledTime(event.target.value)} />
                         </Field>
+                        {config.service_direction === "To School" ? <>
+                          <Field label="Afternoon return measurement time">
+                            <input aria-label={t("Afternoon return measurement time")} className={fieldClassName} type="time" min="12:00"
+                              value={returnTime} onChange={event => setReturnTime(event.target.value)} />
+                          </Field>
+                          <div className="text-xs text-muted-foreground">{t("Morning to school")} {scheduledTime} · {t("Afternoon return")} {returnTime} · Asia/Shanghai</div>
+                        </> : null}
                         <Button
                           type="button"
                           variant="secondary"
@@ -416,7 +454,7 @@ export function DirectSchoolAnalysisPage() {
                         >
                           {scheduledDates.length ? `${scheduledDates.length} ${t("dates selected")}` : t("Select schedule dates")}
                         </Button>
-                        <p className="text-xs leading-5 text-muted-foreground">{t("Each selected date creates one independent traffic snapshot.")}</p>
+                        <p className="text-xs leading-5 text-muted-foreground">{t(config.service_direction === "To School" ? "Two measurements per selected date" : "Each selected date creates one independent traffic snapshot.")}</p>
                       </>
                     ) : null}
                   </CardContent>
@@ -1404,7 +1442,7 @@ function MultiDayPanel({ record }: { record: DirectSchoolJobRecord }) {
 
 function PendingResult({ record }: { record: DirectSchoolJobRecord }) {
   const t = useT();
-  const progress = record.result?.progress;
+  const progress = record.return_result?.progress || record.result?.progress;
   const failure = record.metadata?.failure_details as { address?: string; route_id?: string; route_ids?: string[]; endpoint?: string; snap_distance_m?: number; limit_m?: number } | undefined;
   return (
     <Card>
@@ -1415,7 +1453,7 @@ function PendingResult({ record }: { record: DirectSchoolJobRecord }) {
         {record.error ? <InlineError message={record.error === "google_pickup_snap_mismatch"
           ? t("Google navigation endpoint is too far from the requested stop.")
           : record.error === "google_cross_request_join_mismatch"
-            ? t("Google arrival and departure paths do not meet at this stop.") : record.error} /> : null}
+            ? t("Google arrival and departure paths do not meet at this stop.") : t(record.error)} /> : null}
         {failure ? <dl className="grid w-full max-w-xl min-w-0 grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-left text-sm">
           <dt>{t("Route")}</dt><dd className="min-w-0 break-words">{failure.route_id || failure.route_ids?.join(", ") || "-"}</dd>
           <dt>{t("Address")}</dt><dd className="min-w-0 break-words">{failure.address || "-"}</dd>
@@ -1428,8 +1466,22 @@ function PendingResult({ record }: { record: DirectSchoolJobRecord }) {
   );
 }
 
-function DirectSchoolHistoryItem({ job, active }: { job: DirectSchoolJobSummary; active: boolean }) {
+function DirectSchoolHistoryItem({ job, active, partner }: { job: DirectSchoolJobSummary; active: boolean; partner?: DirectSchoolJobSummary }) {
   const t = useT();
+  if (partner) return <div className="space-y-2 px-1 py-1 text-xs">
+    {[job, partner].map(item => <div key={item.job_id} className="space-y-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span>{t(item.metadata?.period === "pm" ? "Afternoon return" : "Morning to school")}</span>
+        <Badge tone={item.result_status === "partial" ? "warning" : statusTone(item.status)}>
+          {t(item.result_status === "partial" ? "Completed with review" : statusLabel(item.status))}</Badge>
+      </div>
+      <div>{t("Scheduled for")} {formatDateTime(item.scheduled_start_at || String(item.metadata?.scheduled_start_at || ""))}</div>
+      {item.started_at ? <div>{t("Started")} {formatDateTime(item.started_at)}</div> : null}
+      {item.metadata?.period === "pm" && item.result_summary?.under_one_hour_count != null
+        ? <div>{t("Under 1 hour")}: {Number(item.result_summary.under_one_hour_count)} / {Number(item.result_summary.route_count)}</div> : null}
+    </div>)}
+  </div>;
+
   const summary = job.result_summary || {};
   const overLimitCount = Number(summary.direct_over_limit_address_count || 0) + Number(summary.route_only_over_limit_address_count || 0);
   return (

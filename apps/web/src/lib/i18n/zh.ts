@@ -1,6 +1,22 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Incomplete measurement; counts cover measured routes only.": "尚有路线未完成测算；时长分类和超时人数仅统计已测路线。",
+    "Students over trip limit": "乘车超时人数",
+    "Morning to school": "上午去校",
+    "Afternoon return": "下午返程",
+    "Afternoon return measurement time": "下午返程测算时间",
+    "Two measurements per selected date": "每个日期：上午、下午两次测算",
+    "Service period": "运行时段",
+    "Current traffic snapshot": "实时路况快照",
+    "Under 1 hour": "低于1小时",
+    "Return route filter": "返程线路筛选",
+    "Return routes": "返程线路",
+    "No routes under 1 hour": "没有低于1小时的线路",
+    "Driving + stop dwell": "行车时间 + 停站时间",
+    "Driving": "行车",
+    "min:sec": "分:秒",
+    "Scheduled measurement window expired. Create a new measurement; past traffic cannot be replayed.": "已错过定时测算窗口。请创建新的测算，无法补测过去的路况。",
     "Google navigation endpoint is too far from the requested stop.": "Google 导航落点与接送站位置偏差过大。",
     "Google arrival and departure paths do not meet at this stop.": "Google 返回的进站与出站路径未在该站衔接。",
     "Monthly requests remaining": "本月剩余调用",

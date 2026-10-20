@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import nullcontext
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -649,13 +650,14 @@ class SqliteRuntimeStore:
                 (error_code, utc_now_iso(), review_id, worker_token),
             ).rowcount == 1
 
-    def upsert_job(self, record: dict[str, Any]) -> None:
+    def upsert_job(self, record: dict[str, Any], *, _connection=None) -> None:
         summary = job_summary(record)
         job_id = str(summary.get("job_id") or "").strip()
         if not job_id:
             raise ValueError("job_id is required")
-        self.initialize()
-        with self.connect() as conn:
+        if _connection is None:
+            self.initialize()
+        with (self.connect() if _connection is None else nullcontext(_connection)) as conn:
             conn.execute(
                 """
                 INSERT INTO jobs(
@@ -694,6 +696,26 @@ class SqliteRuntimeStore:
             self._apply_history_group_preference(
                 conn, "route_audit", job_id, summary["owner_email"]
             )
+
+    def insert_job_pair(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if len(records) != 2 or len({r["job_id"] for r in records}) != 2:
+            raise ValueError("Exactly two distinct jobs are required.")
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = [conn.execute("SELECT record_json FROM jobs WHERE job_id = ?", (r["job_id"],)).fetchone()
+                        for r in records]
+            if any(existing):
+                if not all(existing):
+                    raise ValueError("The paired schedule was changed or deleted. Submit a new schedule.")
+                saved = [json_loads(row["record_json"], {}) for row in existing]
+                if any(old["metadata"].get("pair_request_hash") != new["metadata"].get("pair_request_hash")
+                       for old, new in zip(saved, records)):
+                    raise ValueError("Submission identity was already used for different settings.")
+                return saved
+            for record in records:
+                self.upsert_job(record, _connection=conn)
+        return records
 
     def claim_queued_job(
         self,
@@ -2279,6 +2301,8 @@ class SqliteRuntimeStore:
             "created_at": row["created_at"],
             "started_at": row["started_at"],
             "finished_at": row["finished_at"],
+            "scheduled_start_at": metadata.get("scheduled_start_at"),
+            "scheduled_trigger_label": metadata.get("scheduled_trigger_label"),
             "metadata": metadata,
             "prepared_payload_summary": json_loads(row["prepared_payload_summary_json"], {}),
             "error": row["error"],

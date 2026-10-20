@@ -2509,7 +2509,8 @@ def _direct_school_jobs(*, user_email: str, include_all: bool) -> list[dict[str,
         job_id = str(entry.get("job_id") or "").strip()
         result = results.get(job_id, {})
         summary = dict(result.get("summary") or {})
-        summary.update(route_coverage(result))
+        if dict(entry.get("metadata") or {}).get("measurement_kind") != "pm_return":
+            summary.update(route_coverage(result))
         summaries.append(
             {
                 **entry,
@@ -2765,6 +2766,12 @@ def _handle_direct_school_submit(payload: dict[str, Any], user_email: str) -> di
         "analysis_signature": signature,
         "client_prep": prep_summary,
     }
+    if scheduled_requested and payload.get("paired_return", True) and analysis_config["service_direction"] == "To School":
+        from paired_return import create_pair
+        pair = create_pair(sys.modules[__name__], payload, prepared_payload, metadata, user_email, scheduled_start_at)
+        return {"job": pair[0], "paired_jobs": pair,
+                "preview": _direct_school_preview_from_prepared(
+                    source_label, current_plan, prepared_payload, prep_summary, analysis_config)}
     summary = JOB_STORE.create_job(
         {},
         prepared_payload,
@@ -2793,6 +2800,8 @@ def _handle_direct_school_submit(payload: dict[str, Any], user_email: str) -> di
 def _direct_school_compatible_records(
     record: dict[str, Any], *, user_email: str, include_all: bool
 ) -> list[dict[str, Any]]:
+    if dict(record.get("metadata") or {}).get("measurement_kind") == "pm_return":
+        return []
     signature = str(dict(record.get("metadata") or {}).get("analysis_signature") or "")
     if not signature:
         return [record]
@@ -2823,7 +2832,8 @@ def _direct_school_public_record(
         "scheduled_trigger_label": record.get("scheduled_trigger_label"),
         "metadata": dict(record.get("metadata") or {}),
         "prepared_payload_summary": dict(record.get("prepared_payload_summary") or {}),
-        "result": present_direct_school_result(record.get("result")),
+        "result": None if dict(record.get("metadata") or {}).get("measurement_kind") == "pm_return" else present_direct_school_result(record.get("result")),
+        "return_result": record.get("result") if dict(record.get("metadata") or {}).get("measurement_kind") == "pm_return" else None,
         "error": record.get("error"),
         "multi_day": aggregate_direct_school_results(compatible),
     }
@@ -2832,6 +2842,9 @@ def _direct_school_public_record(
 def _build_direct_school_export(
     record: dict[str, Any], *, user_email: str, include_all: bool
 ) -> bytes:
+    if dict(record.get("metadata") or {}).get("measurement_kind") == "pm_return":
+        from paired_return import build_return_workbook
+        return build_return_workbook(record)
     compatible = _direct_school_compatible_records(record, user_email=user_email, include_all=include_all)
     return build_direct_school_workbook(record, aggregate_direct_school_results(compatible))
 
@@ -3667,6 +3680,7 @@ class JobStore:
         status: str = "queued",
         scheduled_start_at: str | None = None,
         scheduled_trigger_label: str | None = None,
+        persist: bool = True,
     ) -> dict[str, Any]:
         job_id = uuid4().hex[:12]
         created_at = utc_now_iso()
@@ -3695,6 +3709,8 @@ class JobStore:
             "error": None,
             "traceback": None,
         }
+        if not persist:
+            return record
         with self.lock:
             self._save_job_unlocked(job_id, record)
         return {

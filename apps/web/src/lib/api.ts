@@ -898,6 +898,7 @@ export type DirectSchoolMultiDay = {
 };
 
 export type DirectSchoolJobRecord = JobRecord & {
+    return_result?: import("@/lib/return-types").ReturnResult | null;
     result?: DirectSchoolAnalysisResult | null;
     multi_day: DirectSchoolMultiDay;
 };
@@ -1647,6 +1648,9 @@ export function previewDirectSchoolAnalysis(payload: {
 }
 
 export function createDirectSchoolAnalysisJob(payload: {
+    submission_id?: string;
+    paired_return?: boolean;
+    return_scheduled_time?: string;
     file_name: string;
     file_base64: string;
     config: { service_direction: "To School" | "From School" };
@@ -1656,7 +1660,7 @@ export function createDirectSchoolAnalysisJob(payload: {
     scheduled_date?: string;
     scheduled_time?: string;
 }) {
-    return apiFetch<{ job: DirectSchoolJobSummary; preview: DirectSchoolPreview }>(
+    return apiFetch<{ job: DirectSchoolJobSummary; paired_jobs?: DirectSchoolJobSummary[]; preview: DirectSchoolPreview }>(
         "/distance-checker/direct-school/jobs",
         {
             method: "POST",

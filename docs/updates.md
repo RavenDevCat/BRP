@@ -5,6 +5,23 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-10-20
+
+### Paired Morning And Afternoon Measurements (Staging)
+
+- New scheduled To-School analyses create an atomic morning/afternoon pair for
+  each selected service date. The default return measurement time is 15:40
+  Asia/Shanghai. Existing schedules and historical results are not modified.
+- Afternoon measurement preserves the uploaded routes, vehicles and riders,
+  reverses the stop order, and requests fresh AMap driving routes. It does not
+  reverse morning geometry, optimize stops, remove riders or use Google.
+- Return routes strictly below 3,600 seconds, including stop dwell, are green
+  in the map, filter, route list and spreadsheet. Partial measurements never
+  count as passing. Individual ride time ends before that student's stop dwell.
+- Paired history shows both statuses and planned/actual execution times.
+  Execution/retry more than 15 minutes late is rejected instead of presenting
+  later traffic as the scheduled snapshot. See `paired-return.md` for acceptance.
+
 ## 2026-09-21
 
 ### Forecast Release Compatibility

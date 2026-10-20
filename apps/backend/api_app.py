@@ -1722,12 +1722,11 @@ def create_direct_school_job(
     payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
-    return _json_response(
-        202,
-        backend_service._handle_direct_school_submit(
-            _payload_dict(payload), user_email=context.email
-        ),
-    )
+    try:
+        created = backend_service._handle_direct_school_submit(_payload_dict(payload), user_email=context.email)
+    except ValueError as exc:
+        raise BackendHttpError(422, {"error": str(exc)}) from exc
+    return _json_response(202, created)
 
 
 @_api_route(
@@ -1778,6 +1777,11 @@ def retry_direct_school_job(
     record = _direct_school_job_for_context(job_id, context)
     _require_record_mutation_access(record, context)
     status = str(record.get("status") or "").strip().lower()
+    from paired_return import ensure_current_window
+    try:
+        ensure_current_window(record.get("metadata") or {})
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
     if status in {"queued", "running", "scheduled"}:
         raise BackendHttpError(409, {"error": "This analysis is already active."})
     updated = backend_service.JOB_STORE.update_job(

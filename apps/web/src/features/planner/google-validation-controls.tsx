@@ -18,6 +18,7 @@ export function GoogleValidationControls({ config, available, scheduled, minimum
     enabled: enabled && available, refetchInterval: 30000 });
   const quota = quotaQuery.data?.quota;
   const fixed = config.service_direction === "From School" || config.timing_policy === "fixed_departure";
+  if (!available) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-3 border-b border-border py-3">
       <label htmlFor="google-final-validation" className="text-sm font-medium">

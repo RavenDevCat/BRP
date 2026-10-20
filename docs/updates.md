@@ -10,7 +10,11 @@ runtime architecture, or recommended rerun guidance changed.
 ### Paired Morning And Afternoon Measurements (Staging)
 
 - New scheduled To-School analyses create an atomic morning/afternoon pair for
-  each selected service date. The default return measurement time is 15:40
+  each selected service date in both New Audit and Direct-to-School. New Audit
+  retains the existing morning solver and runs a separate afternoon return
+  measurement. Audit History links the two runs, and audit details support
+  period switching, return maps and spreadsheet export.
+- The default return measurement time is 15:40
   Asia/Shanghai. Existing schedules and historical results are not modified.
 - Afternoon measurement preserves the uploaded routes, vehicles and riders,
   reverses the stop order, and requests fresh AMap driving routes. It does not

@@ -64,6 +64,8 @@ export function NewJobPage() {
   const [fileError, setFileError] = useState("");
   const [jobCustomName, setJobCustomName] = useState("");
   const [scheduledJob, setScheduledJob] = useState(false);
+  const [returnScheduledTime, setReturnScheduledTime] = useState("15:40");
+  const submissionRef = useRef<{ key: string; id: string } | null>(null);
   const [scheduledDates, setScheduledDates] = useState<string[]>([]);
   const [schedulePickerOpen, setSchedulePickerOpen] = useState(false);
   const [scheduleDraftDates, setScheduleDraftDates] = useState<string[]>([]);
@@ -79,6 +81,9 @@ export function NewJobPage() {
     staleTime: 60_000,
   });
   const scheduledJobsEnabled = featuresQuery.data?.scheduled_jobs_enabled === true;
+  const pairedReturn = config.service_direction === "To School" && ["CHINA", "CN"].includes(
+    String(preview?.auto_route_budget?.amap_route_country || preview?.address_review?.items[0]?.country || "").toUpperCase(),
+  );
 
   function buildConfigWithOverrides(
     baseConfig: PlannerConfigPayload,
@@ -203,6 +208,10 @@ export function NewJobPage() {
         setConfig(submitConfig);
       }
       const dates = scheduledJobsEnabled && scheduledJob ? scheduledDates : [undefined];
+      const submissionKey = JSON.stringify([fileBase64, submitConfig, jobCustomName, returnScheduledTime]);
+      if (submissionRef.current?.key !== submissionKey) {
+        submissionRef.current = { key: submissionKey, id: crypto.randomUUID() };
+      }
       let lastPayload = null;
       for (const scheduledDate of dates) {
         lastPayload = await submitWorkbookJob({
@@ -212,6 +221,8 @@ export function NewJobPage() {
           job_custom_name: jobCustomName,
           scheduled_job: scheduledJobsEnabled && scheduledJob,
           scheduled_date: scheduledDate,
+          submission_id: submissionRef.current.id,
+          return_scheduled_time: returnScheduledTime,
           address_review_acknowledged: addressReviewAcknowledged,
         });
       }
@@ -579,8 +590,16 @@ export function NewJobPage() {
                     )}
                   </div>
                   <div className="mt-2 text-xs text-muted-foreground">
-                    {t("Each selected date creates one scheduled audit.")}
+                    {t(pairedReturn ? "Two measurements per selected date" : "Each selected date creates one scheduled audit.")}
                   </div>
+                  {pairedReturn ? (
+                    <label className="mt-4 block max-w-xs space-y-2 text-xs text-muted-foreground">
+                      <span>{t("Afternoon return measurement time")}</span>
+                      <input type="time" min="12:00" required value={returnScheduledTime}
+                        onChange={(event) => setReturnScheduledTime(event.target.value)}
+                        className="h-10 w-full rounded-md border border-border bg-background px-3 text-sm text-foreground" />
+                    </label>
+                  ) : null}
                 </div>
               ) : null}
 

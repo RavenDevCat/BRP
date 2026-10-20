@@ -1182,7 +1182,14 @@ def get_job_export(
 ) -> Response:
     job_record = _job_for_context(job_id, context)
     normalized_export_key = str(export_key or "").strip().lower()
-    if normalized_export_key.startswith("scenario-template-"):
+    if normalized_export_key == "return-routes":
+        if (dict(job_record.get("metadata") or {}).get("measurement_kind") != "pm_return"
+                or not dict(job_record.get("result") or {}).get("routes")):
+            raise BackendHttpError(404, {"error": "Return measurements are not available yet."})
+        from paired_return import build_return_workbook
+        workbook_bytes, export_error = build_return_workbook(job_record), None
+        filename = f"return_routes_{job_id}.xlsx"
+    elif normalized_export_key.startswith("scenario-template-"):
         scenario_key = normalized_export_key[len("scenario-template-") :]
         workbook_bytes, export_error = backend_service._build_scenario_template_export(
             job_record, scenario_key
@@ -3635,6 +3642,8 @@ def workbook_submit(
             exc.status_code,
             {"error": str(exc), "readiness": exc.readiness},
         ) from exc
+    except ValueError as exc:
+        raise BackendHttpError(422, {"error": str(exc)}) from exc
     return _json_response(202, response)
 
 
@@ -3732,6 +3741,11 @@ def release_scheduled_job(
             409,
             {"error": "Only scheduled jobs can be released manually."},
         )
+    from paired_return import ensure_return_due
+    try:
+        ensure_return_due(dict(job_record.get("metadata") or {}))
+    except ValueError as exc:
+        raise BackendHttpError(409, {"error": str(exc)}) from exc
     updated = backend_service._release_scheduled_job(normalized_job_id)
     if not updated:
         raise BackendHttpError(404, {"error": f"Job not found: {normalized_job_id}"})

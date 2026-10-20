@@ -31,6 +31,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { buttonClassName } from "@/components/ui/button-styles";
 import { InteractiveRouteMap } from "@/features/results/interactive-route-map";
 import { MeasurementReviewWorkspace } from "@/features/results/measurement-review-panel";
+import { PmReturnView } from "@/features/distance/pm-return-view";
+import type { ReturnResult } from "@/lib/return-types";
 import {
   controlDeepVerification,
   extendDeepVerificationBudget,
@@ -75,11 +77,23 @@ const resultTabs: Array<{ key: ResultTab; label: string }> = [
 ];
 
 export function JobResultView({ job }: { job: JobRecord }) {
+  if (job.metadata?.measurement_kind === "pm_return") return <AuditReturnResult key={job.job_id} job={job} />;
   return <MeasurementReviewWorkspace key={job.job_id} job={job} mode="full_audit">
     {correction => <JobResultBody key={correction?.review_id || job.job_id} measurementReview={correction || undefined}
       job={correction ? { ...job, result: correction.result!.audit_result, error: null, traceback: null,
         started_at: correction.started_at, finished_at: correction.finished_at } : job} />}
   </MeasurementReviewWorkspace>;
+}
+
+function AuditReturnResult({ job }: { job: JobRecord }) {
+  const t = useT();
+  const result = job.result as ReturnResult | null;
+  return <div className="min-w-0 space-y-4">
+    {job.error ? <div role="alert" className="rounded-md border border-danger/30 p-4 text-sm text-danger">{t(job.error)}</div> : null}
+    {result?.analysis_kind === "pm_return" && result.routes.length ? (
+      <PmReturnView result={result} exportUrl={getJobExportUrl(job.job_id, "return-routes")} />
+    ) : <EmptyState title={t("Afternoon return")} detail={t(job.status)} />}
+  </div>;
 }
 
 function JobResultBody({ job, measurementReview }: { job: JobRecord; measurementReview?: MeasurementReviewRecord }) {

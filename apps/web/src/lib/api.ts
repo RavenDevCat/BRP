@@ -613,6 +613,7 @@ export type AddressReview = {
 
 export type WorkbookSubmitResponse = {
     job: JobSummary & { worker_pid?: number };
+    paired_jobs?: JobSummary[] | null;
     source_label: string;
     selected_sheet: string;
     summary: Record<string, unknown>;
@@ -1493,6 +1494,9 @@ export function submitWorkbookJob(payload: {
     job_custom_name?: string;
     scheduled_job?: boolean;
     scheduled_date?: string;
+    submission_id?: string;
+    paired_return?: boolean;
+    return_scheduled_time?: string;
     address_review_acknowledged?: boolean;
 }) {
     return apiFetch<WorkbookSubmitResponse>("/workbooks/submit", {

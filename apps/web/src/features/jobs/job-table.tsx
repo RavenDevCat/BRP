@@ -51,6 +51,9 @@ export function JobTable({ jobs }: { jobs: JobSummary[] }) {
                                     <td className="max-w-[260px] px-4 py-3">
                                         <div className="truncate font-medium text-foreground">
                                             {getJobName(job)}
+                                            {job.metadata?.period ? <div className="mt-1 text-xs font-normal text-muted-foreground">
+                                                {t(job.metadata.period === "pm" ? "Afternoon return" : "Morning to school")}
+                                            </div> : null}
                                         </div>
                                         <div className="mt-1 font-mono text-xs text-muted-foreground">
                                             {job.job_id}

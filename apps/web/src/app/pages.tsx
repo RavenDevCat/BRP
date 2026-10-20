@@ -157,6 +157,11 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
     });
     const jobs = jobsQuery.data || [];
     const resolvedJobId = selectedJobId || "";
+    const historyJobs = jobs.filter(job => job.metadata?.period !== "pm" ||
+        !jobs.some(candidate => candidate.metadata?.pair_id === job.metadata?.pair_id && candidate.metadata?.period === "am"));
+    const selectedJob = jobs.find(job => job.job_id === resolvedJobId);
+    const historyActiveId = historyJobs.find(job => job.metadata?.pair_id &&
+        job.metadata.pair_id === selectedJob?.metadata?.pair_id)?.job_id || resolvedJobId;
 
     const historyDeleteMutation = useMutation({
         mutationFn: (jobId: string) => deleteJob(jobId),
@@ -267,10 +272,10 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                 ].join(" ")}
             >
                 <HistorySidebar
-                    items={jobs}
+                    items={historyJobs}
                     itemId={(job) => job.job_id}
                     itemName={getJobName}
-                    activeId={resolvedJobId}
+                    activeId={historyActiveId}
                     title="Audit History"
                     emptyMessage="Submitted audit runs will appear here after workbook validation and queue submission."
                     collapsed={desktopHistoryCollapsed}
@@ -299,13 +304,14 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
                         });
                     }}
                     renderItem={(job, active) => (
-                        <AuditHistoryItem job={job} active={active} />
+                        <AuditHistoryItem job={job} active={active} partner={jobs.find(candidate =>
+                            candidate.job_id !== job.job_id && job.metadata?.pair_id && candidate.metadata?.pair_id === job.metadata.pair_id)} />
                     )}
                     className="min-w-0 lg:sticky lg:top-20 lg:self-start"
                 />
 
                 {resolvedJobId ? (
-                    <JobDetailPanel jobId={resolvedJobId} />
+                    <JobDetailPanel jobId={resolvedJobId} jobs={jobs} />
                 ) : (
                     <EmptyState
                         title={t("Select an audit")}
@@ -330,9 +336,11 @@ function JobsWorkspace({ selectedJobId }: { selectedJobId?: string }) {
 function AuditHistoryItem({
     job,
     active,
+    partner,
 }: {
     job: Awaited<ReturnType<typeof listJobs>>[number];
     active: boolean;
+    partner?: Awaited<ReturnType<typeof listJobs>>[number];
 }) {
     const t = useT();
     const summary = job.prepared_payload_summary || {};
@@ -343,6 +351,7 @@ function AuditHistoryItem({
     return (
         <div className="min-w-0 px-1 py-1">
             <Badge tone={active ? "neutral" : getJobStatusTone(job.status)}>
+                {job.metadata?.period ? `${t(job.metadata.period === "pm" ? "Afternoon return" : "Morning to school")} · ` : ""}
                 {t(job.status)}
             </Badge>
             <div className={`mt-2 text-xs ${secondaryClass}`}>
@@ -353,6 +362,10 @@ function AuditHistoryItem({
                     {t("Scheduled for")} {formatDateTime(scheduledStartAt)}
                 </div>
             ) : null}
+            {partner ? <div className={`mt-2 space-y-1 text-xs ${secondaryClass}`}>
+                <div>{t("Afternoon return")} · {t(partner.status)}</div>
+                <div>{formatDateTime(getScheduledStartAt(partner))}</div>
+            </div> : null}
             <div className={`mt-2 grid grid-cols-2 gap-2 text-xs ${secondaryClass}`}>
                 <span>
                     {formatNumber(jobInputStopCount(summary))} {t("stops")}
@@ -407,7 +420,7 @@ function jobRefreshInterval(job?: Awaited<ReturnType<typeof getJob>>) {
     return job.status === "scheduled" ? scheduledRefreshInterval(job) : false;
 }
 
-function JobDetailPanel({ jobId }: { jobId: string }) {
+function JobDetailPanel({ jobId, jobs }: { jobId: string; jobs: Awaited<ReturnType<typeof listJobs>> }) {
     const t = useT();
     const navigate = useNavigate();
     const queryClient = useQueryClient();
@@ -460,6 +473,10 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
     const jobIsActive = job.status === "scheduled" || job.status === "queued" || job.status === "running";
     const jobIsScheduled = job.status === "scheduled";
     const scheduledStartAt = getScheduledStartAt(job);
+    const isReturn = job.metadata?.measurement_kind === "pm_return";
+    const pairedJobs = job.metadata?.pair_id ? jobs.filter(candidate =>
+        candidate.metadata?.pair_id === job.metadata?.pair_id).sort((a, b) =>
+        String(a.metadata?.period).localeCompare(String(b.metadata?.period))) : [];
 
     return (
         <div className="min-w-0 space-y-6">
@@ -479,7 +496,15 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                 <Badge tone={getJobStatusTone(job.status)}>{t(job.status)}</Badge>
             </div>
 
-            <JobMetrics job={job} />
+            {pairedJobs.length ? <nav aria-label={t("Service period")} className="flex flex-wrap gap-2 border-b border-border pb-3">
+                {pairedJobs.map(periodJob => <Link key={periodJob.job_id} to="/jobs/$jobId" params={{ jobId: periodJob.job_id }}
+                    aria-current={periodJob.job_id === jobId ? "page" : undefined}
+                    className={buttonClassName(periodJob.job_id === jobId ? "primary" : "secondary")}>
+                    {t(periodJob.metadata?.period === "pm" ? "Afternoon return" : "Morning to school")}
+                    <span className="text-xs">{t(periodJob.status)}</span>
+                </Link>)}
+            </nav> : null}
+            {!isReturn ? <JobMetrics job={job} /> : null}
 
             <div className="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_360px]">
                 <Suspense fallback={<LoadingState label={t("Loading job")} />}>
@@ -532,7 +557,7 @@ function JobDetailPanel({ jobId }: { jobId: string }) {
                             </h2>
                         </CardHeader>
                         <CardContent className="space-y-3">
-                            {jobIsScheduled ? (
+                            {jobIsScheduled && !isReturn ? (
                                 <Button
                                     type="button"
                                     variant="primary"

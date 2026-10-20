@@ -150,9 +150,10 @@ def main() -> int:
         metadata = dict(job_record.get("metadata") or {})
         job_kind = str(metadata.get("job_kind") or "route_audit").strip().lower()
         prepared_payload = dict(job_record.get("prepared_payload") or {})
-        if job_kind == "direct_school_analysis":
-            from paired_return import ensure_current_window, run_return_measurement
-            ensure_current_window(metadata)
+        from paired_return import ensure_return_due, run_return_measurement
+        ensure_return_due(metadata)
+        is_return = metadata.get("measurement_kind") == "pm_return"
+        if job_kind == "direct_school_analysis" or is_return:
             def save_checkpoint(partial_result: dict[str, Any]) -> None:
                 current = _load_job(job_id)
                 if str(current.get("status", "")).strip().lower() == "canceled":
@@ -200,7 +201,7 @@ def main() -> int:
         job_record["worker_pid"] = None
         job_record["job_slot_path"] = None
         _save_job(job_record)
-        if job_kind == "route_audit":
+        if job_kind == "route_audit" and not is_return:
             _create_automatic_deep_verifications(job_record)
         return 0
     except Exception as exc:

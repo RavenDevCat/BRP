@@ -48,7 +48,7 @@ def reverse_payload(prepared):
     return result
 
 
-def create_pair(service, payload, prepared, metadata, owner, morning_at):
+def create_pair(service, payload, prepared, metadata, owner, morning_at, *, morning_config=None):
     submission_id = str(payload.get("submission_id") or fingerprint([
         prepared["current_plan"], metadata["analysis_config"], morning_at,
         payload.get("return_scheduled_time", "15:40"), metadata.get("job_name")])).strip()
@@ -70,23 +70,30 @@ def create_pair(service, payload, prepared, metadata, owner, morning_at):
     source_version = fingerprint(prepared["current_plan"])
     pair_id = fingerprint([owner.strip().lower(), service.JOB_QUEUE_SCOPE, submission_id,
                            payload.get("scheduled_date")])[:24]
-    request_hash = fingerprint([source_version, metadata["analysis_config"], morning_at,
-                                afternoon_at, metadata.get("job_name")])
+    request_values = [source_version, metadata["analysis_config"], morning_at,
+                      afternoon_at, metadata.get("job_name")]
+    if morning_config is not None:
+        request_values.append(morning_config)
+    request_hash = fingerprint(request_values)
     ids = {"am": pair_id + "-am", "pm": pair_id + "-pm"}
     pair = []
     for period, snapshot, scheduled_at in (("am", prepared, morning_at), ("pm", reversed_prepared, afternoon_at)):
         meta = deepcopy(metadata)
+        config = deepcopy(morning_config or {})
         meta.update(pair_id=pair_id, period=period, paired_job_ids=ids,
                     pair_request_hash=request_hash, source_plan_version=source_version,
                     scheduled_start_at=scheduled_at, scheduled_time=scheduled_at[11:16],
                     schedule_expires_at=(datetime.fromisoformat(scheduled_at) + timedelta(seconds=MAX_DELAY_S)).isoformat())
         if period == "pm":
+            if morning_config is not None:
+                config.update(service_direction="From School", final_time_validation_mode="legacy")
+                meta["planner_config"] = config
             meta["measurement_kind"] = "pm_return"
             meta["analysis_config"].update(service_direction="From School", final_time_validation_mode="legacy",
                                            from_school_departure_time=pm.strftime("%H:%M"))
             meta["analysis_signature"] = service._direct_school_signature(snapshot["current_plan"], meta["analysis_config"])
             meta["scheduled_trigger_label"] = pm.strftime("%H:%M") + " return measurement"
-        record = service.JOB_STORE.create_job({}, snapshot, metadata=meta, owner_email=owner,
+        record = service.JOB_STORE.create_job(config, snapshot, metadata=meta, owner_email=owner,
             status="scheduled", scheduled_start_at=scheduled_at,
             scheduled_trigger_label=meta.get("scheduled_trigger_label") or label, persist=False)
         record["job_id"] = ids[period]
@@ -94,6 +101,26 @@ def create_pair(service, payload, prepared, metadata, owner, morning_at):
     saved = service._runtime_sqlite_store().insert_job_pair(pair)
     from runtime_store_sqlite import job_summary
     return [job_summary(record) for record in saved]
+
+
+def create_audit_pair(service, payload, prepared, metadata, owner, morning_at, config):
+    meta = deepcopy(metadata)
+    meta["job_kind"] = "route_audit"
+    meta["analysis_config"] = {
+        "service_direction": "To School", "final_time_validation_mode": "legacy",
+        "stop_service_minutes": config.get("stop_service_minutes", 1),
+        "far_duration_minutes": 60,
+    }
+    return create_pair(service, payload, prepared, meta, owner, morning_at, morning_config=config)
+
+
+def ensure_return_due(metadata, now=None):
+    now = now or datetime.now(timezone.utc)
+    ensure_current_window(metadata, now)
+    if metadata.get("measurement_kind") == "pm_return":
+        scheduled = metadata.get("scheduled_start_at")
+        if scheduled and now < datetime.fromisoformat(scheduled):
+            raise ValueError("Return measurement cannot run before its scheduled traffic window.")
 
 
 def ensure_current_window(metadata, now=None):

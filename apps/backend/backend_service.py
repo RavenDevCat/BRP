@@ -2953,15 +2953,24 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
             "readiness": readiness,
         },
     }
-    summary = JOB_STORE.create_job(
-        config_payload,
-        dict(client_prep["prepared_payload"]),
-        metadata=metadata,
-        owner_email=user_email,
-        status="scheduled" if scheduled_requested else "queued",
-        scheduled_start_at=scheduled_start_at,
-        scheduled_trigger_label=scheduled_trigger_label,
-    )
+    paired_jobs = None
+    if (scheduled_requested and payload.get("paired_return", True)
+            and config_payload.get("service_direction") == "To School"
+            and infer_traffic_location(input_records)[0].strip().upper() in {"CHINA", "CN"}):
+        from paired_return import create_audit_pair
+        paired_jobs = create_audit_pair(sys.modules[__name__], payload, dict(client_prep["prepared_payload"]),
+            metadata, user_email, scheduled_start_at, config_payload)
+        summary = paired_jobs[0]
+    else:
+        summary = JOB_STORE.create_job(
+            config_payload,
+            dict(client_prep["prepared_payload"]),
+            metadata=metadata,
+            owner_email=user_email,
+            status="scheduled" if scheduled_requested else "queued",
+            scheduled_start_at=scheduled_start_at,
+            scheduled_trigger_label=scheduled_trigger_label,
+        )
     if not scheduled_requested:
         spawned = _spawn_job_worker(str(summary["job_id"]))
         if spawned:
@@ -2974,6 +2983,7 @@ def _handle_workbook_submit(payload: dict[str, Any], user_email: str) -> dict[st
         "client_prep": metadata["client_prep"],
         "address_review": address_review,
         "readiness": readiness,
+        "paired_jobs": paired_jobs,
     }
 
 

@@ -741,11 +741,16 @@ def _amap_route_point(point: dict[str, Any]) -> tuple[float, float] | None:
 
 
 def _check_amap_pickup_precision(points: list[dict[str, Any]], state: dict[str, Any]) -> None:
-    state["pickup_precision_reviews"] = [
-        {"point_index": index, "issues": reviewed["pickup_precision_issues"]}
-        for index, point in enumerate(points)
-        if (reviewed := annotate_amap_pickup(point, str(point.get("requested_address") or point.get("address") or ""))).get("pickup_precision_issues")
-    ]
+    reviews = []
+    for index, point in enumerate(points):
+        reviewed = annotate_amap_pickup(point, str(point.get("requested_address") or point.get("address") or ""))
+        issues = list(reviewed.get("pickup_precision_issues") or [])
+        if (reviewed.get("pickup_resolution_status") == "reference_only"
+                and reviewed.get("pickup_precision_status") != "operator_confirmed" and not issues):
+            issues.append("pickup_location_unconfirmed")
+        if issues:
+            reviews.append({"point_index": index, "issues": issues})
+    state["pickup_precision_reviews"] = reviews
     try:
         require_amap_pickup_precision(points)
     except GeocodePrecisionError as exc:

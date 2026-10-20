@@ -232,8 +232,7 @@ def test_new_relative_parking_address_does_not_accept_landmark_geocode_as_stop(m
     assert point["pickup_resolution_status"] == "reference_only"
     assert point["pickup_precision_status"] == "needs_review"
     assert (point["lat"], point["lng"]) == (31.205, 121.435)
-    with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
-        quality.require_amap_pickup_precision([point])
+    quality.require_amap_pickup_precision([point])
     assert quality.reusable_amap_geocode(point, address)  # Keep a visible reference, not another failed-address cache.
 
 
@@ -327,16 +326,26 @@ def test_parent_and_flat_exit_same_id_whitespace_is_one_candidate_unless_coordin
         assert point['amap_poi_id']=='exit'
 
 
-def test_reference_only_identity_blocks_shared_provider_before_outbound_io(monkeypatch):
+def test_reference_pickup_measures_coordinates_without_promoting_identity(monkeypatch):
     analysis = importlib.import_module("direct_school_analysis")
     monkeypatch.setattr(core, "load_legacy_planner", lambda: type("Planner", (), {"AMAP_KEY": "test"})())
-    monkeypatch.setattr(core, "_amap_route_stats", lambda *_: pytest.fail("reference point cannot become route evidence"))
+    def measure(_planner, coords, _cache, state, **kwargs):
+        assert len(coords) == 2
+        state["api_calls"] += 1
+        evidence = {"status": "verified", "complete": True, "duration_s": 600,
+                    "distance_m": 5000, "issues": []}
+        state["last_route_evidence"] = evidence
+        return evidence
+    monkeypatch.setattr(core, "measure_amap_route", measure)
     point = {"provider": "amap", "address": REQUEST, "lat": 31.2, "lng": 121.43,
              "pickup_resolution_status": "reference_only", "passenger_count": 0, "is_depot": False}
     provider = analysis.FreshRouteProvider("amap", departure_time=None, api_call_limit=10)
-    with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
-        provider.route([point, {"provider": "amap", "address": "school", "lat":31.1, "lng":121.4}])
-    assert provider.state["api_calls"] == 0 and point["is_depot"] is False
+    result = provider.route([point, {"provider": "amap", "address": "school", "lat":31.1, "lng":121.4}])
+    assert result["duration_s"] == 600 and result["distance_m"] == 5000
+    assert result["pickup_precision_reviews"][0]["point_index"] == 0
+    assert provider.state["last_route_evidence"]["pickup_precision_reviews"] == result["pickup_precision_reviews"]
+    assert provider.state["api_calls"] == 1 and point["is_depot"] is False
+    assert point["pickup_resolution_status"] == "reference_only"
 
 
 @pytest.mark.parametrize("confirmed", [False, True])
@@ -358,11 +367,7 @@ def test_fresh_pickup_evidence_survives_cache_and_serialized_payload(monkeypatch
     restored = json.loads(json.dumps(payload))
     assert restored["pickup_resolution_status"] == "reference_only"
     assert restored["amap_parent_poi_id"] == "parent"
-    if confirmed:
-        quality.require_amap_pickup_precision([restored])
-    else:
-        with pytest.raises(quality.GeocodePrecisionError, match="requires confirmation"):
-            quality.require_amap_pickup_precision([restored])
+    quality.require_amap_pickup_precision([restored])
 
 
 @pytest.mark.parametrize("backend", [False, True])

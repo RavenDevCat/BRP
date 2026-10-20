@@ -7,10 +7,17 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-10-20
 
-### Workbook Route Preview Recovery
+### Workbook Route Measurement Recovery
 
-- Upload previews retain available OSRM road geometry when pickup review prevents
-  live route measurement. The map labels this as an unverified preview; it does
+- Resolved AMap coordinates can be measured even when the pickup entrance still
+  needs review. Route Audit, Direct-to-School and afternoon return measurement
+  share this policy. Measured geometry, duration and distance remain visible;
+  pickup uncertainty is retained as a separate advisory in results and exports.
+- Invalid coordinates and incomplete or inconsistent provider route evidence
+  still prevent a verified measurement. Pickup identities are not automatically
+  confirmed and saved coordinates are not moved.
+- Upload previews retain available OSRM road geometry when live route measurement
+  is unavailable. The map labels this as an unverified preview; it does
   not replace provider evidence, populate verified travel times, or pass a route
   through final acceptance. Saved audit maps retain their existing evidence rules.
 - Matched cached pickups no longer remain blocked by a stale reference-only flag

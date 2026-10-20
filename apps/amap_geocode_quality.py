@@ -225,15 +225,7 @@ def annotate_amap_pickup(point: dict[str, Any], requested: str, *, ambiguous: bo
 
 
 def require_amap_pickup_precision(points: list[dict[str, Any]]) -> None:
-    reference_only = [index for index, point in enumerate(points)
-                      if point.get("pickup_resolution_status") == "reference_only"
-                      and point.get("pickup_precision_status") != "operator_confirmed"]
-    if reference_only:
-        raise GeocodePrecisionError(
-            "Pickup identity or entrance requires confirmation at route point index(es): "
-            + ", ".join(map(str, reference_only))
-            + ". The visible coordinate is a reference, not a confirmed service stop; no stop was skipped."
-        )
+    """Require usable coordinates; entrance confidence is a separate advisory."""
     unresolved = [index for index, point in enumerate(points)
                   if not reusable_amap_geocode(point, str(point.get("requested_address") or point.get("address") or ""))]
     if unresolved:

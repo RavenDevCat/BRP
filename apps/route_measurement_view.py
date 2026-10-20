@@ -84,6 +84,8 @@ def measured_route_views(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def evidence_notice(evidence: dict[str, Any]) -> str:
     if evidence.get("status") != "verified" or evidence.get("complete") is not True or evidence.get("issues"):
         return "Travel time unavailable; this route's time-window result is incomplete."
+    if evidence.get("pickup_precision_reviews"):
+        return "Live traffic measured at the resolved coordinates; pickup locations still need review."
     return ""
 
 

@@ -2137,6 +2137,7 @@ def _current_plan_preview_map(
             "current_plan",
             "current_plan",
             attach_impact=False,
+            allow_reference_geometry=True,
         )
     except Exception as exc:
         return None, str(exc) or exc.__class__.__name__
@@ -5795,6 +5796,7 @@ def _build_job_map_payload(
     artifact_key: str,
     *,
     attach_impact: bool,
+    allow_reference_geometry: bool = False,
 ) -> tuple[dict[str, Any] | None, str | None]:
     result = dict(job_record.get("result") or {})
     structured = dict(result.get("structured_results") or {})
@@ -5839,6 +5841,8 @@ def _build_job_map_payload(
         display_distance_m: float | None = None
         evidence = dict(route.get("route_evidence") or {})
         evidence_legs = list(evidence.get("legs") or [])
+        geometry_segments = evidence.get("geometry_segments") or []
+        reference_geometry = geometry
         if evidence.get("evidence_version"):
             display_geometry = list(evidence.get("geometry") or [])
             geometry = display_geometry
@@ -5868,6 +5872,25 @@ def _build_job_map_payload(
         elif is_cn_route_map:
             display_geometry_source = "osrm_legacy"
             display_geometry_message = "Historical result: map and timing were not saved as one measurement. Rerun to verify."
+
+        # Upload previews may show the existing road geometry, never substitute
+        # its timing or geometry into final provider evidence or acceptance.
+        if (allow_reference_geometry and evidence and evidence.get("status") != "verified"
+                and not display_geometry and not geometry_segments):
+            reference_segments = [
+                _route_geometry_coordinates({"leg_details": [leg]}) for leg in leg_details
+            ]
+            if (len(nodes) >= 2 and len(reference_segments) == len(nodes) - 1
+                    and all(leg.get("coordinate_source") in {"plot", "raw_geocode_fallback"}
+                            for leg in leg_details)
+                    and all(len(segment) >= 2 for segment in reference_segments)):
+                geometry = display_geometry = reference_geometry
+                geometry_segments = reference_segments
+                display_geometry_source = "osrm_preview"
+                display_geometry_message = (
+                    "OSRM road preview at the resolved coordinates. "
+                    "Pickup locations and live travel time are not verified."
+                )
 
         visible_geometry = display_geometry if display_geometry else geometry
         for lng, lat in visible_geometry:
@@ -5996,7 +6019,7 @@ def _build_job_map_payload(
                 "route_evidence": evidence or None,
                 "final_route_traffic_gate": traffic_gate or None,
                 "evidence_status": evidence.get("status") or ("legacy" if is_cn_route_map else "not_applicable"),
-                "geometry_segments": evidence.get("geometry_segments") or [],
+                "geometry_segments": geometry_segments,
                 "stop_ids": route_stop_ids,
             }
         )

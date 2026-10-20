@@ -24,6 +24,23 @@ def poi(name=REQUEST, location="121.430,31.200", **extra):
             "address": ROAD_A, "type": BUS, **extra}
 
 
+@pytest.mark.parametrize("warning", [None, "", quality.PICKUP_REVIEW_WARNING])
+def test_matched_pickup_clears_stale_reference_state_independent_of_warning(warning):
+    point = {"provider": "amap", "lat": 31.2, "lng": 121.43,
+             "address": REQUEST, "geocode_level": "poi", "amap_poi_name": REQUEST,
+             "pickup_resolution_status": "reference_only", "geocode_status": "needs_review",
+             "pickup_precision_status": "matched",
+             "warning": warning}
+    result = quality.annotate_amap_pickup(point, REQUEST)
+    assert result["pickup_precision_status"] == "matched"
+    assert result["pickup_resolution_status"] == "matched"
+    assert result["geocode_status"] == "ok"
+    assert result["warning"] == ("" if warning == quality.PICKUP_REVIEW_WARNING else warning)
+    assert result["lat"] == point["lat"] and result["lng"] == point["lng"]
+    assert point["pickup_resolution_status"] == "reference_only"
+    quality.require_amap_pickup_precision([result])
+
+
 def test_coarse_road_and_residential_area_are_not_pickup_evidence():
     for level in ("\u9053\u8def", "\u4f4f\u5b85\u533a", ""):
         candidate = {"level": level, "formatted_address": REQUEST}

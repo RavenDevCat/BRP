@@ -117,6 +117,65 @@ def test_preview_does_not_reuse_measurements_across_uploads(preview):
     assert len(calls) == 2
 
 
+def set_reference_pickup_with_osrm_geometry(prepared, scenario):
+    prepared["original_points"][0]["pickup_resolution_status"] = "reference_only"
+    points = scenario["points"]
+    route = scenario["routes"][0]
+    for leg, a, b in zip(route["leg_details"], route["nodes"], route["nodes"][1:]):
+        leg["geometry"] = [[points[n]["lat"], points[n]["lng"]] for n in (a, b)]
+        leg["coordinate_source"] = "plot"
+
+
+def test_reference_pickup_preview_draws_osrm_without_claiming_measured_timing(preview):
+    current, prepared, calls, _, scenario = preview
+    set_reference_pickup_with_osrm_geometry(prepared, scenario)
+    original = deepcopy(scenario)
+    budget = {"minutes": 5}
+    payload, error = service._current_plan_preview_map(current, prepared, {}, budget)
+    assert error is None
+    assert calls == []
+    route = payload["routes"][0]
+    assert route["display_geometry_source"] == "osrm_preview"
+    assert len(route["geometry_segments"]) == 2
+    assert len(route["display_geometry"]) == 3
+    assert "not verified" in route["display_geometry_message"]
+    assert route["route_evidence"]["geometry"] == []
+    assert route["evidence_status"] == "needs_review"
+    assert route["final_route_traffic_gate"]["passes"] is None
+    assert route["display_metrics"]["duration_s"] is None
+    assert route["verified_total_duration_s"] is None
+    assert all(s["scheduled_time_minutes"] is None for s in payload["stops"])
+    assert [s["node_index"] for s in payload["stops"]] == [1, 2, 0]
+    assert budget["amap_route_status"] == "unavailable"
+    assert scenario == original
+
+
+def test_reference_geometry_is_not_enabled_for_saved_job_maps(preview):
+    _, prepared, _, _, scenario = preview
+    set_reference_pickup_with_osrm_geometry(prepared, scenario)
+    scenario["routes"][0]["route_evidence"] = {
+        "evidence_version": 1, "status": "needs_review", "complete": False,
+        "geometry": [], "legs": [], "issues": [{"code": "pickup_precision_needs_review"}],
+    }
+    job = {"result": {"structured_results": {"current_plan": scenario}}}
+    payload, error = service._build_job_map_payload(job, "current_plan", "current_plan", attach_impact=False)
+    assert error is None
+    assert payload["routes"][0]["geometry"] == []
+    assert payload["routes"][0]["display_geometry_source"] != "osrm_preview"
+
+
+@pytest.mark.parametrize("missing", ["geometry", "coordinate_source"])
+def test_preview_does_not_invent_missing_road_segments(preview, missing):
+    current, prepared, calls, _, scenario = preview
+    set_reference_pickup_with_osrm_geometry(prepared, scenario)
+    scenario["routes"][0]["leg_details"][1].pop(missing)
+    payload, error = service._current_plan_preview_map(current, prepared, {})
+    assert error is None
+    assert calls == []
+    assert payload["routes"][0]["display_geometry_source"] != "osrm_preview"
+    assert payload["routes"][0]["geometry"] == []
+
+
 def test_partial_preview_budget_cannot_claim_all_routes_measured():
     details = {"minutes": 60}
     scenario = {"routes": [{"route_evidence": {"status": "verified"}},

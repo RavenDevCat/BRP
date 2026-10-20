@@ -7,6 +7,17 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-10-20
 
+### Workbook Route Preview Recovery
+
+- Upload previews retain available OSRM road geometry when pickup review prevents
+  live route measurement. The map labels this as an unverified preview; it does
+  not replace provider evidence, populate verified travel times, or pass a route
+  through final acceptance. Saved audit maps retain their existing evidence rules.
+- Matched cached pickups no longer remain blocked by a stale reference-only flag
+  after their generated warning was removed. Independent manual holds, unresolved
+  entrances and operator-confirmed coordinates are preserved.
+- Refresh and upload the workbook again to rebuild an already-open preview.
+
 ### Paired Morning And Afternoon Measurements (Staging)
 
 - New scheduled To-School analyses create an atomic morning/afternoon pair for

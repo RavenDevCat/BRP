@@ -208,12 +208,19 @@ def annotate_amap_pickup(point: dict[str, Any], requested: str, *, ambiguous: bo
     if issues:
         result["geocode_status"] = "needs_review"
         result["warning"] = PICKUP_REVIEW_WARNING
-    elif result.get("warning") == PICKUP_REVIEW_WARNING:
-        result["warning"] = ""
-        if result.get("geocode_status") == "needs_review":
-            result["geocode_status"] = "ok"
-        if result.get("pickup_resolution_status") == "reference_only":
-            result["pickup_resolution_status"] = "matched"
+    else:
+        if result.get("warning") == PICKUP_REVIEW_WARNING:
+            result["warning"] = ""
+            if result.get("geocode_status") == "needs_review":
+                result["geocode_status"] = "ok"
+        # A matched cached pickup can retain an older reference-only flag even
+        # when its warning was stripped. Do not clear independent manual holds.
+        if (point.get("warning") == PICKUP_REVIEW_WARNING
+                or (point.get("pickup_precision_status") == "matched" and not point.get("warning"))):
+            if result.get("pickup_resolution_status") == "reference_only":
+                result["pickup_resolution_status"] = "matched"
+            if result.get("geocode_status") == "needs_review":
+                result["geocode_status"] = "ok"
     return result
 
 

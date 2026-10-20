@@ -1879,6 +1879,20 @@ def _address_review_failure_warnings(
     return warnings
 
 
+def _address_review_has_coordinates(point: dict[str, Any] | None) -> bool:
+    if not point or any(isinstance(point.get(key), bool) for key in ("lat", "lng")):
+        return False
+    try:
+        lat, lng = float(point["lat"]), float(point["lng"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    return (
+        math.isfinite(lat) and math.isfinite(lng)
+        and -90 <= lat <= 90 and -180 <= lng <= 180
+        and (lat, lng) != (0, 0)
+    )
+
+
 def _build_address_review(
     client_core: Any,
     input_records: list[dict[str, Any]],
@@ -1935,9 +1949,9 @@ def _build_address_review(
         status = "ok"
         reason = ""
         suggestion = ""
-        if point is None:
+        if not _address_review_has_coordinates(point):
             status = "blocking"
-            reason = warning_text or "This address could not be resolved to coordinates."
+            reason = "This address could not be resolved to valid coordinates."
             suggestion = str((warning or {}).get("suggestion") or "Correct the workbook address or clear the cached geocode, then upload again.").strip()
         else:
             point_status = str(point.get("geocode_status") or point.get("validation_status") or "").strip().lower()
@@ -1983,18 +1997,15 @@ def _build_address_review(
         "review_count": review_count,
         "ok_count": ok_count,
         "total_count": len(items),
-        "requires_acknowledgement": review_count > 0,
+        "requires_acknowledgement": False,
         "items": items,
     }
 
 
 def _address_review_block_message(address_review: dict[str, Any]) -> str:
     blocking_count = int(address_review.get("blocking_count") or 0)
-    review_count = int(address_review.get("review_count") or 0)
     if blocking_count:
         return f"Address review has {blocking_count} unresolved address(es). Correct the workbook or clear cached geocodes before running audit."
-    if review_count:
-        return f"Address review has {review_count} warning(s). Review and acknowledge them before running audit."
     return ""
 
 
@@ -2018,12 +2029,6 @@ def _workbook_solver_readiness(
             "reason": "address_review_blocked",
             "message": _address_review_block_message(address_review),
         }
-    if bool(address_review.get("requires_acknowledgement")) and not acknowledged:
-        return {
-            "status": "invalid",
-            "reason": "address_review_acknowledgement_required",
-            "message": _address_review_block_message(address_review),
-        }
     if auto_route_budget is not None and auto_route_budget.get("status") != "ready":
         reason = str(auto_route_budget.get("reason") or "route_budget_unavailable")
         status = (
@@ -2036,6 +2041,14 @@ def _workbook_solver_readiness(
             "reason": reason,
             "message": f"Current-plan route budget is unavailable: {reason}",
         }
+    if auto_route_budget is not None:
+        minutes = auto_route_budget.get("minutes")
+        if isinstance(minutes, bool) or not isinstance(minutes, (int, float)) or not math.isfinite(minutes) or minutes <= 0:
+            return {
+                "status": "invalid",
+                "reason": "invalid_route_budget",
+                "message": "Current-plan route budget must be a positive finite number.",
+            }
     if current_plan_error:
         invalid_messages = (
             "No geocoded points",

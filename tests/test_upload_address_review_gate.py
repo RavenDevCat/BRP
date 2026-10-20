@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "backend"))
@@ -76,7 +77,7 @@ class UploadAddressReviewGateTests(unittest.TestCase):
         self.assertEqual(review["items"][0]["status"], "blocking")
         self.assertEqual(review["items"][0]["source_excel_rows"], "12")
 
-    def test_submit_requires_acknowledgement_for_review_warning(self) -> None:
+    def test_submit_accepts_coordinate_notice_without_acknowledgement(self) -> None:
         client_core = self.fake_client_core(
             prepared_payload={
                 "original_points": [
@@ -104,10 +105,18 @@ class UploadAddressReviewGateTests(unittest.TestCase):
         patches = {
             "_read_current_plan_upload": lambda _payload: (client_core, "routes.xlsx", self.current_plan()),
             "_build_client_planner_config": lambda *_args, **_kwargs: object(),
+            "_auto_current_plan_route_budget_details": lambda *_args: {"status": "ready", "minutes": 60},
+            "_current_plan_preview_map": lambda *_args: ({}, None),
+            "_spawn_job_worker": lambda *_args: None,
         }
-        with mock.patch.multiple(backend_service, **patches):
-            with self.assertRaisesRegex(ValueError, "Review and acknowledge"):
-                backend_service._handle_workbook_submit({"config": {}}, user_email="user@example.com")
+        with mock.patch.multiple(backend_service, **patches), mock.patch.object(
+            backend_service.JOB_STORE, "create_job", return_value={"job_id": "notice-job"}
+        ) as create:
+            result = backend_service._handle_workbook_submit({"config": {}}, user_email="user@example.com")
+        self.assertEqual(result["job"]["job_id"], "notice-job")
+        self.assertEqual(result["address_review"]["review_count"], 1)
+        self.assertFalse(result["address_review"]["requires_acknowledgement"])
+        self.assertEqual(create.call_args.kwargs["metadata"]["client_prep"]["readiness"]["status"], "ready")
 
     def test_preview_includes_current_plan_map_when_available(self) -> None:
         client_core = self.fake_client_core(
@@ -183,6 +192,24 @@ class UploadAddressReviewGateTests(unittest.TestCase):
         self.assertIn("keep-client", client_core.runtime.GEOCODE_CACHE)
         self.assertIn("keep-backend", backend_cache)
         self.assertTrue(backend_saved)
+
+
+@pytest.mark.parametrize("lat,lng", [
+    (None, 121.4), ("invalid", 121.4), (float("nan"), 121.4),
+    (31.2, float("inf")), (91, 121.4), (31.2, 181), (0, 0), (True, 121.4),
+])
+def test_present_but_invalid_coordinate_is_blocked(lat, lng):
+    fixture = UploadAddressReviewGateTests()
+    point = {**fixture.current_plan()["input_records"][0], "lat": lat, "lng": lng,
+             "geocode_status": "needs_review"}
+    review = backend_service._build_address_review(
+        fixture.fake_client_core(), fixture.current_plan()["input_records"],
+        {"original_points": [point]}, [],
+    )
+    assert review["blocking_count"] == 1
+    assert review["review_count"] == 0
+    assert backend_service._workbook_solver_readiness(
+        address_review=review, acknowledged=True)["status"] == "invalid"
 
 
 if __name__ == "__main__":

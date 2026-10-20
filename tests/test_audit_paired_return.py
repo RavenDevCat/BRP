@@ -22,12 +22,13 @@ def audit_api(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_runtime_sqlite_store", lambda: store)
     monkeypatch.setattr(service, "SCHEDULED_JOBS_ENABLED", True)
     prepared = source()
+    for point in prepared["original_points"]:
+        point["geocode_status"] = "needs_review"
+        point["pickup_resolution_status"] = "reference_only"
     prepared["current_plan"]["input_records"] = deepcopy(prepared["input_records"])
     core = SimpleNamespace(prepare_client_payload=lambda *args, **kwargs: {"prepared_payload": deepcopy(prepared)})
     monkeypatch.setattr(service, "_read_current_plan_upload", lambda _: (core, "audit.xlsx", prepared["current_plan"]))
     monkeypatch.setattr(service, "_build_client_planner_config", lambda *args: None)
-    monkeypatch.setattr(service, "_build_address_review", lambda *args: {"items": []})
-    monkeypatch.setattr(service, "_workbook_solver_readiness", lambda **kwargs: {"status": "ready"})
     monkeypatch.setattr(service, "_auto_current_plan_route_budget_details", lambda *args: {"status": "ready", "minutes": 90})
     monkeypatch.setattr(service, "_current_plan_preview_map", lambda *args: ({}, None))
     monkeypatch.setattr(service, "_spawn_job_worker", lambda *args: None)
@@ -55,6 +56,9 @@ def test_new_audit_pair_history_permissions_export_and_idempotence(audit_api):
     assert am["config"]["stop_service_minutes"] == 2
     assert am["config"]["max_route_duration_minutes"] == 90
     assert am["prepared_payload"] == prepared
+    assert am["metadata"]["client_prep"]["address_review"]["review_count"] == 3
+    assert am["metadata"]["client_prep"]["address_review"]["requires_acknowledgement"] is False
+    assert am["metadata"]["client_prep"]["readiness"]["status"] == "ready"
     assert pm["metadata"]["job_kind"] == "route_audit"
     assert pm["metadata"]["analysis_config"]["stop_service_minutes"] == 2
     assert pm["metadata"]["analysis_config"]["final_time_validation_mode"] == "legacy"
@@ -103,6 +107,16 @@ def test_invalid_pm_time_does_not_create_am(audit_api):
     client, store, payload, _, _ = audit_api
     response = client.post("/api/workbooks/submit", json={**payload, "return_scheduled_time": "06:00"})
     assert response.status_code == 422
+    assert store.list_jobs(include_all=True) == []
+
+
+@pytest.mark.parametrize("scheduled", [False, True])
+def test_invalid_coordinates_block_real_readiness_before_any_job(audit_api, scheduled):
+    client, store, payload, _, prepared = audit_api
+    prepared["original_points"][0]["lat"] = None
+    response = client.post("/api/workbooks/submit", json={
+        **payload, "scheduled_job": scheduled, "address_review_acknowledged": True})
+    assert response.status_code == 422, response.text
     assert store.list_jobs(include_all=True) == []
 
 

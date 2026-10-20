@@ -72,7 +72,6 @@ export function NewJobPage() {
   const [scheduleMonth, setScheduleMonth] = useState(() => monthKey(new Date()));
   const [config, setConfig] = useState<PlannerConfigPayload>(defaultConfig);
   const [preview, setPreview] = useState<WorkbookPreview | null>(null);
-  const [addressReviewAcknowledged, setAddressReviewAcknowledged] = useState(false);
   const [routeBudgetRetryAttempts, setRouteBudgetRetryAttempts] = useState(0);
   const configOverridesRef = useRef<Partial<PlannerConfigPayload>>({});
   const featuresQuery = useQuery({
@@ -173,8 +172,7 @@ export function NewJobPage() {
     onSuccess: (payload) => {
       setPreview(payload);
       setConfig(configFromPreview(payload));
-      setAddressReviewAcknowledged(false);
-      if (payload.auto_route_budget?.status === "ready") {
+      if (payload.readiness?.status === "ready" && payload.auto_route_budget?.status === "ready") {
         setRouteBudgetRetryAttempts(0);
       }
     },
@@ -183,7 +181,6 @@ export function NewJobPage() {
   const clearAddressCacheMutation = useMutation({
     mutationFn: clearGeocodeCache,
     onSuccess: () => {
-      setAddressReviewAcknowledged(false);
       if (!file || !fileBase64) {
         return;
       }
@@ -223,7 +220,6 @@ export function NewJobPage() {
           scheduled_date: scheduledDate,
           submission_id: submissionRef.current.id,
           return_scheduled_time: returnScheduledTime,
-          address_review_acknowledged: addressReviewAcknowledged,
         });
       }
       if (!lastPayload) {
@@ -248,7 +244,6 @@ export function NewJobPage() {
     previewMutation.reset();
     setFile(nextFile);
     setPreview(null);
-    setAddressReviewAcknowledged(false);
     setRouteBudgetRetryAttempts(0);
     configOverridesRef.current = {};
     setConfig(defaultConfig);
@@ -278,7 +273,6 @@ export function NewJobPage() {
     previewMutation.reset();
     setFileError("");
     setPreview(null);
-    setAddressReviewAcknowledged(false);
     setRouteBudgetRetryAttempts(0);
     previewMutation.mutate({ file, fileBase64, config });
   }
@@ -286,13 +280,13 @@ export function NewJobPage() {
   const autoRouteBudget = preview?.auto_route_budget;
   const addressReview = preview?.address_review;
   const addressReviewBlocking = Boolean((addressReview?.blocking_count ?? 0) > 0);
-  const addressReviewNeedsAcknowledgement = Boolean(addressReview?.requires_acknowledgement);
-  const addressReviewReady = Boolean(
-    !addressReview || (!addressReviewBlocking && (!addressReviewNeedsAcknowledgement || addressReviewAcknowledged)),
-  );
+  const addressReviewReady = !addressReviewBlocking;
+  const workbookReady = preview?.readiness?.status === "ready";
   const routeBudgetPending = previewMutation.isPending && !preview;
   const routeBudgetReady = Boolean(
-    preview && autoRouteBudget?.status === "ready" && Number.isFinite(Number(autoRouteBudget.minutes)),
+    preview && autoRouteBudget?.status === "ready"
+    && typeof autoRouteBudget.minutes === "number"
+    && Number.isFinite(autoRouteBudget.minutes) && autoRouteBudget.minutes > 0,
   );
   const busy = previewMutation.isPending || submitMutation.isPending || clearAddressCacheMutation.isPending;
   const timeWindowReady = Boolean(config.time_window_start && config.time_window_end && config.time_window_start < config.time_window_end);
@@ -309,13 +303,14 @@ export function NewJobPage() {
     file &&
     fileBase64 &&
     !busy &&
-    !routeBudgetReady &&
-    (previewMutation.error || routeBudgetUnavailableRetryable),
+    preview?.readiness?.status !== "invalid" &&
+    (!routeBudgetReady || preview?.readiness?.status === "retryable_error") &&
+    (previewMutation.error || routeBudgetUnavailableRetryable || preview?.readiness?.status === "retryable_error"),
   );
   const routeBudgetAutoRetrying = routeBudgetShouldRetry && routeBudgetRetryAttempts < ROUTE_BUDGET_AUTO_RETRY_LIMIT;
   const routeBudgetRetryExhausted = routeBudgetShouldRetry && !routeBudgetAutoRetrying;
   const predictionReady = config.final_time_validation_mode !== "google" || Boolean(config.validation_service_date);
-  const canSubmit = Boolean(fileBase64 && preview && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && predictionReady && !busy);
+  const canSubmit = Boolean(fileBase64 && preview && workbookReady && routeBudgetReady && addressReviewReady && timeWindowReady && scheduledReady && predictionReady && !busy);
   const canRetryRouteBudget = Boolean(
     file &&
     fileBase64 &&
@@ -328,8 +323,10 @@ export function NewJobPage() {
     : !scheduledReady
       ? t("Select at least one schedule date.")
       : !addressReviewReady
-        ? t("Review address warnings before running audit.")
-        : t("Run audit will unlock after workbook validation and route-budget calculation finish.");
+        ? t("Resolve blocked addresses before running audit.")
+        : preview?.readiness?.status !== "ready" && preview?.readiness?.message
+          ? t(preview.readiness.message)
+          : t("Run audit will unlock after workbook validation and route-budget calculation finish.");
 
   useEffect(() => {
     if (!routeBudgetAutoRetrying || !file || !fileBase64) {
@@ -411,9 +408,7 @@ export function NewJobPage() {
               review={preview.address_review}
               mapData={preview.current_plan_map}
               mapError={preview.current_plan_map_error}
-              acknowledged={addressReviewAcknowledged}
               clearPending={clearAddressCacheMutation.isPending}
-              onAcknowledge={setAddressReviewAcknowledged}
               onClearCache={(item) =>
                 clearAddressCacheMutation.mutate({
                   country: item.country,
@@ -758,6 +753,8 @@ export function NewJobPage() {
                 </div>
               </SettingsSection>
 
+              {preview?.readiness && preview.readiness.status !== "ready" && !previewMutation.isPending
+                ? <InlineError message={t(preview.readiness.message)} /> : null}
               {submitMutation.error ? <InlineError message={(submitMutation.error as Error).message} /> : null}
 
               <div className="flex flex-col gap-3 sm:flex-row">
@@ -816,17 +813,13 @@ function CurrentPlanReviewPanel({
   review,
   mapData,
   mapError,
-  acknowledged,
   clearPending,
-  onAcknowledge,
   onClearCache,
 }: {
   review: NonNullable<WorkbookPreview["address_review"]>;
   mapData?: WorkbookPreview["current_plan_map"];
   mapError?: string | null;
-  acknowledged: boolean;
   clearPending: boolean;
-  onAcknowledge: (value: boolean) => void;
   onClearCache: (item: AddressReviewItem) => void;
 }) {
   const t = useT();
@@ -867,10 +860,10 @@ function CurrentPlanReviewPanel({
           {blocked
             ? t("Some workbook addresses could not be resolved. Clear bad cache entries or correct the workbook before running audit.")
             : needsReview
-              ? t("Some resolved addresses need human review before running audit.")
+              ? t("Location notices do not block audit submission. Pickup entrances are not confirmed.")
               : t("No address issues were detected.")}
           <div className="mt-1 text-xs opacity-80">
-            {formatNumber(review.total_count)} {t("addresses")} · {formatNumber(review.review_count)} {t("review")} · {formatNumber(review.blocking_count)} {t("blocked")}
+            {formatNumber(review.total_count)} {t("addresses")} · {formatNumber(review.review_count)} {t("location notices")} · {formatNumber(review.blocking_count)} {t("blocking issues")}
           </div>
         </div>
 
@@ -918,7 +911,7 @@ function CurrentPlanReviewPanel({
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <Badge tone={item.status === "blocking" ? "danger" : item.status === "needs_review" ? "warning" : "success"}>
-                        {t(item.status)}
+                        {t(item.status === "needs_review" ? "Location notice" : item.status)}
                       </Badge>
                       {item.source_excel_rows ? (
                         <span className="text-xs text-muted-foreground">{t("Rows")} {item.source_excel_rows}</span>
@@ -951,17 +944,6 @@ function CurrentPlanReviewPanel({
           <Button type="button" variant="secondary" className="h-8 text-xs" onClick={() => setShowAll((value) => !value)}>
             {showAll ? t("Show flagged only") : t("Show all resolved addresses")}
           </Button>
-          {review.requires_acknowledgement ? (
-            <label className="flex items-center gap-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={acknowledged}
-                disabled={blocked}
-                onChange={(event) => onAcknowledge(event.target.checked)}
-              />
-              <span>{t("I reviewed these address warnings")}</span>
-            </label>
-          ) : null}
         </div>
       </CardContent>
     </Card>

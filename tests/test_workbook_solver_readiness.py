@@ -40,6 +40,31 @@ def test_readiness_separates_invalid_and_retryable_failures() -> None:
     assert ready["status"] == "ready"
 
 
+def test_legacy_acknowledgement_flag_cannot_block_resolved_notices():
+    review = {**_address_review(), "status": "needs_review",
+              "review_count": 62, "requires_acknowledgement": True}
+    assert backend_service._workbook_solver_readiness(
+        address_review=review, acknowledged=False,
+        auto_route_budget={"status": "ready", "minutes": 60})["status"] == "ready"
+    review["blocking_count"] = 1
+    assert backend_service._workbook_solver_readiness(
+        address_review=review, acknowledged=True)["reason"] == "address_review_blocked"
+
+
+@pytest.mark.parametrize("minutes", [None, 0, -1, float("nan"), float("inf"), True, "60"])
+def test_ready_status_cannot_hide_invalid_route_budget(minutes):
+    readiness = backend_service._workbook_solver_readiness(
+        address_review=_address_review(), auto_route_budget={"status": "ready", "minutes": minutes})
+    assert readiness["reason"] == "invalid_route_budget"
+
+
+def test_map_failure_remains_retryable_with_ready_budget():
+    readiness = backend_service._workbook_solver_readiness(
+        address_review=_address_review(), auto_route_budget={"status": "ready", "minutes": 60},
+        current_plan_error="Provider request timed out")
+    assert readiness["status"] == "retryable_error"
+
+
 def test_submit_rejects_unready_workbook_before_job_creation(monkeypatch) -> None:
     class FakeClientCore:
         @staticmethod

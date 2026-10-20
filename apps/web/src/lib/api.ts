@@ -549,6 +549,11 @@ export type PlannerConfigPayload = {
 };
 
 export type WorkbookPreview = {
+    readiness?: {
+        status: "ready" | "invalid" | "retryable_error";
+        reason: string;
+        message: string;
+    };
     source_label: string;
     selected_sheet: string;
     job_default_name: string;

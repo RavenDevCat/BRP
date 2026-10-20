@@ -16,6 +16,12 @@ runtime architecture, or recommended rerun guidance changed.
 - Invalid coordinates and incomplete or inconsistent provider route evidence
   still prevent a verified measurement. Pickup identities are not automatically
   confirmed and saved coordinates are not moved.
+- Resolved-location notices no longer require acknowledgement to submit an
+  immediate or scheduled audit. Unresolved or invalid coordinates still block
+  submission, even when a legacy client sends an acknowledgement.
+- New Audit uses the backend readiness result as well as the route budget.
+  Retryable preview failures remain bounded when the budget is already available;
+  invalid inputs do not trigger repeated automatic preview requests.
 - Upload previews retain available OSRM road geometry when live route measurement
   is unavailable. The map labels this as an unverified preview; it does
   not replace provider evidence, populate verified travel times, or pass a route

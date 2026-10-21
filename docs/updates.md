@@ -5,6 +5,18 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-10-21
+
+### Native Traffic Recovery
+
+- A failed initial continuous-route request no longer invalidates a later
+  successful full native-waypoint recovery. Initial failure diagnostics remain
+  available, while verified recovery supplies the original provider metrics.
+- Missing waypoint evidence, wrong stop endpoints and unresolved chunk joins
+  still fail validation. Geometry-only gaps remain separate from timing evidence.
+- Historical recovery must retain the original response timestamps and route
+  assignments; a fresh off-peak request must not replace a morning observation.
+
 ## 2026-10-20
 
 ### Audit Return Scenarios And Paired History

@@ -283,3 +283,33 @@ def test_missing_native_proof_keeps_all_independent_edges_diagnostic_not_verifie
     assert result["point_count"] == 3
     assert result["status"] == "needs_review"
     assert any(issue["code"] == "continuous_itinerary_unverified" for issue in result["issues"])
+
+
+@pytest.mark.parametrize("bad_endpoint", [False, True])
+def test_initial_itinerary_failure_does_not_poison_successful_native_recovery(bad_endpoint):
+    planner, cache, state = Planner(), {}, {"api_call_limit": 4}
+    attempts = []
+
+    def transient_context(active_planner, points):
+        attempts.append(list(points))
+        if len(attempts) == 1:
+            raise RuntimeError("Temporary provider failure")
+        snapshot = evidence.fetch_amap_itinerary(active_planner, points)
+        if bad_endpoint:
+            snapshot["waypoint_legs"][-1]["geometry"][-1] = [122.0, 32.0]
+        return snapshot
+
+    result = evidence.measure_amap_route(planner, [A, B, C], cache, state,
+        fetch_leg=adjacent, fetch_context=transient_context)
+    assert result["continuous_recovery"]["status"] == "applied"
+    assert result["continuous_measurement"]["status"] == "complete"
+    assert result["continuous_measurement"]["initial_chunks"][0]["error_type"] == "RuntimeError"
+    assert result["source"] == "amap_continuous_waypoint_legs"
+    assert result["duration_s"] == 540
+    assert result["distance_m"] == 600
+    assert result["status"] == ("needs_review" if bad_endpoint else "verified")
+    assert not any(item["code"] == "continuous_itinerary_unverified" for item in result["issues"])
+    assert bool(result["issues"]) == bad_endpoint
+    assert state["last_route_evidence"] is result
+    assert state["api_calls"] == 4
+    assert len(attempts) == 2

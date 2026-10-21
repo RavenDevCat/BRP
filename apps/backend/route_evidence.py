@@ -558,6 +558,17 @@ def measure_amap_route(
             return result
         start = end - 3
     result = _measure_adjacent_route(planner, points, cache, state, fetch_leg=fetch_leg, fetch_context=fetch_context)
+    recovery = result.get("continuous_recovery") or {}
+    if (result.get("complete") and recovery.get("status") == "applied"
+            and result.get("source") == "amap_continuous_waypoint_legs"
+            and len(result.get("legs") or []) == len(points) - 1):
+        # A later full native itinerary supersedes the initial failed request;
+        # retain its diagnostics without invalidating the recovered measurement.
+        result["continuous_measurement"] = {
+            "status": "complete", "initial_chunks": chunks,
+            "chunks": [{**deepcopy(recovery), "point_start": 0, "point_end": len(points) - 1}],
+        }
+        return result
     result["continuous_measurement"] = {"status": "unavailable", "chunks": chunks}
     result["issues"].append({"leg_index": 0, "code": "continuous_itinerary_unverified"})
     if result["status"] == "verified":

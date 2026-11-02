@@ -1,6 +1,8 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Candidate Plan": "候选方案",
+    "Current traffic snapshot; not a morning traffic forecast.": "当前路况实测，不代表早高峰预测。",
     "Return duration limit (min)": "返程评估窗口（分钟）",
     "Return duration limit must be between 1 and 240 minutes.": "返程评估窗口须为1至240分钟。",
     "Under limit": "低于窗口",

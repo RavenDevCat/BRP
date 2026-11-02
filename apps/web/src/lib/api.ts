@@ -512,6 +512,11 @@ export type JobMapData = {
         distance_m: number | null;
         duration_s: number | null;
         measurement_unavailable_route_count?: number;
+        timing_mode?: string;
+        measured_from?: string | null;
+        measured_to?: string | null;
+        plan_status?: string;
+        route_time_limit_exceeded_count?: number;
         time_impact?: JobMapTimeImpactSummary;
     };
 };
@@ -1009,6 +1014,11 @@ export type FleetPlannerClusterResponse = {
 
 export type FleetPlannerRoutePreviewResponse = {
     summary: {
+        timing_mode?: string;
+        measured_from?: string | null;
+        measured_to?: string | null;
+        plan_status?: string;
+        provider_api_calls?: number;
         route_count?: number;
         total_distance_km?: number | null;
         total_duration_min?: number | null;

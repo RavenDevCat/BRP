@@ -1259,7 +1259,8 @@ function RoutePreviewResult({
   const measurementReviewCount = Number(summary.route_measurement_review_count || 0);
   const referenceCount = Number(summary.route_measurement_reference_count || 0);
   const exceedsCount = Number(summary.route_time_limit_exceeded_count || 0);
-  const badgeTone = result.refinement_note || measurementReviewCount || exceedsCount ? "warning" : referenceCount ? "info" : "success";
+  const displayTitle = exceedsCount || measurementReviewCount ? t("Candidate Plan") : title;
+  const badgeTone = measurementReviewCount || exceedsCount ? "warning" : referenceCount ? "info" : "success";
   const metric = (value: unknown, unit: string) => typeof value === "number" && Number.isFinite(value) ? `${formatNumber(value)} ${unit}` : t("Not available");
   const content = (
     <>
@@ -1268,7 +1269,7 @@ function RoutePreviewResult({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Route className="h-4 w-4 text-primary" aria-hidden="true" />
-              <h2 className="text-sm font-semibold">{title}</h2>
+              <h2 className="text-sm font-semibold">{displayTitle}</h2>
             </div>
             <Badge tone={badgeTone}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
           </div>
@@ -1277,7 +1278,7 @@ function RoutePreviewResult({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Route className="h-4 w-4 text-primary" aria-hidden="true" />
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <h2 className="text-sm font-semibold">{displayTitle}</h2>
           </div>
           <Badge tone={badgeTone}>{template(t("{count} routes"), { count: formatNumber(summary.route_count) })}</Badge>
         </div>
@@ -1291,6 +1292,7 @@ function RoutePreviewResult({
           <Metric label="Target" value={summary.max_route_duration_minutes ? `${formatNumber(summary.max_route_duration_minutes)} ${t("min")}` : t("N/A")} />
         </div>
         {measurementReviewCount ? <div role="status" className="border-l-4 border-amber-500 bg-amber-50 px-3 py-2 text-sm text-amber-900">{template(t("{count} routes have incomplete measurements. Totals and stop times remain unavailable where evidence is missing."), { count: formatNumber(measurementReviewCount) })}</div> : null}
+        {summary.timing_mode === "current_snapshot" ? <p className="text-sm text-muted-foreground">{t("Current traffic snapshot; not a morning traffic forecast.")} {formatDateTime(summary.measured_from)}</p> : null}
         {exceedsCount ? <div role="status" className="border-l-4 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-900">{template(t("{count} measured routes exceed the route-time target, including stop time."), { count: formatNumber(exceedsCount) })}</div> : null}
         {referenceCount ? <p className="text-xs text-muted-foreground">{t("Planning references and historical measurements are not a new live verification.")}</p> : null}
         {summary.candidate_vehicle_count || summary.solver ? (
@@ -1299,7 +1301,7 @@ function RoutePreviewResult({
             <Metric label="Solver" value={String(summary.solver || "global_ortools")} />
           </div>
         ) : null}
-        {result.refinement_note ? <InlineError message={result.refinement_note} /> : null}
+        {result.refinement_note ? <p role="status" className="text-sm text-muted-foreground">{result.refinement_note}</p> : null}
         {result.workbook_base64 ? (
           <Button
             type="button"
@@ -1481,6 +1483,8 @@ function ToolMapsPanel({
             {mapOutputs.length > 1 ? <Badge tone="info">{formatNumber(mapOutputs.length)} {t("maps")}</Badge> : null}
           </div>
         </div>
+        {selected.mapData?.summary.timing_mode === "current_snapshot" ? <p className="mt-2 text-sm text-muted-foreground">{t("Current traffic snapshot; not a morning traffic forecast.")} {formatDateTime(selected.mapData.summary.measured_from)}</p> : null}
+        {Number(selected.mapData?.summary.route_time_limit_exceeded_count || 0) > 0 ? <p className="mt-2 text-sm text-red-700">{template(t("{count} measured routes exceed the route-time target, including stop time."), {count: formatNumber(selected.mapData?.summary.route_time_limit_exceeded_count)})}</p> : null}
         {mapOutputs.length > 1 ? (
           <div className="mt-3 flex flex-wrap gap-2">
             {mapOutputs.map((item) => (
@@ -2130,7 +2134,7 @@ function collectFleetMapOutputs({
   return [
     {
       key: "optimized-plan",
-      name: "Optimized Plan",
+      name: globalPlanResult?.summary.plan_status === "verified" ? "Optimized Plan" : "Candidate Plan",
       mapData: globalPlanResult?.map_data,
     },
   ].filter((item) => item.mapData) as ToolMapOutput[];

@@ -39,8 +39,8 @@ def source(direction="to_school"):
             "route_rows": [{"cluster_id": "R1", "duration_min": 1.5, "distance_km": 12.345}]}
 
 
-@pytest.mark.parametrize("direction,expected", [("to_school", ["07:53", "07:56", "08:00"]), ("from_school", ["15:40", "15:42", "15:46"])])
-def test_saved_total_dwell_and_schedules_agree_across_map_table_and_workbook(direction, expected):
+@pytest.mark.parametrize("direction", ["to_school", "from_school"])
+def test_current_snapshot_totals_agree_without_inventing_clock_times(direction):
     original = source(direction)
     before = deepcopy(original)
     view = fleet.fleet_route_display_view(original)
@@ -55,7 +55,10 @@ def test_saved_total_dwell_and_schedules_agree_across_map_table_and_workbook(dir
     assert route["duration_s"] == 420 and route["distance_m"] == 1000
     assert route_display_metrics(route)["duration_s"] == 420
     assert data["summary"]["duration_s"] == 420
-    assert [stop["scheduled_time_label"] for stop in data["stops"]] == expected
+    assert [stop["scheduled_time_label"] for stop in data["stops"]] == [None] * 3
+    assert data["summary"]["timing_mode"] == "current_snapshot"
+    assert data["summary"]["measured_from"] == "2026-01-01T00:00:00Z"
+    assert data["summary"]["plan_status"] == "verified"
     waypoint = next(stop for stop in data["stops"] if stop["requested_address"] == "Zero waypoint")
     assert waypoint["passenger_count"] == 0 and not waypoint["is_depot"]
     assert route["geometry"] == [] and len(route["geometry_segments"]) == 2
@@ -63,7 +66,7 @@ def test_saved_total_dwell_and_schedules_agree_across_map_table_and_workbook(dir
     row = list(wb["Route Measurements"].values)[1]
     assert row[:5] == ("R1", 7, 1, 5, 2)
     assignments = list(wb["current_plan_assignments"].values)
-    assert [row[-1] for row in assignments[1:]] == expected
+    assert [row[-1] for row in assignments[1:]] == [None] * 3
     assert original == before
 
 
@@ -158,6 +161,20 @@ def test_historical_read_refreshes_presentations_not_source_or_provider(monkeypa
     assert result["rows"][0]["duration_min"] == 7
     assert result["workbook_base64"] != "OLD EXCEL" and "map_html" not in result
     assert record == before
+
+
+def test_direct_exception_is_explained_in_map_table_and_export():
+    original = source()
+    route = original['routes'][0]
+    route['refinement_reason'] = 'direct_trip_exceeds_limit'
+    route['final_route_traffic_gate'].update(status='failed', passes=False)
+    view = fleet.fleet_route_display_view(original)
+    assert 'Single-stop direct trip' in view['route_rows'][0]['measurement_note']
+    data = fleet.build_route_preview_map_data(original)
+    assert data['scenario_name'] == 'Candidate Plan'
+    assert 'Single-stop direct trip' in data['routes'][0]['display_geometry_message']
+    wb = openpyxl.load_workbook(BytesIO(fleet.build_generated_plan_workbook_bytes(original)))
+    assert 'Single-stop direct trip' in wb['Route Measurements']['H2'].value
 
 
 def test_failed_history_read_does_not_return_stale_map_or_workbook(monkeypatch):

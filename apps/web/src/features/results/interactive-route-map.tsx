@@ -1858,6 +1858,9 @@ function fitMapToData(map: MapRef | null, data: JobMapData) {
 }
 
 function routeDisplayGeometry(route: JobMapRoute): number[][] {
+    if (route.geometry_segments?.length) {
+        return route.geometry_segments.flatMap((segment) => segment.length >= 2 ? segment : []);
+    }
     const displayGeometry = route.display_geometry;
     if (Array.isArray(displayGeometry) && displayGeometry.length >= 2) {
         return displayGeometry;

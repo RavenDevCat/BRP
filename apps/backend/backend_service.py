@@ -1273,6 +1273,7 @@ def _route_plan_response(
         "map_html": demand_routing.build_route_preview_map_html(route_preview),
         "map_data": map_data,
         "refinement_note": str(route_preview.get("refinement_note") or ""),
+        "refinement": dict(route_preview.get("refinement") or {}),
         "workbook_file_name": workbook_file_name,
         "workbook_base64": base64.b64encode(workbook_bytes).decode("ascii"),
     }
@@ -1462,6 +1463,27 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
         traffic_profile_name=str(traffic_context["traffic_profile_name"]),
         traffic_profile_context=str(traffic_context["traffic_profile_context"]),
     )
+    # Legacy CN uses one budgeted provider across initial validation and repairs.
+    # Google remains isolated and follows its existing feature-gated lifecycle.
+    if market == "CN" and timing_context is None:
+        from fleet_refinement import refine_measured_plan
+        demand_routing = _client_module("demand_routing")
+        provider = FreshRouteProvider("amap", departure_time=None, api_call_limit=min(200, AMAP_FINAL_ROUTE_MAX_CALLS))
+        _attach_fleet_route_measurements(global_plan, demand_routing, measurement_provider=provider)
+        assumptions = demand_global_optimizer.get_planning_assumptions(market, mode=mode,
+            monitor_seats=monitor_seats, max_route_duration_minutes=max_route_duration_minutes)
+        total_students = sum(int(point.get("student_count", 0) or 0) for point in geocode_result.get("demand_points") or [] if point.get("status") == "ok")
+        vehicles = demand_global_optimizer._candidate_vehicle_pool(total_students, assumptions, custom_catalog)
+
+        def measure_children(routes):
+            partial = {"school": global_plan["school"], "summary": dict(global_plan["summary"]), "routes": routes}
+            _attach_fleet_route_measurements(partial, demand_routing, measurement_provider=provider)
+
+        global_plan = refine_measured_plan(global_plan, vehicles, measure_children,
+            budget_available=lambda: provider.state["api_calls"] < provider.state["api_call_limit"])
+        global_plan["summary"]["provider_api_calls"] = provider.state["api_calls"]
+        global_plan["summary"]["provider_api_call_limit"] = provider.state["api_call_limit"]
+        return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx", already_measured=True)
     return _route_plan_response(
         global_plan, workbook_file_name="fleet_planner_global_plan.xlsx", timing_context=timing_context
     )

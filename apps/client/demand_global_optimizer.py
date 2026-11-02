@@ -18,6 +18,7 @@ from ortools_route_core import (  # noqa: E402
     register_matrix_transit,
 )
 from demand_routing import (
+    DEFAULT_STOP_DWELL_SECONDS,
     _annotate_ordered_points_with_schedule,
     _build_osrm_matrix,
     _point_payload,
@@ -122,8 +123,7 @@ def _candidate_vehicle_pool(
             continue
         count = min(
             available_count,
-            int(assumptions.default_max_vehicles_per_type),
-            max(1, math.ceil(max(1, total_students) / capacity) + 2),
+            max(1, total_students),
         )
         for index in range(count):
             vehicles.append(
@@ -331,11 +331,18 @@ def build_global_ortools_plan(
     manager = pywrapcp.RoutingIndexManager(len(extended_duration), vehicle_count, starts, ends)
     routing = pywrapcp.RoutingModel(manager)
 
-    transit_callback_index = register_matrix_transit(
+    register_matrix_transit(
         routing,
         manager,
         extended_duration,
     )
+    # Charge dwell on departure from service stops, including the last dropoff.
+    def time_transit(from_index: int, to_index: int) -> int:
+        source, target = manager.IndexToNode(from_index), manager.IndexToNode(to_index)
+        dwell = DEFAULT_STOP_DWELL_SECONDS if 0 < source < dummy_index else 0
+        return int(extended_duration[source][target] + dwell)
+
+    time_callback_index = routing.RegisterTransitCallback(time_transit)
     for vehicle_index, vehicle in enumerate(vehicle_pool):
         routing.SetFixedCostOfVehicle(int(vehicle["fixed_cost"]), vehicle_index)
 
@@ -349,11 +356,35 @@ def build_global_ortools_plan(
         name="Capacity",
     )
 
-    add_route_time_dimension(
+    time_limit_s = int(assumptions.max_route_duration_minutes * 60)
+    direct_times = {node: int(extended_duration[node][0] if direction == "to_school" else extended_duration[0][node]) + int(DEFAULT_STOP_DWELL_SECONDS)
+                    for node in range(1, dummy_index)}
+    isolated = [node for node, seconds in direct_times.items() if seconds > time_limit_s]
+    reserved = {}
+    available_indices = set(range(vehicle_count))
+    for node in sorted(isolated, key=lambda i: int(points[i].get("student_count", 0)), reverse=True):
+        demand = int(points[node].get("student_count", 0))
+        choices = [(int(vehicle_pool[i]["capacity"]), i) for i in available_indices if vehicle_pool[i]["capacity"] >= demand]
+        if not choices:
+            raise RuntimeError("Available fleet cannot cover isolated direct-trip exceptions.")
+        vehicle_index = min(choices)[1]
+        reserved[node] = vehicle_index
+        available_indices.remove(vehicle_index)
+    if isolated and len(isolated) < dummy_index - 1 and not available_indices:
+        raise RuntimeError("Available fleet is exhausted by direct-trip exceptions.")
+    time_dimension = add_route_time_dimension(
         routing,
-        transit_callback_index,
-        int(assumptions.max_route_duration_minutes * 60),
+        time_callback_index,
+        max([time_limit_s, *[direct_times[node] for node in isolated]]),
     )
+    for vehicle_index in range(vehicle_count):
+        reserved_node = next((node for node, vehicle in reserved.items() if vehicle == vehicle_index), None)
+        time_dimension.CumulVar(routing.End(vehicle_index)).SetMax(
+            direct_times[reserved_node] if reserved_node is not None else time_limit_s)
+    if isolated:
+        for node in range(1, dummy_index):
+            routing.VehicleVar(manager.NodeToIndex(node)).SetValues(
+                [reserved[node]] if node in reserved else sorted(available_indices))
 
     add_stop_count_dimension(
         routing,
@@ -409,7 +440,7 @@ def build_global_ortools_plan(
         load_factor = student_count / max(1, int(vehicle["capacity"]))
         route_id = f"G{len(route_rows) + 1:02d}"
         warnings: list[str] = []
-        if total_duration_s > assumptions.max_route_duration_minutes * 60:
+        if total_duration_s + len(customer_order) * DEFAULT_STOP_DWELL_SECONDS > assumptions.max_route_duration_minutes * 60:
             warnings.append(f"exceeds {assumptions.max_route_duration_minutes} min target")
         route_rows.append(
             {
@@ -434,6 +465,7 @@ def build_global_ortools_plan(
                 "ordered_points": ordered_points,
                 "leg_details": leg_details,
                 "duration_s": total_duration_s,
+                "stop_service_time_s": len(customer_order) * DEFAULT_STOP_DWELL_SECONDS,
                 "distance_m": total_distance_m,
                 "selected_vehicle": {
                     **vehicle,

@@ -386,9 +386,19 @@ def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
                 for key in ("scheduled_offset_s", "scheduled_time_minutes", "scheduled_time_label"):
                     point.pop(key, None)
         route["measurement_schedule_available"] = bool(schedule_known or (metrics["source"] == "planning_reference" and metrics["duration_s"] is not None and metrics["distance_m"] is not None))
+        if evidence.get("provider") == "amap":
+            # A live snapshot supports elapsed times, not a forecast at 08:00.
+            for point in route.get("ordered_points") or []:
+                for key in ("scheduled_time_label", "scheduled_time_minutes", "schedule_anchor_label", "schedule_anchor_kind"):
+                    point.pop(key, None)
+            summary["timing_mode"] = "current_snapshot"
+            summary["traffic_profile_name"] = "Current traffic"
+            summary["traffic_profile_context"] = "Current traffic snapshot; not a morning traffic forecast."
         route["display_traffic_gate"] = (dict(route.get("final_route_traffic_gate") or {})
             if metrics["duration_s"] is not None and metrics["distance_m"] is not None else {"status": "unavailable", "passes": None})
         route["measurement_note"] = measurement_note(route)
+        if route.get("refinement_reason") == "direct_trip_exceeds_limit":
+            route["measurement_note"] += " Single-stop direct trip exceeds the target in this traffic snapshot; splitting cannot resolve this route."
     for field in ("route_rows", "rows"):
         if field not in view:
             continue
@@ -406,6 +416,10 @@ def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
     summary["route_measurement_review_count"] = sum(item["duration_s"] is None or item["distance_m"] is None for item in metrics)
     summary["route_measurement_reference_count"] = sum(item["source"] in {"planning_reference", "historical_measurement"} for item in metrics)
     summary["route_time_limit_exceeded_count"] = sum(route["display_traffic_gate"].get("status") == "failed" for route in routes)
+    captured = sorted(str(route.get("route_evidence", {}).get("called_at")) for route in routes if route.get("route_evidence", {}).get("called_at"))
+    summary["measured_from"] = captured[0] if captured else None
+    summary["measured_to"] = captured[-1] if captured else None
+    summary["plan_status"] = "measurement_incomplete" if summary["route_measurement_review_count"] else "time_limit_exceeded" if summary["route_time_limit_exceeded_count"] else "verified" if routes and all(route["display_traffic_gate"].get("status") == "passed" for route in routes) else "planning_reference"
     return view
 
 
@@ -726,7 +740,7 @@ def build_route_preview_map_data(
     return {
         "job_id": "",
         "scenario_key": scenario_key,
-        "scenario_name": scenario_name,
+        "scenario_name": "Candidate Plan" if summary.get("plan_status") in {"time_limit_exceeded", "measurement_incomplete"} else scenario_name,
         "service_direction": service_direction_label,
         "traffic_profile_name": str(summary.get("traffic_profile_name") or ""),
         "bounds": _map_bounds_from_coordinates(all_coordinates),
@@ -736,6 +750,11 @@ def build_route_preview_map_data(
         "private_links": [],
         "summary": {
             "route_count": len(route_payloads),
+            "timing_mode": summary.get("timing_mode"),
+            "measured_from": summary.get("measured_from"),
+            "measured_to": summary.get("measured_to"),
+            "plan_status": summary.get("plan_status"),
+            "route_time_limit_exceeded_count": summary.get("route_time_limit_exceeded_count"),
             "stop_count": len([stop for stop in stop_payloads if not stop.get("is_depot")]),
             "passenger_count": sum(int(route.get("load", 0) or 0) for route in route_payloads),
             "distance_m": sum(route["distance_m"] for route in route_payloads) if route_payloads and all(route["distance_m"] is not None for route in route_payloads) else None,

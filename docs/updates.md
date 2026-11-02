@@ -7,6 +7,22 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-11-02
 
+### Fleet Live Refinement
+
+- Fleet planning uses the available vehicle inventory, not a capacity-only
+  candidate cap, and includes stop dwell in its route-time constraint.
+- China plans now split and remeasure over-limit multi-stop candidates within
+  the available fleet and a shared 200-call live-measurement budget. Unavailable
+  child measurements retain the measured parent. This bounded repair does not
+  prove a minimum fleet size; direct-trip exceptions remain explicit failures.
+- Current AMap snapshots show their actual measurement time, not invented
+  morning arrival/departure clock times. Elapsed times remain available.
+- Interactive and exported maps include segmented measured routes. History
+  reads repair presentation without rewriting source evidence or making API
+  calls; fresh recalculations are separately named history revisions.
+- Incomplete or over-limit results are candidate plans, not verified operating
+  plans. Google validation and scheduled Route Audit behavior are unchanged.
+
 ### Optional Time Impact Limit
 
 - New audits have a separate Time Impact Limit switch, initially off. Off means

@@ -1493,7 +1493,7 @@ function TimeImpactPanel({
   const data = impactQuery.data;
   const summary = data?.summary.time_impact;
   const recommendation = summary?.available ? buildTimeImpactRecommendation(summary, selected.name, t) : null;
-  const acceptanceThresholdLabel = formatImpactMinutes(summary?.acceptance_threshold_minutes ?? 15);
+  const acceptanceThresholdLabel = summary?.limit_enabled === false ? t("No limit") : formatImpactMinutes(summary?.acceptance_threshold_minutes ?? 15);
   const routeRows = data ? buildTimeImpactRouteRows(data) : [];
   const stopRows = data ? buildTimeImpactStopRows(data, { filter, search, selectedRouteId }) : [];
   const comparedStops = data ? data.stops.filter((stop) => stop.time_impact?.comparison_available) : [];
@@ -1578,13 +1578,13 @@ function TimeImpactPanel({
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ImpactSummaryCard
               label="Within acceptance"
-              value={formatPercent(summary.acceptance_rider_ratio, 100)}
+              value={summary.limit_enabled === false ? t("No limit") : formatPercent(summary.acceptance_rider_ratio, 100)}
               detail={`${formatNumber(summary.compared_rider_count)} ${t("riders")} / ${formatNumber(summary.compared_stop_count)} ${t("stops compared")}`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
             <ImpactSummaryCard
-              label={`Over ${acceptanceThresholdLabel}`}
-              value={`${formatNumber(summary.over_acceptance_rider_count)} ${t("riders")}`}
+              label={summary.limit_enabled === false ? "Time Impact Limit" : `Over ${acceptanceThresholdLabel}`}
+              value={summary.limit_enabled === false ? t("Off") : `${formatNumber(summary.over_acceptance_rider_count)} ${t("riders")}`}
               detail={`${formatNumber(summary.over_acceptance_stop_count)} ${t("stops")}; ${t("max over by")} ${formatImpactMinutes(summary.max_over_acceptance_delta_minutes)}`}
               tone={Number(summary.over_acceptance_rider_count || 0) ? "warning" : "success"}
             />
@@ -1704,7 +1704,7 @@ function TimeImpactPanel({
   );
 }
 
-type TimeImpactRecommendationLevel = "acceptable" | "review" | "high_risk" | "incomplete";
+type TimeImpactRecommendationLevel = "acceptable" | "review" | "high_risk" | "incomplete" | "informational";
 
 type TimeImpactRecommendation = {
   level: TimeImpactRecommendationLevel;
@@ -1719,6 +1719,13 @@ function buildTimeImpactRecommendation(
   scenarioName: string,
   t: (key: string, fallback?: string) => string,
 ): TimeImpactRecommendation {
+  if (summary.limit_enabled === false) {
+    return {
+      level: "informational", tone: "info", title: t("Time Impact Limit") + ": " + t("Off"),
+      detail: t("No limit"),
+      evidence: [`${formatNumber(summary.compared_rider_count)} ${t("riders")} / ${formatNumber(summary.compared_stop_count)} ${t("stops compared")}`],
+    };
+  }
   const comparedRiders = Number(summary.compared_rider_count || 0);
   const comparedStops = Number(summary.compared_stop_count || 0);
   const overRiders = Number(summary.over_acceptance_rider_count || 0);
@@ -1908,7 +1915,7 @@ function timeImpactTopStopReason(
   const riders = Number(stop.affected_rider_count || 0);
   const familyEffect = timeImpactAdversePhrase(serviceDirection, adverseMinutes, t);
   const routeChange = stop.route_changed ? ` ${t("Route changes from")} ${stop.current_route_id || t("current plan")} ${t("to")} ${stop.new_route_id || stop.route_id}.` : "";
-  const thresholdText = stop.within_acceptance === false
+  const thresholdText = stop.limit_enabled === false ? "" : stop.within_acceptance === false
     ? ` ${t("It is")} ${formatImpactMinutes(overMinutes)} ${t("over the")} ${formatImpactMinutes(threshold)} ${t("window.")}`
     : ` ${t("It remains within the")} ${formatImpactMinutes(threshold)} ${t("window.")}`;
   return `${formatNumber(riders)} ${t("rider(s)")}; ${familyEffect}.${thresholdText}${routeChange}`;
@@ -3164,7 +3171,7 @@ function buildScenarioRows(result: Record<string, unknown>): ScenarioRow[] {
     : scenarioFromAssessment("current_plan", "Current Plan", "Imported supplier route order", asRecord(result.current_plan_assessment));
   return [
     currentPlanRow,
-    scenarioFromScenario("time_constrained", timeImpactScenarioName(result, timeConstrainedScenario), `Requires every route to meet the time window, ${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-minute time-impact limit, vehicle saving, stop limit, and comfort inputs.`, timeConstrainedScenario),
+    scenarioFromScenario("time_constrained", timeImpactScenarioName(result, timeConstrainedScenario), asRecord(result.planner_config).time_impact_limit_enabled === false ? "Requires every route to meet the time window, vehicle saving, stop limit, and comfort inputs." : `Requires every route to meet the time window, ${timeImpactLimitFromScenario(result, timeConstrainedScenario)}-minute time-impact limit, vehicle saving, stop limit, and comfort inputs.`, timeConstrainedScenario),
     scenarioFromScenario("exception_preserving", "Protected Plan", "Keeps current noncompliant routes protected, then requires the remaining routes to meet every hard input constraint.", asRecord(result.exception_preserving_optimization || structured.exception_preserving)),
   ];
 }

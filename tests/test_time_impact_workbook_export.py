@@ -11,6 +11,20 @@ backend_service = importlib.import_module("backend_service")
 planner_core = importlib.import_module("planner_core")
 
 
+def test_disabled_time_impact_export_preserves_comparison_and_labels_off(monkeypatch):
+    monkeypatch.setattr(backend_service, "_build_job_map_payload", lambda *a, **kw: ({
+        "job_id": "off", "scenario_name": "Strict Plan", "routes": [], "stops": [],
+        "summary": {"time_impact": {"available": True, "limit_enabled": False,
+            "acceptance_threshold_minutes": None, "max_adverse_delta_minutes": 30}},
+    }, None))
+    content, error = backend_service._build_time_impact_workbook_export({}, "time_constrained")
+    assert error is None
+    workbook = load_workbook(io.BytesIO(content), read_only=True)
+    rows = list(workbook["Summary"].iter_rows(values_only=True))
+    assert ("Acceptance threshold minutes", "Disabled") in rows
+    assert ("Max adverse minutes", 30) in rows
+
+
 def test_time_impact_workbook_includes_am_window_gate(monkeypatch):
     def fake_map_payload(_job_record, _scenario_key, _map_key, *, attach_impact=False):
         return {

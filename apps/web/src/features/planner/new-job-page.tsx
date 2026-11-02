@@ -686,9 +686,24 @@ export function NewJobPage() {
                   </div>
                 </Field>
                 <Field label="Time Impact Limit">
+                  <div className="mb-2 flex h-6 items-center gap-2">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-label={t("Time Impact Limit")}
+                      aria-checked={config.time_impact_limit_enabled !== false}
+                      onClick={() => updateUserConfig({ time_impact_limit_enabled: config.time_impact_limit_enabled === false })}
+                      className={`relative inline-flex h-6 w-11 shrink-0 rounded-full border transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary ${config.time_impact_limit_enabled !== false ? "border-primary bg-primary" : "border-border bg-muted"}`}
+                    >
+                      <span aria-hidden="true" className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${config.time_impact_limit_enabled !== false ? "translate-x-5" : "translate-x-0"}`} />
+                    </button>
+                    <span className="text-xs">{t(config.time_impact_limit_enabled !== false ? "On" : "No limit")}</span>
+                  </div>
                   <input
                     className={fieldClassName}
                     type="number"
+                    aria-label={t("Time Impact Limit") + " (min)"}
+                    disabled={config.time_impact_limit_enabled === false}
                     min={0}
                     max={240}
                     step={1}
@@ -700,7 +715,7 @@ export function NewJobPage() {
                     }
                   />
                   <div className="mt-1 text-xs leading-relaxed text-muted-foreground">
-                    {t("Used by the X-minute time-impact scenarios.")}
+                    {config.time_impact_limit_enabled !== false ? t("Used by the X-minute time-impact scenarios.") : t("No limit")}
                   </div>
                 </Field>
                 <Field label="Improve comfort">

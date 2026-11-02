@@ -167,8 +167,9 @@ function buildRunParameterItems(job: JobRecord): RunParameterItem[] {
   if (timeImpactLimit !== null) {
     items.push({
       label: "Time Impact Limit",
-      value: `${formatNumber(timeImpactLimit)} min`,
-      detail: "Used by the X-minute time-impact scenarios.",
+      value: config.time_impact_limit_enabled === false ? "No limit" : `${formatNumber(timeImpactLimit)} min`,
+      translateValue: config.time_impact_limit_enabled === false,
+      detail: config.time_impact_limit_enabled === false ? undefined : "Used by the X-minute time-impact scenarios.",
     });
   }
 

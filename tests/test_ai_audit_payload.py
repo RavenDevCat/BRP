@@ -12,6 +12,17 @@ import ai_audit  # noqa: E402
 import backend_service  # noqa: E402
 
 
+def test_disabled_impact_is_informational_not_a_failed_audit_gate():
+    scenario = {"final_time_impact_gate": {
+        "limit_enabled": False, "status": "not_applicable", "max_adverse_minutes": 30,
+        "threshold_minutes": None, "over_limit_stop_count": 0,
+    }}
+    assert ai_audit._scenario_time_impact_passed(scenario)
+    assert ai_audit._scenario_decision_metrics(scenario)["time_impact_max_over_limit_minutes"] == 0
+    summary = ai_audit._compact_time_impact({"available": True, "limit_enabled": False, "high_risk_stop_count": 1})
+    assert summary["decision"] == "informational"
+
+
 def test_legacy_scenario_status_adapter_is_read_only() -> None:
     source = {
         "result": {
@@ -160,6 +171,7 @@ def test_ai_audit_payload_includes_operational_review_without_full_addresses() -
         "minimum_vehicle_reduction": 2,
         "time_impact_limit_minutes": 20,
         "comfort_enabled": True,
+        "time_impact_limit_enabled": True,
         "comfort_load_factor": 0.85,
         "stop_dwell_minutes": 1,
     }

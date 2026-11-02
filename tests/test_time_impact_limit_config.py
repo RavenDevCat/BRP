@@ -1,11 +1,75 @@
 import importlib
 import sys
+import pytest
 from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "backend"))
 backend_service = importlib.import_module("backend_service")
 planner_core = importlib.import_module("planner_core")
+
+
+def test_time_impact_switch_preserves_legacy_zero_and_explicit_off():
+    legacy = backend_service._planner_config_payload({"time_impact_limit_minutes": 0})
+    assert legacy["time_impact_limit_enabled"] is True
+    disabled = backend_service._planner_config_payload({
+        "time_impact_limit_minutes": 0, "time_impact_limit_enabled": False,
+    })
+    assert disabled["time_impact_limit_enabled"] is False
+    assert disabled["time_impact_limit_minutes"] == 0
+    for invalid in (None, "false", "true", 0, 1):
+        with pytest.raises(ValueError, match="time_impact_limit_enabled"):
+            planner_core.build_planner_config({"time_impact_limit_enabled": invalid})
+
+
+def test_disabled_time_impact_builds_no_solver_bounds_or_baseline_requirement():
+    lower, upper, metadata = planner_core._build_time_acceptance_constraint_builder(
+        None, [], None, "To School", 0, enabled=False,
+    )
+    assert lower is None and upper is None
+    assert metadata["enabled"] is False
+    assert "unavailable_reason" not in metadata
+
+
+@pytest.mark.parametrize("direction,offset", [("To School", -1200), ("From School", 1200)])
+@pytest.mark.parametrize("enabled", [True, False])
+def test_final_impact_off_retains_deltas_without_rejecting(monkeypatch, direction, offset, enabled):
+    points = [{"is_depot": True}, {"address": "A", "passenger_count": 2}]
+    current = {"offset": 0}
+    candidate = {"offset": offset}
+    monkeypatch.setattr(planner_core, "_scenario_time_impact_rows", lambda scenario, *_: ([{
+        "keys": ["A"], "offset_s": scenario["offset"], "affected_rider_count": 2,
+        "node_index": 1, "route_id": "R1",
+    }], 0))
+    config = planner_core.PlannerConfig(service_direction=direction, time_impact_limit_enabled=enabled)
+    gate = planner_core._build_final_time_impact_validator(current, points, config, 0)(candidate, points)
+    assert gate["max_adverse_minutes"] == 20
+    assert gate["status"] == ("failed" if enabled else "not_applicable")
+    assert gate["over_limit_stop_count"] == (1 if enabled else 0)
+    assert candidate["time_constraint"]["final_validation_required"] is enabled
+    if not enabled:
+        assert gate["threshold_minutes"] is None
+        assert not planner_core._tighten_final_time_impact_bounds(object(), gate)
+
+
+def test_disabled_impact_keeps_route_duration_bounds():
+    matrix = [[0, 300, 700], [300, 0, 400], [700, 400, 0]]
+    assert planner_core._protected_route_within_solver_bounds([1, 2], matrix, {}, 1200)
+    assert not planner_core._protected_route_within_solver_bounds([1, 2], matrix, {}, 600)
+    assert not planner_core._protected_route_within_solver_bounds([1, 2], matrix, {1: 0, 2: 0}, 1200)
+
+
+def test_disabled_impact_summary_keeps_comparison_without_threshold_claims():
+    summary = backend_service._time_impact_summary([{
+        "passenger_count": 2, "time_impact": {
+            "comparison_available": True, "adverse_delta_minutes": 30,
+        },
+    }], 0, limit_enabled=False)
+    assert summary["limit_enabled"] is False
+    assert summary["acceptance_threshold_minutes"] is None
+    assert summary["compared_rider_count"] == 2
+    assert summary["max_adverse_delta_minutes"] == 30
+    assert summary["within_acceptance_stop_count"] == summary["over_acceptance_stop_count"] == 0
 
 
 def test_time_impact_limit_payload_normalizes_user_input():

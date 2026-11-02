@@ -15,6 +15,7 @@ export const DEFAULT_PLANNER_CONFIG: PlannerConfigPayload = {
   express_skip_inner_km: 8,
   max_route_duration_minutes: 60,
   time_impact_limit_minutes: 15,
+  time_impact_limit_enabled: false,
   stop_service_minutes: 1,
   comfort_load_factor: 1.0,
   traffic_profile_name: "Off-Peak",

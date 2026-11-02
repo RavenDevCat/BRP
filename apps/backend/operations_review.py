@@ -95,6 +95,7 @@ def _compatibility_parts(job: dict[str, Any]) -> dict[str, Any]:
             for key in (
                 "max_route_duration_minutes",
                 "time_impact_limit_minutes",
+                "time_impact_limit_enabled",
                 "minimum_vehicle_reduction",
                 "route_stop_limit",
                 "comfort_load_factor",

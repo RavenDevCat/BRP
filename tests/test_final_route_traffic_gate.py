@@ -617,6 +617,7 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
         def __init__(self):
             self.min_counts_seen = []
             self.fleet_counts_seen = []
+            self.bounds_seen = []
             self._BRP_ACTIVE_CONFIG = planner_core.PlannerConfig(service_direction="To School")
 
         def log(self, _message):
@@ -650,6 +651,7 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
 
         def solve_routes(self, _points, _solve_time, _solve_distance):
             self.min_counts_seen.append(int(self.MIN_SOLVER_VEHICLE_COUNT or 0))
+            self.bounds_seen.append((dict(self.NODE_TIME_UPPER_BOUNDS), dict(self.NODE_TIME_LOWER_BOUNDS), dict(self.NODE_TIME_SOFT_UPPER_BOUNDS)))
             return [{"route_id": "Bus 1", "nodes": [0, 1], "time_s": 1200, "stop_service_time_s": 0}]
 
         def enrich_routes_with_actual_driving(self, _points, _routes):
@@ -683,6 +685,24 @@ def test_time_constraint_uses_reduced_limit_without_current_vehicle_floor(monkey
     assert result["time_constraint"]["expected_solver_stop_count"] == 1
     assert result["time_constraint"]["strict_satisfied"] is True
     assert metadata["min_solver_vehicle_count"] == 0
+
+    planner._BRP_ACTIVE_CONFIG.time_impact_limit_enabled = False
+    planner.NODE_TIME_UPPER_BOUNDS = {1: 0}
+    planner.NODE_TIME_LOWER_BOUNDS = {1: 0}
+    planner.NODE_TIME_SOFT_UPPER_BOUNDS = {1: (0, 100)}
+    planner_core._compute_scenario_without_render(
+        planner,
+        [{"is_depot": True, **PRECISE_PICKUP, "lat": 31.1, "lng": 121.1},
+         {**PRECISE_PICKUP, "lat": 31.2, "lng": 121.2}],
+        "No impact limit",
+        reduced_vehicle_limit=19,
+        forced_vehicle_count=19,
+        time_constraint_metadata={"enabled": False, "mode": "disabled"},
+    )
+    assert planner.min_counts_seen[-1] == 19
+    assert planner.fleet_counts_seen[-1] == 19
+    assert planner.bounds_seen[-1] == ({}, {}, {})
+    assert planner.NODE_TIME_UPPER_BOUNDS == {1: 0}
 
 
 def test_am_arrival_gate_fails_routes_outside_default_six_thirty_to_eight_window(monkeypatch):

@@ -389,8 +389,9 @@ export type JobMapStopTimeImpact = {
     delta_minutes?: number;
     absolute_delta_minutes?: number;
     adverse_delta_minutes?: number;
-    acceptance_threshold_minutes?: number;
-    within_acceptance?: boolean;
+    limit_enabled?: boolean;
+    acceptance_threshold_minutes?: number | null;
+    within_acceptance?: boolean | null;
     acceptance_status?: "within" | "over" | string;
     over_acceptance_minutes?: number;
     benefit_delta_minutes?: number;
@@ -416,8 +417,9 @@ export type JobMapTimeImpactTopStop = {
     delta_minutes?: number;
     adverse_delta_minutes?: number;
     absolute_delta_minutes?: number;
-    acceptance_threshold_minutes?: number;
-    within_acceptance?: boolean;
+    limit_enabled?: boolean;
+    acceptance_threshold_minutes?: number | null;
+    within_acceptance?: boolean | null;
     acceptance_status?: string;
     over_acceptance_minutes?: number;
     affected_rider_count?: number;
@@ -432,7 +434,8 @@ export type JobMapTimeImpactSummary = {
     compared_stop_count?: number;
     unavailable_stop_count?: number;
     compared_rider_count?: number;
-    acceptance_threshold_minutes?: number;
+    limit_enabled?: boolean;
+    acceptance_threshold_minutes?: number | null;
     within_acceptance_stop_count?: number;
     within_acceptance_rider_count?: number;
     over_acceptance_stop_count?: number;
@@ -531,6 +534,7 @@ export type PlannerConfigPayload = {
     express_skip_inner_km: number;
     max_route_duration_minutes: number;
     time_impact_limit_minutes: number;
+    time_impact_limit_enabled?: boolean;
     stop_service_minutes: number;
     comfort_load_factor: number;
     traffic_profile_name: string;

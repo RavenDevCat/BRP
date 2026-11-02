@@ -5,6 +5,21 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-11-02
+
+### Optional Time Impact Limit
+
+- New audits have a separate Time Impact Limit switch, initially off. Off means
+  pickup/dropoff changes do not constrain, rank or reject optimization candidates.
+  Comparative timing remains available in maps and exports without threshold claims.
+- When enabled, zero minutes still means no adverse change is permitted. Existing
+  jobs without the switch retain their original enabled-limit interpretation.
+- Fleet capacity, route windows, stop limits, comfort and minimum vehicle saving
+  remain enforced. Minimum saving zero does not stop the vehicle-count search at
+  the first feasible plan; unresolved lower counts are not claimed as infeasible.
+- Saved scheduled jobs retain their submitted parameters unless explicitly updated.
+  Deploying the feature alone does not change those saved parameters.
+
 ## 2026-10-21
 
 ### Native Traffic Recovery

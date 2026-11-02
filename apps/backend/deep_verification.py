@@ -116,7 +116,7 @@ def _scenario_rank(scenario: dict[str, Any]) -> tuple[int, int, float, float]:
     return (
         _scenario_route_count(scenario),
         _safe_int(time_impact.get("over_limit_rider_count"), 0),
-        _safe_float(time_impact.get("max_adverse_minutes"), 0.0),
+        _safe_float(time_impact.get("max_adverse_minutes"), 0.0) if time_impact.get("limit_enabled", True) else 0.0,
         _safe_float(
             traffic_gate.get("max_time_window_overrun_minutes")
             or traffic_gate.get("max_estimated_arrival_delay_minutes"),

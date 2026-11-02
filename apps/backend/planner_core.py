@@ -379,6 +379,7 @@ class PlannerConfig:
     express_skip_inner_km: float = 8.0
     max_route_duration_minutes: int = 60
     time_impact_limit_minutes: int = int(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
+    time_impact_limit_enabled: bool = True
     stop_service_minutes: int = 1
     comfort_load_factor: float = 1.0
     traffic_profile_name: str = "Off-Peak"
@@ -646,6 +647,8 @@ def build_planner_config(config_payload: dict[str, Any] | None = None) -> Planne
         payload["minimum_vehicle_reduction"] = 0
     whole_number("minimum_vehicle_reduction", 0, 200)
     whole_number("time_impact_limit_minutes", 0, 240)
+    if not isinstance(payload.get("time_impact_limit_enabled", True), bool):
+        raise ValueError("time_impact_limit_enabled must be a boolean.")
     whole_number("stop_service_minutes", 0, 60)
     whole_number("max_route_duration_minutes", 1, 1440)
     for field_name in ("large_bus_capacity", "mid_bus_capacity", "small_bus_capacity"):
@@ -1562,7 +1565,7 @@ def build_route_feasibility_report(
     if not failed_route_ids and gate_status == "failed" and ignored_route_ids:
         gate_status = "passed"
     time_constraint = dict(scenario.get("time_constraint") or {})
-    time_impact_required = bool(time_constraint)
+    time_impact_required = config.time_impact_limit_enabled and bool(time_constraint)
     expected_time_stops = int(time_constraint.get("expected_solver_stop_count", 0) or 0)
     bounded_time_stops = int(time_constraint.get("bounded_solver_stop_count", 0) or 0)
     final_time_impact_gate = dict(scenario.get("final_time_impact_gate") or {})
@@ -1669,7 +1672,7 @@ def build_route_feasibility_report(
                     if not time_impact_required
                     else "passed" if time_impact_passed else "failed"
                 ),
-                "limit_minutes": float(config.time_impact_limit_minutes),
+                "limit_minutes": float(config.time_impact_limit_minutes) if time_impact_required else None,
                 "bounded_solver_stop_count": bounded_time_stops,
                 "expected_solver_stop_count": expected_time_stops,
                 "final_validation_status": final_time_impact_status,
@@ -5841,7 +5844,7 @@ def _failed_scenario_rank(result: dict[str, Any]) -> tuple[int, int, int, float,
         len(list(report.get("failure_reasons") or [])),
         int(gate.get("failed_route_count", 0) or 0),
         int(time_impact_gate.get("over_limit_stop_count", 0) or 0),
-        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
+        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0) if time_impact_gate.get("limit_enabled", True) else 0.0,
         _traffic_gate_overrun_minutes(gate),
         _scenario_bus_count(result),
     )
@@ -6310,7 +6313,7 @@ def _exception_candidate_rank(
         + (1 if int(time_impact_gate.get("over_limit_stop_count", 0) or 0) else 0),
         int(candidate_summary.get("failed_route_count", 0) or 0),
         int(time_impact_gate.get("over_limit_stop_count", 0) or 0),
-        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0),
+        float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0) if time_impact_gate.get("limit_enabled", True) else 0.0,
         int(candidate_summary.get("affected_rider_count", 0) or 0),
         float(candidate_summary.get("max_overrun_minutes", 0.0) or 0.0),
         int(candidate_route_count or 0),
@@ -6457,8 +6460,8 @@ def _build_route_preserving_protected_scenario(
         audit.update({"status": "infeasible", "reason": "insufficient_movable_routes"})
         return None
 
-    bounds = dict(node_time_upper_bounds_builder(original_points) or {})
-    if not bounds:
+    bounds = dict(node_time_upper_bounds_builder(original_points) or {}) if callable(node_time_upper_bounds_builder) else {}
+    if config.time_impact_limit_enabled and not bounds:
         audit.update({"status": "unavailable", "reason": "missing_time_impact_bounds"})
         return None
     current_elapsed: dict[int, float] = {}
@@ -6538,8 +6541,8 @@ def _build_route_preserving_protected_scenario(
                         after = _protected_route_cost(merged, solve_time)
                         options.append(
                             (
-                                max(increases, default=0.0),
-                                sum(increases),
+                                max(increases, default=0.0) if config.time_impact_limit_enabled else 0.0,
+                                sum(increases) if config.time_impact_limit_enabled else 0.0,
                                 after - before,
                                 route_id,
                                 merged,
@@ -6644,8 +6647,8 @@ def _build_route_preserving_protected_scenario(
                 )
                 candidate["time_constraint"] = {
                     **deepcopy(time_constraint_metadata or {}),
-                    "enabled": True,
-                    "mode": "hard",
+                    "enabled": config.time_impact_limit_enabled,
+                    "mode": "hard" if config.time_impact_limit_enabled else "disabled",
                     "best_effort": False,
                     "strict_satisfied": True,
                     "bounded_solver_stop_count": remaining_stop_count,
@@ -6812,7 +6815,7 @@ def build_exception_preserving_scenario(
             route_preserving_audit: dict[str, Any] = {}
             if (
                 enable_route_preserving_search
-                and callable(node_time_upper_bounds_builder)
+                and (not config.time_impact_limit_enabled or callable(node_time_upper_bounds_builder))
                 and callable(final_time_impact_validator)
                 and solve_time is not None
             ):
@@ -7320,7 +7323,7 @@ def _build_final_time_impact_validator(
     threshold_minutes: float,
 ) -> Any:
     def require_same_source(scenario):
-        if config.final_time_validation_mode != "google":
+        if not config.time_impact_limit_enabled or config.final_time_validation_mode != "google":
             return
         for route in scenario.get("routes") or []:
             gate = route.get("final_route_traffic_gate") or {}
@@ -7378,7 +7381,7 @@ def _build_final_time_impact_validator(
             )
             adverse_minutes = max(0.0, -delta_s if service_direction == "To School" else delta_s) / 60.0
             max_adverse_minutes = max(max_adverse_minutes, adverse_minutes)
-            if adverse_minutes <= threshold_minutes + 1e-9:
+            if not config.time_impact_limit_enabled or adverse_minutes <= threshold_minutes + 1e-9:
                 continue
             over_limit_rider_count += affected_rider_count
             violations.append(
@@ -7397,9 +7400,12 @@ def _build_final_time_impact_validator(
             status = "unavailable"
         elif violations:
             status = "failed"
+        if not config.time_impact_limit_enabled:
+            status = "not_applicable"
         gate = {
             "status": status,
-            "threshold_minutes": threshold_minutes,
+            "limit_enabled": config.time_impact_limit_enabled,
+            "threshold_minutes": threshold_minutes if config.time_impact_limit_enabled else None,
             "expected_stop_count": max(0, len(scenario_points) - 1),
             "compared_stop_count": compared_stop_count,
             "compared_rider_count": compared_rider_count,
@@ -7416,7 +7422,8 @@ def _build_final_time_impact_validator(
         }
         scenario["final_time_impact_gate"] = gate
         time_constraint = dict(scenario.get("time_constraint") or {})
-        time_constraint["final_validation_required"] = True
+        time_constraint["enabled"] = config.time_impact_limit_enabled
+        time_constraint["final_validation_required"] = config.time_impact_limit_enabled
         time_constraint["final_validation_status"] = status
         time_constraint["final_satisfied"] = status == "passed"
         scenario["time_constraint"] = time_constraint
@@ -7484,6 +7491,8 @@ def _build_time_acceptance_constraint_builder(
     assessment_time: list[list[float]] | None,
     service_direction: str,
     threshold_minutes: float,
+    *,
+    enabled: bool = True,
 ) -> tuple[Any | None, Any | None, dict[str, Any]]:
     threshold_seconds = max(0, int(round(float(threshold_minutes) * 60.0)))
     metadata: dict[str, Any] = {
@@ -7498,6 +7507,9 @@ def _build_time_acceptance_constraint_builder(
         "bounded_current_stop_count": 0,
         "bounded_solver_stop_count": 0,
     }
+    if not enabled:
+        metadata.update({"mode": "disabled", "threshold_minutes": None, "threshold_seconds": None})
+        return None, None, metadata
     if not current_plan_assessment:
         metadata["unavailable_reason"] = "No current plan assessment was available."
         return None, None, metadata
@@ -7766,6 +7778,7 @@ def run_backend_planner_with_prepared_data(
         time_constrained_display_label = "Strict Plan"
         time_constrained_solver_label = (
             f"Strict plan ({time_impact_limit_label}-minute time-impact limit)"
+            if config.time_impact_limit_enabled else "Strict plan (no time-impact limit)"
         )
         (
             time_constraint_lower_builder,
@@ -7777,12 +7790,13 @@ def run_backend_planner_with_prepared_data(
             assessment_time,
             config.service_direction,
             time_impact_limit_minutes,
+            enabled=config.time_impact_limit_enabled,
         )
         time_constraint_metadata.update(
             {
                 "display_name": time_constrained_display_label,
                 "time_impact_limit_minutes": time_impact_limit_minutes,
-                "final_validation_required": True,
+                "final_validation_required": config.time_impact_limit_enabled,
             }
         )
         final_time_impact_validator = _build_final_time_impact_validator(
@@ -7791,7 +7805,7 @@ def run_backend_planner_with_prepared_data(
             config,
             time_impact_limit_minutes,
         )
-        if time_constraint_builder is None:
+        if config.time_impact_limit_enabled and time_constraint_builder is None:
             raise RuntimeError(
                 str(
                     time_constraint_metadata.get("unavailable_reason")
@@ -7903,7 +7917,7 @@ def run_backend_planner_with_prepared_data(
         time_constrained_result["time_constraint"] = {
             **hard_time_constraint_metadata,
             **dict(time_constrained_result.get("time_constraint") or {}),
-            "enabled": True,
+            "enabled": config.time_impact_limit_enabled,
             "bounded_solver_stop_count": int(
                 dict(time_constrained_result.get("time_constraint") or {}).get(
                     "bounded_solver_stop_count",

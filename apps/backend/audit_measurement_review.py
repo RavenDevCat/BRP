@@ -264,7 +264,7 @@ def run_audit_review(store: Any, record: dict[str, Any], token: str, *,
     saved_scenarios = [structured[key] for key in SCENARIOS if key in structured]
     output["time_window_revalidated"] = all(s.get("routes") and s.get("traffic_gate", {}).get("status") in {"passed", "failed"}
         and not s["traffic_gate"].get("unavailable_route_count") for s in saved_scenarios)
-    output["time_impact_revalidated"] = all(structured[key].get("final_time_impact_gate", {}).get("status") in {"passed", "failed"}
+    output["time_impact_revalidated"] = not config.time_impact_limit_enabled or all(structured[key].get("final_time_impact_gate", {}).get("status") in {"passed", "failed"}
         for key in SCENARIOS[1:] if key in structured)
     output["status"] = "complete" if output["time_window_revalidated"] and output["time_impact_revalidated"] and all(
         row["status"] == "verified" for row in output["routes"]) else "partial"

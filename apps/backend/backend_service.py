@@ -2098,8 +2098,9 @@ def _current_plan_preview_map(
             assessment_time,
             str(getattr(config, "service_direction", "") or ""),
             float(getattr(config, "time_impact_limit_minutes", TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)),
+            enabled=config.time_impact_limit_enabled,
         )
-        if not callable(upper_builder):
+        if config.time_impact_limit_enabled and not callable(upper_builder):
             raise ValueError(
                 str(time_constraint.get("unavailable_reason") or "Current-plan time constraints are unavailable.")
             )
@@ -5467,11 +5468,9 @@ def _time_impact_top_stops(
                 "absolute_delta_minutes": float(
                     impact.get("absolute_delta_minutes", 0.0) or 0.0
                 ),
-                "acceptance_threshold_minutes": float(
-                    impact.get("acceptance_threshold_minutes", TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
-                    or TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES
-                ),
-                "within_acceptance": bool(impact.get("within_acceptance")),
+                "limit_enabled": impact.get("limit_enabled", True),
+                "acceptance_threshold_minutes": impact.get("acceptance_threshold_minutes", TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES),
+                "within_acceptance": impact.get("within_acceptance"),
                 "acceptance_status": str(impact.get("acceptance_status") or ""),
                 "over_acceptance_minutes": float(
                     impact.get("over_acceptance_minutes", 0.0) or 0.0
@@ -5488,6 +5487,8 @@ def _time_impact_top_stops(
 def _time_impact_summary(
     stops: list[dict[str, Any]],
     acceptance_threshold: float | None = None,
+    *,
+    limit_enabled: bool = True,
 ) -> dict[str, Any]:
     service_stops = [stop for stop in stops if not bool(stop.get("is_depot"))]
     compared = [
@@ -5547,13 +5548,13 @@ def _time_impact_summary(
     within_acceptance = [
         stop
         for stop in compared
-        if float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        if limit_enabled and float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
         <= acceptance_threshold
     ]
     over_acceptance = [
         stop
         for stop in compared
-        if float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
+        if limit_enabled and float(dict(stop.get("time_impact") or {}).get("adverse_delta_minutes", 0.0) or 0.0)
         > acceptance_threshold
     ]
     within_acceptance_rider_count = sum(
@@ -5572,7 +5573,8 @@ def _time_impact_summary(
     ]
     return {
         "available": bool(compared),
-        "acceptance_threshold_minutes": acceptance_threshold,
+        "limit_enabled": limit_enabled,
+        "acceptance_threshold_minutes": acceptance_threshold if limit_enabled else None,
         "service_stop_count": len(service_stops),
         "compared_stop_count": len(compared),
         "unavailable_stop_count": len(unavailable),
@@ -5672,12 +5674,14 @@ def _attach_schedule_impact(
     current_payload: dict[str, Any] | None,
     *,
     acceptance_threshold: float | None = None,
+    limit_enabled: bool = True,
 ) -> None:
     stops = list(payload.get("stops") or [])
     if not current_payload:
         payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(
             stops,
             acceptance_threshold,
+            limit_enabled=limit_enabled,
         )
         return
 
@@ -5760,7 +5764,7 @@ def _attach_schedule_impact(
             if acceptance_threshold is not None
             else float(TIME_IMPACT_ACCEPTANCE_THRESHOLD_MINUTES)
         )
-        within_acceptance = adverse_delta_minutes <= stop_acceptance_threshold
+        within_acceptance = adverse_delta_minutes <= stop_acceptance_threshold if limit_enabled else None
         stop["time_impact"] = {
             "comparison_available": True,
             "comparison_status": "matched",
@@ -5781,10 +5785,11 @@ def _attach_schedule_impact(
             "delta_minutes": delta_minutes,
             "absolute_delta_minutes": absolute_delta_minutes,
             "adverse_delta_minutes": adverse_delta_minutes,
-            "acceptance_threshold_minutes": stop_acceptance_threshold,
+            "limit_enabled": limit_enabled,
+            "acceptance_threshold_minutes": stop_acceptance_threshold if limit_enabled else None,
             "within_acceptance": within_acceptance,
-            "acceptance_status": "within" if within_acceptance else "over",
-            "over_acceptance_minutes": max(0.0, adverse_delta_minutes - stop_acceptance_threshold),
+            "acceptance_status": ("within" if within_acceptance else "over") if limit_enabled else "not_applicable",
+            "over_acceptance_minutes": max(0.0, adverse_delta_minutes - stop_acceptance_threshold) if limit_enabled else 0.0,
             "benefit_delta_minutes": benefit_delta_minutes,
             "adverse_direction": adverse_direction,
             "change_direction": _time_impact_change_direction(delta_minutes),
@@ -5797,7 +5802,7 @@ def _attach_schedule_impact(
             "route_changed": route_changed,
         }
 
-    summary = _time_impact_summary(stops, acceptance_threshold)
+    summary = _time_impact_summary(stops, acceptance_threshold, limit_enabled=limit_enabled)
     payload.setdefault("summary", {})["time_impact"] = summary
 
     stops_by_route: dict[str, list[dict[str, Any]]] = {}
@@ -5807,6 +5812,7 @@ def _attach_schedule_impact(
         route["time_impact"] = _time_impact_summary(
             stops_by_route.get(str(route.get("id") or ""), []),
             acceptance_threshold,
+            limit_enabled=limit_enabled,
         )
 
 
@@ -6159,6 +6165,9 @@ def _build_job_map_payload(
     _apply_schedule_times(payload, job_record)
     _attach_am_arrival_gate(payload, job_record)
     acceptance_threshold = _job_time_impact_limit_minutes(job_record, result, scenario_key)
+    saved_config = dict(job_record.get("config") or {})
+    saved_config.update(dict(result.get("planner_config") or {}))
+    limit_enabled = saved_config.get("time_impact_limit_enabled", True) is not False
     if attach_impact and scenario_key != "current_plan":
         current_payload, _current_error = _build_job_map_payload(
             job_record,
@@ -6171,11 +6180,13 @@ def _build_job_map_payload(
                 payload,
                 current_payload,
                 acceptance_threshold=acceptance_threshold,
+                limit_enabled=limit_enabled,
             )
     else:
         payload.setdefault("summary", {})["time_impact"] = _time_impact_summary(
             list(payload.get("stops") or []),
             acceptance_threshold,
+            limit_enabled=limit_enabled,
         )
     _apply_map_display_metrics(payload)
     return payload, None
@@ -6390,7 +6401,7 @@ def _build_time_impact_workbook_export(
         ["Job ID", payload.get("job_id")],
         ["Scenario", payload.get("scenario_name")],
         ["Service direction", payload.get("service_direction")],
-        ["Acceptance threshold minutes", summary.get("acceptance_threshold_minutes")],
+        ["Acceptance threshold minutes", summary.get("acceptance_threshold_minutes") if summary.get("limit_enabled", True) else "Disabled"],
         ["Compared stops", summary.get("compared_stop_count")],
         ["Compared riders", summary.get("compared_rider_count")],
         ["Within-threshold stops", summary.get("within_acceptance_stop_count")],

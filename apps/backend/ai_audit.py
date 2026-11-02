@@ -178,10 +178,13 @@ def _compact_time_impact(summary: dict[str, Any]) -> dict[str, Any]:
         decision = "high_risk"
     elif over_stop_count or over_rider_count:
         decision = "review_needed"
+    if summary.get("limit_enabled") is False:
+        decision = "informational"
 
     return {
         "available": True,
         "decision": decision,
+        "limit_enabled": summary.get("limit_enabled", True),
         "acceptance_threshold_minutes": summary.get("acceptance_threshold_minutes"),
         "compared_stop_count": summary.get("compared_stop_count"),
         "compared_rider_count": summary.get("compared_rider_count"),
@@ -320,6 +323,8 @@ def _scenario_summary(
 
 def _scenario_time_impact_passed(scenario: dict[str, Any]) -> bool:
     final_gate = dict(scenario.get("final_time_impact_gate") or {})
+    if final_gate.get("limit_enabled") is False:
+        return True
     if final_gate:
         return str(final_gate.get("status") or "") == "passed"
     constraint = dict(scenario.get("time_constraint") or {})
@@ -455,7 +460,7 @@ def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
     impact_max_over_limit_minutes = float(
         time_impact_gate.get("max_over_limit_minutes", 0.0) or 0.0
     )
-    if impact_max_over_limit_minutes <= 0:
+    if impact_max_over_limit_minutes <= 0 and time_impact_gate.get("limit_enabled", True):
         impact_max_over_limit_minutes = max(
             0.0,
             float(time_impact_gate.get("max_adverse_minutes", 0.0) or 0.0)
@@ -490,7 +495,7 @@ def _scenario_decision_metrics(scenario: dict[str, Any]) -> dict[str, Any]:
             or int(traffic_gate.get("checked_route_count", 0) or 0) >= len(routes)
         )
     )
-    time_impact_evidence_complete = (
+    time_impact_evidence_complete = time_impact_gate.get("limit_enabled") is False or (
         time_impact_status in {"passed", "failed"}
         and int(time_impact_gate.get("unavailable_stop_count", 0) or 0) == 0
         and int(time_impact_gate.get("unavailable_route_count", 0) or 0) == 0
@@ -709,7 +714,8 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "service_direction": service_direction,
             "traffic_profile": traffic_profile,
             "target_route_duration_min": planner_config.get("max_route_duration_minutes"),
-            "time_impact_limit_minutes": time_impact_limit_minutes,
+            "time_impact_limit_enabled": planner_config.get("time_impact_limit_enabled", True),
+            "time_impact_limit_minutes": time_impact_limit_minutes if planner_config.get("time_impact_limit_enabled", True) else None,
         },
         "run_parameters": {
             "service_direction": service_direction,
@@ -729,7 +735,8 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
             "osrm_route_budget_minutes": planner_config.get("max_route_duration_minutes"),
             "route_stop_limit": planner_config.get("route_stop_limit"),
             "minimum_vehicle_reduction": planner_config.get("minimum_vehicle_reduction"),
-            "time_impact_limit_minutes": time_impact_limit_minutes,
+            "time_impact_limit_enabled": planner_config.get("time_impact_limit_enabled", True),
+            "time_impact_limit_minutes": time_impact_limit_minutes if planner_config.get("time_impact_limit_enabled", True) else None,
             "comfort_enabled": comfort_load_factor < 1.0,
             "comfort_load_factor": round(comfort_load_factor, 2),
             "stop_dwell_minutes": planner_config.get("stop_service_minutes"),

@@ -75,6 +75,21 @@ def test_failed_parent_has_no_original_fallback(status):
     assert pm["prepared_payload"] == {}
 
 
+def test_completed_partial_morning_binds_three_layouts_without_approving_them():
+    am, pm = pair_fixture()
+    am["result"]["traffic_validation_summary"] = {"status": "partial", "unavailable_route_count": 1}
+    scenario = am["result"]["structured_results"]["time_constrained"]
+    scenario["traffic_feasible"] = False
+    scenario["routes"][0]["final_route_traffic_gate"] = {"status": "unavailable", "passes": None}
+    assert bind(am, pm)
+    snapshots = pm["prepared_payload"]["return_scenarios"]
+    assert len(snapshots) == 3
+    assert snapshots["time_constrained"]["source_status"] == "rejected"
+    assert all(not value.get("error") for value in snapshots.values())
+    assert pm["metadata"]["return_dependency_status"] == "ready"
+    assert scenario["routes"][0]["final_route_traffic_gate"]["status"] == "unavailable"
+
+
 def test_missing_parent_and_expired_post_completion_window():
     am, pm = pair_fixture()
     with pytest.raises(ValueError, match="missing"):

@@ -105,6 +105,7 @@ function JobResultBody({ job, measurementReview }: { job: JobRecord; measurement
   const t = useT();
   const [activeTab, setActiveTab] = useState<ResultTab>("summary");
   const result = asRecord(job.result);
+  const trafficValidation = asRecord(result.traffic_validation_summary);
   const currentPlan = asRecord(result.current_plan_assessment);
   const routeSummaries = asRecordArray(currentPlan.route_summaries);
   const currentComparison = asRecord(result.current_plan_comparison);
@@ -144,6 +145,15 @@ function JobResultBody({ job, measurementReview }: { job: JobRecord; measurement
 
   return (
     <div className="min-w-0 space-y-4">
+      {trafficValidation.status === "partial" ? (
+        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <TriangleAlert className="mr-2 inline h-4 w-4" aria-hidden="true" />
+          {t("Analysis completed with incomplete traffic measurements. Unverified routes are not approved.")}
+          <div className="mt-1">
+            {t("Unverified routes")}: {String(trafficValidation.unavailable_route_count ?? 0)}
+          </div>
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-2">
         {resultTabs.map((tab) => (
           <button

@@ -240,8 +240,9 @@ class ChunkPlanner:
         assert len(points) <= 18
         path = native_path(points, (60,)*(len(points)-1), (300,)*(len(points)-1))
         if self.mutate_overlap and len(self.calls) == 2:
-            a, b = points[:2]
-            path["steps"][0]["polyline"] = f"{a[1]},{a[0]};{a[1]+.003},{a[0]};{b[1]},{b[0]}"
+            for i in range(2):
+                a, b = points[i:i+2]
+                path["steps"][i]["polyline"] = f"{a[1]},{a[0]};{a[1]+.003},{a[0]};{b[1]},{b[0]}"
         return {"route": {"paths": [path]}}
 
 
@@ -272,6 +273,75 @@ def test_long_route_cannot_silently_reset_approach_at_chunk_boundary():
     assert result["status"] == "unavailable"
     assert result["continuous_measurement"]["chunks"][-1]["reason"] == "continuous_chunk_join_unverified"
     assert len(planner.calls) == 2
+
+
+def test_native_splice_replaces_destination_tail_not_the_certified_incoming_leg():
+    points = [(31.2+i*.002, 121.4) for i in range(19)]
+    planner, cache, state = ChunkPlanner(), {}, {"api_call_limit": 2}
+
+    def context(active, requested):
+        snapshot = evidence.fetch_amap_itinerary(active, requested)
+        if len(active.calls) == 1:
+            leg = snapshot["waypoint_legs"][-1]
+            leg["geometry"][-1][0] += .0002
+            leg["distance_m"] += 16
+            leg["duration_s"] += 10
+        else:
+            # Traffic can change between calls without changing the road.
+            snapshot["waypoint_legs"][0]["duration_s"] += 120
+        return snapshot
+
+    result = evidence.measure_amap_route(planner, points, cache, state, fetch_context=context)
+    assert result["status"] == "verified"
+    assert result["duration_s"] == 18 * 60
+    assert result["distance_m"] == 18 * 300
+    assert len(result["legs"]) == 18
+    splice = result["continuous_measurement"]["chunks"][-1]
+    assert splice["overlap_resolution"]["duration_delta_s"] == 120
+    assert splice["superseded_legs"][0]["distance_m"] == 316
+    assert [leg["leg_index"] for leg in result["legs"]] == list(range(18))
+    assert state["api_calls"] == 2
+
+
+def test_later_shared_incoming_leg_can_anchor_without_replacing_old_prefix():
+    points = [(31.2+i*.002, 121.4) for i in range(19)]
+    planner = ChunkPlanner()
+
+    def context(active, requested):
+        snapshot = evidence.fetch_amap_itinerary(active, requested)
+        if len(active.calls) == 2:
+            leg = snapshot["waypoint_legs"][0]
+            leg["geometry"].insert(1, [121.8, 31.8])
+            leg["duration_s"] = 1000
+            leg["distance_m"] = 5000
+        return snapshot
+
+    result = evidence.measure_amap_route(planner, points, {}, {"api_call_limit": 2}, fetch_context=context)
+    assert result["status"] == "verified"
+    assert result["duration_s"] == 18 * 60
+    assert result["distance_m"] == 18 * 300
+    assert result["continuous_measurement"]["chunks"][-1]["overlap_resolution"]["anchor_leg_index"] == 16
+    assert result["legs"][15]["distance_m"] == 300
+
+
+@pytest.mark.parametrize("failure", ["order", "gap", "metric", "diagnostic", "direction", "detour"])
+def test_native_anchor_never_accepts_real_discontinuities(failure):
+    snapshot = evidence.fetch_amap_itinerary(Planner(), [A, B, C])
+    before, continuation = deepcopy(snapshot["waypoint_legs"])
+    incoming = deepcopy(before)
+    if failure == "order":
+        incoming["destination"] = list(C)
+    elif failure == "gap":
+        continuation["geometry"][0][0] += .003
+    elif failure == "metric":
+        incoming["duration_s"] = float("nan")
+    elif failure == "diagnostic":
+        incoming["geometry_diagnostics"] = [{"code": "native_step_geometry_gap"}]
+    elif failure == "direction":
+        incoming["geometry"].reverse()
+    else:
+        incoming["geometry"].insert(1, [121.8, 31.8])
+    assert evidence._native_chunk_anchor(before, incoming, continuation)["status"] == "unresolved"
 
 
 def test_missing_native_proof_keeps_all_independent_edges_diagnostic_not_verified():

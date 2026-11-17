@@ -1,6 +1,8 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "Analysis completed with incomplete traffic measurements. Unverified routes are not approved.": "분석은 완료되었으나 일부 교통 측정이 불완전합니다. 미검증 노선은 승인되지 않았습니다.",
+    "Unverified routes": "미검증 노선",
     "Candidate Plan": "후보 계획",
     "Current traffic snapshot; not a morning traffic forecast.": "현재 교통 실측이며 아침 교통 예측이 아닙니다.",
     "Incomplete measurement; counts cover measured routes only.": "측정되지 않은 노선이 있습니다. 시간 분류와 초과 인원은 측정된 노선만 집계합니다.",

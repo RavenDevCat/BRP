@@ -4,6 +4,8 @@ import type { Translations } from "./types";
 // This dictionary exists so every language file follows the same shape
 // and TypeScript can verify that all keys are present.
 const en: Translations = {
+    "Analysis completed with incomplete traffic measurements. Unverified routes are not approved.": "Analysis completed with incomplete traffic measurements. Unverified routes are not approved.",
+    "Unverified routes": "Unverified routes",
     "Incomplete measurement; counts cover measured routes only.": "Incomplete measurement; counts cover measured routes only.",
     "Students over trip limit": "Students over trip limit",
     "Morning to school": "Morning to school",

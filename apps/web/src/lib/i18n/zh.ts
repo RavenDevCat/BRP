@@ -1,6 +1,8 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "Analysis completed with incomplete traffic measurements. Unverified routes are not approved.": "分析已完成，部分交通测量不完整。未核验线路未被判定为通过。",
+    "Unverified routes": "未核验线路",
     "Candidate Plan": "候选方案",
     "Current traffic snapshot; not a morning traffic forecast.": "当前路况实测，不代表早高峰预测。",
     "Return duration limit (min)": "返程评估窗口（分钟）",

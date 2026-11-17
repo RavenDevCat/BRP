@@ -274,6 +274,46 @@ def _continuous_turn_resolution(previous: dict[str, Any], following: dict[str, A
         return {**result, "reason": "invalid_context_evidence"}
 
 
+def _native_chunk_anchor(previous: dict[str, Any], incoming: dict[str, Any],
+                         continuation: dict[str, Any]) -> dict[str, Any]:
+    """Certify an incoming leg before replacing the old destination-only tail."""
+    result: dict[str, Any] = {"status": "unresolved", "policy": "native-incoming-anchor-v1"}
+    try:
+        if any(previous[key] != incoming[key] for key in ("origin", "destination")):
+            return {**result, "reason": "waypoint_order_mismatch"}
+        if incoming["destination"] != continuation["origin"]:
+            return {**result, "reason": "waypoint_order_mismatch"}
+        if any(leg.get("geometry_diagnostics") for leg in (previous, incoming, continuation)):
+            return {**result, "reason": "native_geometry_gap"}
+        for leg in (previous, incoming, continuation):
+            if not all(math.isfinite(float(leg[key])) and float(leg[key]) > 0
+                       for key in ("duration_s", "distance_m")):
+                return {**result, "reason": "incomplete_context_metrics"}
+        before, a = _geometry_profile(previous["geometry"])
+        after, b = _geometry_profile(incoming["geometry"])
+        result.update(distance_delta_m=incoming["distance_m"] - previous["distance_m"],
+                      duration_delta_s=incoming["duration_s"] - previous["duration_s"])
+        if abs(result["distance_delta_m"]) > 5 or abs(a[-1] - b[-1]) > 5:
+            return {**result, "reason": "continuous_distance_differs"}
+        steps = max(1, math.ceil(max(a[-1], b[-1]) / 5))
+        if steps > 10000:
+            return {**result, "reason": "geometry_comparison_limit"}
+        fractions = {i / steps for i in range(steps + 1)} | {x / a[-1] for x in a} | {x / b[-1] for x in b}
+        result["maximum_separation_m"] = max(
+            distance_m(tuple(reversed(_geometry_position(before, a, fraction))),
+                       tuple(reversed(_geometry_position(after, b, fraction)))) for fraction in fractions)
+        if result["maximum_separation_m"] > CONTEXT_GEOMETRY_TOLERANCE_M:
+            return {**result, "reason": "continuous_geometry_differs"}
+        # The retained prefix must meet the new native continuation, not the
+        # superseded destination approach. Time changes are not road changes.
+        gap = distance_m(tuple(reversed(before[-1])), tuple(reversed(continuation["geometry"][0])))
+        if gap > CONTEXT_GEOMETRY_TOLERANCE_M:
+            return {**result, "reason": "adjacent_road_gap", "gap_m": gap}
+        return {**result, "status": "confirmed", "reason": "same_directed_incoming_leg"}
+    except (KeyError, ValueError, TypeError, IndexError, OverflowError):
+        return {**result, "reason": "invalid_context_evidence"}
+
+
 def _recover_continuous_legs(planner: Any, points: list[tuple[float, float]], cache: dict[str, Any],
                              state: dict[str, Any], legs: list[dict[str, Any]],
                              fetch_context: Callable) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
@@ -517,17 +557,23 @@ def measure_amap_route(
             break
         skip = 0
         if start:
-            # Re-request two complete incoming legs so a chunk cannot reset the
-            # approach at its join. An unproven join remains diagnostic only.
-            overlap = {"geometry": chunk[0]["geometry"] + chunk[1]["geometry"],
-                       "duration_s": chunk[0]["duration_s"] + chunk[1]["duration_s"],
-                       "distance_m": chunk[0]["distance_m"] + chunk[1]["distance_m"]}
-            resolution = _continuous_turn_resolution(legs[-2], legs[-1], overlap)
-            record["overlap_resolution"] = resolution
-            if resolution["status"] != "confirmed":
+            # Either full incoming overlap leg can certify the join. Retain
+            # the original prefix and discard only the new request's prefix.
+            attempts = []
+            for offset in range(len(legs) - start - 1, -1, -1):
+                resolution = _native_chunk_anchor(legs[start + offset], chunk[offset], chunk[offset + 1])
+                attempts.append({**resolution, "anchor_leg_index": start + offset})
+                if resolution["status"] == "confirmed":
+                    skip = offset + 1
+                    break
+            record["anchor_attempts"] = attempts
+            record["overlap_resolution"] = attempts[-1]
+            if not skip:
                 record.update(status="unavailable", reason="continuous_chunk_join_unverified")
                 break
-            skip = 2
+            record["superseded_legs"] = deepcopy(legs[start + skip:])
+            legs = legs[:start + skip]
+            issues = [item for item in issues if item["leg_index"] < start + skip]
         for leg in chunk[skip:]:
             leg["leg_index"] += start
             legs.append(leg)

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
+import math
 from pathlib import Path
 import shutil
 import sys
@@ -80,7 +81,7 @@ def _is_scheduled_job(job_record: dict[str, Any]) -> bool:
 
 
 def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> str | None:
-    result = dict(result or {})
+    result = result if isinstance(result, dict) else {}
     structured = dict(result.get("structured_results") or {})
     refresh = dict(
         structured.get("scheduled_run_traffic_refresh")
@@ -99,6 +100,8 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
             return "scheduled fresh traffic refresh made no provider API calls"
 
     required_gate_count = 0
+    measured_count = 0
+    incomplete_scenarios = []
     for scenario_key in (
         "current_plan",
         "time_constrained",
@@ -117,13 +120,48 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
             continue
         required_gate_count += 1
         status = str(gate.get("status") or "").strip().lower()
-        if status not in {"passed", "failed"} or int(gate.get("unavailable_route_count", 0) or 0) > 0:
+        unavailable = int(gate.get("unavailable_route_count", 0) or 0)
+        checked = int(gate.get("checked_route_count", 0) or 0)
+        if unavailable > 0:
+            route_gates = [dict(route.get("final_route_traffic_gate") or {}) for route in routes]
+            local_missing = [item for item in route_gates if item.get("status") == "unavailable"
+                             and item.get("passes") is None
+                             and (item.get("error") or item.get("evidence_issues"))]
+            local_checked = [item for item in route_gates if item.get("status") in {"passed", "failed"}
+                             and item.get("passes") is (item.get("status") == "passed")
+                             and all(isinstance(item.get(key), (int, float))
+                                     and math.isfinite(item[key]) and item[key] >= 0
+                                     for key in ("verified_total_duration_s", "verified_distance_m"))]
+            local_failed = sum(item.get("status") == "failed" for item in local_checked)
+            failed_count_key = ("all_routes_failed_route_count"
+                                if gate.get("evaluation_scope") == "optimized_remainder"
+                                else "failed_route_count")
+            if (status not in {"failed", "unavailable"} or checked + unavailable != len(routes)
+                    or len(local_missing) != unavailable or len(local_checked) != checked
+                    or local_failed != int(gate.get(failed_count_key, 0) or 0)
+                    or scenario.get("traffic_feasible") is not False):
+                return f"scheduled final traffic gate unavailable for {scenario_key}"
+            incomplete_scenarios.append({"scenario": scenario_key, "checked_route_count": checked,
+                "unavailable_route_count": unavailable,
+                "route_ids": [str(item.get("route_id") or "") for item in local_missing]})
+        elif status not in {"passed", "failed"}:
             return f"scheduled final traffic gate unavailable for {scenario_key}"
-        if int(gate.get("checked_route_count", 0) or 0) < len(routes):
+        elif checked != len(routes):
             return f"scheduled final traffic gate did not check every route for {scenario_key}"
+        measured_count += checked
 
     if required_gate_count and refresh_provider not in supported_providers:
         return "scheduled result lacks fresh provider traffic evidence"
+    if incomplete_scenarios and not measured_count:
+        return "scheduled final traffic gate unavailable for all routes"
+    if incomplete_scenarios:
+        result["traffic_validation_summary"] = {
+            "status": "partial", "checked_route_count": measured_count,
+            "unavailable_route_count": sum(item["unavailable_route_count"] for item in incomplete_scenarios),
+            "incomplete_scenarios": incomplete_scenarios,
+        }
+    else:
+        result.pop("traffic_validation_summary", None)
     return None
 
 

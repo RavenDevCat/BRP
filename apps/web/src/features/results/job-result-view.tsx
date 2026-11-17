@@ -3501,8 +3501,9 @@ function buildScenarioDecisionMetrics(
 
   const timeImpactOverLimitRiderCount = Math.max(0, Number(timeImpactGate.over_limit_rider_count || 0));
   const timeImpactMaxAdverseMinutes = Math.max(0, Number(timeImpactGate.max_adverse_minutes || 0));
-  let timeImpactMaxOverLimitMinutes = Number(timeImpactGate.max_over_limit_minutes || 0);
-  if (timeImpactMaxOverLimitMinutes <= 0) {
+  const timeImpactDisabled = timeImpactGate.limit_enabled === false;
+  let timeImpactMaxOverLimitMinutes = timeImpactDisabled ? 0 : Number(timeImpactGate.max_over_limit_minutes || 0);
+  if (!timeImpactDisabled && timeImpactMaxOverLimitMinutes <= 0) {
     timeImpactMaxOverLimitMinutes = Math.max(
       0,
       Number(timeImpactGate.max_adverse_minutes || 0) - Number(timeImpactGate.threshold_minutes || 0),
@@ -3519,7 +3520,8 @@ function buildScenarioDecisionMetrics(
   const trafficEvidenceComplete = ["passed", "failed"].includes(trafficStatus)
     && Number(trafficGate.unavailable_route_count || 0) === 0
     && (!routes.length || Number(trafficGate.checked_route_count || 0) >= routes.length);
-  const timeImpactEvidenceComplete = ["passed", "failed"].includes(timeImpactStatus)
+  const timeImpactEvidenceComplete = (["passed", "failed"].includes(timeImpactStatus)
+      || (timeImpactDisabled && timeImpactStatus === "not_applicable"))
     && Number(timeImpactGate.unavailable_stop_count || 0) === 0
     && Number(timeImpactGate.unavailable_route_count || 0) === 0;
 

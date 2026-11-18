@@ -436,6 +436,11 @@ def build_global_ortools_plan(
             route_duration_s=total_duration_s,
             service_direction=service_direction,
         )
+        # Static directed road costs rank potential splits; they are not live measurements.
+        for pos, (node, stop) in enumerate(zip(order, ordered_points, strict=True)):
+            stop["static_school_drive_s"] = duration_matrix[node][0] if service_direction == "to_school" else duration_matrix[0][node]
+            if pos + 1 < len(order):
+                stop["static_next_drive_s"] = duration_matrix[node][order[pos + 1]]
         student_count = sum(int(points[node].get("student_count", 0) or 0) for node in customer_order)
         load_factor = student_count / max(1, int(vehicle["capacity"]))
         route_id = f"G{len(route_rows) + 1:02d}"

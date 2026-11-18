@@ -1480,7 +1480,7 @@ def _handle_fleet_planner_global_plan(payload: dict[str, Any]) -> dict[str, Any]
             _attach_fleet_route_measurements(partial, demand_routing, measurement_provider=provider)
 
         global_plan = refine_measured_plan(global_plan, vehicles, measure_children,
-            budget_available=lambda: provider.state["api_calls"] < provider.state["api_call_limit"])
+            budget_available=lambda: provider.state["api_call_limit"] - provider.state["api_calls"] >= 2)
         global_plan["summary"]["provider_api_calls"] = provider.state["api_calls"]
         global_plan["summary"]["provider_api_call_limit"] = provider.state["api_call_limit"]
         return _route_plan_response(global_plan, workbook_file_name="fleet_planner_global_plan.xlsx", already_measured=True)

@@ -1,5 +1,6 @@
 """Bounded live-measurement repair of a Fleet candidate, without relaxing limits."""
 from copy import deepcopy
+import math
 
 
 def _load(route):
@@ -28,6 +29,50 @@ def assign_vehicles(routes, vehicle_pool):
     return True
 
 
+def _rank_splits(service, direction, other_routes, vehicle_pool, *, dwell_s=0.0):
+    caps = sorted((int(v["capacity"]) for v in vehicle_pool), reverse=True)
+    others = [_load(r) for r in other_routes]
+    if len(others) + 2 > len(caps):
+        return []
+    loads, road = [0], [0.0]
+    points = [p for _, p in service]
+    for point in points:
+        loads.append(loads[-1] + int(point.get("student_count") or 0))
+    for point in points[:-1]:
+        road.append(road[-1] + float(point.get("static_next_drive_s") or 0))
+    static_known = (all(p.get("static_school_drive_s") is not None for p in points)
+                    and all(p.get("static_next_drive_s") is not None for p in points[:-1]))
+    ranks = []
+    for split in range(1, len(points)):
+        left, right = loads[split], loads[-1] - loads[split]
+        needed = sorted([*others, left, right], reverse=True)
+        if any(load > cap for load, cap in zip(needed, caps)):
+            continue
+        if static_known:
+            a, b = (points[0], points[split]) if direction == "from_school" else (points[split-1], points[-1])
+            t1 = road[split-1] + a["static_school_drive_s"] + split * dwell_s
+            t2 = road[-1] - road[split] + b["static_school_drive_s"] + (len(points)-split) * dwell_s
+            drive_score = (max(t1, t2), t1+t2)
+        else:
+            drive_score = (0, 0)
+        ranks.append((*drive_score, abs(left-right), abs(len(points)-2*split), split))
+    return [rank[-1] for rank in sorted(ranks)]
+
+
+def _split_children(parent, service, school, direction, cut):
+    children = []
+    for part in (service[:cut], service[cut:]):
+        nodes, stops = zip(*part)
+        children.append({
+            "cluster_id": parent["cluster_id"], "source_cluster_id": parent.get("source_cluster_id", parent["cluster_id"]),
+            "solver": "global_ortools_live_split", "service_direction": direction,
+            "order": [0, *nodes] if direction == "from_school" else [*nodes, 0],
+            "ordered_points": deepcopy([school, *stops] if direction == "from_school" else [*stops, school]),
+            "leg_details": [], "warnings": [],
+        })
+    return children
+
+
 def refine_measured_plan(plan, vehicle_pool, measure, *, max_splits=32, budget_available=lambda: True):
     """Split failed multi-stop routes and retain the last fully measured candidate."""
     result = deepcopy(plan)
@@ -42,43 +87,55 @@ def refine_measured_plan(plan, vehicle_pool, measure, *, max_splits=32, budget_a
         if not candidates:
             break
         parent = max(candidates, key=lambda route: route["final_route_traffic_gate"].get("verified_total_duration_s", 0))
-        if not budget_available():
-            parent["refinement_reason"] = "measurement_budget_exhausted"
-            break
+
         direction = parent.get("service_direction", result["summary"].get("service_direction", "to_school"))
         points, order = parent["ordered_points"], parent["order"]
         school = points[0] if direction == "from_school" else points[-1]
         service = list(zip(order[1:], points[1:])) if direction == "from_school" else list(zip(order[:-1], points[:-1]))
-        cut = len(service) // 2
-        children = []
-        for part in (service[:cut], service[cut:]):
-            nodes, stops = zip(*part)
-            child = {
-                "cluster_id": parent["cluster_id"],
-                "source_cluster_id": parent.get("source_cluster_id", parent["cluster_id"]),
-                "solver": "global_ortools_live_split", "service_direction": direction,
-                "order": [0, *nodes] if direction == "from_school" else [*nodes, 0],
-                "ordered_points": deepcopy([school, *stops] if direction == "from_school" else [*stops, school]),
-                "leg_details": [], "warnings": [],
-            }
-            children.append(child)
         index = routes.index(parent)
-        tentative = routes[:index] + children + routes[index + 1:]
-        if not assign_vehicles(deepcopy(tentative), vehicle_pool):
-            parent["refinement_reason"] = "available_fleet_exhausted"
+        dwell_s = (parent.get("stop_service_time_s") or 0) / len(service)
+        ranked = _rank_splits(service, direction, routes[:index] + routes[index+1:], vehicle_pool, dwell_s=dwell_s)
+        if not ranked:
+            parent["refinement_reason"] = "no_capacity_feasible_cut"
             blocked.add(id(parent))
             continue
-        measure(children)
-        available = all(child.get("route_evidence", {}).get("status") == "verified"
-                        and child.get("final_route_traffic_gate", {}).get("status") in {"passed", "failed"}
-                        for child in children)
-        attempts.append({"source_route": parent["cluster_id"], "accepted": available,
-                         "child_statuses": [child.get("final_route_traffic_gate", {}).get("status") for child in children]})
-        if not available:
-            parent["refinement_reason"] = "child_measurement_unavailable"
+        if not budget_available():
+            parent["refinement_reason"] = "measurement_budget_exhausted"
             blocked.add(id(parent))
             continue
-        assert assign_vehicles(tentative, vehicle_pool)
+        best = None
+        for cut in ranked[:3]:
+            if not budget_available():
+                break
+            children = _split_children(parent, service, school, direction, cut)
+            measure(children)
+            gates = [r.get("final_route_traffic_gate") or {} for r in children]
+            statuses = [g.get("status") for g in gates]
+            verified = all(r.get("route_evidence", {}).get("status") == "verified"
+                           and r["route_evidence"].get("complete") is not False
+                           and isinstance(g.get("verified_total_duration_s"), (int, float))
+                           and not isinstance(g["verified_total_duration_s"], bool)
+                           and math.isfinite(g["verified_total_duration_s"]) and g["verified_total_duration_s"] >= 0
+                           and status in {"passed", "failed"} for r, g, status in zip(children, gates, statuses))
+            attempt = {"source_route": parent["cluster_id"], "cut": cut, "accepted": False,
+                       "measured": verified, "child_statuses": statuses}
+            attempts.append(attempt)
+            if not verified:
+                continue
+            score = (statuses.count("failed"), max(g["verified_total_duration_s"] for g in gates))
+            if best is None or score < best[0]:
+                best = score, children, attempt
+            if not score[0]:
+                break
+        if best is None:
+            parent["refinement_reason"] = "split_not_verified_within_budget" if not budget_available() else "child_measurement_unavailable"
+            blocked.add(id(parent))
+            continue
+        _, children, accepted = best
+        tentative = routes[:index] + children + routes[index+1:]
+        if not assign_vehicles(tentative, vehicle_pool):
+            raise RuntimeError("Fleet capacity changed during split measurement")
+        accepted["accepted"] = True
         routes[:] = tentative
         splits += 1
     rows = []
@@ -106,4 +163,9 @@ def refine_measured_plan(plan, vehicle_pool, measure, *, max_splits=32, budget_a
                             "unresolved_routes": [route["cluster_id"] for route in routes
                                 if route.get("final_route_traffic_gate", {}).get("status") != "passed"]}
     result["refinement_note"] = f"Live refinement: {splits} splits; {len(result['refinement']['unresolved_routes'])} routes remain unverified or over limit."
+    reasons = {r.get("refinement_reason") for r in routes}
+    if "no_capacity_feasible_cut" in reasons:
+        result["refinement_note"] += " No capacity-feasible split for one or more routes with the available fleet."
+    if reasons & {"split_not_verified_within_budget", "measurement_budget_exhausted", "child_measurement_unavailable"}:
+        result["refinement_note"] += " One or more splits could not be verified within the measurement budget or available evidence."
     return result

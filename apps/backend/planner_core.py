@@ -3460,35 +3460,93 @@ def _route_metric_cost(node_ids: list[int], metric_matrix: list[list[float]]) ->
     return sum(float(metric_matrix[from_node][to_node]) for from_node, to_node in zip(node_ids[:-1], node_ids[1:]))
 
 
-def _nearest_neighbor_order(start_node: int, candidate_nodes: list[int], metric_matrix: list[list[float]]) -> list[int]:
-    remaining = set(candidate_nodes)
-    ordered = [start_node]
-    current = start_node
-    while remaining:
-        next_node = min(remaining, key=lambda node: float(metric_matrix[current][node]))
-        ordered.append(next_node)
-        remaining.remove(next_node)
-        current = next_node
-    return ordered
+def _optimize_route_node_order(route_node_ids, metric_matrix, *, fixed_end=False):
+    """Shortest directed open path with a fixed school endpoint; ties retain the input."""
+    from functools import lru_cache
+    from time import monotonic
 
+    if len(route_node_ids) < 3:
+        return list(route_node_ids)
+    nodes = list(reversed(route_node_ids)) if fixed_end else list(route_node_ids)
+    n = len(nodes)
+    def edge(a, b):
+        i, j = (b, a) if fixed_end else (a, b)
+        return metric_matrix[nodes[i]][nodes[j]]
 
-def _optimize_route_node_order(route_node_ids: list[int], metric_matrix: list[list[float]]) -> list[int]:
-    if len(route_node_ids) <= 2:
-        return route_node_ids
+    def cost(order):
+        return sum(edge(a, b) for a, b in zip(order, order[1:]))
 
-    start_node = route_node_ids[0]
-    visit_nodes = route_node_ids[1:]
-    if len(visit_nodes) <= 8:
-        best_order = route_node_ids
-        best_cost = _route_metric_cost(best_order, metric_matrix)
-        for permutation in itertools.permutations(visit_nodes):
-            candidate = [start_node, *permutation]
-            candidate_cost = _route_metric_cost(candidate, metric_matrix)
-            if candidate_cost < best_cost:
-                best_order = candidate
-                best_cost = candidate_cost
-        return best_order
-    return _nearest_neighbor_order(start_node, visit_nodes, metric_matrix)
+    best = list(range(n))
+    best_cost = cost(best)
+    if n - 1 <= 11:
+        # Positions, not node IDs, are bits so repeated visits are not lost.
+        choices = {}
+        @lru_cache(None)
+        def remaining(last, mask):
+            if not mask:
+                return 0
+            bits = mask
+            minimum = math.inf
+            while bits:
+                bit = bits & -bits
+                nxt = bit.bit_length()
+                value = edge(last, nxt) + remaining(nxt, mask ^ bit)
+                if value < minimum:
+                    minimum = value
+                    choices[last, mask] = nxt
+                bits ^= bit
+            return minimum
+
+        mask = (1 << (n - 1)) - 1
+        if remaining(0, mask) < best_cost:
+            candidate = [0]
+            while mask:
+                nxt = choices[candidate[-1], mask]
+                candidate.append(nxt)
+                mask ^= 1 << (nxt - 1)
+            if cost(candidate) < best_cost:
+                best = candidate
+        remaining.cache_clear()
+    else:
+        # Both a deterministic work cap and a wall clock cap apply to each route.
+        deadline = monotonic() + 0.035
+        starts = sorted(range(1, n), key=lambda i: (edge(0, i), i))
+        for first in dict.fromkeys([starts[0], 1, starts[-1], starts[len(starts)//2]]):
+            candidate = [0, first]
+            unused = set(range(1, n)) - {first}
+            while unused and monotonic() < deadline:
+                last = candidate[-1]
+                nxt = min(unused, key=lambda i: (edge(last, i), i))
+                candidate.append(nxt)
+                unused.remove(nxt)
+            if unused:
+                break
+            value = cost(candidate)
+            if value < best_cost:
+                best, best_cost = candidate, value
+
+        moves = 0
+        while monotonic() < deadline and moves < 1500:
+            improved = False
+            for i in range(1, n):
+                for j in range(1, n):
+                    if i == j:
+                        continue
+                    if moves >= 1500 or monotonic() >= deadline:
+                        break
+                    candidate = best.copy()
+                    candidate.insert(j, candidate.pop(i))
+                    value = cost(candidate)
+                    moves += 1
+                    if value < best_cost:
+                        best, best_cost, improved = candidate, value, True
+                        break
+                if improved or moves >= 1500 or monotonic() >= deadline:
+                    break
+            if not improved:
+                break
+    ordered = [nodes[i] for i in best]
+    return list(reversed(ordered)) if fixed_end else ordered
 
 
 def assess_current_plan(
@@ -3579,17 +3637,12 @@ def assess_current_plan(
         if optimize_stop_order and len(matched_points) >= 3:
             terminal_point = next((point for point in matched_points if bool(point.get("is_depot"))), matched_points[0])
             remaining_points = [point for point in matched_points if point is not terminal_point]
-            if service_direction == "To School":
-                solve_time_working = [list(row) for row in zip(*solve_time)]
-            else:
-                solve_time_working = solve_time
+            fixed_end = service_direction == "To School"
+            input_points = [*remaining_points, terminal_point] if fixed_end else [terminal_point, *remaining_points]
             optimized_node_ids = _optimize_route_node_order(
-                [int(terminal_point.get("node_id", 0)), *[int(point.get("node_id", 0)) for point in remaining_points]],
-                solve_time_working,
-            )
+                [int(point.get("node_id", 0)) for point in input_points], solve_time, fixed_end=fixed_end)
             point_by_node = {int(point.get("node_id", 0)): point for point in matched_points}
-            optimized_points = [point_by_node[node_id] for node_id in optimized_node_ids if node_id in point_by_node]
-            matched_points = order_points_for_service_direction(optimized_points, service_direction, optimized=True)
+            matched_points = [point_by_node[node_id] for node_id in optimized_node_ids]
         else:
             matched_points = order_points_for_service_direction(matched_points, service_direction, optimized=False)
 
@@ -4246,10 +4299,9 @@ def _route_metric_from_stop_ids(
         if normalized_stop_id not in global_stop_to_node_id:
             return None
         node_ids.append(int(global_stop_to_node_id[normalized_stop_id]))
-    optimize_matrix = transpose_matrix(solve_time) if normalized_direction == "To School" else solve_time
-    optimized_node_ids = _optimize_route_node_order(node_ids, optimize_matrix) if len(node_ids) >= 3 else node_ids
-    if normalized_direction == "To School":
-        optimized_node_ids = list(reversed(optimized_node_ids))
+    fixed_end = normalized_direction == "To School"
+    input_order = [*node_ids[1:], node_ids[0]] if fixed_end else node_ids
+    optimized_node_ids = _optimize_route_node_order(input_order, solve_time, fixed_end=fixed_end)
     route_distance_m = _route_metric_cost(optimized_node_ids, solve_distance) if len(optimized_node_ids) >= 2 else 0.0
     route_duration_s = _route_metric_cost(optimized_node_ids, solve_time) if len(optimized_node_ids) >= 2 else 0.0
     return route_distance_m, route_duration_s, optimized_node_ids

@@ -7,6 +7,15 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-11-18
 
+### Route Ordering and Fleet Planning
+
+- Fixed-school stop ordering preserves the original order when the directed road
+  metric cannot be improved. Up to eleven service visits use an exact search;
+  larger routes use a bounded search, not a proof of the minimum fleet size.
+- Fleet Planner considers every consecutive split against the whole available
+  fleet before measuring the best candidates. Unmeasured cuts do not count as
+  passing live-traffic checks. Road matrices are fetched in directed batches.
+
 ### Scheduled Audit Reliability
 
 - Simultaneous scheduler triggers release a due audit only once. A return is

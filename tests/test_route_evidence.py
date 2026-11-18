@@ -465,12 +465,14 @@ def test_fleet_keeps_raw_gcj_for_amap_and_converts_only_osrm_requests(monkeypatc
     raw = routing._point_payload({"lat": A[0], "lng": A[1], "provider": "amap"})
     assert core._amap_route_point(raw) == A
     requests = []
-    def metrics(origin, destinations):
-        requests.append((origin, destinations))
-        return [{"duration_s": 123, "distance_m": 456} for _ in destinations]
-    monkeypatch.setattr(routing, "compute_osrm_metrics_from_origin", metrics)
+    def table(url, params, rows, cols):
+        requests.append(url.rsplit("/", 1)[1].split(";")[0])
+        return [[123] * cols for _ in range(rows)], [[456] * cols for _ in range(rows)]
+    tool = importlib.import_module("distance_tool")
+    monkeypatch.setattr(tool, "_read_table", table)
+    monkeypatch.setattr(tool, "maybe_ensure_osrm_base_url", lambda _: None)
     matrix, _ = routing._build_osrm_matrix([raw, {"lat": B[0], "lng": B[1]}])
-    assert (requests[0][0]["lat"], requests[0][0]["lng"]) == amap.gcj02_to_wgs84(*A)
+    assert tuple(reversed(list(map(float, requests[0].split(","))))) == amap.gcj02_to_wgs84(*A)
     assert matrix[0][1] == 123
     assert (raw["lat"], raw["lng"]) == A
 

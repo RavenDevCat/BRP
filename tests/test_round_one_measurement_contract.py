@@ -30,16 +30,18 @@ def test_osrm_actual_request_coordinates(monkeypatch, variant):
     urls = []
     class Response:
         def raise_for_status(self): pass
-        def json(self): return {"code":"Ok","durations":[[0]],"distances":[[0]]}
+        def __init__(self, rows, cols): self.values = [[0] * cols for _ in range(rows)]
+        def json(self): return {"code":"Ok","durations":self.values,"distances":self.values}
     def capture(url, **kwargs):
         urls.append(url)
-        return Response()
+        params = kwargs["params"]
+        return Response(len(params["sources"].split(";")), len(params["destinations"].split(";")))
     monkeypatch.setattr(tool.requests, "get", capture)
     monkeypatch.setattr(tool, "maybe_ensure_osrm_base_url", lambda _: None)
     tool.compute_osrm_metrics_from_origin(raw, [raw])
     tool.compute_osrm_route_leg_metrics([raw, raw])
     fleet._build_osrm_matrix([raw, raw])
-    assert len(urls) == 4 and all(url.endswith(f"/{lng},{lat};{lng},{lat}") for url in urls)
+    assert len(urls) == 3 and all(url.endswith(f"/{lng},{lat};{lng},{lat}") for url in urls)
     assert raw == saved
 
 

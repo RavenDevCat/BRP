@@ -14,23 +14,14 @@ import demand_routing  # noqa: E402
 
 class FleetPlannerSideToolTests(unittest.TestCase):
     def test_osrm_matrix_keeps_raw_duration_and_distance(self) -> None:
-        original = demand_routing.compute_osrm_metrics_from_origin
-
-        def fake_metrics(origin, destinations):
-            return [
-                {"duration_s": 600.0 + index * 60.0, "distance_m": 1000.0 + index * 100.0}
-                for index, _destination in enumerate(destinations)
-            ]
-
-        try:
-            demand_routing.compute_osrm_metrics_from_origin = fake_metrics
-            points = [
-                {"lat": 1.0, "lng": 1.0},
-                {"lat": 1.1, "lng": 1.1},
-            ]
+        from unittest.mock import patch
+        import distance_tool
+        with patch.object(distance_tool, "_read_table", return_value=(
+                [[0, 600], [660, 0]], [[0, 1000], [1100, 0]])), patch.object(
+                distance_tool, "maybe_ensure_osrm_base_url"):
+            points = [{"lat": 1.0, "lng": 1.0}, {"lat": 1.1, "lng": 1.1}]
             durations, distances = demand_routing._build_osrm_matrix(points)
-        finally:
-            demand_routing.compute_osrm_metrics_from_origin = original
+        self.assertEqual(durations[1][0], 660.0)
 
         self.assertEqual(durations[0][0], 0.0)
         self.assertEqual(durations[0][1], 600.0)

@@ -22,7 +22,7 @@ from ortools_route_core import (  # noqa: E402
 import client_runtime as runtime
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
 from route_measurement_view import route_display_metrics, measurement_note
-from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details, osrm_point as _osrm_point_payload
+from distance_tool import compute_osrm_matrix, compute_osrm_route_leg_details, osrm_point as _osrm_point_payload
 
 
 HUGE_COST = 10**9
@@ -115,28 +115,7 @@ def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
 def _build_osrm_matrix(
     points: list[dict[str, Any]],
 ) -> tuple[list[list[float]], list[list[float]]]:
-    duration_matrix: list[list[float]] = []
-    distance_matrix: list[list[float]] = []
-    for origin_index, origin in enumerate(points):
-        destinations = [_osrm_point_payload(point) for index, point in enumerate(points) if index != origin_index]
-        metrics = compute_osrm_metrics_from_origin(_osrm_point_payload(origin), destinations)
-        duration_row: list[float] = []
-        distance_row: list[float] = []
-        metric_index = 0
-        for destination_index in range(len(points)):
-            if destination_index == origin_index:
-                duration_row.append(0.0)
-                distance_row.append(0.0)
-                continue
-            metric = metrics[metric_index]
-            metric_index += 1
-            duration_s = metric.get("duration_s")
-            distance_m = metric.get("distance_m")
-            duration_row.append(float(duration_s) if duration_s is not None else float(HUGE_COST))
-            distance_row.append(float(distance_m) if distance_m is not None else float(HUGE_COST))
-        duration_matrix.append(duration_row)
-        distance_matrix.append(distance_row)
-    return duration_matrix, distance_matrix
+    return compute_osrm_matrix(points, unreachable=HUGE_COST)
 
 
 def _greedy_open_route_order(duration_matrix: list[list[float]], service_direction: str) -> list[int]:

@@ -124,7 +124,7 @@ def _country_aliases(country: str) -> list[str]:
     return deduped
 
 
-def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
+def resolve_osrm_base_url(points: list[dict[str, Any]], *, fallback: str | None = None) -> str:
     for point in points:
         country = _canonical_country(str(point.get("country", "")).strip())
         city = _canonical_city(str(point.get("city", "")).strip())
@@ -150,8 +150,8 @@ def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
             builtin_url = OSRM_LOCATION_DEFAULTS.get((country, ""))
             if builtin_url:
                 return builtin_url
-    if OSRM_BASE_URL:
-        return OSRM_BASE_URL
+    if fallback or OSRM_BASE_URL:
+        return fallback or OSRM_BASE_URL
     raise RuntimeError(
         "No OSRM endpoint is configured for these points. "
         "Set OSRM_BASE_URL_<COUNTRY>_<CITY>, OSRM_BASE_URL_<COUNTRY>, or OSRM_BASE_URL "
@@ -176,34 +176,104 @@ def _osrm_coordinates(points: list[dict[str, Any]]) -> str:
     return ";".join(f"{float(point['lng'])},{float(point['lat'])}" for point in points)
 
 
-def _request_osrm_table(
-    origin_point: dict[str, Any],
-    destination_points: list[dict[str, Any]],
-) -> tuple[list[float | None], list[float | None]]:
+class _TableTooLarge(RuntimeError):
+    pass
+
+
+def _table_request(base, points, sources, destinations):
+    url = f"{base}/table/v1/driving/{_osrm_coordinates(points)}"
+    params = {"annotations": "duration,distance", "sources": ";".join(map(str, sources)),
+              "destinations": ";".join(map(str, destinations))}
+    return url, params
+
+
+def _read_table(url, params, rows, cols):
+    response = requests.get(url, params=params, timeout=OSRM_REQUEST_TIMEOUT)
+    if getattr(response, "status_code", 200) == 414:
+        raise _TableTooLarge("OSRM table URL exceeds provider limit")
+    try:
+        payload = response.json()
+    except ValueError:
+        response.raise_for_status()
+        raise
+    if payload.get("code") == "TooBig":
+        raise _TableTooLarge("OSRM table exceeds provider limit")
+    response.raise_for_status()
+    if payload.get("code") != "Ok":
+        raise RuntimeError(f"OSRM table request failed: {payload.get('code')}")
+    values = [payload.get(key) for key in ("durations", "distances")]
+    for matrix in values:
+        if not isinstance(matrix, list) or len(matrix) != rows or any(
+                not isinstance(row, list) or len(row) != cols for row in matrix):
+            raise RuntimeError("OSRM returned an incomplete table shape")
+    return values
+
+
+def _request_osrm_table(origin_point, destination_points):
     if not destination_points:
         return [], []
+    points = [osrm_point(p) for p in (origin_point, *destination_points)]
+    base = resolve_osrm_base_url(points)
+    maybe_ensure_osrm_base_url(base)
+    url, params = _table_request(base, points, [0], range(1, len(points)))
+    durations, distances = _read_table(url, params, 1, len(destination_points))
+    return durations[0], distances[0]
 
-    all_points = [osrm_point(p) for p in (origin_point, *destination_points)]
-    coordinates = _osrm_coordinates(all_points)
-    destination_indexes = ";".join(str(index) for index in range(1, len(all_points)))
-    osrm_base_url = resolve_osrm_base_url(all_points)
-    maybe_ensure_osrm_base_url(osrm_base_url)
-    response = requests.get(
-        f"{osrm_base_url}/table/v1/driving/{coordinates}",
-        params={
-            "annotations": "duration,distance",
-            "sources": "0",
-            "destinations": destination_indexes,
-        },
-        timeout=OSRM_REQUEST_TIMEOUT,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    if payload.get("code") != "Ok":
-        raise RuntimeError(f"OSRM table request failed: {payload}")
 
-    durations = list((payload.get("durations") or [[None]])[0])
-    distances = list((payload.get("distances") or [[None]])[0])
+def compute_osrm_matrix(points, *, unreachable):
+    """Fetch directed Table tiles. Never infer a reverse edge or turn a missing edge into zero."""
+    n = len(points)
+    durations = [[0.0] * n for _ in points]
+    distances = [[0.0] * n for _ in points]
+    if n < 2:
+        return durations, distances
+    normalized = [osrm_point(p) for p in points]
+    max_coords = int(os.environ.get("OSRM_MAX_TABLE_SIZE", "100"))
+    max_cells = int(os.environ.get("BRP_OSRM_TABLE_MAX_CELLS", "2500"))
+    max_url = int(os.environ.get("BRP_OSRM_TABLE_MAX_URL_BYTES", "7500"))
+    if max_coords < 2 or max_cells < 1 or max_url < 1:
+        raise ValueError("Invalid OSRM matrix limits")
+    width = max(1, min(max_coords // 2, math.isqrt(max_cells)))
+    groups = {}
+    default_base = resolve_osrm_base_url(normalized)
+    for index, point in enumerate(normalized):
+        base = resolve_osrm_base_url([point], fallback=default_base)
+        groups.setdefault(base, []).append(index)
+
+    def write_tile(base, src, dst):
+        if len(src) == len(dst) == 1 and src == dst:
+            return
+        ids = list(dict.fromkeys([*src, *dst]))
+        local = {key: i for i, key in enumerate(ids)}
+        url, params = _table_request(base, [normalized[i] for i in ids],
+                                    [local[i] for i in src], [local[i] for i in dst])
+        try:
+            if len(requests.Request("GET", url, params=params).prepare().url.encode("ascii")) > max_url:
+                raise _TableTooLarge("OSRM table URL exceeds configured limit")
+            dt, ds = _read_table(url, params, len(src), len(dst))
+        except _TableTooLarge:
+            if len(src) >= len(dst) and len(src) > 1:
+                mid = len(src) // 2
+                write_tile(base, src[:mid], dst)
+                write_tile(base, src[mid:], dst)
+            elif len(dst) > 1:
+                mid = len(dst) // 2
+                write_tile(base, src, dst[:mid])
+                write_tile(base, src, dst[mid:])
+            else:
+                raise
+            return
+        for i, origin in enumerate(src):
+            for j, dest in enumerate(dst):
+                if origin != dest:
+                    durations[origin][dest] = float(unreachable if dt[i][j] is None else dt[i][j])
+                    distances[origin][dest] = float(unreachable if ds[i][j] is None else ds[i][j])
+
+    for base, indices in groups.items():
+        maybe_ensure_osrm_base_url(base)
+        for i in range(0, len(indices), width):
+            for j in range(0, n, width):
+                write_tile(base, indices[i:i+width], list(range(j, min(j+width, n))))
     return durations, distances
 
 

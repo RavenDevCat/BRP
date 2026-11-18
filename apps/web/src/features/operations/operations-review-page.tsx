@@ -130,7 +130,7 @@ export function OperationsReviewPage() {
                 <Metric label={t("Qualified samples")} value={formatNumber(review.qualified_sample_count)} tone="success" />
                 <Metric label={t("Excluded samples")} value={formatNumber(review.excluded_sample_count)} tone={review.excluded_sample_count ? "warning" : "neutral"} />
                 <Metric
-                    label={t("Repeated plan samples")}
+                    label={t("Matched service days")}
                     value={formatNumber(review.recommendation?.sample_count ?? 0)}
                     tone={review.recommendation?.sample_count && review.recommendation.sample_count > 1 ? "success" : "warning"}
                 />
@@ -179,7 +179,7 @@ export function OperationsReviewPage() {
                                 }
                                 onClick={() => setSelectedCandidateId(candidate.candidate_id)}
                             >
-                                {t(candidate.scenario_name)} · {formatNumber(candidate.route_count)} {t("routes")} · {formatNumber(candidate.sample_count)} {t("samples")}
+                                {t(candidate.scenario_name)} · {formatNumber(candidate.route_count)} {t("routes")} · {formatNumber(candidate.sample_count)} {t("service days")}
                             </button>
                         ))}
                     </div>
@@ -257,7 +257,7 @@ function DecisionPanel({ candidate }: { candidate: OperationsReviewCandidate }) 
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <Metric label={t("Routes")} value={formatNumber(candidate.route_count)} />
-                    <Metric label={t("Samples matched")} value={`${formatNumber(candidate.sample_count)} / ${formatNumber(candidate.valid_sample_count)}`} tone="success" />
+                    <Metric label={t("Matched service days")} value={`${formatNumber(candidate.sample_count)} / ${formatNumber(candidate.valid_sample_count)}`} tone="success" />
                     <Metric label={t("Affected riders, worst day")} value={formatNumber(candidate.max_time_impact_affected_rider_count)} tone={candidate.max_time_impact_affected_rider_count ? "warning" : "success"} />
                     <Metric label={t("Maximum breach, worst day")} value={`${formatNumber(candidate.max_time_impact_adverse_minutes)} ${t("min")}`} tone={candidate.max_time_impact_adverse_minutes ? "warning" : "success"} />
                     <Metric label={t("Average excess rider-minutes")} value={formatNumber(candidate.average_excess_rider_minutes)} tone={candidate.average_excess_rider_minutes ? "warning" : "success"} />

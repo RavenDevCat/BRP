@@ -547,6 +547,7 @@ def is_electric_bus_type(bus_type: str) -> bool:
 
 
 def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+    cache = runtime.geocode_batch_cache()
     resolved_rows: list[dict[str, Any]] = []
     cache_changed = False
     for record in records:
@@ -566,6 +567,7 @@ def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[li
             str(record.get("city", "")).strip(),
             address,
             [int(record.get("source_excel_row", 0) or 0)],
+            cache=cache,
         )
         cache_changed = cache_changed or changed
         if point is None:
@@ -595,7 +597,7 @@ def geocode_records_for_distance_tool(records: list[dict[str, Any]]) -> tuple[li
             }
         )
     if cache_changed:
-        runtime.save_json_cache(runtime.GEOCODE_CACHE_PATH, runtime.GEOCODE_CACHE)
+        runtime.save_json_cache(runtime.GEOCODE_CACHE_PATH, cache)
     return resolved_rows, cache_changed
 
 

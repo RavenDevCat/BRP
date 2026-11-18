@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import traceback
+import logging
+from uuid import uuid4
 import base64
 import math
 import sqlite3
@@ -456,13 +457,19 @@ def backend_http_error_handler(
 
 @app.exception_handler(Exception)
 def backend_unhandled_error_handler(_request: Request, exc: Exception) -> JSONResponse:
-    return _json_response(
-        500,
-        {
-            "error": str(exc),
-            "traceback": traceback.format_exc(),
-        },
-    )
+    return _internal_error(exc, 500, "internal_error", "An internal error occurred.")
+
+
+def _internal_error(exc, status, code, message):
+    reference = uuid4().hex
+    logging.getLogger(__name__).error("%s [%s]", code, reference,
+                                     exc_info=(type(exc), exc, exc.__traceback__))
+    return _json_response(status, {"error": message, "code": code, "request_id": reference})
+
+
+@app.exception_handler(backend_service.HistoryReadError)
+def history_read_error_handler(_request: Request, exc: Exception) -> JSONResponse:
+    return _internal_error(exc, 503, "history_unavailable", "History is temporarily unavailable.")
 
 
 @_api_route("GET", "/health")
@@ -2067,6 +2074,16 @@ def _insert_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _insert_walkable_point(stop):
+    lat, lng = _insert_float(stop.get("lat")), _insert_float(stop.get("lng"))
+    return lat is not None and lng is not None and abs(lat) <= 90 and abs(lng) <= 180
+
+
+def _walking_limit(value):
+    limit = _insert_float(value)
+    return max(0.0, limit) if limit is not None else 500.0
+
+
 def _insert_haversine_m(a: dict[str, Any], b: dict[str, Any]) -> float:
     lat1 = _insert_float(a.get("lat"))
     lng1 = _insert_float(a.get("lng"))
@@ -3331,7 +3348,7 @@ def _build_route_insert_proposals(
     if google_mode:
         final_timing.require_china(default_country)
     default_city = str(constraints.get("city") or payload.get("city") or "Shanghai").strip()
-    walking_threshold_m = max(0.0, _insert_float(constraints.get("walking_threshold_m")) or 500.0)
+    walking_threshold_m = _walking_limit(constraints.get("walking_threshold_m"))
     proposal_limit = max(1, min(100, _insert_int(constraints.get("proposal_limit"), 50)))
     refine_top_n = max(0, min(50, _insert_int(constraints.get("refine_top_n"), 25)))
 
@@ -3367,11 +3384,11 @@ def _build_route_insert_proposals(
             base_distance_m = round(_insert_float(route.get("distance_m")) or 0.0)
 
             nearest = min(
-                service_stops,
+                (s for s in service_stops if _insert_walkable_point(s)),
                 key=lambda stop: _insert_haversine_m(new_stop, stop),
                 default=None,
             )
-            if nearest:
+            if nearest and _insert_walkable_point(new_stop):
                 walk_m = _insert_haversine_m(new_stop, nearest)
                 if walk_m <= walking_threshold_m:
                     feasible = capacity_ok

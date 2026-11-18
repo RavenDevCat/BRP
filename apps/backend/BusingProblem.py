@@ -1011,6 +1011,8 @@ def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
 
 
 def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    from brp_storage.keyed_cache import for_batch
+    cache = for_batch(GEOCODE_CACHE)
     points: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
     changed = False
@@ -1020,7 +1022,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         address = str(item.get("address", "")).strip()
         passenger_count = int(item.get("passenger_count", 0 if index == 0 else 1))
         cache_key = geocode_cache_key(country, city, address)
-        cached = GEOCODE_CACHE.get(cache_key)
+        cached = cache.get(cache_key)
         config = _china_city_config(city) if is_china_country(country) else None
         point = confirmed_pickup(str(config["amap_city"]), address) if config else None
         if cached and point is None:
@@ -1044,7 +1046,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         if point is None:
             try:
                 point = geocode_query(country, city, address)
-                GEOCODE_CACHE[cache_key] = point
+                cache[cache_key] = point
                 changed = True
             except Exception as exc:
                 log(f"[WARN] geocode failed: {address} -> {exc}")
@@ -1069,7 +1071,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
         point["is_depot"] = index == 0
         points.append(point)
     if changed:
-        save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
+        save_json_cache(GEOCODE_CACHE_PATH, cache)
     if not points:
         raise RuntimeError("No valid stops were accepted as valid input stops.")
     return points, warnings

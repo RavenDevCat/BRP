@@ -1154,6 +1154,8 @@ const zh: Translations = {
     "Insufficient evidence": "证据不足",
     "Selected jobs": "已选任务",
     "Qualified samples": "合格样本",
+    "Matched service days": "方案匹配运营日",
+    "service days": "个运营日",
     "Excluded samples": "排除样本",
     "Repeated plan samples": "方案重复样本数",
     "Selected jobs are not comparable": "所选任务不可直接对比",

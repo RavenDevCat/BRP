@@ -1300,6 +1300,8 @@ const ko: Translations = {
     "Insufficient evidence": "근거 부족",
     "Selected jobs": "선택한 작업",
     "Qualified samples": "적격 샘플",
+    "Matched service days": "계획 일치 운행일",
+    "service days": "운행일",
     "Excluded samples": "제외된 샘플",
     "Repeated plan samples": "동일 계획 반복 샘플 수",
     "Selected jobs are not comparable": "선택한 작업은 직접 비교할 수 없습니다",

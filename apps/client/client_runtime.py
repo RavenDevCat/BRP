@@ -1058,7 +1058,9 @@ def resolve_geocoded_point(
     city: str,
     address: str,
     source_excel_rows: list[int] | None = None,
+    *, cache=None,
 ) -> tuple[dict[str, Any] | None, dict[str, str] | None, bool]:
+    cache = GEOCODE_CACHE if cache is None else cache
     config = _china_city_config(city) if is_china_country(country) else None
     override = confirmed_pickup(str(config["amap_city"]), address) if config else None
     if override is not None:
@@ -1067,7 +1069,7 @@ def resolve_geocoded_point(
     cached = None
     matched_cache_key = None
     for lookup_key in geocode_cache_lookup_keys(country, city, address):
-        candidate = GEOCODE_CACHE.get(lookup_key)
+        candidate = cache.get(lookup_key)
         if candidate is not None:
             cached = candidate
             matched_cache_key = lookup_key
@@ -1081,10 +1083,10 @@ def resolve_geocoded_point(
                     or retry_after <= time.time()
                     or (is_china_country(country) and cached.get("geocode_quality_version") != GEOCODE_QUALITY_VERSION)):
                 if matched_cache_key:
-                    GEOCODE_CACHE.pop(matched_cache_key, None)
+                    cache.pop(matched_cache_key, None)
                     cache_changed = True
                 if matched_cache_key != cache_key:
-                    GEOCODE_CACHE.pop(cache_key, None)
+                    cache.pop(cache_key, None)
                     cache_changed = True
             else:
                 attempted_providers = failed_geocode_cache_providers(cached)
@@ -1092,7 +1094,7 @@ def resolve_geocoded_point(
                     warning = _provider_warning(country, city, address, source_excel_rows,
                                                 cached.get("error", ""), cached.get("failure_kind"))
                     if matched_cache_key and matched_cache_key != cache_key:
-                        GEOCODE_CACHE[cache_key] = dict(cached)
+                        cache[cache_key] = dict(cached)
                         return None, warning, True
                     return None, warning, False
         elif str(cached.get("provider", "")).strip().lower() in set(provider_names):
@@ -1117,17 +1119,17 @@ def resolve_geocoded_point(
                     validation_status=str(cached.get("validation_status", "") or "ok"),
                 )
                 if matched_cache_key and matched_cache_key != cache_key:
-                    GEOCODE_CACHE[cache_key] = enriched_cached
+                    cache[cache_key] = enriched_cached
                     return dict(enriched_cached), None, True
                 if enriched_cached != cached:
-                    GEOCODE_CACHE[cache_key] = enriched_cached
+                    cache[cache_key] = enriched_cached
                     return dict(enriched_cached), None, True
                 return dict(enriched_cached), None, False
             if matched_cache_key:
-                GEOCODE_CACHE.pop(matched_cache_key, None)
+                cache.pop(matched_cache_key, None)
                 cache_changed = True
             if matched_cache_key != cache_key:
-                GEOCODE_CACHE.pop(cache_key, None)
+                cache.pop(cache_key, None)
                 cache_changed = True
 
     errors: list[str] = []
@@ -1138,7 +1140,7 @@ def resolve_geocoded_point(
         try:
             point = run_geocode_provider(provider_name, country, city, address)
             point["geocode_provider_chain"] = " -> ".join(attempted_providers)
-            GEOCODE_CACHE[cache_key] = point
+            cache[cache_key] = point
             if len(attempted_providers) > 1:
                 log(f"[INFO] geocode fallback succeeded: {address} via {point.get('geocode_provider_chain')}")
             return dict(point), None, True
@@ -1154,7 +1156,7 @@ def resolve_geocoded_point(
 
     reason = "; ".join(errors) or "No geocode provider returned a usable coordinate."
     log(f"[WARN] geocode failed: {address} -> {reason}")
-    GEOCODE_CACHE[cache_key] = {
+    cache[cache_key] = {
         "cache_status": "failed",
         "failure_kind": failure_kind,
         "retry_after": time.time() + _NEGATIVE_CACHE_TTL[failure_kind],
@@ -1311,10 +1313,16 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
     raise GeocodePrecisionError(f"No matching Google geocode for {address.strip()}")
 
 
+def geocode_batch_cache():
+    from brp_storage.keyed_cache import for_batch
+    return for_batch(GEOCODE_CACHE)
+
+
 def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     points: list[dict[str, Any]] = []
     warnings: list[dict[str, str]] = []
     changed = False
+    cache = geocode_batch_cache()
     unique_records: dict[str, dict[str, Any]] = {}
     ordered_keys: list[str] = []
     for item in input_records:
@@ -1342,7 +1350,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
             record["country"],
             record["city"],
             record["address"],
-            record.get("source_excel_rows"),
+            record.get("source_excel_rows"), cache=cache,
         )
         changed = changed or cache_changed
         if point is not None:
@@ -1354,7 +1362,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
 
     if ordered_keys and ordered_keys[0] in failed_keys:
         if changed:
-            save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
+            save_json_cache(GEOCODE_CACHE_PATH, cache)
         raise RuntimeError("The school address could not be resolved precisely. No passenger stop was substituted as the school.")
 
     for index, item in enumerate(input_records):
@@ -1380,7 +1388,7 @@ def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str,
     if points:
         warnings.extend(apply_school_distance_review(points[0], points[1:]))
     if changed:
-        save_json_cache(GEOCODE_CACHE_PATH, GEOCODE_CACHE)
+        save_json_cache(GEOCODE_CACHE_PATH, cache)
     if not points:
         details = []
         for warning in warnings[:20]:

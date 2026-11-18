@@ -3082,7 +3082,8 @@ def _handle_geocode_cache_clear(payload: dict[str, Any]) -> dict[str, Any]:
     removed: dict[str, list[str]] = {"client": [], "backend": []}
     client_core = _client_core_module()
     runtime = getattr(client_core, "runtime", None)
-    client_cache = getattr(runtime, "GEOCODE_CACHE", None)
+    from brp_storage.keyed_cache import for_batch
+    client_cache = for_batch(getattr(runtime, "GEOCODE_CACHE", None))
     client_keys = _client_geocode_cache_lookup_keys(client_core, country, city, address)
     if isinstance(client_cache, dict):
         removed["client"] = _remove_geocode_cache_entries(
@@ -3097,7 +3098,7 @@ def _handle_geocode_cache_clear(payload: dict[str, Any]) -> dict[str, Any]:
                 save_func(cache_path, client_cache)
 
     planner = load_legacy_planner()
-    backend_cache = getattr(planner, "GEOCODE_CACHE", None)
+    backend_cache = for_batch(getattr(planner, "GEOCODE_CACHE", None))
     backend_key_func = getattr(planner, "geocode_cache_key", None)
     backend_keys: list[str] = []
     if callable(backend_key_func):
@@ -3695,6 +3696,10 @@ def _is_chinese_ai_audit_job(record: dict[str, Any]) -> bool:
     )
 
 
+class HistoryReadError(RuntimeError):
+    pass
+
+
 class JobStore:
     def __init__(self, jobs_dir: Path) -> None:
         self.jobs_dir = jobs_dir
@@ -3706,9 +3711,8 @@ class JobStore:
     def _load_job_unlocked(self, job_id: str) -> dict[str, Any] | None:
         try:
             return _runtime_sqlite_store().get_job(str(job_id or "").strip())
-        except Exception:
-            traceback.print_exc()
-            return None
+        except Exception as exc:
+            raise HistoryReadError("Job detail query failed") from exc
 
     def _list_jobs_unlocked(
         self, user_email: str = "", include_all: bool = False
@@ -3717,9 +3721,8 @@ class JobStore:
             return _runtime_sqlite_store().list_jobs(
                 user_email=user_email, include_all=include_all
             )
-        except Exception:
-            traceback.print_exc()
-            return []
+        except Exception as exc:
+            raise HistoryReadError("Job history query failed") from exc
 
     def _save_job_unlocked(self, job_id: str, record: dict[str, Any]) -> None:
         record["job_id"] = str(record.get("job_id") or job_id).strip()
@@ -4034,9 +4037,8 @@ class SideToolHistoryStore:
             return _runtime_sqlite_store().get_side_tool_run(
                 self.tool_key, str(run_id or "").strip()
             )
-        except Exception:
-            traceback.print_exc()
-            return None
+        except Exception as exc:
+            raise HistoryReadError("Tool history detail query failed") from exc
 
     def _list_summaries_unlocked(
         self, user_email: str = "", include_all: bool = False
@@ -4045,9 +4047,8 @@ class SideToolHistoryStore:
             return _runtime_sqlite_store().list_side_tool_runs(
                 self.tool_key, user_email=user_email, include_all=include_all
             )
-        except Exception:
-            traceback.print_exc()
-            return []
+        except Exception as exc:
+            raise HistoryReadError("Tool history query failed") from exc
 
     def _summary_for_record(self, record: dict[str, Any]) -> dict[str, Any]:
         return {

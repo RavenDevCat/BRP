@@ -61,6 +61,11 @@ def load(path):
         return Snapshot(path, generation, conn.execute("SELECT key,rev,body FROM entries"))
 
 
+def for_batch(data):
+    """Give each task a fresh, private keyed snapshot; keep legacy JSON semantics."""
+    return load(data.path) if isinstance(data, Snapshot) else data
+
+
 def clear(path):
     with _transaction(path) as (conn, _):
         conn.execute("DELETE FROM entries")

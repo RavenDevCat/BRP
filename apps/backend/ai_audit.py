@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import math
 import os
+import re
 from typing import Any
 
 import requests
@@ -710,7 +712,6 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
         "job": {
             "job_id": job_record.get("job_id"),
             "job_name": metadata.get("job_name") or metadata.get("source_label"),
-            "owner_email": job_record.get("owner_email"),
             "service_direction": service_direction,
             "traffic_profile": traffic_profile,
             "target_route_duration_min": planner_config.get("max_route_duration_minutes"),
@@ -807,6 +808,55 @@ def build_ai_audit_payload(job_record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _model_facts(payload):
+    """External boundary: project typed facts, never forward a report or arbitrary strings."""
+    def metrics(row, names):
+        return {k: row[k] for k in names.split() if k in row and
+                (row[k] is None or type(row[k]) in (int, bool) or
+                 type(row[k]) is float and math.isfinite(row[k]))}
+
+    def labels(row, choices):
+        return {k: row[k] for k, allowed in choices.items()
+                if isinstance(row.get(k), str) and row[k] in allowed}
+
+    def route_ids(values):
+        return [v for v in values if isinstance(v, str) and
+                re.fullmatch(r"(?:[RG]|(?:Opt )?Bus ?)\d{1,4}", v, re.I)][:12]
+
+    def scenario(row):
+        if not isinstance(row, dict):
+            return None
+        data = metrics(row, "route_count stop_count frozen_route_count provider_total_duration_s adoption_ready exception_accepted")
+        statuses = {"passed", "failed", "rejected", "unavailable", "not_applicable", "partial", "not_verified"}
+        data.update(labels(row, {"key": SCENARIO_KEYS, "status": statuses,
+                                 "recommendation_type": {"adoption_ready", "review_reference"}}))
+        data["frozen_route_ids"] = route_ids(row.get("frozen_route_ids") or [])
+        gate = row.get("traffic_gate") or {}
+        data["traffic_gate"] = {**metrics(gate, "available checked_route_count failed_route_count unavailable_route_count max_time_window_overrun_min vehicle_saving_target"),
+                                **labels(gate, {"status": statuses})}
+        impact = row.get("final_time_impact_gate") or {}
+        data["final_time_impact_gate"] = {**metrics(impact, "over_limit_rider_count unavailable_stop_count unavailable_route_count max_adverse_minutes max_over_limit_minutes"),
+                                          **labels(impact, {"status": statuses})}
+        data["decision_metrics"] = metrics(row.get("decision_metrics") or {}, "evidence_complete affected_rider_count worst_over_limit_minutes excess_rider_minutes time_window_affected_rider_count time_window_max_overrun_minutes time_impact_over_limit_rider_count time_impact_max_adverse_minutes")
+        return data
+
+    SCENARIO_KEYS = {"current_plan", "time_constrained", "exception_preserving"}
+    rp = payload.get("run_parameters") or {}
+    params = metrics(rp, "route_stop_limit osrm_route_budget_minutes minimum_vehicle_reduction time_impact_limit_enabled time_impact_limit_minutes comfort_enabled comfort_load_factor stop_dwell_minutes")
+    params.update(labels(rp, {"service_direction": {"To School", "From School"}, "traffic_profile": {
+        "AM Peak", "PM Peak", "Off Peak", "AMAP Current (Scheduled)", "AMAP Current", "Free Flow"}}))
+    for k in ("time_window_start", "time_window_end", "school_arrival_time", "school_departure_time"):
+        if isinstance(rp.get(k), str) and re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", rp[k]):
+            params[k] = rp[k]
+    current = payload.get("current_plan") or {}
+    return {"run_parameters": params,
+            "current_plan": {**metrics(current, "route_count stop_count assignment_count avg_route_duration_min avg_load_factor_pct overlong_route_count"),
+                             "review_route_ids": route_ids([r.get("route_id") for r in current.get("weakest_routes") or [] if isinstance(r, dict)])},
+            "scenario_outcomes": [scenario(r) for r in payload.get("scenario_outcomes") or []],
+            "recommended_scenario": scenario(payload.get("recommended_scenario")),
+            "input_address_review": metrics((payload.get("decision_review") or {}).get("input_address_review") or {}, "warning_count route_context_warning_count address_warning_count")}
+
+
 def _ai_audit_prompts(payload: dict[str, Any], report_language: str) -> tuple[str, str]:
     system_prompt = (
         "You are a school bus operations audit analyst. Use only the supplied JSON facts and write for operators. "
@@ -841,7 +891,7 @@ def _ai_audit_prompts(payload: dict[str, Any], report_language: str) -> tuple[st
         "- If recommended_scenario is null, say evidence is insufficient to select a plan.\n"
         "- If recommended_scenario is a review_reference, call it the closest non-adoption-ready reference and state its remaining constraint misses.\n"
         "- Clearly separate measured facts from interpretation and state unavailable facts plainly.\n\n"
-        f"FACTS JSON:\n{json.dumps(payload, ensure_ascii=False, separators=(',', ':'))}"
+        f"FACTS JSON:\n{json.dumps(_model_facts(payload), ensure_ascii=False, separators=(',', ':'))}"
     )
     return system_prompt, user_prompt
 
@@ -856,7 +906,11 @@ def generate_ai_audit_report(job_record: dict[str, Any], *, force: bool = False,
         raise RuntimeError("AI audit can only be generated for a completed job with results.")
 
     payload = build_ai_audit_payload(job_record)
-    report_language = (language or AI_AUDIT_LANGUAGE or "English").strip()
+    requested = (language or AI_AUDIT_LANGUAGE or "English").strip().lower()
+    report_language = {"zh": "Chinese", "zh-cn": "Chinese", "chinese": "Chinese",
+                       "simplified chinese": "Chinese", "中文": "Chinese",
+                       "ko": "Korean", "ko-kr": "Korean", "korean": "Korean",
+                       "한국어": "Korean"}.get(requested, "English")
     system_prompt, user_prompt = _ai_audit_prompts(payload, report_language)
     DEEPSEEK_LIMITER.wait()
     response = requests.post(

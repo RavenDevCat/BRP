@@ -4,6 +4,7 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 try:
@@ -235,10 +236,19 @@ def _daily_evidence(job: dict[str, Any]) -> dict[str, Any]:
     scenario_key = str((recommended or {}).get("key") or "")
     scenario = _scenario_record(job, scenario_key) if scenario_key else {}
     metadata = dict(job.get("metadata") or {})
+    instant = _parse_datetime(job.get("scheduled_start_at") or metadata.get("scheduled_start_at") or sample_at)
+    countries = (job.get("prepared_payload_summary") or {}).get("country_samples") or []
+    country = str(next(iter(countries), "")).strip().lower()
+    zone = ZoneInfo({"south korea": "Asia/Seoul", "korea": "Asia/Seoul", "kr": "Asia/Seoul",
+                     "thailand": "Asia/Bangkok", "th": "Asia/Bangkok"}.get(country, "Asia/Shanghai"))
+    service_date = (instant.astimezone(zone) if instant and instant.tzinfo else instant)
+    if service_date is None:
+        reasons.append("service_date_unavailable")
     return {
         "job_id": str(job.get("job_id") or ""),
         "job_name": metadata.get("job_name") or metadata.get("source_label") or job.get("job_id"),
         "sample_at": sample_at,
+        "service_date": service_date.date().isoformat() if service_date else None,
         "started_at": job.get("started_at"),
         "qualified": not reasons,
         "exclusion_reasons": reasons,
@@ -282,18 +292,22 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
             -(_parse_datetime(item.get("sample_at")).timestamp() if _parse_datetime(item.get("sample_at")) else 0),
         ),
     )
-    adoption_count = sum(bool(item.get("adoption_ready")) for item in items)
-    if adoption_count == len(items):
+    by_day = defaultdict(list)
+    for item in items:
+        by_day[item["service_date"]].append(item)
+    adoption_count = sum(all(run.get("adoption_ready") for run in runs) for runs in by_day.values())
+    if adoption_count == len(by_day):
         status = "operationally_ready"
     elif adoption_count:
         status = "conditionally_viable"
     else:
         status = "review_reference"
-    count = len(items)
+    count = len(by_day)
     return {
         "candidate_id": str(items[0].get("plan_fingerprint") or "")[:12],
         "status": status,
         "sample_count": count,
+        "sample_run_count": len(items),
         "valid_sample_count": valid_sample_count,
         "recurrence_ratio": round(count / valid_sample_count, 3) if valid_sample_count else 0,
         "adoption_ready_day_count": adoption_count,
@@ -303,7 +317,7 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
         "representative_job_id": representative.get("job_id"),
         "representative_job_name": representative.get("job_name"),
         "sample_job_ids": [item.get("job_id") for item in items],
-        "sample_dates": [item.get("sample_at") for item in items],
+        "sample_dates": sorted(by_day),
         "max_affected_rider_count": int(max(_number(item, "affected_rider_count") for item in items)),
         "max_over_limit_minutes": round(max(_number(item, "worst_over_limit_minutes") for item in items), 1),
         "max_time_impact_affected_rider_count": int(
@@ -312,8 +326,8 @@ def _candidate_group(items: list[dict[str, Any]], valid_sample_count: int) -> di
         "max_time_impact_adverse_minutes": round(
             max(_number(item, "time_impact_max_adverse_minutes") for item in items), 1
         ),
-        "average_excess_rider_minutes": round(sum(_number(item, "excess_rider_minutes") for item in items) / count, 1),
-        "average_provider_duration_minutes": round(sum(_number(item, "provider_total_duration_minutes") for item in items) / count, 1),
+        "average_excess_rider_minutes": round(sum(sum(_number(r, "excess_rider_minutes") for r in runs) / len(runs) for runs in by_day.values()) / count, 1),
+        "average_provider_duration_minutes": round(sum(sum(_number(r, "provider_total_duration_minutes") for r in runs) / len(runs) for runs in by_day.values()) / count, 1),
     }
 
 
@@ -334,7 +348,8 @@ def build_operations_review(jobs: list[dict[str, Any]]) -> dict[str, Any]:
             if fingerprint:
                 groups[fingerprint].append(item)
 
-    candidates = [_candidate_group(items, len(valid)) for items in groups.values()]
+    day_count = len({item["service_date"] for item in valid})
+    candidates = [_candidate_group(items, day_count) for items in groups.values()]
     status_order = {"operationally_ready": 0, "conditionally_viable": 1, "review_reference": 2}
     candidates.sort(
         key=lambda item: (
@@ -349,7 +364,7 @@ def build_operations_review(jobs: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
     recommendation = candidates[0] if candidates else None
-    if not compatibility["compatible"] or len(valid) < 2 or not recommendation:
+    if not compatibility["compatible"] or day_count < 2 or not recommendation:
         overall_status = "insufficient_evidence"
     elif int(recommendation.get("sample_count", 0) or 0) < 2:
         overall_status = "conditionally_viable"
@@ -364,6 +379,7 @@ def build_operations_review(jobs: list[dict[str, Any]]) -> dict[str, Any]:
         "compatibility": compatibility,
         "selected_job_count": len(jobs),
         "qualified_sample_count": len(valid),
+        "qualified_day_count": day_count,
         "excluded_sample_count": len(evidence) - len(valid),
         "status": overall_status,
         "recommendation": recommendation,

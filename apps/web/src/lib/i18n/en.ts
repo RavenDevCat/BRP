@@ -1113,6 +1113,8 @@ const en: Translations = {
     "Insufficient evidence": "Insufficient evidence",
     "Selected jobs": "Selected jobs",
     "Qualified samples": "Qualified samples",
+    "Matched service days": "Matched service days",
+    "service days": "service days",
     "Excluded samples": "Excluded samples",
     "Repeated plan samples": "Repeated plan samples",
     "Selected jobs are not comparable": "Selected jobs are not comparable",

@@ -357,10 +357,10 @@ def _is_obviously_bad_address(address: str) -> bool:
     return not any(character.isalnum() for character in text)
 
 
-def _find_cached_geocode_status(country: str, city: str, address: str) -> tuple[dict[str, Any] | None, bool]:
+def _find_cached_geocode_status(country: str, city: str, address: str, cache) -> tuple[dict[str, Any] | None, bool]:
     provider_name = runtime.expected_geocode_provider(country, address)
     for lookup_key in runtime.geocode_cache_lookup_keys(country, city, address):
-        candidate = runtime.GEOCODE_CACHE.get(lookup_key)
+        candidate = cache.get(lookup_key)
         if not isinstance(candidate, dict):
             continue
         if runtime.is_failed_geocode_cache_entry(candidate):
@@ -388,6 +388,7 @@ def _geocode_one(
     address: str,
     source_excel_row: int,
     role: str,
+    cache,
 ) -> tuple[dict[str, Any], bool]:
     if _is_obviously_bad_address(address):
         return (
@@ -408,8 +409,8 @@ def _geocode_one(
             False,
         )
 
-    cached_entry, cached_is_failure = _find_cached_geocode_status(country, city, address)
-    point, warning, cache_changed = runtime.resolve_geocoded_point(country, city, address, [source_excel_row])
+    cached_entry, cached_is_failure = _find_cached_geocode_status(country, city, address, cache)
+    point, warning, cache_changed = runtime.resolve_geocoded_point(country, city, address, [source_excel_row], cache=cache)
     cache_hit = cached_entry is not None
     if point is None:
         return (
@@ -452,12 +453,13 @@ def _geocode_one(
 def geocode_demand_workbook(demand_workbook: DemandWorkbook) -> dict[str, Any]:
     school = dict(demand_workbook.school)
     cache_changed = False
+    cache = runtime.geocode_batch_cache()
     school_row, changed = _geocode_one(
         country=str(school.get("country", "")).strip(),
         city=str(school.get("city", "")).strip(),
         address=str(school.get("school_address", "")).strip(),
         source_excel_row=2,
-        role="school",
+        role="school", cache=cache,
     )
     cache_changed = cache_changed or changed
 
@@ -468,7 +470,7 @@ def geocode_demand_workbook(demand_workbook: DemandWorkbook) -> dict[str, Any]:
             city=str(rider.get("city", "")).strip(),
             address=str(rider.get("student_address", "")).strip(),
             source_excel_row=int(rider.get("source_excel_row", 0) or 0),
-            role="student",
+            role="student", cache=cache,
         )
         row["student_count"] = int(rider.get("student_count", 0) or 0)
         row["notes"] = str(rider.get("notes", "")).strip()
@@ -480,7 +482,7 @@ def geocode_demand_workbook(demand_workbook: DemandWorkbook) -> dict[str, Any]:
         distance_review_warnings = runtime.apply_school_distance_review(school_row, demand_rows)
 
     if cache_changed:
-        runtime.save_json_cache(runtime.GEOCODE_CACHE_PATH, runtime.GEOCODE_CACHE)
+        runtime.save_json_cache(runtime.GEOCODE_CACHE_PATH, cache)
 
     ok_rows = [row for row in demand_rows if row.get("status") == "ok"]
     failed_rows = [row for row in demand_rows if row.get("status") != "ok"]

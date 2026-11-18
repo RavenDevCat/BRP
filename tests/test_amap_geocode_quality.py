@@ -470,7 +470,7 @@ def test_failed_school_cannot_promote_zero_passenger_waypoint_to_depot(monkeypat
             return {"address": address, "lat": 31.2, "lng": 121.4}
         monkeypatch.setattr(module, "geocode_query", geocode)
     else:
-        monkeypatch.setattr(module, "resolve_geocoded_point", lambda _c, _city, address, _rows:
+        monkeypatch.setattr(module, "resolve_geocoded_point", lambda _c, _city, address, _rows, *, cache:
                             (None, {"address": address}, False) if address == "school" else
                             ({"address": address, "lat": 31.2, "lng": 121.4}, None, False))
     with pytest.raises(RuntimeError, match="school address"):

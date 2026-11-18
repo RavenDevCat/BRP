@@ -206,7 +206,7 @@ export function RouteInsertAdvisorPage() {
     constraints: {
       country,
       city,
-      walking_threshold_m: Number(walkingThreshold) || 0,
+      walking_threshold_m: walkingThreshold.trim() === "" ? undefined : Number(walkingThreshold),
       stop_limit: stopLimit ? Number(stopLimit) : null,
     },
   });

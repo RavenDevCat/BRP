@@ -182,8 +182,8 @@ def test_worker_dispatch_and_timing_gate(monkeypatch, period):
     calls = []
     monkeypatch.setattr(runner, "_load_job", lambda _: deepcopy(state))
     monkeypatch.setattr(runner, "_save_job", lambda record: state.update(deepcopy(record)))
-    monkeypatch.setattr(runner, "_release_concurrency_slot", lambda: None)
-    monkeypatch.setattr(runner, "_create_automatic_deep_verifications", lambda _: calls.append("deep"))
+
+
     import audit_return
     monkeypatch.setattr(audit_return, "is_audit_return", lambda _: False)
     monkeypatch.setattr(runner, "_scheduled_final_traffic_validation_error", lambda _, **kwargs: None)
@@ -200,4 +200,4 @@ def test_worker_dispatch_and_timing_gate(monkeypatch, period):
     monkeypatch.setattr(paired_return, "run_return_measurement", pm)
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "pair"])
     assert runner.main() == (1 if period in {"expired", "early"} else 0)
-    assert calls == (["audit", "deep"] if period == "am" else ["pm"] if period == "pm" else [])
+    assert calls == (["audit"] if period == "am" else ["pm"] if period == "pm" else [])

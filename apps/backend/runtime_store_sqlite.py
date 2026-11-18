@@ -5,13 +5,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import math
+import logging
+import os
 from pathlib import Path
 import sqlite3
 import threading
 from typing import Any, Iterable
 from uuid import uuid4
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
+_QUEUE_SCOPE = """lower(trim(coalesce(nullif(json_extract(record_json,'$.job_queue_scope'),''),
+                 nullif(json_extract(metadata_json,'$.job_queue_scope'),''),'default')))"""
+_DUE = """julianday(coalesce(nullif(json_extract(record_json,'$.scheduled_start_at'),''),
+                      json_extract(metadata_json,'$.scheduled_start_at')))"""
 
 HISTORY_GROUP_MEMBER_ROLES = {"editor", "viewer"}
 
@@ -366,6 +372,13 @@ class SqliteRuntimeStore:
                     """,
                     (SCHEMA_VERSION, utc_now_iso()),
                 )
+                for status, order in (("queued", "created_at"), ("running", "created_at"), ("scheduled", _DUE)):
+                    conn.execute(f"CREATE INDEX IF NOT EXISTS idx_jobs_{status}_dispatch ON jobs({_QUEUE_SCOPE},{order},job_id) WHERE status='{status}'")
+                conn.execute("""CREATE TABLE IF NOT EXISTS automatic_review_outbox (
+                    parent_id TEXT PRIMARY KEY REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    queue_scope TEXT NOT NULL, retry_at INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0)""")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_auto_review_ready ON automatic_review_outbox(queue_scope,retry_at)")
             self._initialized = True
 
     @staticmethod
@@ -721,6 +734,7 @@ class SqliteRuntimeStore:
         self,
         job_id: str,
         *,
+        scope: str | None = None,
         worker_pid: int | None = None,
         job_slot_path: str | None = None,
     ) -> dict[str, Any] | None:
@@ -731,10 +745,12 @@ class SqliteRuntimeStore:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                row = conn.execute(
-                    "SELECT status, record_json FROM jobs WHERE job_id = ?",
-                    (normalized_job_id,),
-                ).fetchone()
+                sql = "SELECT status, record_json FROM jobs WHERE job_id=? AND status='queued'"
+                args = [normalized_job_id]
+                if scope is not None:
+                    sql += f" AND {_QUEUE_SCOPE}=?"
+                    args.append(scope or "default")
+                row = conn.execute(sql, args).fetchone()
                 if not row:
                     conn.rollback()
                     return None
@@ -750,6 +766,8 @@ class SqliteRuntimeStore:
 
                 started_at = record.get("started_at") or utc_now_iso()
                 record["status"] = "running"
+                record["worker_token"] = uuid4().hex
+                record["claim_launcher_pid"] = os.getpid()
                 record["started_at"] = started_at
                 record["finished_at"] = None
                 record["worker_pid"] = worker_pid
@@ -786,6 +804,144 @@ class SqliteRuntimeStore:
             except Exception:
                 conn.rollback()
                 raise
+
+    def dispatch_ids(self, status, scope, *, due_at=None, limit=64):
+        if status not in {"queued", "scheduled", "running"}:
+            raise ValueError("Unsupported dispatch state")
+        self.initialize()
+        order = _DUE if status == "scheduled" else "created_at"
+        sql = f"SELECT job_id FROM jobs WHERE status='{status}' AND {_QUEUE_SCOPE}=?"
+        args = [scope or "default"]
+        if status == "scheduled":
+            sql += f""" AND {_DUE}<=julianday(?) AND (
+                coalesce(json_extract(metadata_json,'$.return_dependency_status'),'') != 'waiting_for_morning'
+                OR coalesce((SELECT parent.status FROM jobs parent
+                    WHERE parent.job_id=json_extract(jobs.metadata_json,'$.paired_job_ids.am')),
+                    'missing') NOT IN ('scheduled','queued','running'))"""
+            args.append(due_at)
+        # A waiting return re-enters the bounded batch when its parent becomes terminal.
+        sql += f" ORDER BY {order}, job_id"
+        if limit is not None:
+            sql += " LIMIT ?"
+            args.append(limit)
+        with self.connect() as conn:
+            return [row[0] for row in conn.execute(sql, args)]
+
+    @staticmethod
+    def _tx_job(conn, job_id):
+        row = conn.execute("SELECT record_json FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def release_scheduled(self, job_id, scope, bind, *, now, manual=None):
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = self._tx_job(conn, job_id)
+            if not record:
+                return None, False
+            due = "" if manual is not None else f" AND {_DUE} <= julianday(?)"
+            args = [job_id, scope or "default"] + ([] if manual is not None else [now.isoformat()])
+            if not conn.execute(f"SELECT 1 FROM jobs WHERE job_id=? AND status='scheduled' AND {_QUEUE_SCOPE}=?"+due, args).fetchone():
+                return record, False
+            metadata = record.setdefault("metadata", {})
+            if (manual is not None and metadata.get("measurement_kind") == "pm_return"
+                    and not conn.execute(f"SELECT 1 FROM jobs WHERE job_id=? AND {_DUE}<=julianday(?)",
+                                         (job_id, now.isoformat())).fetchone()):
+                return record, False
+            previous_dependency = metadata.get("return_dependency_status")
+            # Pair validation and binding may read the same large morning plan twice.
+            pair = {job_id: record}
+            def lookup(key):
+                if key not in pair:
+                    pair[key] = self._tx_job(conn, key)
+                return pair[key]
+            try:
+                ready = bind(record, lookup, now=now)
+            except ValueError as exc:
+                ready = False
+                record.update(status="failed", error=str(exc), finished_at=utc_now_iso())
+            if ready:
+                metadata["scheduled_released_at"] = utc_now_iso()
+                if manual is not None:
+                    metadata["scheduled_release_mode"] = manual
+                record.update(status="queued", worker_pid=None, job_slot_path=None)
+            if ready or record["status"] == "failed" or metadata.get("return_dependency_status") != previous_dependency:
+                self.upsert_job(record, _connection=conn)
+            return record, ready
+
+    def change_existing_job(self, job_id, changes, *, expected_status=None, token=None,
+                            expected_pid=None, automatic_review=False):
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            record = self._tx_job(conn, job_id)
+            if (not record or (expected_status is not None and record["status"] != expected_status)
+                    or (token is not None and record.get("worker_token") != token)
+                    or (expected_pid is not None and int(record.get("worker_pid") or 0) != expected_pid)):
+                return None
+            record.update(changes)
+            self.upsert_job(record, _connection=conn)
+            if automatic_review:
+                meta = record.get("metadata") or {}
+                scope = (record.get("job_queue_scope") or meta.get("job_queue_scope") or "default").strip().lower()
+                conn.execute("INSERT INTO automatic_review_outbox(parent_id,queue_scope) VALUES(?,?) ON CONFLICT DO NOTHING",
+                             (job_id, scope))
+            return record
+
+    def cancel_active_job(self, job_id):
+        self.initialize()
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            previous = self._tx_job(conn, job_id)
+            if not previous or previous["status"] not in {"running", "queued", "scheduled"}:
+                return None, previous
+            preserve = (previous.get("metadata") or {}).get("job_kind") == "direct_school_analysis"
+            updated = dict(previous, status="canceled", finished_at=utc_now_iso(), worker_pid=None,
+                           job_slot_path=None, error="Job was canceled by the user.", traceback=None,
+                           result=previous.get("result") if preserve else None)
+            self.upsert_job(updated, _connection=conn)
+            return previous, updated
+
+    def ensure_review_children(self, parent, build, *, _connection=None):
+        if _connection is None:
+            self.initialize()
+        with (self.connect() if _connection is None else nullcontext(_connection)) as conn:
+            if _connection is None:
+                conn.execute("BEGIN IMMEDIATE")
+            job = self._tx_job(conn, parent)
+            if not job or job["status"] != "succeeded":
+                return []
+            rows = conn.execute("SELECT record_json FROM deep_verifications WHERE parent_job_id=?", (parent,))
+            children = [json.loads(row[0]) for row in rows]
+            existing = {r["scenario_key"] for r in children}
+            for child in build(job):
+                if child["scenario_key"] not in existing:
+                    self.upsert_deep_verification(child, _connection=conn)
+                    children.append(child)
+                    existing.add(child["scenario_key"])
+            return children
+
+    def drain_automatic_reviews(self, scope, build):
+        self.initialize()
+        with self.connect() as conn:
+            ids = [row[0] for row in conn.execute("""SELECT parent_id FROM automatic_review_outbox
+                WHERE queue_scope=? AND retry_at<=unixepoch() ORDER BY retry_at,parent_id LIMIT 4""", (scope or "default",))]
+        for parent in ids:
+            with self.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                if not conn.execute("SELECT 1 FROM automatic_review_outbox WHERE parent_id=? AND retry_at<=unixepoch()", (parent,)).fetchone():
+                    continue
+                conn.execute("SAVEPOINT consume_event")
+                try:
+                    self.ensure_review_children(parent, build, _connection=conn)
+                    conn.execute("DELETE FROM automatic_review_outbox WHERE parent_id=?", (parent,))
+                except Exception:
+                    # Roll back even a partially created set; persist retry, never fail the parent's result.
+                    conn.execute("ROLLBACK TO consume_event")
+                    conn.execute("""UPDATE automatic_review_outbox SET attempts=attempts+1,
+                        retry_at=unixepoch()+min(1800,30*(attempts+1)) WHERE parent_id=?""", (parent,))
+                    logging.getLogger(__name__).exception("Deferred automatic review for %s", parent)
+                conn.execute("RELEASE consume_event")
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         self.initialize()
@@ -950,7 +1106,7 @@ class SqliteRuntimeStore:
             conn.commit()
         return True
 
-    def upsert_deep_verification(self, record: dict[str, Any]) -> None:
+    def upsert_deep_verification(self, record: dict[str, Any], *, _connection=None) -> None:
         summary = deep_verification_summary(record)
         verification_id = str(summary.get("verification_id") or "").strip()
         parent_job_id = str(summary.get("parent_job_id") or "").strip()
@@ -961,8 +1117,9 @@ class SqliteRuntimeStore:
             raise ValueError("parent_job_id is required")
         if not scenario_key:
             raise ValueError("scenario_key is required")
-        self.initialize()
-        with self.connect() as conn:
+        if _connection is None:
+            self.initialize()
+        with (self.connect() if _connection is None else nullcontext(_connection)) as conn:
             conn.execute(
                 """
                 INSERT INTO deep_verifications(

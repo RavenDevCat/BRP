@@ -32,9 +32,19 @@ class FakeJobStore:
         if not record or record.get("status") != "queued":
             return None
         record["status"] = "running"
+        record["worker_token"] = f"test-attempt-{self.claims}"
         record["worker_pid"] = worker_pid
         record["job_slot_path"] = job_slot_path
         return dict(record)
+
+    def cancel_active_job(self, job_id):
+        record = self.get_job(job_id)
+        if not record or record["status"] in {"succeeded", "failed", "canceled"}:
+            return None, record
+        return record, self.update_job(job_id, status="canceled", worker_pid=None, job_slot_path=None)
+
+    def drain_automatic_reviews(self):
+        pass
 
     def list_queued_jobs(self) -> list[dict[str, Any]]:
         return [
@@ -59,6 +69,10 @@ class FakeJobStore:
     def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
         record = self.records.get(job_id)
         if not record:
+            return None
+        status = changes.pop("expected_status", None)
+        token = changes.pop("expected_token", None)
+        if (status and status != record["status"]) or (token and token != record.get("worker_token")):
             return None
         record.update(changes)
         return dict(record)

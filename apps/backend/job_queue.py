@@ -106,6 +106,10 @@ class JobStoreProtocol(Protocol):
 
     def list_queued_jobs(self) -> list[dict[str, Any]]: ...
 
+    def drain_automatic_reviews(self) -> None: ...
+
+    def cancel_active_job(self, job_id: str) -> tuple[dict | None, dict | None]: ...
+
     def release_due_scheduled_jobs(self) -> list[dict[str, Any]]: ...
 
     def get_job(self, job_id: str) -> dict[str, Any] | None: ...
@@ -294,6 +298,8 @@ class JobQueueManager:
                 return None
 
             env = os.environ.copy()
+            token = claimed["worker_token"]
+            env["BRP_JOB_RUN_TOKEN"] = token
             if slot_path:
                 env["BRP_JOB_CONCURRENCY_SLOT"] = str(slot_path)
                 env["BRP_JOB_CONCURRENCY_ROOT"] = str(self.gate.slot_dir)
@@ -316,6 +322,7 @@ class JobQueueManager:
                     normalized_job_id,
                     status="failed",
                     finished_at=utc_now_iso(),
+                    expected_status="running", expected_token=token,
                     error=f"Failed to start job worker: {exc}",
                     traceback=traceback.format_exc(),
                     worker_pid=None,
@@ -326,27 +333,27 @@ class JobQueueManager:
 
             self.gate.attach_worker(slot_path, int(process.pid))
             updated = self.job_store.update_job(
-                normalized_job_id,
+                normalized_job_id, expected_status="running", expected_token=token,
                 worker_pid=int(process.pid),
                 job_slot_path=str(slot_path) if slot_path else None,
             )
             threading.Thread(
                 target=self._reap_job_worker,
-                args=(normalized_job_id, process, slot_path),
+                args=(normalized_job_id, process, slot_path, token),
                 name=f"brp-job-worker-reaper-{process.pid}",
                 daemon=True,
             ).start()
         return updated or self.job_store.get_job(normalized_job_id) or claimed
 
     def _reap_job_worker(
-        self, job_id: str, process: subprocess.Popen[Any], slot_path: Path | None
+        self, job_id: str, process: subprocess.Popen[Any], slot_path: Path | None, token: str | None = None
     ) -> None:
         exit_code = int(process.wait())
         with self._worker_state_lock:
             job_record = self.job_store.get_job(job_id)
             if str((job_record or {}).get("status", "")).strip().lower() == "running":
                 self.job_store.update_job(
-                    job_id,
+                    job_id, expected_status="running", expected_token=token,
                     status="failed",
                     finished_at=utc_now_iso(),
                     error=(
@@ -356,10 +363,8 @@ class JobQueueManager:
                     worker_pid=None,
                     job_slot_path=None,
                 )
-            self.gate.release(
-                (job_record or {}).get("job_slot_path") or slot_path,
-                job_id=job_id,
-            )
+            if token is None or (job_record or {}).get("worker_token") == token:
+                self.gate.release(slot_path, job_id=job_id)
             self.gate.cleanup_stale_slots()
         self.schedule_queued_jobs()
 
@@ -514,6 +519,7 @@ class JobQueueManager:
                 return
             if self.measurement_reviews:
                 self.measurement_reviews.schedule()
+            self.job_store.drain_automatic_reviews()
             list_queued_verifications = getattr(
                 self.job_store, "list_queued_deep_verifications", lambda: []
             )
@@ -560,30 +566,14 @@ class JobQueueManager:
 
     def cancel_job(self, job_id: str) -> dict[str, Any] | None:
         with self._worker_state_lock:
-            job_record = self.job_store.get_job(job_id)
-            if not job_record:
-                return None
-            status = str(job_record.get("status", "")).strip().lower()
-            pid = safe_int(job_record.get("worker_pid"))
-            if status in {"succeeded", "failed", "canceled"}:
-                return job_record
+            previous, updated = self.job_store.cancel_active_job(job_id)
+            if not previous:
+                return updated
+            job_record = previous
+            pid = safe_int(previous.get("worker_pid"))
             terminate_worker_process(pid)
             self.gate.release(job_record.get("job_slot_path"), job_id=job_id)
             self.gate.cleanup_stale_slots()
-            preserve_result = (
-                str(dict(job_record.get("metadata") or {}).get("job_kind") or "").strip().lower()
-                == "direct_school_analysis"
-            )
-            updated = self.job_store.update_job(
-                job_id,
-                status="canceled",
-                finished_at=utc_now_iso(),
-                error="Job was canceled by the user.",
-                traceback=None,
-                worker_pid=None,
-                job_slot_path=None,
-                result=job_record.get("result") if preserve_result else None,
-            )
         self.schedule_queued_jobs()
         return updated
 

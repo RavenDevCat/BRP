@@ -82,7 +82,7 @@ def test_failed_worker_retains_checkpoint_and_diagnostics(monkeypatch):
         raise g.ValidationUnavailable('google_pickup_snap_mismatch',details={'address':'Second','snap_distance_m':238})
     monkeypatch.setattr(runner,'_load_job',lambda _:deepcopy(state['record']))
     monkeypatch.setattr(runner,'_save_job',lambda r:state.update(record=deepcopy(r)))
-    monkeypatch.setattr(runner,'_release_concurrency_slot',lambda:None)
+
     monkeypatch.setattr(runner,'run_direct_school_analysis',run)
     monkeypatch.setattr(sys,'argv',['backend_job_runner.py','checkpoint-test'])
     assert runner.main()==1

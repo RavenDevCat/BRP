@@ -110,7 +110,7 @@ def test_runner_retains_provisional_values_without_removal_or_trusted_time(monke
     monkeypatch.setattr(analysis, '_osrm_leg', fake_osrm)
     monkeypatch.setattr(backend_job_runner, '_load_job', lambda _: deepcopy(state['record']))
     monkeypatch.setattr(backend_job_runner, '_save_job', lambda record: state.update(record=deepcopy(record)))
-    monkeypatch.setattr(backend_job_runner, '_release_concurrency_slot', lambda: None)
+
     monkeypatch.setattr(sys, 'argv', ['backend_job_runner.py', 'review-runner'])
     assert backend_job_runner.main() == 0
     result = state['record']['result']
@@ -280,7 +280,7 @@ def test_actual_job_runner_preserves_unknown_classification(monkeypatch, schedul
     monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
     monkeypatch.setattr(backend_job_runner, "_load_job", lambda _id: deepcopy(state["record"]))
     monkeypatch.setattr(backend_job_runner, "_save_job", save)
-    monkeypatch.setattr(backend_job_runner, "_release_concurrency_slot", lambda: None)
+
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "classification-runner"])
     # Exercise the real runner and analysis; only provider I/O and persistence are substituted.
     assert backend_job_runner.main() == 0

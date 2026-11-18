@@ -7,6 +7,14 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-11-18
 
+### Scheduled Audit Reliability
+
+- Simultaneous scheduler triggers release a due audit only once. A return is
+  bound to its saved morning scenarios, and a canceled or deleted run cannot
+  be brought back by an older worker.
+- A completed morning result remains available when creation of its optional
+  deep reviews fails. Reviews retry separately without rerunning the audit.
+
 ### Measurement Completeness
 
 - Fleet, road distance and route cost use the same WGS84 points for OSRM.

@@ -158,7 +158,7 @@ def test_runner_classification_removal_and_export_use_warning_measurements(monke
                      "analysis_config": {"far_duration_minutes": 45}}}}
     monkeypatch.setattr(runner, "_load_job", lambda _: deepcopy(state["record"]))
     monkeypatch.setattr(runner, "_save_job", lambda record: state.update(record=deepcopy(record)))
-    monkeypatch.setattr(runner, "_release_concurrency_slot", lambda: None)
+
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "warning-runner"])
     assert runner.main() == 0
     result = state["record"]["result"]

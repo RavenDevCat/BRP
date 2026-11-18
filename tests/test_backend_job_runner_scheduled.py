@@ -135,8 +135,8 @@ def test_partial_worker_completes_and_preserves_evidence(monkeypatch):
                         "prepared_payload": {"input_records": [{"country": "China"}]}}}
     monkeypatch.setattr(backend_job_runner, "_load_job", lambda _: deepcopy(state["record"]))
     monkeypatch.setattr(backend_job_runner, "_save_job", lambda record: state.update(record=deepcopy(record)))
-    monkeypatch.setattr(backend_job_runner, "_release_concurrency_slot", lambda: None)
-    monkeypatch.setattr(backend_job_runner, "_create_automatic_deep_verifications", lambda _: None)
+
+
     monkeypatch.setattr(backend_job_runner, "run_backend_planner_with_prepared_data", lambda *a, **k: result)
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "partial"])
     assert backend_job_runner.main() == 0
@@ -167,7 +167,7 @@ def test_scheduled_runner_preserves_result_when_fresh_validation_fails(monkeypat
         "_save_job",
         lambda record: state.update(record=deepcopy(record)),
     )
-    monkeypatch.setattr(backend_job_runner, "_release_concurrency_slot", lambda: None)
+
     monkeypatch.setattr(
         backend_job_runner,
         "run_backend_planner_with_prepared_data",

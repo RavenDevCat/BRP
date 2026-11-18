@@ -1811,7 +1811,7 @@ def retry_direct_school_job(
     if status in {"queued", "running", "scheduled"}:
         raise BackendHttpError(409, {"error": "This analysis is already active."})
     updated = backend_service.JOB_STORE.update_job(
-        str(job_id or "").strip(),
+        str(job_id or "").strip(), expected_status=status,
         status="queued",
         started_at=None,
         finished_at=None,
@@ -1820,8 +1820,10 @@ def retry_direct_school_job(
         error=None,
         traceback=None,
     )
+    if updated is None:
+        raise BackendHttpError(409, {"error": "The analysis changed before it could be resumed."})
     backend_service.JOB_QUEUE.schedule_queued_jobs()
-    return _json_response(202, updated or record)
+    return _json_response(202, updated)
 
 
 @_api_route(

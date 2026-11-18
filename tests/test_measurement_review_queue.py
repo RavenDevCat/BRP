@@ -250,7 +250,7 @@ def test_normal_queue_gets_priority_and_background_waits(preempt_success):
     events = []
     scheduler = SimpleNamespace(
         _scheduler_lock=threading.Lock(), gate=SimpleNamespace(enabled=True, cleanup_stale_slots=lambda: None),
-        job_store=SimpleNamespace(release_due_scheduled_jobs=lambda: None,
+        job_store=SimpleNamespace(release_due_scheduled_jobs=lambda: None, drain_automatic_reviews=lambda: None,
             list_queued_jobs=lambda: [{"job_id": "normal"}], list_queued_deep_verifications=lambda: []),
         measurement_reviews=SimpleNamespace(reconcile=lambda: None,
             preempt=lambda: events.append("preempt") or preempt_success,

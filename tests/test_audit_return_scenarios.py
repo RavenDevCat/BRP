@@ -260,7 +260,7 @@ def test_worker_defers_until_parent_without_calling_provider(monkeypatch):
     monkeypatch.setattr(runner, "_load_job", lambda key: deepcopy(state[key]))
     monkeypatch.setattr(runner, "_save_job", lambda record: state.update({record["job_id"]: deepcopy(record)}))
     monkeypatch.setattr(runner, "_runtime_store", lambda: SimpleNamespace(get_job=state.get))
-    monkeypatch.setattr(runner, "_release_concurrency_slot", lambda: None)
+
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", pm["job_id"]])
     assert runner.main() == 0
     assert state[pm["job_id"]]["status"] == "scheduled"

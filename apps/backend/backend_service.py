@@ -3774,14 +3774,9 @@ class JobStore:
             "error": None,
         }
 
-    def update_job(self, job_id: str, **changes: Any) -> dict[str, Any] | None:
-        with self.lock:
-            record = self._load_job_unlocked(job_id)
-            if not record:
-                return None
-            record.update(changes)
-            self._save_job_unlocked(job_id, record)
-            return deepcopy(record)
+    def update_job(self, job_id: str, *, expected_status=None, expected_token=None, **changes: Any) -> dict[str, Any] | None:
+        return _runtime_sqlite_store().change_existing_job(
+            job_id, changes, expected_status=expected_status, token=expected_token)
 
     def claim_queued_job(
         self,
@@ -3793,7 +3788,7 @@ class JobStore:
         with self.lock:
             try:
                 record = _runtime_sqlite_store().claim_queued_job(
-                    job_id,
+                    job_id, scope=JOB_QUEUE_SCOPE,
                     worker_pid=worker_pid,
                     job_slot_path=job_slot_path,
                 )
@@ -3826,12 +3821,10 @@ class JobStore:
                 return "cached", deepcopy(record)
             if str(record.get("ai_audit_status", "")).strip().lower() == "running":
                 return "running", deepcopy(record)
-            record["ai_audit_status"] = "running"
-            record["ai_audit_started_at"] = utc_now_iso()
-            record["ai_audit_finished_at"] = None
-            record["ai_audit_error"] = None
-            self._save_job_unlocked(job_id, record)
-            return "started", deepcopy(record)
+            saved = _runtime_sqlite_store().change_existing_job(job_id, dict(
+                ai_audit_status="running", ai_audit_started_at=utc_now_iso(), ai_audit_finished_at=None,
+                ai_audit_error=None))
+            return ("started", saved) if saved else ("missing", None)
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         with self.lock:
@@ -3852,90 +3845,30 @@ class JobStore:
         return _runtime_sqlite_store().get_job_result_summaries(job_ids)
 
     def list_queued_jobs(self) -> list[dict[str, Any]]:
-        with self.lock:
-            entries = self._list_jobs_unlocked(include_all=True)
-            records: list[dict[str, Any]] = []
-            for entry in entries:
-                if str(entry.get("status", "")).strip().lower() != "queued":
-                    continue
-                job_id = str(entry.get("job_id", "")).strip()
-                if not job_id:
-                    continue
-                record = self._load_job_unlocked(job_id)
-                if not record or not self._matches_queue_scope(record):
-                    continue
-                if record and str(record.get("status", "")).strip().lower() == "queued":
-                    records.append(deepcopy(record))
-            records.sort(key=lambda item: str(item.get("created_at") or ""))
-            return records
-
-    def _bind_return_dependency_unlocked(self, record, now=None):
-        from audit_return import bind_morning_scenarios
-        try:
-            ready = bind_morning_scenarios(record, self._load_job_unlocked, now=now)
-        except ValueError as exc:
-            record.update(status="failed", error=str(exc), finished_at=utc_now_iso())
-            ready = False
-        self._save_job_unlocked(record["job_id"], record)
-        return ready
+        return [{"job_id": job_id} for job_id in _runtime_sqlite_store().dispatch_ids("queued", JOB_QUEUE_SCOPE)]
 
     def release_due_scheduled_jobs(self) -> list[dict[str, Any]]:
+        from audit_return import bind_morning_scenarios
+        store = _runtime_sqlite_store()
         now = datetime.now(timezone.utc)
-        released: list[dict[str, Any]] = []
-        with self.lock:
-            entries = self._list_jobs_unlocked(include_all=True)
-            for entry in entries:
-                if str(entry.get("status", "")).strip().lower() != "scheduled":
-                    continue
-                job_id = str(entry.get("job_id", "")).strip()
-                if not job_id:
-                    continue
-                record = self._load_job_unlocked(job_id)
-                if not record or str(record.get("status", "")).strip().lower() != "scheduled":
-                    continue
-                if not self._matches_queue_scope(record):
-                    continue
-                scheduled_at = _parse_iso_datetime(
-                    record.get("scheduled_start_at")
-                    or dict(record.get("metadata") or {}).get("scheduled_start_at")
-                )
-                if scheduled_at is None or scheduled_at > now:
-                    continue
-                if not self._bind_return_dependency_unlocked(record, now):
-                    continue
-                metadata = dict(record.get("metadata") or {})
-                metadata["scheduled_released_at"] = utc_now_iso()
-                record["metadata"] = metadata
-                record["status"] = "queued"
-                record["worker_pid"] = None
-                record["job_slot_path"] = None
-                self._save_job_unlocked(job_id, record)
-                released.append(deepcopy(record))
+        released = []
+        for job_id in store.dispatch_ids("scheduled", JOB_QUEUE_SCOPE, due_at=now.isoformat()):
+            record, won = store.release_scheduled(job_id, JOB_QUEUE_SCOPE, bind_morning_scenarios, now=now)
+            if won:
+                released.append(record)
         return released
 
     def release_scheduled_job(self, job_id: str, *, release_mode: str = "manual") -> dict[str, Any] | None:
-        normalized_job_id = str(job_id or "").strip()
-        if not normalized_job_id:
-            return None
-        with self.lock:
-            record = self._load_job_unlocked(normalized_job_id)
-            if not record:
-                return None
-            if not self._matches_queue_scope(record):
-                return deepcopy(record)
-            if str(record.get("status", "")).strip().lower() != "scheduled":
-                return deepcopy(record)
-            if not self._bind_return_dependency_unlocked(record):
-                return deepcopy(record)
-            metadata = dict(record.get("metadata") or {})
-            metadata["scheduled_released_at"] = utc_now_iso()
-            metadata["scheduled_release_mode"] = str(release_mode or "manual").strip() or "manual"
-            record["metadata"] = metadata
-            record["status"] = "queued"
-            record["worker_pid"] = None
-            record["job_slot_path"] = None
-            self._save_job_unlocked(normalized_job_id, record)
-            return deepcopy(record)
+        from audit_return import bind_morning_scenarios
+        record, _ = _runtime_sqlite_store().release_scheduled(job_id, JOB_QUEUE_SCOPE, bind_morning_scenarios,
+            now=datetime.now(timezone.utc), manual=release_mode or "manual")
+        return record
+
+    def cancel_active_job(self, job_id):
+        return _runtime_sqlite_store().cancel_active_job(job_id)
+
+    def drain_automatic_reviews(self):
+        _runtime_sqlite_store().drain_automatic_reviews(JOB_QUEUE_SCOPE, build_automatic_verification_records)
 
     def delete_job(self, job_id: str) -> bool:
         with self.lock:
@@ -3950,36 +3883,21 @@ class JobStore:
             return _runtime_sqlite_store().prepare_jobs_for_deletion(job_ids)
 
     def reconcile_running_jobs(self) -> None:
-        with self.lock:
-            index_entries = self._list_jobs_unlocked(include_all=True)
-            for entry in index_entries:
-                job_id = str(entry.get("job_id", "")).strip()
-                if not job_id:
-                    continue
-                record = self._load_job_unlocked(job_id)
-                if not record:
-                    continue
-                if not self._matches_queue_scope(record):
-                    continue
-                status = str(record.get("status", "")).strip().lower()
-                if status == "queued":
-                    record["worker_pid"] = None
-                    record["job_slot_path"] = None
-                    self._save_job_unlocked(job_id, record)
-                    continue
-                if status == "running":
-                    worker_pid = safe_int(record.get("worker_pid"), 0)
-                    if pid_is_alive(worker_pid):
-                        continue
-                    record["status"] = "failed"
-                    record["finished_at"] = utc_now_iso()
-                    record["error"] = (
-                        "Job was interrupted because the backend service restarted."
-                    )
-                    record["traceback"] = None
-                    record["worker_pid"] = None
-                    record["job_slot_path"] = None
-                    self._save_job_unlocked(job_id, record)
+        store = _runtime_sqlite_store()
+        for job_id in store.dispatch_ids("running", JOB_QUEUE_SCOPE, limit=None):
+            record = store.get_job(job_id)
+            if not record or record["status"] != "running":
+                continue
+            pid = safe_int(record.get("worker_pid"), 0)
+            if pid_is_alive(pid):
+                continue
+            # A second scheduler can start while the first launcher is attaching its PID.
+            if not pid and record.get("worker_token") and pid_is_alive(record.get("claim_launcher_pid")):
+                continue
+            store.change_existing_job(job_id, dict(status="failed", finished_at=utc_now_iso(),
+                error="Job was interrupted because the backend service restarted.", traceback=None,
+                worker_pid=None, job_slot_path=None), expected_status="running",
+                token=record.get("worker_token"), expected_pid=pid)
 
     def list_queued_deep_verifications(self) -> list[dict[str, Any]]:
         with self.lock:
@@ -4063,23 +3981,10 @@ class JobStore:
         *,
         automatic: bool,
     ) -> list[dict[str, Any]]:
-        parent_job_id = str(parent_job.get("job_id") or "").strip()
-        if not parent_job_id:
-            return []
-        with self.lock:
-            existing = _runtime_sqlite_store().list_deep_verifications(
-                parent_job_id=parent_job_id
-            )
-            if existing:
-                return [deepcopy(record) for record in existing]
-            records = build_automatic_verification_records(
-                parent_job,
-                queue_scope=JOB_QUEUE_SCOPE,
-            )
-            for record in records:
-                record["automatic"] = bool(automatic)
-                _runtime_sqlite_store().upsert_deep_verification(record)
-            return [deepcopy(record) for record in records]
+        def build(record):
+            return [dict(child, automatic=bool(automatic)) for child in
+                    build_automatic_verification_records(record, queue_scope=JOB_QUEUE_SCOPE)]
+        return _runtime_sqlite_store().ensure_review_children(parent_job["job_id"], build)
 
     def reconcile_running_deep_verifications(self) -> None:
         with self.lock:

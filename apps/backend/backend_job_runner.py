@@ -3,19 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-import shutil
+from functools import lru_cache
 import sys
 import traceback
 from typing import Any
 
 try:
-    from .deep_verification import build_automatic_verification_records
     from .direct_school_analysis import run_direct_school_analysis
     from .planner_core import (build_planner_config, run_backend_planner_with_prepared_data,
                                scheduled_traffic_provider, partial_traffic_route_ids, measured_route_gate)
     from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
-    from deep_verification import build_automatic_verification_records
     from direct_school_analysis import run_direct_school_analysis
     from planner_core import (build_planner_config, run_backend_planner_with_prepared_data,
                               scheduled_traffic_provider, partial_traffic_route_ids, measured_route_gate)
@@ -33,10 +31,13 @@ def _runtime_db_path() -> Path:
     return Path(__file__).resolve().parents[2] / "state" / "brp_runtime.sqlite"
 
 
+@lru_cache(maxsize=1)
+def _worker_store_at(path: Path) -> SqliteRuntimeStore:
+    return SqliteRuntimeStore(path)
+
+
 def _runtime_store() -> SqliteRuntimeStore:
-    store = SqliteRuntimeStore(_runtime_db_path())
-    store.initialize()
-    return store
+    return _worker_store_at(_runtime_db_path())
 
 
 def _load_job(job_id: str) -> dict[str, Any]:
@@ -46,34 +47,26 @@ def _load_job(job_id: str) -> dict[str, Any]:
     return payload
 
 
+class SupersededAttempt(Exception):
+    pass
+
+
 def _save_job(payload: dict[str, Any]) -> None:
-    _runtime_store().upsert_job(payload)
-
-
-def _create_automatic_deep_verifications(payload: dict[str, Any]) -> None:
-    store = _runtime_store()
-    if store.list_deep_verifications(parent_job_id=str(payload.get("job_id") or "")):
-        return
-    for record in build_automatic_verification_records(payload):
-        store.upsert_deep_verification(record)
-
-
-def _release_concurrency_slot() -> None:
-    slot_path = os.environ.get("BRP_JOB_CONCURRENCY_SLOT", "").strip()
-    if not slot_path:
-        return
-    try:
-        resolved_slot = Path(slot_path).resolve()
-        root_path = os.environ.get("BRP_JOB_CONCURRENCY_ROOT", "").strip()
-        if root_path:
-            resolved_slot.relative_to(Path(root_path).resolve())
-        if not resolved_slot.name.startswith("slot-"):
-            return
-        if not (resolved_slot / "metadata.json").exists():
-            return
-        shutil.rmtree(resolved_slot, ignore_errors=True)
-    except Exception:
-        return
+    token = os.environ.get("BRP_JOB_RUN_TOKEN")
+    if not token or payload.get("worker_token") != token:
+        raise SupersededAttempt()
+    meta = payload.get("metadata") or {}
+    review = (payload.get("status") == "succeeded" and meta.get("job_kind", "route_audit") == "route_audit"
+              and meta.get("measurement_kind") != "pm_return")
+    fields = {k:payload[k] for k in ("status", "started_at", "finished_at", "worker_pid", "job_slot_path",
+                                    "result", "error", "traceback", "updated_at") if k in payload}
+    if meta.get("failure_details") or meta.get("measurement_kind") == "pm_return":
+        fields["metadata"] = meta
+        if meta.get("measurement_kind") == "pm_return":
+            fields["prepared_payload"] = payload["prepared_payload"]
+    if _runtime_store().change_existing_job(payload["job_id"], fields, expected_status="running",
+                                            token=token, automatic_review=review) is None:
+        raise SupersededAttempt()
 
 
 def _is_scheduled_job(job_record: dict[str, Any]) -> bool:
@@ -162,17 +155,15 @@ def main() -> int:
 
     job_record = _load_job(job_id)
     if str(job_record.get("status", "")).strip().lower() == "canceled":
-        _release_concurrency_slot()
         return 0
 
     job_record["status"] = "running"
     job_record["started_at"] = job_record.get("started_at") or utc_now_iso()
     job_record["worker_pid"] = int(os.getpid())
     job_record["job_slot_path"] = os.environ.get("BRP_JOB_CONCURRENCY_SLOT", "").strip() or job_record.get("job_slot_path")
-    _save_job(job_record)
-
     result: dict[str, Any] | None = None
     try:
+        _save_job(job_record)
         metadata = dict(job_record.get("metadata") or {})
         job_kind = str(metadata.get("job_kind") or "route_audit").strip().lower()
         from audit_return import bind_morning_scenarios, is_audit_return, run_audit_return
@@ -241,8 +232,8 @@ def main() -> int:
         job_record["worker_pid"] = None
         job_record["job_slot_path"] = None
         _save_job(job_record)
-        if job_kind == "route_audit" and not is_return:
-            _create_automatic_deep_verifications(job_record)
+        return 0
+    except SupersededAttempt:
         return 0
     except Exception as exc:
         job_record = _load_job(job_id)
@@ -260,10 +251,11 @@ def main() -> int:
         job_record["traceback"] = traceback.format_exc()
         job_record["worker_pid"] = None
         job_record["job_slot_path"] = None
-        _save_job(job_record)
+        try:
+            _save_job(job_record)
+        except SupersededAttempt:
+            return 0
         return 1
-    finally:
-        _release_concurrency_slot()
 
 
 if __name__ == "__main__":

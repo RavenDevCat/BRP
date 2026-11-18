@@ -853,7 +853,10 @@ def test_backend_job_runner_reads_and_writes_sqlite_job(
     payload = job_record("job1", "alice@example.com")
     payload["status"] = "queued"
     payload["prepared_payload"] = {"rows": [{"address": "A"}]}
-    SqliteRuntimeStore(sqlite_path).upsert_job(payload)
+    queue = SqliteRuntimeStore(sqlite_path)
+    queue.upsert_job(payload)
+    claim = queue.claim_queued_job("job1")
+    monkeypatch.setenv("BRP_JOB_RUN_TOKEN", claim["worker_token"])
 
     assert backend_job_runner.main() == 0
 

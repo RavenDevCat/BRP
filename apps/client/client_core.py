@@ -97,6 +97,7 @@ def clear_route_caches() -> None:
         runtime.SUBWAY_CACHE_PATH,
     ):
         clear_json_object(cache_path)
+    runtime.GEOCODE_CACHE = runtime.load_json_cache(runtime.GEOCODE_CACHE_PATH)
 
 
 def get_excel_sheet_names(excel_path: str | Path) -> list[str]:

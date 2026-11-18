@@ -2281,8 +2281,8 @@ def clear_route_caches() -> None:
     global PLANNER_RESULT_CACHE
 
     ensure_cache_dir()
-    PLANNER_RESULT_CACHE = {}
-    save_planner_result_cache(PLANNER_RESULT_CACHE)
+    clear_json_object(PLANNER_RESULT_CACHE_PATH)
+    PLANNER_RESULT_CACHE = load_planner_result_cache()
 
     for cache_path in (ROUTE_METRICS_CACHE_PATH, ROUTE_GEOMETRY_CACHE_PATH):
         clear_json_object(cache_path)

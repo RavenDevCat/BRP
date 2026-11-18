@@ -1015,6 +1015,7 @@ export type FleetPlannerClusterResponse = {
 };
 
 export type FleetPlannerRoutePreviewResponse = {
+    workbook_deferred?: boolean;
     summary: {
         timing_mode?: string;
         measured_from?: string | null;
@@ -1851,6 +1852,22 @@ export function buildFleetPlannerGlobalPlan(payload: {
             body: JSON.stringify(payload),
         },
     );
+}
+
+const workbookRequests = new WeakMap<FleetPlannerRoutePreviewResponse, Promise<string>>();
+export function fleetWorkbook(result: FleetPlannerRoutePreviewResponse): Promise<string> {
+    if (result.workbook_base64) return Promise.resolve(result.workbook_base64);
+    let request = workbookRequests.get(result);
+    if (!request) {
+        const { routes, summary, school } = result;
+        request = apiFetch<{ workbook_base64: string }>("/fleet-planner/workbook", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ routes, summary, school }, (key, value) =>
+                ["geometry", "geometry_segments", "polyline", "leg_details"].includes(key) ? undefined : value),
+        }).then((data) => data.workbook_base64).catch((err) => { workbookRequests.delete(result); throw err; });
+        workbookRequests.set(result, request);
+    }
+    return request;
 }
 
 export async function listFleetPlannerHistory() {

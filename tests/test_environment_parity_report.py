@@ -57,6 +57,7 @@ class EnvironmentParityReportTests(unittest.TestCase):
             root = Path(tmpdir)
             assets = root / "apps" / "web" / "dist" / "assets"
             assets.mkdir(parents=True)
+            (assets.parent/"index.html").write_text('<script type="module" src="/assets/index-test.js"></script>')
             (assets / "index-test.js").write_text("window.__APP_VERSION__='abc1234';", encoding="utf-8")
             old_assets = root / "apps" / "web" / "dist.prev-old" / "assets"
             old_assets.mkdir(parents=True)

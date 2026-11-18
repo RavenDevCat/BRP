@@ -41,7 +41,9 @@ def test_fleet_planner_inline_and_fullscreen_maps_keep_map_and_workbook_download
     maps_panel = _section(source, "function ToolMapsPanel({", "function VehicleConfigModal")
 
     assert "downloadInteractiveMapHtml" in maps_panel
-    assert "downloadBase64Workbook" in maps_panel
+    assert "useWorkbookDownload()" in maps_panel
+    assert maps_panel.count("workbook.mutate(workbookResult)") == 2
+    assert "downloadBase64Workbook(await fleetWorkbook(result)" in source
     assert "canDownloadWorkbook" in maps_panel
     assert maps_panel.count("<FileSpreadsheet") >= 2
     assert maps_panel.count("Workbook") >= 2

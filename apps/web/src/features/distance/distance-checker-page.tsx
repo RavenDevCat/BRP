@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useHistoryDetail, deleteHistoryBatch, checkDeletion } from "@/lib/history-actions";
 import { Calculator, FileSpreadsheet, Fuel, Loader2, MapPinned, Ruler, Upload } from "lucide-react";
 import { DirectSchoolAnalysisPage } from "@/features/distance/direct-school-analysis-page";
 import { HistorySidebar } from "@/components/history-sidebar";
@@ -161,10 +162,7 @@ function LegacyDistanceCheckerPage({
     },
   });
 
-  const openHistoryMutation = useMutation({
-    mutationFn: ({ toolMode, runId }: { toolMode: DistanceCheckerToolMode; runId: string }) => getDistanceCheckerHistory(toolMode, runId),
-    onSuccess: (record) => applyHistoryRecord(record),
-  });
+  const openHistoryMutation = useHistoryDetail(activeTool, ({ toolMode, runId }: { toolMode: DistanceCheckerToolMode; runId: string }) => getDistanceCheckerHistory(toolMode, runId), applyHistoryRecord);
 
   const deleteHistoryMutation = useMutation({
     mutationFn: ({ toolMode, runId }: { toolMode: DistanceCheckerToolMode; runId: string }) => deleteDistanceCheckerHistory(toolMode, runId),
@@ -181,18 +179,16 @@ function LegacyDistanceCheckerPage({
   });
   const bulkDeleteHistoryMutation = useMutation({
     mutationFn: async ({ toolMode, runIds }: { toolMode: DistanceCheckerToolMode; runIds: string[] }) => {
-      for (const runId of runIds) {
-        await deleteDistanceCheckerHistory(toolMode, runId);
-      }
-      return { toolMode, runIds };
+      return { toolMode, ...await deleteHistoryBatch(runIds, (id) => deleteDistanceCheckerHistory(toolMode, id)) };
     },
-    onSuccess: async ({ runIds, toolMode }) => {
+    onSuccess: async ({ deleted: runIds, failed, toolMode }) => {
       if (runIds.includes(loadedHistoryRecord?.run_id || "")) {
         setLoadedHistoryRecord(null);
         setResult(null);
         setRouteCostResult(null);
       }
       await queryClient.invalidateQueries({ queryKey: ["distance-checker-history", toolMode] });
+      checkDeletion(failed);
     },
   });
 

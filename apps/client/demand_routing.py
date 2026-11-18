@@ -317,9 +317,17 @@ def build_osrm_route_preview(
     }
 
 
+class _FleetDisplayView(dict):
+    """Already prepared for read-only table, workbook and map rendering."""
+
+
+def _display_view(plan):
+    return plan if isinstance(plan, _FleetDisplayView) else fleet_route_display_view(plan)
+
+
 def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
     """Read saved Fleet measurements without re-solving, routing or changing inputs."""
-    view = deepcopy(route_preview)
+    view = _FleetDisplayView(deepcopy(route_preview))
     routes = list(view.get("routes") or [])
     summary = view.setdefault("summary", {})
     by_id = {str(route.get("cluster_id")): route for route in routes}
@@ -394,12 +402,12 @@ def fleet_route_display_view(route_preview: dict[str, Any]) -> dict[str, Any]:
 
 
 def route_preview_to_dataframe(route_preview: dict[str, Any]) -> pd.DataFrame:
-    view = fleet_route_display_view(route_preview)
+    view = _display_view(route_preview)
     return pd.DataFrame(list(view.get("route_rows") or view.get("rows") or []))
 
 
 def route_preview_stop_detail_to_dataframe(route_preview: dict[str, Any]) -> pd.DataFrame:
-    route_preview = fleet_route_display_view(route_preview)
+    route_preview = _display_view(route_preview)
     rows: list[dict[str, Any]] = []
     for route in list(route_preview.get("routes") or []):
         vehicle = dict(route.get("selected_vehicle") or {})
@@ -428,7 +436,7 @@ def _build_route_preview_workbook_bytes(
     assignments_sheet_name: str,
     fleet_sheet_name: str,
 ) -> bytes:
-    route_preview = fleet_route_display_view(route_preview)
+    route_preview = _display_view(route_preview)
     assignment_rows: list[dict[str, Any]] = []
     fleet_counts: dict[tuple[str, int], int] = {}
     service_direction = str((route_preview.get("summary") or {}).get("service_direction", "to_school"))
@@ -491,6 +499,11 @@ def _build_route_preview_workbook_bytes(
                 "Note": route["measurement_note"],
             })
         pd.DataFrame(measurement_rows).to_excel(writer, sheet_name="Route Measurements", index=False)
+        for ws in writer.sheets.values():
+            for line in ws.iter_rows():
+                for cell in line:
+                    if cell.data_type == "f":
+                        cell.data_type = "s"
         sheet = writer.sheets["Route Measurements"]
         sheet.freeze_panes = "B2"
         sheet.auto_filter.ref = sheet.dimensions
@@ -597,7 +610,7 @@ def build_route_preview_map_data(
     scenario_key: str = "optimized_plan",
     scenario_name: str = "Optimized Plan",
 ) -> dict[str, Any]:
-    route_preview = fleet_route_display_view(route_preview)
+    route_preview = _display_view(route_preview)
     routes = list(route_preview.get("routes") or [])
     summary = dict(route_preview.get("summary") or {})
     service_direction = str(summary.get("service_direction") or "to_school")
@@ -735,7 +748,7 @@ def build_route_preview_map_data(
 
 
 def build_route_preview_map_html(route_preview: dict[str, Any]) -> str:
-    route_preview = fleet_route_display_view(route_preview)
+    route_preview = _display_view(route_preview)
     routes = list(route_preview.get("routes") or [])
     if not routes:
         return ""

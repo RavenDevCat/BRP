@@ -485,6 +485,7 @@ def run_direct_school_analysis(
     scheduled_start_at: str | None = None,
     run_seed: str = "",
     checkpoint: Callable[[dict[str, Any]], None] | None = None,
+    checkpoint_delta: Callable[..., None] | None = None,
     resume_result: dict[str, Any] | None = None,
     provider_factory: Callable[..., FreshRouteProvider] | None = None,
     check_canceled: Callable[[], None] | None = None,
@@ -623,7 +624,27 @@ def run_direct_school_analysis(
     route_results: list[dict[str, Any]] = []
     route_window_analysis: list[dict[str, Any]] = []
 
-    def save_checkpoint() -> None:
+    offsets = {"routes": 0, "route_window_analysis": 0, "errors": 0}
+    row_indices = {id(row): i for i,row in enumerate(rows)}
+    last_phase = None
+    def save_checkpoint(changed=None) -> None:
+        nonlocal last_phase
+        if checkpoint_delta:
+            first = last_phase is None
+            phase = progress["phase"]
+            changed_rows = rows if first or (phase != last_phase and phase == "route_window_recovery") else ([] if changed is None else [changed])
+            parts = [("stops",row_indices[id(row)],{k:v for k,v in row.items() if k!="_point"}) for row in changed_rows]
+            head = _base_result(config=config, provider=provider_name, school=school, rows=rows,
+                route_count=len(route_groups), logical_call_estimate=logical_call_estimate, progress=progress, errors=errors)
+            for name, items in (("routes",route_results),("route_window_analysis",route_window_analysis),("errors",errors)):
+                parts.extend((name,i,items[i]) for i in range(offsets[name],len(items)))
+                offsets[name] = len(items)
+                head.pop(name,None)
+            head.pop("stops")
+            parts.append(("head",0,head))
+            checkpoint_delta(parts, reset=first)
+            last_phase = phase
+            return
         if not checkpoint:
             return
         public_rows = [{key: value for key, value in row.items() if key != "_point"} for row in rows]
@@ -659,7 +680,7 @@ def run_direct_school_analysis(
         point = dict(row.get("_point") or {})
         if not point:
             progress["completed"] += 1
-            save_checkpoint()
+            save_checkpoint(row)
             continue
         request_points = [point, school_point]
         if config["service_direction"] == "From School":
@@ -714,11 +735,11 @@ def run_direct_school_analysis(
                 row.update(quality_status="provider_failed", operational_category="data_review", reasons=[str(exc)])
                 errors.append({"error": str(exc), **details})
                 progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
-                save_checkpoint()
+                save_checkpoint(row)
                 if not _isolatable_google_pickup_error(exc):
                     raise
                 progress["completed"] += 1
-                save_checkpoint()
+                save_checkpoint(row)
                 continue
             row["route_evidence"] = deepcopy(provider.state.get("last_route_evidence"))
             row["quality_status"] = "provider_failed"
@@ -728,7 +749,7 @@ def run_direct_school_analysis(
         progress["completed"] += 1
         progress["provider_api_calls"] = int(provider.state.get("api_calls", 0))
         progress["in_run_reuse_count"] = int(provider.state.get("cache_hits", 0))
-        save_checkpoint()
+        save_checkpoint(row)
 
     progress["phase"] = "current_routes"
     route_contexts_by_stop: dict[str, list[dict[str, Any]]] = defaultdict(list)

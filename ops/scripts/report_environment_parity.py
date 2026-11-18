@@ -183,19 +183,18 @@ def git_origin_head(root_dir: Path) -> tuple[str | None, str | None]:
 def dist_contains_marker(root_dir: Path, marker: str | None) -> tuple[bool, str]:
     if not marker:
         return False, "missing git head"
-    assets_dir = root_dir / "apps" / "web" / "dist" / "assets"
-    if not assets_dir.exists():
-        return False, f"missing {assets_dir}"
-    candidates = sorted(assets_dir.glob("index-*.js"))
-    if not candidates:
-        candidates = sorted(assets_dir.glob("*.js"))
-    for path in candidates:
-        try:
-            if marker in path.read_text(encoding="utf-8", errors="ignore"):
-                return True, str(path.relative_to(root_dir))
-        except OSError as exc:
-            return False, f"{path}: {exc}"
-    return False, f"marker {marker} not found in current dist assets"
+    script_dir = str(Path(__file__).resolve().parent)
+    if script_dir not in sys.path:
+        sys.path.insert(0, script_dir)
+    from verified_web_release import verified_entry
+    try:
+        path = verified_entry(root_dir / "apps/web/dist", marker)
+        return True, path.relative_to(root_dir).as_posix()
+    except (OSError, ValueError) as exc:
+        return False, str(exc)
+
+
+
 
 
 def connectable(host: str, port: int, timeout: float = 2.0) -> bool:

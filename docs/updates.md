@@ -7,6 +7,18 @@ runtime architecture, or recommended rerun guidance changed.
 
 ## 2026-11-18
 
+### Data and Release Reliability
+
+- History pages keep the most recent selection and refresh after partially
+  successful deletes. Fleet workbooks can be rendered on first download from
+  the displayed measurements, without requesting new traffic.
+- Optional keyed cache migration and incremental Direct-to-School checkpoints
+  are independent of Google timing. Existing caches and completed results are
+  not rewritten on upgrade.
+- CN releases verify the JavaScript actually referenced by the page, confirm
+  the runtime database is readable, and restore the previous release if checks fail.
+  See `ops/scripts/README.round4.md` before enabling optional changes.
+
 ### Route Ordering and Fleet Planning
 
 - Fixed-school stop ordering preserves the original order when the directed road

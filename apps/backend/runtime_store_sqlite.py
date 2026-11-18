@@ -167,6 +167,11 @@ class SqliteRuntimeStore:
                     version INTEGER NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS job_checkpoint_parts (
+                    job_id TEXT NOT NULL REFERENCES jobs(job_id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL, slot INTEGER NOT NULL, body TEXT NOT NULL,
+                    PRIMARY KEY(job_id,kind,slot)
+                );
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
                     owner_email TEXT NOT NULL DEFAULT '',
@@ -706,6 +711,8 @@ class SqliteRuntimeStore:
                     utc_now_iso(),
                 ),
             )
+            if summary["status"] != "running":
+                conn.execute("DELETE FROM job_checkpoint_parts WHERE job_id=?", (job_id,))
             self._apply_history_group_preference(
                 conn, "route_audit", job_id, summary["owner_email"]
             )
@@ -830,7 +837,37 @@ class SqliteRuntimeStore:
     @staticmethod
     def _tx_job(conn, job_id):
         row = conn.execute("SELECT record_json FROM jobs WHERE job_id=?", (job_id,)).fetchone()
-        return json.loads(row[0]) if row else None
+        if not row:
+            return None
+        record = json.loads(row[0])
+        if record.get("status") == "running":
+            head, sections = None, {}
+            for kind, body in conn.execute("SELECT kind,body FROM job_checkpoint_parts WHERE job_id=? ORDER BY kind,slot", (job_id,)):
+                if kind == "head":
+                    head = json.loads(body)
+                else:
+                    sections.setdefault(kind, []).append(json.loads(body))
+            if head is not None:
+                record["result"] = {**head, **{k:sections.get(k, []) for k in ("stops","routes","route_window_analysis","errors")}}
+        return record
+
+    def running_attempt(self, job_id, token):
+        self.initialize()
+        with self.connect() as conn:
+            return bool(token and conn.execute("SELECT 1 FROM jobs WHERE job_id=? AND status='running' AND json_extract(record_json,'$.worker_token')=?", (job_id,token)).fetchone())
+
+    def checkpoint_parts(self, job_id, token, parts, *, reset=False):
+        self.initialize()
+        encoded = [(job_id,k,i,json_dumps(v)) for k,i,v in parts]
+        with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if not token or not conn.execute("SELECT 1 FROM jobs WHERE job_id=? AND status='running' AND json_extract(record_json,'$.worker_token')=?", (job_id,token)).fetchone():
+                return False
+            if reset:
+                conn.execute("DELETE FROM job_checkpoint_parts WHERE job_id=?", (job_id,))
+            conn.executemany("""INSERT INTO job_checkpoint_parts VALUES(?,?,?,?) ON CONFLICT(job_id,kind,slot)
+                             DO UPDATE SET body=excluded.body""", encoded)
+            return True
 
     def release_scheduled(self, job_id, scope, bind, *, now, manual=None):
         self.initialize()
@@ -946,11 +983,9 @@ class SqliteRuntimeStore:
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         self.initialize()
         with self.connect() as conn:
-            row = conn.execute("SELECT record_json FROM jobs WHERE job_id = ?", (job_id,)).fetchone()
-        if not row:
-            return None
-        payload = json_loads(row["record_json"], {})
-        return payload if isinstance(payload, dict) else None
+            conn.execute("BEGIN")
+            return self._tx_job(conn, job_id)
+
 
     def list_jobs(self, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         self.initialize()
@@ -994,8 +1029,8 @@ class SqliteRuntimeStore:
                 batch = ids[offset:offset + 500]
                 placeholders = ",".join("?" for _ in batch)
                 rows = conn.execute(f"""
-                    SELECT job_id, json_extract(record_json, '$.result.status') AS result_status,
-                        json_extract(record_json, '$.result.summary') AS result_summary,
+                    SELECT j.job_id, coalesce(json_extract(h.body,'$.status'),json_extract(record_json, '$.result.status')) AS result_status,
+                        coalesce(json_extract(h.body,'$.summary'),json_extract(record_json, '$.result.summary')) AS result_summary,
                         (SELECT json_group_array(json_object(
                             'status', json_extract(value, '$.status'),
                             'route_evidence', json_object(
@@ -1008,8 +1043,10 @@ class SqliteRuntimeStore:
                                 'point_count', json_extract(value, '$.route_evidence.point_count'),
                                 'duration_s', json_extract(value, '$.route_evidence.duration_s'),
                                 'distance_m', json_extract(value, '$.route_evidence.distance_m'))))
-                         FROM json_each(json_extract(record_json, '$.result.routes'))) AS routes
-                    FROM jobs WHERE job_id IN ({placeholders})
+                         FROM (SELECT value FROM json_each(json_extract(record_json, '$.result.routes')) WHERE h.body IS NULL
+                               UNION ALL SELECT body FROM job_checkpoint_parts r WHERE h.body IS NOT NULL AND r.job_id=j.job_id AND r.kind='routes')) AS routes
+                    FROM jobs j LEFT JOIN job_checkpoint_parts h ON h.job_id=j.job_id AND h.kind='head'
+                    WHERE j.job_id IN ({placeholders})
                 """, batch).fetchall()
                 for row in rows:
                     routes = json_loads(row["routes"], [])

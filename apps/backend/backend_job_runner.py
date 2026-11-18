@@ -197,12 +197,22 @@ def main() -> int:
                     result = run_return_measurement(prepared_payload, dict(metadata.get("analysis_config") or {}),
                         checkpoint=save_checkpoint, check_canceled=check_canceled)
             else:
+                delta_options = {}
+                if os.environ.get("BRP_DELTA_CHECKPOINTS") == "1":
+                    token = os.environ.get("BRP_JOB_RUN_TOKEN")
+                    def check_attempt():
+                        if not _runtime_store().running_attempt(job_id, token):
+                            raise SupersededAttempt()
+                    def save_delta(parts, *, reset):
+                        if not _runtime_store().checkpoint_parts(job_id, token, parts, reset=reset):
+                            raise SupersededAttempt()
+                    delta_options = {"checkpoint_delta": save_delta, "check_canceled": check_attempt}
                 result = run_direct_school_analysis(
                     prepared_payload,
                     dict(metadata.get("analysis_config") or {}),
                     scheduled_start_at=job_record.get("scheduled_start_at"),
                     run_seed=str(job_record.get("scheduled_start_at") or job_id),
-                    checkpoint=save_checkpoint,
+                    checkpoint=save_checkpoint, **delta_options,
                     resume_result=dict(job_record.get("result") or {}),
                 )
         else:

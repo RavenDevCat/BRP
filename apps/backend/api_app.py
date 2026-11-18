@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import traceback
+import base64
 import math
+import sqlite3
+from contextlib import closing
 from copy import deepcopy
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -465,6 +468,33 @@ def backend_unhandled_error_handler(_request: Request, exc: Exception) -> JSONRe
 @_api_route("GET", "/health")
 def health() -> JSONResponse:
     return _json_response(200, {"status": "ok"})
+
+
+@_api_route("POST", "/fleet-planner/workbook", dependencies=[Depends(require_authorized_request)])
+def fleet_workbook(payload: FlexiblePayload) -> JSONResponse:
+    snapshot = _payload_dict(payload)
+    routes = snapshot.get("routes")
+    if not backend_service.fleet_export_snapshot_supported(routes):
+        return _json_response(422, {"error":"Invalid Fleet workbook snapshot"})
+    # Render only the supplied result. No geocoding, solving or measurement is permitted here.
+    view = {"routes":routes, "summary":snapshot.get("summary") or {}, "school":snapshot.get("school") or {}}
+    output = backend_service._client_module("demand_routing").build_generated_plan_workbook_bytes(view)
+    return _json_response(200, {"workbook_base64":base64.b64encode(output).decode("ascii")})
+
+
+@_api_route("GET", "/ready")
+def ready() -> JSONResponse:
+    # Do not initialize, migrate, enqueue or expose database contents from a readiness probe.
+    uri = backend_service.RUNTIME_DB_PATH.resolve().as_uri() + "?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as conn:
+            conn.execute("SELECT job_id FROM jobs LIMIT 1").fetchone()
+            conn.execute("SELECT parent_id,queue_scope FROM automatic_review_outbox LIMIT 1").fetchone()
+            if not conn.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_jobs_scheduled_dispatch'").fetchone():
+                raise sqlite3.DatabaseError("missing dispatch index")
+    except sqlite3.Error:
+        return _json_response(503, {"status":"unavailable"})
+    return _json_response(200, {"status":"ready"})
 
 
 @_api_route("GET", "/auth/config", dependencies=[Depends(require_authorized_request)])

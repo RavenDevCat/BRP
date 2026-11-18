@@ -2,6 +2,7 @@ import { useState, type ReactNode } from "react";
 import { DEFAULT_FINAL_TIMING, FinalTimingOptions } from "@/features/planner/final-timing-options";
 import { Link } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useHistoryDetail, deleteHistoryBatch, checkDeletion } from "@/lib/history-actions";
 import { ListChecks, MapPin, PlusCircle, ShieldCheck, Upload } from "lucide-react";
 import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
@@ -162,15 +163,12 @@ export function RouteInsertAdvisorPage() {
     queryKey: ["route-insert-history"],
     queryFn: listRouteInsertAdvisorHistory,
   });
-  const openHistoryMutation = useMutation({
-    mutationFn: getRouteInsertAdvisorHistory,
-    onSuccess: (record) => {
+  const openHistoryMutation = useHistoryDetail("insert", getRouteInsertAdvisorHistory, (record) => {
       const restored = record.route_insert_result;
       if (!restored) return;
       setHistoryResult(restored);
       setActiveHistoryId(record.run_id);
       setActiveScenarioId(restored.scenarios?.[0]?.id || "recommended");
-    },
   });
   const deleteHistoryMutation = useMutation({
     mutationFn: deleteRouteInsertAdvisorHistory,
@@ -184,15 +182,15 @@ export function RouteInsertAdvisorPage() {
   });
   const bulkDeleteHistoryMutation = useMutation({
     mutationFn: async (runIds: string[]) => {
-      for (const runId of runIds) await deleteRouteInsertAdvisorHistory(runId);
-      return runIds;
+      return deleteHistoryBatch(runIds, deleteRouteInsertAdvisorHistory);
     },
-    onSuccess: async (runIds) => {
+    onSuccess: async ({ deleted: runIds, failed }) => {
       if (runIds.includes(activeHistoryId)) {
         setActiveHistoryId("");
         setHistoryResult(undefined);
       }
       await queryClient.invalidateQueries({ queryKey: ["route-insert-history"] });
+      checkDeletion(failed);
     },
   });
   const capabilities = capabilitiesQuery.data;

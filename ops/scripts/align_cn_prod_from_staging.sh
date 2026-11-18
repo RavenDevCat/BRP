@@ -1,95 +1,59 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-STAGING_ROOT="${STAGING_ROOT:-/opt/brp/staging/app}"
-PROD_ROOT="${PROD_ROOT:-/opt/brp/prod/app}"
-PROD_BACKEND_SERVICE="${PROD_BACKEND_SERVICE:-brp-prod-backend.service}"
-PROD_BACKEND_HEALTH_URL="${PROD_BACKEND_HEALTH_URL:-http://127.0.0.1:8000/health}"
-PROD_BACKEND_HEALTH_ATTEMPTS="${PROD_BACKEND_HEALTH_ATTEMPTS:-15}"
-PROD_BACKEND_HEALTH_DELAY_SECONDS="${PROD_BACKEND_HEALTH_DELAY_SECONDS:-2}"
-TARGET_HEAD="${1:-}"
-
-wait_for_backend_health() {
-  local attempt
-
-  case "$PROD_BACKEND_HEALTH_ATTEMPTS" in
-    ''|*[!0-9]*|0)
-      echo "PROD_BACKEND_HEALTH_ATTEMPTS must be a positive integer." >&2
-      return 1
-      ;;
-  esac
-  case "$PROD_BACKEND_HEALTH_DELAY_SECONDS" in
-    ''|*[!0-9]*)
-      echo "PROD_BACKEND_HEALTH_DELAY_SECONDS must be a non-negative integer." >&2
-      return 1
-      ;;
-  esac
-
-  for ((attempt = 1; attempt <= PROD_BACKEND_HEALTH_ATTEMPTS; attempt++)); do
-    if curl -fsS "$PROD_BACKEND_HEALTH_URL" >/dev/null 2>&1; then
-      echo "CN_PROD_BACKEND_READY_ATTEMPT=$attempt"
-      return 0
-    fi
-    if [ "$attempt" -lt "$PROD_BACKEND_HEALTH_ATTEMPTS" ]; then
-      sleep "$PROD_BACKEND_HEALTH_DELAY_SECONDS"
-    fi
-  done
-
-  echo "CN production backend did not become healthy after $PROD_BACKEND_HEALTH_ATTEMPTS attempts." >&2
-  sudo systemctl status "$PROD_BACKEND_SERVICE" --no-pager -l >&2 || true
-  return 1
-}
-
-if [ -z "$TARGET_HEAD" ]; then
-  TARGET_HEAD="$(git -C "$STAGING_ROOT" rev-parse --short HEAD)"
-fi
-
-staging_head="$(git -C "$STAGING_ROOT" rev-parse --short HEAD)"
-if [ "$staging_head" != "$TARGET_HEAD" ]; then
-  echo "Staging head $staging_head does not match target $TARGET_HEAD" >&2
-  exit 1
-fi
-
-if ! grep -R "$TARGET_HEAD" -n "$STAGING_ROOT/apps/web/dist/assets"/index-*.js >/dev/null; then
-  echo "Staging dist does not contain version marker $TARGET_HEAD." >&2
-  echo "Build frontend on CN staging first, then rerun this script." >&2
-  exit 1
-fi
-
-cd "$PROD_ROOT"
+stage=${STAGING_ROOT:-/opt/brp/staging/app}
+prod=${PROD_ROOT:-/opt/brp/prod/app}
+service=${PROD_BACKEND_SERVICE:-brp-prod-backend.service}
+health=${PROD_BACKEND_HEALTH_URL:-http://127.0.0.1:8000/health}
+ready=${PROD_BACKEND_READY_URL:-${health%/health}/ready}
+attempts=${PROD_BACKEND_HEALTH_ATTEMPTS:-15}
+delay=${PROD_BACKEND_HEALTH_DELAY_SECONDS:-2}
+[[ $attempts =~ ^[1-9][0-9]*$ && $delay =~ ^[0-9]+$ ]]
+target=$(git -C "$stage" rev-parse HEAD)
+version=$(git -C "$stage" rev-parse --short HEAD)
+[[ ${1:-$version} == "$version" ]]
+web="$prod/apps/web"
+tool="$stage/ops/scripts/verified_web_release.py"
+exec 9>"$web/.brp-deploy.lock"
+flock -n 9 || { echo 'Another release is in progress' >&2; exit 1; }
+cd "$prod"
+[[ -z $(git status --porcelain -uno) ]]
+old=$(git rev-parse HEAD)
 git fetch origin main
-git checkout main
-git pull --ff-only origin main
-
-prod_head="$(git rev-parse --short HEAD)"
-if [ "$prod_head" != "$TARGET_HEAD" ]; then
-  echo "Prod head $prod_head does not match target $TARGET_HEAD" >&2
-  exit 1
+[[ $(git rev-parse FETCH_HEAD) == "$target" ]]
+git merge-base --is-ancestor "$old" "$target"
+# Build and verify the staging bundle before any production code or service change.
+previous=$(python3 "$tool" activate "$web" --source "$stage/apps/web/dist" --version "$version")
+wait_ok() {
+    local url=$1
+    for ((i=1;i<=attempts;i++)); do
+        if [[ $url == "$ready" ]]; then
+            if curl --max-time 3 -fsS "$url" | python3 -c 'import json,sys; sys.exit(json.load(sys.stdin).get("status") != "ready")' 2>/dev/null; then return 0; fi
+        elif curl --max-time 3 -fsS "$url" >/dev/null; then return 0; fi
+        sleep "$delay"
+    done
+    return 1
+}
+rollback() {
+    trap - ERR INT TERM
+    set +e
+    python3 "$tool" restore "$web" --source "$previous" &&
+        git switch --detach "$old" &&
+        sudo systemctl restart "$service" &&
+        wait_ok "$health" || { echo 'Rollback failed; requires operator' >&2; exit 2; }
+    echo 'Previous release restored' >&2
+    exit 1
+}
+trap rollback ERR INT TERM
+git switch main
+git merge --ff-only "$target"
+test "$(git rev-parse HEAD)" = "$target"
+sudo systemctl restart "$service"
+wait_ok "$health"
+wait_ok "$ready"
+python3 "$tool" verify "$web" --source "$stage/apps/web/dist" --version "$version"
+touch "$web/dist/.accepted"
+trap - ERR INT TERM
+if [[ ${BRP_WEB_PRUNE_RELEASES:-0} == 1 ]]; then
+    python3 "$tool" prune "$web" --keep "${BRP_WEB_RELEASE_KEEP:-3}" --apply
 fi
-
-web_dir="$PROD_ROOT/apps/web"
-dist="$web_dir/dist"
-new_dist="$web_dir/dist.new-$TARGET_HEAD"
-backup="$web_dir/dist.prev-prod-$TARGET_HEAD-$(date +%Y%m%d%H%M%S)"
-
-rm -rf "$new_dist"
-mkdir -p "$web_dir"
-cp -a "$STAGING_ROOT/apps/web/dist" "$new_dist"
-
-if [ -d "$dist/assets" ] && [ -d "$new_dist/assets" ]; then
-  cp -an "$dist/assets/." "$new_dist/assets/" || true
-fi
-
-if [ -d "$dist" ]; then
-  mv "$dist" "$backup"
-fi
-mv "$new_dist" "$dist"
-
-grep -R "$TARGET_HEAD" -n "$dist/assets"/index-*.js >/dev/null
-
-sudo systemctl restart "$PROD_BACKEND_SERVICE"
-wait_for_backend_health
-
-echo "CN_PROD_HEAD=$prod_head"
-echo "CN_PROD_DIST=ok"
-echo "CN_PROD_BACKEND=ok"
+printf 'CN_PROD_HEAD=%s\nCN_PROD_DIST=ok\nCN_PROD_BACKEND=ok\n' "$version"

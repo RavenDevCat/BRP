@@ -1246,6 +1246,16 @@ def _service_direction_label(service_direction: str) -> str:
     )
 
 
+def fleet_export_snapshot_supported(routes):
+    return (isinstance(routes, list) and 0 < len(routes) <= 1000
+            and all(isinstance(r, dict) and isinstance(r.get("ordered_points"), list) for r in routes)
+            and sum(len(r["ordered_points"]) for r in routes) <= 20000)
+
+
+def _defer_fleet_export(result):
+    return os.environ.get("BRP_DEFER_FLEET_EXPORTS") == "1" and fleet_export_snapshot_supported(result.get("routes"))
+
+
 def _route_plan_response(
     route_preview: dict[str, Any], *, workbook_file_name: str,
     timing_context: Any = None, already_measured: bool = False
@@ -1254,7 +1264,8 @@ def _route_plan_response(
     if not already_measured:
         _attach_fleet_route_measurements(route_preview, demand_routing, measurement_provider=timing_context)
     route_preview = demand_routing.fleet_route_display_view(route_preview)
-    workbook_bytes = demand_routing.build_generated_plan_workbook_bytes(route_preview)
+    deferred = _defer_fleet_export(route_preview)
+    workbook_bytes = None if deferred else demand_routing.build_generated_plan_workbook_bytes(route_preview)
     map_data = demand_routing.build_route_preview_map_data(
         route_preview,
         scenario_key="optimized_plan",
@@ -1270,12 +1281,12 @@ def _route_plan_response(
         "stop_rows": _dataframe_records(
             demand_routing.route_preview_stop_detail_to_dataframe(route_preview)
         ),
-        "map_html": demand_routing.build_route_preview_map_html(route_preview),
+        "map_html": "" if deferred else demand_routing.build_route_preview_map_html(route_preview),
         "map_data": map_data,
         "refinement_note": str(route_preview.get("refinement_note") or ""),
         "refinement": dict(route_preview.get("refinement") or {}),
         "workbook_file_name": workbook_file_name,
-        "workbook_base64": base64.b64encode(workbook_bytes).decode("ascii"),
+        **({"workbook_deferred": True} if deferred else {"workbook_base64": base64.b64encode(workbook_bytes).decode("ascii")}),
     }
 
 
@@ -1403,9 +1414,14 @@ def _ensure_fleet_planner_map_data(
         )
         result["rows"] = _dataframe_records(demand_routing.route_preview_to_dataframe(result))
         result["stop_rows"] = _dataframe_records(demand_routing.route_preview_stop_detail_to_dataframe(result))
-        result["workbook_base64"] = base64.b64encode(demand_routing.build_generated_plan_workbook_bytes(result)).decode("ascii")
+        if _defer_fleet_export(result):
+            result.pop("workbook_base64", None)
+            result["workbook_deferred"] = True
+        else:
+            result["workbook_base64"] = base64.b64encode(demand_routing.build_generated_plan_workbook_bytes(result)).decode("ascii")
         result.pop("map_html", None)
     except Exception as exc:
+        result.pop("workbook_deferred", None)
         result["map_data_error"] = f"Saved Fleet measurement readout unavailable ({type(exc).__name__})."
         for key in ("map_data", "map_html", "workbook_base64"):
             result.pop(key, None)

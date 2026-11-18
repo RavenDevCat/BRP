@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { DEFAULT_FINAL_TIMING, FinalTimingOptions } from "@/features/planner/final-timing-options";
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useHistoryDetail, deleteHistoryBatch, checkDeletion } from "@/lib/history-actions";
 import { ArrowRight, Bus, CircleHelp, Download, FileSpreadsheet, Loader2, Map, MapPinned, Maximize2, Plus, RotateCcw, Route, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import { HistorySidebar } from "@/components/history-sidebar";
 import { Badge } from "@/components/ui/badge";
@@ -13,6 +14,7 @@ import {
   buildFleetPlannerGlobalPlan,
   buildFleetPlannerRoutePreview,
   deleteFleetPlannerHistory,
+  fleetWorkbook,
   geocodeFleetPlannerDemand,
   getFleetPlannerHistory,
   getFleetPlannerVehicleCatalog,
@@ -297,9 +299,7 @@ export function FleetPlannerPage() {
     },
   });
 
-  const loadHistoryMutation = useMutation({
-    mutationFn: (runId: string) => getFleetPlannerHistory(runId),
-    onSuccess: (record) => {
+  const loadHistoryMutation = useHistoryDetail("fleet", (runId: string) => getFleetPlannerHistory(runId), (record) => {
       previewMutation.reset();
       geocodeMutation.reset();
       clusterMutation.reset();
@@ -321,7 +321,6 @@ export function FleetPlannerPage() {
         setGlobalDirection,
       });
       setActiveResultView("map");
-    },
   });
 
   const deleteHistoryMutation = useMutation({
@@ -338,12 +337,9 @@ export function FleetPlannerPage() {
   });
   const bulkDeleteHistoryMutation = useMutation({
     mutationFn: async (runIds: string[]) => {
-      for (const runId of runIds) {
-        await deleteFleetPlannerHistory(runId);
-      }
-      return runIds;
+      return deleteHistoryBatch(runIds, deleteFleetPlannerHistory);
     },
-    onSuccess: async (runIds) => {
+    onSuccess: async ({ deleted: runIds, failed }) => {
       const deletedSet = new Set(runIds);
       if (
         deletedSet.has(loadedHistoryRecord?.run_id || "") ||
@@ -355,6 +351,7 @@ export function FleetPlannerPage() {
         setActiveResultView("review");
       }
       await queryClient.invalidateQueries({ queryKey: ["fleet-planner-history"] });
+      checkDeletion(failed);
     },
   });
 
@@ -423,7 +420,7 @@ export function FleetPlannerPage() {
   );
   const mixRows = useMemo(
     () =>
-      Object.entries(result?.mix_summary.vehicle_mix || {}).map(([vehicle, count]) => ({
+      Object.entries(result?.mix_summary?.vehicle_mix || {}).map(([vehicle, count]) => ({
         vehicle,
         count,
       })),
@@ -1245,6 +1242,11 @@ function DemandClusterPreview({ result, framed = true }: { result: FleetPlannerC
   return framed ? <Card>{content}</Card> : <div className="space-y-4">{content}</div>;
 }
 
+function useWorkbookDownload() {
+  return useMutation({ mutationFn: async (result: FleetPlannerRoutePreviewResponse) =>
+    downloadBase64Workbook(await fleetWorkbook(result), result.workbook_file_name || "fleet_planner_generated_plan.xlsx") });
+}
+
 function RoutePreviewResult({
   result,
   title,
@@ -1256,6 +1258,7 @@ function RoutePreviewResult({
 }) {
   const t = useT();
   const summary = result.summary || {};
+  const workbook = useWorkbookDownload();
   const measurementReviewCount = Number(summary.route_measurement_review_count || 0);
   const referenceCount = Number(summary.route_measurement_reference_count || 0);
   const exceedsCount = Number(summary.route_time_limit_exceeded_count || 0);
@@ -1302,12 +1305,14 @@ function RoutePreviewResult({
           </div>
         ) : null}
         {result.refinement_note ? <p role="status" className="text-sm text-muted-foreground">{result.refinement_note}</p> : null}
-        {result.workbook_base64 ? (
+        {workbook.error && <p role="alert">{workbook.error.message}</p>}
+        {result.workbook_base64 || result.workbook_deferred ? (
           <Button
             type="button"
             variant="secondary"
             icon={<Download className="h-4 w-4" />}
-            onClick={() => downloadBase64Workbook(result.workbook_base64 || "", result.workbook_file_name || "fleet_planner_generated_plan.xlsx")}
+            disabled={workbook.isPending}
+            onClick={() => workbook.mutate(result)}
           >
             {t("Download workbook")}
           </Button>
@@ -1429,7 +1434,8 @@ function ToolMapsPanel({
   const [selectedKey, setSelectedKey] = useState("");
   const [isMapFullscreenOpen, setIsMapFullscreenOpen] = useState(false);
   const selected = mapOutputs.find((item) => item.key === selectedKey) || mapOutputs[0];
-  const canDownloadWorkbook = Boolean(workbookResult?.workbook_base64);
+  const workbook = useWorkbookDownload();
+  const canDownloadWorkbook = !workbook.isPending && Boolean(workbookResult?.workbook_base64 || workbookResult?.workbook_deferred);
 
   if (!selected) {
     return <EmptyResultState title="No maps available" detail="This Fleet Planner run has no rendered maps." />;
@@ -1463,10 +1469,7 @@ function ToolMapsPanel({
         className="bg-surface shadow-sm"
         icon={<FileSpreadsheet className="h-4 w-4" />}
         disabled={!canDownloadWorkbook}
-        onClick={() =>
-          workbookResult?.workbook_base64 &&
-          downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
-        }
+        onClick={() => workbookResult && workbook.mutate(workbookResult)}
       >
         {t("Workbook")}
       </Button>
@@ -1475,6 +1478,7 @@ function ToolMapsPanel({
 
   return (
     <section className="space-y-4">
+      {workbook.error && <p role="alert">{workbook.error.message}</p>}
       <div className="rounded-md border border-border bg-surface px-3 py-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -1541,10 +1545,7 @@ function ToolMapsPanel({
                   className="bg-surface shadow-sm"
                   icon={<FileSpreadsheet className="h-4 w-4" />}
                   disabled={!canDownloadWorkbook}
-                  onClick={() =>
-                    workbookResult?.workbook_base64 &&
-                    downloadBase64Workbook(workbookResult.workbook_base64, workbookResult.workbook_file_name || "fleet_planner_generated_plan.xlsx")
-                  }
+                  onClick={() => workbookResult && workbook.mutate(workbookResult)}
                 >
                   {t("Workbook")}
                 </Button>

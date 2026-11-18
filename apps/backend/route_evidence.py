@@ -111,6 +111,12 @@ def _native_step_geometry(steps: list[dict[str, Any]], start: int = 0) -> dict[s
             "geometry_diagnostics": diagnostics}
 
 
+class _BoundaryError(ValueError):
+    def __init__(self, code, **details):
+        super().__init__(code)
+        self.details = {"code": code, **details}
+
+
 def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]]) -> list[dict[str, Any]]:
     """Split only at provider navigation boundaries, never by distance ratios."""
     steps = path.get("steps") or []
@@ -121,7 +127,10 @@ def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]
     if (len(points) < 2 or not steps or len(boundaries) != len(points) - 2
             or boundaries and boundaries[-1] == len(steps) - 1
             or [i for i, action in enumerate(actions) if action == destination] != [len(steps) - 1]):
-        raise ValueError("Incomplete native waypoint boundaries")
+        raise _BoundaryError("navigation_markers_disagree", expected_waypoints=len(points)-2,
+                             waypoint_step_indices=boundaries,
+                             destination_step_indices=[i for i, action in enumerate(actions) if action == destination],
+                             step_count=len(steps))
     legs: list[dict[str, Any]] = []
     start = 0
     for index, end in enumerate([*boundaries, len(steps) - 1]):
@@ -129,10 +138,10 @@ def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]
         durations = [float(step["cost"]["duration"]) for step in segment]
         distances = [float(step["step_distance"]) for step in segment]
         if not all(math.isfinite(value) and value >= 0 for value in durations + distances):
-            raise ValueError("Invalid native step metrics")
+            raise _BoundaryError("invalid_step_metrics", leg_index=index)
         drawing = _native_step_geometry(segment, start)
         if sum(distances) <= 0 or sum(durations) <= 0:
-            raise ValueError("Ambiguous zero-length native waypoint leg")
+            raise _BoundaryError("zero_length_waypoint_leg", leg_index=index)
         legs.append({"duration_s": sum(durations), "distance_m": sum(distances),
                      **drawing, "native_step_start": start, "native_step_end": end,
                      "boundary_action": actions[end], "native_steps": deepcopy(segment),
@@ -141,7 +150,8 @@ def _native_waypoint_legs(path: dict[str, Any], points: list[tuple[float, float]
     totals = amap_driving_path_stats(path)
     if any(not math.isfinite(totals[key]) or abs(sum(leg[key] for leg in legs) - totals[key]) > 1
            for key in ("duration_s", "distance_m")):
-        raise ValueError("Native step totals disagree with route totals")
+        raise _BoundaryError("step_totals_disagree", duration_delta_s=sum(leg["duration_s"] for leg in legs)-totals["duration_s"],
+                             distance_delta_m=sum(leg["distance_m"] for leg in legs)-totals["distance_m"])
     return legs
 
 
@@ -165,8 +175,10 @@ def fetch_amap_itinerary(planner: Any, points: list[tuple[float, float]]) -> dic
         try:
             result["waypoint_legs"] = _native_waypoint_legs(path, points)
             result["segmentation"] = "native_navigation_boundaries"
-        except (ValueError, KeyError, TypeError, IndexError, OverflowError):
+        except (ValueError, KeyError, TypeError, IndexError, OverflowError) as exc:
             result["segmentation"] = "native_boundaries_unavailable"
+            result["segmentation_diagnostic"] = (exc.details if isinstance(exc, _BoundaryError)
+                else {"code": "invalid_native_step", "error_type": type(exc).__name__})
     return result
 
 
@@ -543,12 +555,34 @@ def measure_amap_route(
               "osrm_reference_distance_m": references[i] if i < len(references) else None,
               "osrm_reference_duration_s": reference_times[i] if i < len(reference_times) else None}
              for i, (a, b) in enumerate(zip(points, points[1:]))]
+    attempts = []
+    for size in (18, 13):
+        if attempts:
+            # Move the split, never the acceptance threshold. Only retry structural
+            # boundary failures; do not consume the diagnostic fallback budget.
+            reason = attempts[-1][-1].get("reason")
+            calls = math.ceil(max(0, len(points) - size) / (size - 3)) + 1
+            left = state.get("api_call_limit", 0) - state.get("api_calls", 0)
+            if (len(points) <= 18 or calls > 4 or left < calls + len(points) - 1
+                    or reason not in {"native_boundaries_unavailable", "continuous_chunk_join_unverified"}):
+                break
+        result, chunks = _continuous_chunks(planner, points, bases, cache, state, fetch_context, size)
+        if result is not None:
+            if attempts:
+                result["continuous_measurement"]["prior_chunk_attempts"] = attempts
+            state["last_route_evidence"] = result
+            return result
+        attempts.append(chunks)
+    return _continuous_fallback(planner, points, cache, state, fetch_leg, fetch_context, attempts)
+
+
+def _continuous_chunks(planner, points, bases, cache, state, fetch_context, size):
     legs: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
     chunks: list[dict[str, Any]] = []
     start = 0
     while start < len(points) - 1:
-        end = min(len(points), start + 18)
+        end = min(len(points), start + size)
         chunk, chunk_issues, record = _recover_continuous_legs(
             planner, points[start:end], cache, state, bases[start:end - 1], fetch_context)
         record.update(point_start=start, point_end=end - 1)
@@ -600,9 +634,13 @@ def measure_amap_route(
                       "leg_durations_s": [leg["duration_s"] for leg in legs],
                       "leg_distances_m": [leg["distance_m"] for leg in legs]}
             _classify_findings(result)
-            state["last_route_evidence"] = result
-            return result
+            return result, chunks
         start = end - 3
+    return None, chunks
+
+
+def _continuous_fallback(planner, points, cache, state, fetch_leg, fetch_context, attempts):
+    chunks = attempts[-1]
     result = _measure_adjacent_route(planner, points, cache, state, fetch_leg=fetch_leg, fetch_context=fetch_context)
     recovery = result.get("continuous_recovery") or {}
     if (result.get("complete") and recovery.get("status") == "applied"
@@ -614,8 +652,12 @@ def measure_amap_route(
             "status": "complete", "initial_chunks": chunks,
             "chunks": [{**deepcopy(recovery), "point_start": 0, "point_end": len(points) - 1}],
         }
+        if len(attempts) > 1:
+            result["continuous_measurement"]["prior_chunk_attempts"] = attempts[:-1]
         return result
     result["continuous_measurement"] = {"status": "unavailable", "chunks": chunks}
+    if len(attempts) > 1:
+        result["continuous_measurement"]["prior_chunk_attempts"] = attempts[:-1]
     result["issues"].append({"leg_index": 0, "code": "continuous_itinerary_unverified"})
     if result["status"] == "verified":
         result["status"] = "needs_review"

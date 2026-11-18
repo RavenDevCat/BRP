@@ -273,6 +273,14 @@ def _provider_for_records(input_records: list[dict[str, Any]]) -> str:
     return "none"
 
 
+class RouteMeasurementRejected(RuntimeError):
+    """The measurements belong to this request, not the last task on the provider."""
+    def __init__(self, evidence):
+        self.evidence = deepcopy(evidence)
+        codes = sorted({str(item.get("code")) for item in evidence.get("issues") or []})
+        super().__init__("Route measurement incomplete or inconsistent: " + (", ".join(codes) or "provider unavailable"))
+
+
 class FreshRouteProvider:
     def __init__(
         self,
@@ -313,7 +321,6 @@ class FreshRouteProvider:
             raise RuntimeError("Route contains unresolved coordinates.")
         before_calls = int(self.state.get("api_calls", 0))
         called_at = utc_now_iso()
-        self.state.pop("last_route_evidence", None)
         self.state["expected_leg_distances_m"] = [
             _safe_float(leg.get("distance_m")) for leg in reference_legs or []
         ]
@@ -334,8 +341,7 @@ class FreshRouteProvider:
             )
         if not result:
             evidence = dict(self.state.get("last_route_evidence") or {})
-            codes = sorted({str(item.get("code")) for item in evidence.get("issues") or []})
-            raise RuntimeError("Route measurement incomplete or inconsistent: " + (", ".join(codes) or "provider unavailable"))
+            raise RouteMeasurementRejected(evidence)
         return {
             **dict(result),
             "provider": self.provider,

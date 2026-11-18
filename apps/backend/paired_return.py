@@ -218,6 +218,7 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
                  "stops": deepcopy(ordered)}
         route.update(deepcopy(ordered[0].get("source_route") or {}))
         result["routes"].append(route)
+        native = None
         try:
             points = [stop.get("source_point") or analysis._lookup_point(stop, lookup) for stop in ordered]
             if any(point is None for point in points):
@@ -239,6 +240,10 @@ def run_return_measurement(prepared, config, *, checkpoint=None, check_canceled=
                          provider_route_source=native.get("source") or provider_name, route_evidence=native)
         except Exception as exc:
             route.update(error=str(exc), under_one_hour=False)
+            # Keep rejected receipts for review, never as published timing/geometry.
+            rejected = exc.evidence if isinstance(exc, analysis.RouteMeasurementRejected) else native
+            if rejected:
+                route["rejected_route_evidence"] = deepcopy(rejected)
         result["summary"] = {"route_count": len(groups), "completed_route_count": sum(r["status"] == "resolved" for r in result["routes"]),
             "under_one_hour_count": sum(r["under_one_hour"] for r in result["routes"]),
             "under_duration_limit_count": sum(under_return_limit(r, threshold_s) for r in result["routes"]),

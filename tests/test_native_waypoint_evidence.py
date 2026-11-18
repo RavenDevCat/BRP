@@ -81,7 +81,13 @@ def test_incomplete_native_boundaries_never_fabricate_segment_times(mutation):
     assert result["source"] == "amap_adjacent_legs"
     assert result["status"] == "needs_review"
     assert result["leg_durations_s"] == [100, 100]
-    assert result["continuous_measurement"]["chunks"][0]["reason"] == "native_boundaries_unavailable"
+    chunk = result["continuous_measurement"]["chunks"][0]
+    assert chunk["reason"] == "native_boundaries_unavailable"
+    diagnostic = chunk["measurement"]["segmentation_diagnostic"]
+    assert diagnostic["code"] in {"navigation_markers_disagree", "invalid_step_metrics", "step_totals_disagree",
+                                  "zero_length_waypoint_leg", "invalid_native_step"}
+    if mutation == "no_markers":
+        assert diagnostic["expected_waypoints"] == 1 and diagnostic["waypoint_step_indices"] == []
 
 
 @pytest.mark.parametrize("durations,distances", [((180, 360), (400, 200)), ((30, 60), (350, 180))])

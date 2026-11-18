@@ -89,7 +89,7 @@ def fake_osrm(origin: dict, destination: dict, _cache: dict) -> dict:
 
 
 @pytest.mark.parametrize("scheduled_at", [None, "2026-09-10T23:00:00+00:00"])
-def test_runner_retains_provisional_values_without_removal_or_trusted_time(monkeypatch, scheduled_at):
+def test_runner_retains_provisional_values_without_removal_or_trusted_time(monkeypatch, tmp_path, scheduled_at):
     class ReviewProvider(FakeProvider):
         def route(self, points, **kwargs):
             if len(points) == 3:
@@ -108,11 +108,12 @@ def test_runner_retains_provisional_values_without_removal_or_trusted_time(monke
             'analysis_config': {'far_duration_minutes': 45}, 'scheduled_job': bool(scheduled_at)}}}
     monkeypatch.setattr(analysis, 'FreshRouteProvider', ReviewProvider)
     monkeypatch.setattr(analysis, '_osrm_leg', fake_osrm)
-    monkeypatch.setattr(backend_job_runner, '_load_job', lambda _: deepcopy(state['record']))
-    monkeypatch.setattr(backend_job_runner, '_save_job', lambda record: state.update(record=deepcopy(record)))
+    from claimed_runner import claimed_store
+    store = claimed_store(monkeypatch, tmp_path, state['record'])
 
     monkeypatch.setattr(sys, 'argv', ['backend_job_runner.py', 'review-runner'])
     assert backend_job_runner.main() == 0
+    state['record'] = store.get_job('review-runner')
     result = state['record']['result']
     assert result['status'] == 'partial'
     assert result['routes'][0]['status'] == 'needs_review'
@@ -256,7 +257,7 @@ def test_direct_over_limit_counts_all_occurrences_even_when_one_route_fails(monk
 
 
 @pytest.mark.parametrize("scheduled_at", [None, "2026-09-08T23:00:00+00:00"])
-def test_actual_job_runner_preserves_unknown_classification(monkeypatch, scheduled_at) -> None:
+def test_actual_job_runner_preserves_unknown_classification(monkeypatch, tmp_path, scheduled_at) -> None:
     class MissingDirect(FakeProvider):
         def route(self, points, **kwargs):
             if len(points) == 2 and points[0]["address"] == "Far stop":
@@ -272,19 +273,14 @@ def test_actual_job_runner_preserves_unknown_classification(monkeypatch, schedul
     }}
     snapshots = []
 
-    def save(record):
-        state["record"] = deepcopy(record)
-        snapshots.append(deepcopy(record))
-
     monkeypatch.setattr(analysis, "FreshRouteProvider", MissingDirect)
     monkeypatch.setattr(analysis, "_osrm_leg", fake_osrm)
-    monkeypatch.setattr(backend_job_runner, "_load_job", lambda _id: deepcopy(state["record"]))
-    monkeypatch.setattr(backend_job_runner, "_save_job", save)
+    from claimed_runner import claimed_store
+    store = claimed_store(monkeypatch, tmp_path, state["record"], snapshots)
 
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "classification-runner"])
-    # Exercise the real runner and analysis; only provider I/O and persistence are substituted.
     assert backend_job_runner.main() == 0
-    saved = state["record"]
+    saved = store.get_job("classification-runner")
     assert saved["status"] == "succeeded"
     assert saved["result"]["status"] == "partial"
     assert saved["prepared_payload"] == original

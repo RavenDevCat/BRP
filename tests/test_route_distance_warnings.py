@@ -156,11 +156,12 @@ def test_runner_classification_removal_and_export_use_warning_measurements(monke
         "scheduled_start_at": "2026-09-10T23:00:00+00:00" if scheduled else None,
         "metadata": {"job_kind": "direct_school_analysis", "scheduled_job": scheduled,
                      "analysis_config": {"far_duration_minutes": 45}}}}
-    monkeypatch.setattr(runner, "_load_job", lambda _: deepcopy(state["record"]))
-    monkeypatch.setattr(runner, "_save_job", lambda record: state.update(record=deepcopy(record)))
+    from claimed_runner import claimed_store
+    store = claimed_store(monkeypatch, tmp_path, state["record"])
 
     monkeypatch.setattr(sys, "argv", ["backend_job_runner.py", "warning-runner"])
     assert runner.main() == 0
+    state["record"] = store.get_job("warning-runner")
     result = state["record"]["result"]
     assert result["analysis_version"] == 8 and result["routes"][0]["status"] == "resolved"
     assert result["summary"]["route_measurement_verified_count"] == 1

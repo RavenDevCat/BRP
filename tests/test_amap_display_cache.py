@@ -71,7 +71,7 @@ class AMapDisplayCacheTests(unittest.TestCase):
                 self.service.AMAP_DISPLAY_GEOMETRY_CACHE_PATH = old_path
                 self.service._fetch_amap_display_geometry = old_fetch
 
-            saved_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+            saved_cache = self.service.load_json_object(cache_path)
 
             self.assertEqual(calls, [request_points])
             self.assertEqual(source, "amap_cn_v5_strategy32")

@@ -66,7 +66,8 @@ def test_native_review_preserves_source_order_counts_and_saved_dwell(tmp_path, m
         assert plan["map_data"]["routes"][0]["duration_s"] == 2120
         assert plan["routes"][0]["stop_service_time_s"] == 120
         assert plan["routes"][0]["final_route_traffic_gate"]["status"] == "failed"
-        assert plan["workbook_base64"]
+        from fleet_download import download_workbook
+        assert download_workbook(plan)["Route Measurements"]["B2"].value == pytest.approx(2120 / 60)
     else:
         plan = native["route_insert_result"]["selected_plan"]
         assert plan["affected_routes"][0]["measurement_inputs"]["base_stop_service_time_s"] == 0

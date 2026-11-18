@@ -159,7 +159,9 @@ def test_historical_read_refreshes_presentations_not_source_or_provider(monkeypa
     result = backend._hydrate_fleet_planner_history_record(record)["global_plan_result"]
     assert result["map_data"]["routes"][0]["duration_s"] == 420
     assert result["rows"][0]["duration_min"] == 7
-    assert result["workbook_base64"] != "OLD EXCEL" and "map_html" not in result
+    from fleet_download import download_workbook
+    assert download_workbook(result)["Route Measurements"]["B2"].value == 7
+    assert "map_html" not in result
     assert record == before
 
 

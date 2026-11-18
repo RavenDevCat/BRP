@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -158,6 +159,19 @@ def resolve_osrm_base_url(points: list[dict[str, Any]]) -> str:
     )
 
 
+def osrm_point(point: dict[str, Any]) -> dict[str, Any]:
+    """Return a WGS84 request point without changing its geocode receipt."""
+    system = str(point.get("coordinate_system") or "").upper().replace("-", "")
+    if system == "WGS84":
+        return point
+    payload = {**point, "coordinate_system": "WGS84"}
+    if point.get("plot_lat") is not None and point.get("plot_lng") is not None:
+        payload.update(lat=point["plot_lat"], lng=point["plot_lng"])
+    elif system == "GCJ02" or str(point.get("provider") or "").lower() == "amap":
+        payload["lat"], payload["lng"] = runtime.gcj02_to_wgs84(float(point["lat"]), float(point["lng"]))
+    return payload
+
+
 def _osrm_coordinates(points: list[dict[str, Any]]) -> str:
     return ";".join(f"{float(point['lng'])},{float(point['lat'])}" for point in points)
 
@@ -169,7 +183,7 @@ def _request_osrm_table(
     if not destination_points:
         return [], []
 
-    all_points = [origin_point, *destination_points]
+    all_points = [osrm_point(p) for p in (origin_point, *destination_points)]
     coordinates = _osrm_coordinates(all_points)
     destination_indexes = ";".join(str(index) for index in range(1, len(all_points)))
     osrm_base_url = resolve_osrm_base_url(all_points)
@@ -216,7 +230,11 @@ def compute_osrm_route_leg_metrics(points: list[dict[str, Any]]) -> list[dict[st
     if len(points) < 2:
         return metrics
     for origin_point, destination_point in zip(points[:-1], points[1:]):
-        durations, distances = _request_osrm_table(origin_point, [destination_point])
+        try:
+            durations, distances = _request_osrm_table(origin_point, [destination_point])
+        except (requests.RequestException, RuntimeError):
+            metrics.append({"duration_s": None, "distance_m": None})
+            continue
         duration_s = durations[0] if durations else None
         distance_m = distances[0] if distances else None
         metrics.append(
@@ -320,6 +338,7 @@ def compute_osrm_route_leg_details(points: list[dict[str, Any]]) -> list[dict[st
     details: list[dict[str, Any]] = []
     if len(points) < 2:
         return details
+    points = [osrm_point(point) for point in points]
     for origin_point, destination_point in zip(points[:-1], points[1:]):
         try:
             detail = _request_osrm_route_leg_detail(origin_point, destination_point)
@@ -629,6 +648,8 @@ def build_current_plan_route_cost_dataframe(
         enriched = {**row, **geocoded_by_row.get(int(row.get("source_excel_row", 0) or 0), {})}
         route_groups.setdefault(route_id, []).append(enriched)
 
+    if not route_groups:
+        raise ValueError("Route cost requires at least one input stop.")
     route_result_rows: list[dict[str, Any]] = []
     leg_result_rows: list[dict[str, Any]] = []
     for route_id, route_rows in route_groups.items():
@@ -647,21 +668,30 @@ def build_current_plan_route_cost_dataframe(
             raise ValueError("All route stops must resolve before Google timing validation")
         if timing_context is not None and len(valid_rows) < 2:
             raise ValueError("Google route timing requires at least two resolved stops")
-        leg_metrics = compute_osrm_route_leg_metrics([dict(row["point"]) for row in valid_rows]) if len(valid_rows) >= 2 else []
+        pairs = list(zip(ordered_rows, ordered_rows[1:]))
+        leg_metrics = []
+        for origin, destination in pairs:
+            if any(row.get("status") != "ok" or not row.get("point") for row in (origin, destination)):
+                leg_metrics.append({"measurement_status": "unresolved_stop"})
+            else:
+                leg_metrics.extend(compute_osrm_route_leg_metrics([origin["point"], destination["point"]]))
         evidence = None
         if timing_context is not None and len(valid_rows) >= 2:
             evidence = timing_context.route([dict(row["point"]) for row in valid_rows], reference_legs=leg_metrics)
             leg_metrics = [{**metric, "duration_s": native["duration_s"]}
-                           for metric, native in zip(leg_metrics, evidence["legs"])]
+                           for metric, native in zip(leg_metrics, evidence["legs"], strict=True)]
         total_distance_m = 0.0
         total_duration_s = 0.0
-        for leg_index, (from_row, to_row, metric) in enumerate(zip(valid_rows[:-1], valid_rows[1:], leg_metrics), start=1):
+        measured_legs = 0
+        for leg_index, ((from_row, to_row), metric) in enumerate(zip(pairs, leg_metrics, strict=True), start=1):
             distance_m = metric.get("distance_m")
             duration_s = metric.get("duration_s")
-            distance_km = float(distance_m or 0.0) / 1000.0
-            duration_min = float(duration_s or 0.0) / 60.0
-            total_distance_m += float(distance_m or 0.0)
-            total_duration_s += float(duration_s or 0.0)
+            measured = all(isinstance(v, (float, int)) and not isinstance(v, bool)
+                           and math.isfinite(v) and v >= 0 for v in (distance_m, duration_s))
+            if measured:
+                total_distance_m += distance_m
+                total_duration_s += duration_s
+                measured_legs += 1
             leg_result_rows.append(
                 {
                     "route_id": route_id,
@@ -670,30 +700,34 @@ def build_current_plan_route_cost_dataframe(
                     "from_address": str(from_row.get("address", "")).strip(),
                     "to_stop_sequence": to_row.get("stop_sequence"),
                     "to_address": str(to_row.get("address", "")).strip(),
-                    "distance_km": round(distance_km, 3),
-                    "duration_min": round(duration_min, 1),
+                    "measurement_status": "measured" if measured else metric.get("measurement_status", "unavailable"),
+                    "distance_km": round(distance_m / 1000, 3) if measured else None,
+                    "duration_min": round(duration_s / 60, 1) if measured else None,
+                    **({"time_provider": "google_routes", "distance_provider": "osrm"} if timing_context is not None else {}),
                 }
             )
 
         total_distance_km = total_distance_m / 1000.0
-        if timing_context is not None:
-            for row in leg_result_rows:
-                if row["route_id"] == route_id:
-                    row["time_provider"] = "google_routes"
-                    row["distance_provider"] = "osrm"
-        fuel_liters = None if skip_diesel_cost else (total_distance_km / fuel_efficiency_km_per_liter if fuel_efficiency_km_per_liter > 0 else 0.0)
+        complete = bool(pairs) and measured_legs == len(pairs)
+        fuel_liters = (total_distance_km / fuel_efficiency_km_per_liter
+                       if complete and not skip_diesel_cost and fuel_efficiency_km_per_liter > 0 else None)
         fuel_cost = None if fuel_liters is None else fuel_liters * diesel_price_per_liter
         route_result_rows.append(
             {
                 "route_id": route_id,
                 "bus_type": route_bus_type or "Unknown",
-                "diesel_cost_status": "skipped_electric_bus" if skip_diesel_cost else "estimated",
+                "diesel_cost_status": "skipped_electric_bus" if skip_diesel_cost else "estimated" if complete else "incomplete",
                 "stops_in_file": len(ordered_rows),
                 "resolved_stops": len(valid_rows),
                 "failed_stops": failed_count,
-                "drive_legs": len(leg_metrics),
-                "route_distance_km": round(total_distance_km, 3),
-                "route_duration_min": round(total_duration_s / 60.0, 1),
+                "drive_legs": measured_legs,
+                "expected_legs": len(pairs),
+                "measured_legs": measured_legs,
+                "measurement_status": "complete" if complete else "incomplete",
+                "measured_distance_km": round(total_distance_km, 3) if measured_legs else None,
+                "measured_duration_min": round(total_duration_s / 60, 1) if measured_legs else None,
+                "route_distance_km": round(total_distance_km, 3) if complete else None,
+                "route_duration_min": round(total_duration_s / 60.0, 1) if complete else None,
                 **({"time_provider": "google_routes", "distance_cost_provider": "osrm",
                     "timing_evidence": json.dumps(evidence, ensure_ascii=False)} if timing_context is not None else {}),
                 "estimated_diesel_liters": round(fuel_liters, 2) if fuel_liters is not None else None,

@@ -686,8 +686,10 @@ export type RouteCostResponse = {
     summary: {
         route_count: number;
         leg_count: number;
-        total_one_way_distance_km: number;
-        estimated_one_way_fuel_cost: number;
+        total_one_way_distance_km: number | null;
+        estimated_one_way_fuel_cost: number | null;
+        routes_with_incomplete_measurement?: number;
+        measured_leg_count?: number;
         routes_with_unresolved_stops: number;
         electric_routes_skipped: number;
         currency_code: string;

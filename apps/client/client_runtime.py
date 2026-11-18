@@ -23,7 +23,7 @@ from quota_store_sqlite import SqliteQuotaStore
 APPS_DIR = Path(__file__).resolve().parents[1]
 if str(APPS_DIR) not in sys.path:
     sys.path.insert(0, str(APPS_DIR))
-from amap_geocode_quality import GEOCODE_QUALITY_VERSION, annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
+from amap_geocode_quality import GEOCODE_QUALITY_VERSION, GeocodePrecisionError, annotate_amap_pickup, reusable_amap_geocode, resolve_amap_pickup
 from pickup_overrides import confirmed_pickup
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -131,10 +131,16 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
+class GeocodeAccessError(RuntimeError):
+    def __init__(self, kind: str, message: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 def require_api_key(env_name: str, value: str, provider_label: str) -> str:
     if value:
         return value
-    raise RuntimeError(
+    raise GeocodeAccessError("provider_configuration",
         f"{provider_label} API key is not configured. "
         f"Set environment variable `{env_name}` before running this workflow."
     )
@@ -164,7 +170,7 @@ def read_google_geocode_monthly_usage(month_key: str | None = None) -> int:
 def assert_google_geocode_monthly_limit_not_exceeded() -> str:
     month_key = current_google_usage_month_key()
     if read_google_geocode_monthly_usage(month_key) >= GOOGLE_GEOCODE_MONTHLY_LIMIT:
-        raise RuntimeError(
+        raise GeocodeAccessError("provider_quota",
             "Google geocoding monthly usage limit reached. "
             f"Usage is capped at {GOOGLE_GEOCODE_MONTHLY_LIMIT:,} requests per month."
         )
@@ -184,7 +190,7 @@ def reserve_google_geocode_monthly_usage() -> str:
         )
     except RuntimeError as exc:
         if "usage cap would be exceeded" in str(exc):
-            raise RuntimeError(
+            raise GeocodeAccessError("provider_quota",
                 "Google geocoding monthly usage limit reached. "
                 f"Usage is capped at {GOOGLE_GEOCODE_MONTHLY_LIMIT:,} requests per month."
             ) from exc
@@ -760,6 +766,11 @@ def amap_request_json(endpoint: str, params: dict[str, Any], limiter: RateLimite
     if str(payload.get("status")) != "1":
         info = payload.get("info", "UNKNOWN_ERROR")
         infocode = payload.get("infocode", "")
+        upper_info = str(info).upper()
+        if any(word in upper_info for word in ("LIMIT", "QUOTA", "QPS")):
+            raise GeocodeAccessError("provider_quota", f"AMap usage limit ({infocode})")
+        if any(word in upper_info for word in ("KEY", "PRIVILEGE", "SIGNATURE", "PERMISSION")):
+            raise GeocodeAccessError("provider_configuration", f"AMap access unavailable ({infocode})")
         raise RuntimeError(f"AMap request failed: {endpoint} -> {info} ({infocode})")
     return payload
 
@@ -1018,6 +1029,30 @@ def is_failed_geocode_cache_entry(entry: Any) -> bool:
     return isinstance(entry, dict) and str(entry.get("cache_status", "")).strip().lower() == "failed"
 
 
+_NEGATIVE_CACHE_TTL = {"provider_unavailable": 60, "provider_quota": 900,
+                       "provider_configuration": 300, "no_match": 86400}
+
+
+def _geocode_failure_kind(exc):
+    if isinstance(exc, GeocodePrecisionError):
+        return "no_match"
+    if isinstance(exc, GeocodeAccessError):
+        return exc.kind
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return "provider_quota"
+    if status in {401, 403}:
+        return "provider_configuration"
+    return "provider_unavailable"
+
+
+def _provider_warning(country, city, address, rows, reason, kind):
+    warning = build_geocode_warning(country, city, address, rows, reason=reason)
+    if kind != "no_match":
+        warning["suggestion"] = "Provider unavailable. Retry later or check the provider configuration and quota."
+    return warning
+
+
 def resolve_geocoded_point(
     country: str,
     city: str,
@@ -1041,7 +1076,10 @@ def resolve_geocoded_point(
     cache_changed = False
     if cached:
         if is_failed_geocode_cache_entry(cached):
-            if is_korea_country(country) or (is_china_country(country) and cached.get("geocode_quality_version") != GEOCODE_QUALITY_VERSION):
+            retry_after = cached.get("retry_after")
+            if (not isinstance(retry_after, (float, int)) or not math.isfinite(retry_after)
+                    or retry_after <= time.time()
+                    or (is_china_country(country) and cached.get("geocode_quality_version") != GEOCODE_QUALITY_VERSION)):
                 if matched_cache_key:
                     GEOCODE_CACHE.pop(matched_cache_key, None)
                     cache_changed = True
@@ -1051,10 +1089,12 @@ def resolve_geocoded_point(
             else:
                 attempted_providers = failed_geocode_cache_providers(cached)
                 if attempted_providers.issuperset(set(provider_names)):
+                    warning = _provider_warning(country, city, address, source_excel_rows,
+                                                cached.get("error", ""), cached.get("failure_kind"))
                     if matched_cache_key and matched_cache_key != cache_key:
                         GEOCODE_CACHE[cache_key] = dict(cached)
-                        return None, build_geocode_warning(country, city, address, source_excel_rows), True
-                    return None, build_geocode_warning(country, city, address, source_excel_rows), False
+                        return None, warning, True
+                    return None, warning, False
         elif str(cached.get("provider", "")).strip().lower() in set(provider_names):
             cached_lat = float(cached.get("lat", 0.0) or 0.0)
             cached_lng = float(cached.get("lng", 0.0) or 0.0)
@@ -1091,6 +1131,7 @@ def resolve_geocoded_point(
                 cache_changed = True
 
     errors: list[str] = []
+    failure_kind = "no_match"
     attempted_providers: list[str] = []
     for provider_name in provider_names:
         attempted_providers.append(provider_name)
@@ -1102,7 +1143,12 @@ def resolve_geocoded_point(
                 log(f"[INFO] geocode fallback succeeded: {address} via {point.get('geocode_provider_chain')}")
             return dict(point), None, True
         except Exception as exc:
-            error_text = f"{provider_name}: {exc}"
+            kind = _geocode_failure_kind(exc)
+            # Retry when the earliest potentially usable provider can recover.
+            if _NEGATIVE_CACHE_TTL[kind] < _NEGATIVE_CACHE_TTL[failure_kind]:
+                failure_kind = kind
+            # Transport exception messages may contain authenticated query strings.
+            error_text = f"{provider_name}: {exc if isinstance(exc, GeocodePrecisionError) else kind}"
             errors.append(error_text)
             log(f"[WARN] geocode provider failed: {address} -> {error_text}")
 
@@ -1110,6 +1156,8 @@ def resolve_geocoded_point(
     log(f"[WARN] geocode failed: {address} -> {reason}")
     GEOCODE_CACHE[cache_key] = {
         "cache_status": "failed",
+        "failure_kind": failure_kind,
+        "retry_after": time.time() + _NEGATIVE_CACHE_TTL[failure_kind],
         "geocode_quality_version": GEOCODE_QUALITY_VERSION if is_china_country(country) else None,
         "attempted_provider": attempted_providers[-1] if attempted_providers else "",
         "attempted_providers": attempted_providers,
@@ -1118,7 +1166,7 @@ def resolve_geocoded_point(
         "address": address,
         "error": reason,
     }
-    return None, build_geocode_warning(country, city, address, source_excel_rows, reason=reason), True
+    return None, _provider_warning(country, city, address, source_excel_rows, reason, failure_kind), True
 
 
 def amap_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
@@ -1219,7 +1267,7 @@ def kakao_geocode_query(country: str, city: str, address: str) -> dict[str, Any]
 
     if last_error:
         raise last_error
-    raise RuntimeError(f"Kakao geocode failed for {address.strip()}")
+    raise GeocodePrecisionError(f"No matching Kakao geocode for {address.strip()}")
 
 
 def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any]:
@@ -1260,7 +1308,7 @@ def google_geocode_query(country: str, city: str, address: str) -> dict[str, Any
 
     if last_error:
         raise last_error
-    raise RuntimeError(f"Google geocode failed for {address.strip()}")
+    raise GeocodePrecisionError(f"No matching Google geocode for {address.strip()}")
 
 
 def geocode_records(input_records: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:

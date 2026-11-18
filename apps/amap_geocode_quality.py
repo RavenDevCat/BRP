@@ -299,6 +299,7 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
     ambiguous_poi: dict[str, Any] | None = None
     fallback_geocode: dict[str, Any] | None = None
     fallback_poi: dict[str, Any] | None = None
+    request_error = None
     for poi in ((True, False) if prefer_poi else (False, True)):
         params = ({"keywords": address.strip(), "citylimit": "true", "offset": 10, "page": 1, "extensions": "all"}
                   if poi else {"address": address.strip()})
@@ -313,7 +314,8 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
         try:
             response = request_json("/v3/place/text" if poi else "/v3/geocode/geo", params,
                                     poi_limiter if poi else geocode_limiter)
-        except Exception:
+        except Exception as exc:
+            request_error = exc
             continue
         raw_candidates = list(response.get("pois" if poi else "geocodes") or [])
         if poi and _gate_tokens(address):
@@ -372,4 +374,6 @@ def resolve_amap_pickup(*, request_json, country: str, city: str, address: str,
         return resolved(ambiguous_poi, ambiguous=True)
     if fallback_poi is not None:
         return {**resolved(fallback_poi), "pickup_resolution_status": "reference_only"}
+    if request_error is not None:
+        raise request_error
     raise GeocodePrecisionError("No unique, precise pickup matches this address. Road/area centroids, unrelated POIs and unrequested parking locations are not accepted; specify the stop, building number or entrance.")

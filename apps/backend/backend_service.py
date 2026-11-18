@@ -823,13 +823,11 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
         )
         route_records = _dataframe_records(route_results_df)
         leg_records = _dataframe_records(leg_results_df)
-        total_distance = sum(
-            float(row.get("route_distance_km") or 0.0) for row in route_records
-        )
-        total_cost = sum(
-            float(row.get("estimated_one_way_fuel_cost") or 0.0)
-            for row in route_records
-        )
+        incomplete = sum(row["measurement_status"] != "complete" for row in route_records)
+        total_distance = None if incomplete else round(sum(row["route_distance_km"] for row in route_records), 3)
+        diesel_costs = [row["estimated_one_way_fuel_cost"] for row in route_records
+                        if row["diesel_cost_status"] != "skipped_electric_bus"]
+        total_cost = None if not diesel_costs or None in diesel_costs else round(sum(diesel_costs), 2)
         unresolved_routes = sum(
             1 for row in route_records if float(row.get("failed_stops") or 0.0) > 0
         )
@@ -872,8 +870,10 @@ def _handle_current_plan_route_cost(payload: dict[str, Any]) -> dict[str, Any]:
             "summary": {
                 "route_count": len(route_records),
                 "leg_count": len(leg_records),
-                "total_one_way_distance_km": round(total_distance, 3),
-                "estimated_one_way_fuel_cost": round(total_cost, 2),
+                "total_one_way_distance_km": total_distance,
+                "estimated_one_way_fuel_cost": total_cost,
+                "routes_with_incomplete_measurement": incomplete,
+                "measured_leg_count": sum(row["measured_legs"] for row in route_records),
                 "routes_with_unresolved_stops": unresolved_routes,
                 "electric_routes_skipped": electric_routes,
                 "currency_code": currency_code,

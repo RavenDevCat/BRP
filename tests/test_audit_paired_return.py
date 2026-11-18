@@ -186,7 +186,7 @@ def test_worker_dispatch_and_timing_gate(monkeypatch, period):
     monkeypatch.setattr(runner, "_create_automatic_deep_verifications", lambda _: calls.append("deep"))
     import audit_return
     monkeypatch.setattr(audit_return, "is_audit_return", lambda _: False)
-    monkeypatch.setattr(runner, "_scheduled_final_traffic_validation_error", lambda _: None)
+    monkeypatch.setattr(runner, "_scheduled_final_traffic_validation_error", lambda _, **kwargs: None)
     def audit(*args, **kwargs):
         assert kwargs["require_fresh_final_traffic"] is True
         calls.append("audit")

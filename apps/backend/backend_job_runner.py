@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import os
-import math
 from pathlib import Path
 import shutil
 import sys
@@ -12,12 +11,14 @@ from typing import Any
 try:
     from .deep_verification import build_automatic_verification_records
     from .direct_school_analysis import run_direct_school_analysis
-    from .planner_core import build_planner_config, run_backend_planner_with_prepared_data
+    from .planner_core import (build_planner_config, run_backend_planner_with_prepared_data,
+                               scheduled_traffic_provider, partial_traffic_route_ids, measured_route_gate)
     from .runtime_store_sqlite import SqliteRuntimeStore
 except ImportError:  # pragma: no cover - supports running as a direct script.
     from deep_verification import build_automatic_verification_records
     from direct_school_analysis import run_direct_school_analysis
-    from planner_core import build_planner_config, run_backend_planner_with_prepared_data
+    from planner_core import (build_planner_config, run_backend_planner_with_prepared_data,
+                              scheduled_traffic_provider, partial_traffic_route_ids, measured_route_gate)
     from runtime_store_sqlite import SqliteRuntimeStore
 
 
@@ -80,7 +81,7 @@ def _is_scheduled_job(job_record: dict[str, Any]) -> bool:
     return bool(metadata.get("scheduled_job") or job_record.get("scheduled_start_at"))
 
 
-def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> str | None:
+def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None, *, expected_provider: str) -> str | None:
     result = result if isinstance(result, dict) else {}
     structured = dict(result.get("structured_results") or {})
     refresh = dict(
@@ -89,17 +90,17 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
         or {}
     )
     refresh_provider = str(refresh.get("provider") or "none").strip().lower()
-    supported_providers = {"amap", "kakao_navi"}
     current_plan_routes = list(dict(structured.get("current_plan") or {}).get("routes") or [])
     if not current_plan_routes:
         return "scheduled result is missing current-plan routes"
-    if refresh_provider in supported_providers:
-        if str(refresh.get("status") or "").strip().lower() != "ready":
+    if refresh_provider != expected_provider:
+        return f"scheduled result lacks fresh {expected_provider} traffic evidence"
+    if expected_provider != "none":
+        if refresh.get("status") not in {"ready", "partial"}:
             return "scheduled fresh traffic refresh was unavailable"
         if int(refresh.get("api_calls", 0) or 0) <= 0:
             return "scheduled fresh traffic refresh made no provider API calls"
 
-    required_gate_count = 0
     measured_count = 0
     incomplete_scenarios = []
     for scenario_key in (
@@ -114,44 +115,31 @@ def _scheduled_final_traffic_validation_error(result: dict[str, Any] | None) -> 
         gate = dict(scenario.get("traffic_gate") or {})
         policy = dict(gate.get("traffic_policy") or {})
         provider = str(gate.get("provider") or policy.get("provider") or "none").strip().lower()
-        if provider not in supported_providers:
-            if refresh_provider in supported_providers:
-                return f"scheduled final traffic gate unavailable for {scenario_key}"
+        if provider != expected_provider:
+            return f"scheduled final traffic gate unavailable for {scenario_key}"
+        if expected_provider == "none":
             continue
-        required_gate_count += 1
         status = str(gate.get("status") or "").strip().lower()
         unavailable = int(gate.get("unavailable_route_count", 0) or 0)
         checked = int(gate.get("checked_route_count", 0) or 0)
         if unavailable > 0:
-            route_gates = [dict(route.get("final_route_traffic_gate") or {}) for route in routes]
-            local_missing = [item for item in route_gates if item.get("status") == "unavailable"
-                             and item.get("passes") is None
-                             and (item.get("error") or item.get("evidence_issues"))]
-            local_checked = [item for item in route_gates if item.get("status") in {"passed", "failed"}
-                             and item.get("passes") is (item.get("status") == "passed")
-                             and all(isinstance(item.get(key), (int, float))
-                                     and math.isfinite(item[key]) and item[key] >= 0
-                                     for key in ("verified_total_duration_s", "verified_distance_m"))]
-            local_failed = sum(item.get("status") == "failed" for item in local_checked)
-            failed_count_key = ("all_routes_failed_route_count"
-                                if gate.get("evaluation_scope") == "optimized_remainder"
-                                else "failed_route_count")
-            if (status not in {"failed", "unavailable"} or checked + unavailable != len(routes)
-                    or len(local_missing) != unavailable or len(local_checked) != checked
-                    or local_failed != int(gate.get(failed_count_key, 0) or 0)
-                    or scenario.get("traffic_feasible") is not False):
+            missing = partial_traffic_route_ids(scenario, gate)
+            if missing is None:
                 return f"scheduled final traffic gate unavailable for {scenario_key}"
             incomplete_scenarios.append({"scenario": scenario_key, "checked_route_count": checked,
                 "unavailable_route_count": unavailable,
-                "route_ids": [str(item.get("route_id") or "") for item in local_missing]})
+                "route_ids": missing})
         elif status not in {"passed", "failed"}:
             return f"scheduled final traffic gate unavailable for {scenario_key}"
-        elif checked != len(routes):
+        elif checked != len(routes) or not all(measured_route_gate(r.get("final_route_traffic_gate") or {}) for r in routes):
             return f"scheduled final traffic gate did not check every route for {scenario_key}"
         measured_count += checked
 
-    if required_gate_count and refresh_provider not in supported_providers:
-        return "scheduled result lacks fresh provider traffic evidence"
+    if refresh.get("status") == "partial":
+        original = next((s for s in incomplete_scenarios if s["scenario"] == "current_plan"), {})
+        if (not original or original["checked_route_count"] != refresh.get("measured_route_count")
+                or original["route_ids"] != refresh.get("unavailable_route_ids")):
+            return "scheduled partial refresh does not match current-plan evidence"
     if incomplete_scenarios and not measured_count:
         return "scheduled final traffic gate unavailable for all routes"
     if incomplete_scenarios:
@@ -229,12 +217,15 @@ def main() -> int:
         else:
             config = build_planner_config(job_record.get("config") or {})
             if _is_scheduled_job(job_record):
+                expected = scheduled_traffic_provider(
+                    prepared_payload.get("input_records") or [], google=config.final_time_validation_mode == "google"
+                )
                 result = run_backend_planner_with_prepared_data(
                     prepared_payload,
                     config=config,
                     require_fresh_final_traffic=True,
                 )
-                validation_error = _scheduled_final_traffic_validation_error(result)
+                validation_error = _scheduled_final_traffic_validation_error(result, expected_provider=expected)
                 if validation_error:
                     raise RuntimeError(validation_error)
             else:

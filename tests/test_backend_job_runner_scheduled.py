@@ -21,7 +21,8 @@ def _scheduled_result(*, api_calls: int = 1, gate_status: str = "failed") -> dic
         },
         "structured_results": {
             "current_plan": {
-                "routes": [{"route_id": "Bus 1"}],
+                "routes": [{"route_id": "Bus 1", "final_route_traffic_gate": {
+                    "status": "failed", "passes": False, "verified_total_duration_s": 4200, "verified_distance_m": 20000}}],
                 "traffic_gate": {
                     "provider": "amap",
                     "status": gate_status,
@@ -35,18 +36,18 @@ def _scheduled_result(*, api_calls: int = 1, gate_status: str = "failed") -> dic
 
 def test_scheduled_validation_requires_fresh_calls_and_available_gates() -> None:
     assert backend_job_runner._scheduled_final_traffic_validation_error(
-        _scheduled_result(api_calls=0)
+        _scheduled_result(api_calls=0), expected_provider="amap"
     ) == "scheduled fresh traffic refresh made no provider API calls"
     assert backend_job_runner._scheduled_final_traffic_validation_error(
-        _scheduled_result(gate_status="unavailable")
+        _scheduled_result(gate_status="unavailable"), expected_provider="amap"
     ) == "scheduled final traffic gate unavailable for current_plan"
     assert backend_job_runner._scheduled_final_traffic_validation_error(
-        _scheduled_result(gate_status="failed")
+        _scheduled_result(gate_status="failed"), expected_provider="amap"
     ) is None
     result_with_legacy_scenario = _scheduled_result(gate_status="failed")
     result_with_legacy_scenario["structured_results"]["original"] = {"routes": [{}]}
     assert backend_job_runner._scheduled_final_traffic_validation_error(
-        result_with_legacy_scenario
+        result_with_legacy_scenario, expected_provider="amap"
     ) is None
 
 
@@ -73,10 +74,24 @@ def _partial_result():
 def test_local_failure_preserves_failed_constraints_and_marks_partial():
     result = _partial_result()
     original = deepcopy(result["structured_results"])
-    assert backend_job_runner._scheduled_final_traffic_validation_error(result) is None
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap") is None
     assert result["structured_results"] == original
     assert result["traffic_validation_summary"]["status"] == "partial"
     assert result["traffic_validation_summary"]["incomplete_scenarios"][0]["route_ids"] == ["R2"]
+
+
+def test_partial_current_plan_survives_upstream_refresh_and_final_validation():
+    from planner_core import calibrate_scheduled_current_plan_traffic
+    result = _partial_result()
+    current = result["structured_results"]["current_plan"]
+    current["traffic_gate"]["api_calls"] = 2
+    refresh = calibrate_scheduled_current_plan_traffic(current, current["traffic_gate"])
+    assert refresh["status"] == "partial" and refresh["unavailable_route_ids"] == ["R2"]
+    result["scheduled_run_traffic_refresh"] = refresh
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap") is None
+    assert result["traffic_validation_summary"]["status"] == "partial" and current["traffic_feasible"] is False
+    refresh["unavailable_route_ids"] = ["wrong"]
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap")
 
 
 def test_protected_scope_counts_frozen_failures_without_erasing_them():
@@ -85,10 +100,10 @@ def test_protected_scope_counts_frozen_failures_without_erasing_them():
     scenario["routes"][0]["exception_role"] = "frozen_current"
     scenario["traffic_gate"].update(evaluation_scope="optimized_remainder", failed_route_count=0,
         all_routes_failed_route_count=1, excluded_route_count=1, excluded_route_ids=["R1"])
-    assert backend_job_runner._scheduled_final_traffic_validation_error(result) is None
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap") is None
     assert scenario["routes"][0]["final_route_traffic_gate"]["status"] == "failed"
     scenario["traffic_gate"]["all_routes_failed_route_count"] = 0
-    assert backend_job_runner._scheduled_final_traffic_validation_error(result)
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap")
 
 
 @pytest.mark.parametrize("fault", ["counts", "missing_gate", "passes", "no_error", "feasible", "no_metric", "all_missing"])
@@ -110,13 +125,14 @@ def test_partial_is_not_a_bypass_for_missing_or_inconsistent_evidence(fault):
     else:
         scenario["routes"] = scenario["routes"][1:]
         scenario["traffic_gate"].update(status="unavailable", checked_route_count=0, failed_route_count=0)
-    assert backend_job_runner._scheduled_final_traffic_validation_error(result)
+    assert backend_job_runner._scheduled_final_traffic_validation_error(result, expected_provider="amap")
     assert "traffic_validation_summary" not in result
 
 
 def test_partial_worker_completes_and_preserves_evidence(monkeypatch):
     result = _partial_result()
-    state = {"record": {"job_id": "partial", "status": "queued", "metadata": {"scheduled_job": True}}}
+    state = {"record": {"job_id": "partial", "status": "queued", "metadata": {"scheduled_job": True},
+                        "prepared_payload": {"input_records": [{"country": "China"}]}}}
     monkeypatch.setattr(backend_job_runner, "_load_job", lambda _: deepcopy(state["record"]))
     monkeypatch.setattr(backend_job_runner, "_save_job", lambda record: state.update(record=deepcopy(record)))
     monkeypatch.setattr(backend_job_runner, "_release_concurrency_slot", lambda: None)
@@ -137,7 +153,7 @@ def test_scheduled_runner_preserves_result_when_fresh_validation_fails(monkeypat
             "status": "queued",
             "metadata": {"scheduled_job": True},
             "config": {},
-            "prepared_payload": {},
+            "prepared_payload": {"input_records": [{"country": "China"}]},
         }
     }
 

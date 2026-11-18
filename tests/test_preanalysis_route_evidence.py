@@ -32,7 +32,7 @@ def preview(monkeypatch):
     monkeypatch.setattr(service, "load_legacy_planner", lambda: planner)
     monkeypatch.setattr(service, "_build_assessment_metric_matrices", lambda *_: ([], []))
     monkeypatch.setattr(service, "assess_current_plan", lambda *_, **__: {})
-    monkeypatch.setattr(service, "_build_time_acceptance_constraint_builder", lambda *_: (None, lambda: None, {}))
+    monkeypatch.setattr(service, "_build_time_acceptance_constraint_builder", lambda *_, enabled: (None, lambda: None, {}))
     monkeypatch.setattr(service, "build_current_plan_map_scenario", lambda *_: deepcopy(scenario))
     monkeypatch.setattr(service, "_should_use_amap_display_geometry", lambda *_: False)
     monkeypatch.setattr(core, "FINAL_ROUTE_TRAFFIC_VERIFICATION_ENABLED", True)

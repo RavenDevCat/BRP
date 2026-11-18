@@ -446,6 +446,10 @@ function LegacyDistanceCheckerPage({
         "resolved_stops",
         "failed_stops",
         "drive_legs",
+        "expected_legs",
+        "measurement_status",
+        "measured_distance_km",
+        "measured_duration_min",
         "route_distance_km",
         "route_duration_min",
         "estimated_diesel_liters",
@@ -618,17 +622,18 @@ function LegacyDistanceCheckerPage({
               <CardHeader>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-sm font-semibold">{t("Route Cost Results")}</h2>
-                  <Badge tone="success">{formatNumber(routeCostResult.summary.route_count)} {t("routes")}</Badge>
+                  <Badge tone={routeCostResult.summary.routes_with_incomplete_measurement ? "warning" : "success"}>{formatNumber(routeCostResult.summary.route_count)} {t("routes")}</Badge>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="grid gap-3 md:grid-cols-4">
-                  <Metric label="One-Way Distance km" value={routeCostResult.summary.total_one_way_distance_km} />
+                  <Metric label="One-Way Distance km" value={routeCostResult.summary.total_one_way_distance_km ?? t("Not available")} />
                   <Metric
                     label={`Diesel Cost ${routeCostResult.summary.currency_label}`}
-                    value={formatCurrency(routeCostResult.summary.estimated_one_way_fuel_cost, routeCostResult.summary.currency_code)}
+                    value={routeCostResult.summary.estimated_one_way_fuel_cost == null ? t("Not available") : formatCurrency(routeCostResult.summary.estimated_one_way_fuel_cost, routeCostResult.summary.currency_code)}
                   />
-                  <Metric label="Routes With Failed Stops" value={routeCostResult.summary.routes_with_unresolved_stops} />
+                  <Metric label={routeCostResult.summary.routes_with_incomplete_measurement == null ? "Routes With Failed Stops" : "Incomplete routes"}
+                    value={routeCostResult.summary.routes_with_incomplete_measurement ?? routeCostResult.summary.routes_with_unresolved_stops} />
                   <Metric label="Electric Routes Skipped" value={routeCostResult.summary.electric_routes_skipped} />
                 </div>
                 <DistanceHistoryAutoSaveStatus

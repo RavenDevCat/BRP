@@ -373,28 +373,16 @@ def _osrm_leg(
     destination: dict[str, Any],
     cache: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
-    origin_coords = _point_coordinates(origin)
-    destination_coords = _point_coordinates(destination)
-    if not origin_coords or not destination_coords:
+    route_origin = distance_tool.osrm_point(origin)
+    route_destination = distance_tool.osrm_point(destination)
+    origin_coords = (_safe_float(route_origin.get("lat"), math.nan), _safe_float(route_origin.get("lng"), math.nan))
+    destination_coords = (_safe_float(route_destination.get("lat"), math.nan), _safe_float(route_destination.get("lng"), math.nan))
+    if not all(map(math.isfinite, (*origin_coords, *destination_coords))):
         raise RuntimeError("OSRM route contains unresolved coordinates.")
     key = "|".join(
         f"{value:.6f}" for value in (*origin_coords, *destination_coords)
     )
     if key not in cache:
-        # Audit maps route on plot coordinates (WGS84), while China geocoders also
-        # retain raw GCJ-02 coordinates in lat/lng. Normalize the request before
-        # calling the shared distance helper so the route and map markers use the
-        # same coordinate system.
-        route_origin = {
-            **origin,
-            "lat": origin_coords[0],
-            "lng": origin_coords[1],
-        }
-        route_destination = {
-            **destination,
-            "lat": destination_coords[0],
-            "lng": destination_coords[1],
-        }
         detail = distance_tool.compute_osrm_route_leg_details(
             [route_origin, route_destination]
         )[0]

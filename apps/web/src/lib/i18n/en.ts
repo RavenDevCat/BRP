@@ -349,6 +349,11 @@ const en: Translations = {
     "Open map": "Open map",
     "Download map": "Download map",
     "Not available": "Not available",
+    "Incomplete routes": "Incomplete routes",
+    "expected_legs": "Expected legs",
+    "measurement_status": "Measurement status",
+    "measured_distance_km": "Measured subtotal (km)",
+    "measured_duration_min": "Measured subtotal (min)",
 
     // Interactive route map
     All: "All",

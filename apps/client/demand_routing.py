@@ -22,7 +22,7 @@ from ortools_route_core import (  # noqa: E402
 import client_runtime as runtime
 from amap_geocode_quality import GEOCODE_PROVENANCE_FIELDS
 from route_measurement_view import route_display_metrics, measurement_note
-from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details
+from distance_tool import compute_osrm_metrics_from_origin, compute_osrm_route_leg_details, osrm_point as _osrm_point_payload
 
 
 HUGE_COST = 10**9
@@ -110,15 +110,6 @@ def _point_payload(point: dict[str, Any]) -> dict[str, Any]:
         "formatted_address": str(point.get("formatted_address", "")).strip(),
         "student_count": int(point.get("student_count", 0) or 0),
     }
-
-
-def _osrm_point_payload(point: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(point)
-    if (str(point.get("provider") or "").lower() == "amap"
-            and str(point.get("coordinate_system") or "").upper() != "WGS84"):
-        payload["lat"], payload["lng"] = runtime.gcj02_to_wgs84(float(point["lat"]), float(point["lng"]))
-    payload["coordinate_system"] = "WGS84"
-    return payload
 
 
 def _build_osrm_matrix(

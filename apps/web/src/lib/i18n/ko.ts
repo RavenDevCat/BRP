@@ -404,6 +404,11 @@ const ko: Translations = {
     "Open map": "지도 열기",
     "Download map": "지도 다운로드",
     "Not available": "사용 불가",
+    "Incomplete routes": "측정 미완료 노선",
+    "expected_legs": "전체 구간 수",
+    "measurement_status": "측정 상태",
+    "measured_distance_km": "측정 거리 소계 (km)",
+    "measured_duration_min": "측정 시간 소계 (분)",
 
     // Interactive route map
     All: "전체",

@@ -431,6 +431,8 @@ class TrafficPolicy:
 
 def _normalize_location_value(value: str | None) -> str:
     normalized = str(value or "").strip().upper()
+    if normalized in {"CN", "PRC", "中国", "中华人民共和国", "CHINA"}:
+        return "CHINA"
     if normalized in {"KR", "KOREA", "SOUTH KOREA", "REPUBLIC OF KOREA", "KOREA, REPUBLIC OF", "대한민국", "한국"}:
         return "SOUTH KOREA"
     return normalized
@@ -1029,6 +1031,17 @@ def _final_route_stats(
     return None
 
 
+def _native_traffic_provider(country: str) -> str:
+    return {"CHINA": "amap", "SOUTH KOREA": "kakao_navi"}.get(country, "none")
+
+
+def scheduled_traffic_provider(input_records, *, google=False) -> str:
+    country, _ = infer_traffic_location([row for row in input_records if isinstance(row, dict)])
+    if not country:
+        raise ValueError("Scheduled traffic requires a single identifiable input country.")
+    return "google_routes" if google else _native_traffic_provider(country)
+
+
 def resolve_final_route_traffic_policy(
     planner: Any,
     _config: PlannerConfig,
@@ -1041,12 +1054,7 @@ def resolve_final_route_traffic_policy(
         return TrafficPolicy(provider="google_routes", country=country, city=city,
             final_validation_enabled=True, final_validation_applicable=country_label == "CHINA",
             unavailable_reason=state["reason"])
-    if country_label == "CHINA":
-        provider = "amap"
-    elif country_label == "SOUTH KOREA":
-        provider = "kakao_navi"
-    else:
-        provider = "none"
+    provider = _native_traffic_provider(country_label)
     applicable = provider != "none"
     unavailable_reason = None
     if provider == "amap" and not str(getattr(planner, "AMAP_KEY", "") or "").strip():
@@ -3773,6 +3781,28 @@ def attach_current_plan_traffic_gate(
     )
 
 
+def measured_route_gate(item: dict) -> bool:
+    return (item.get("status") in {"passed", "failed"}
+            and item.get("passes") is (item["status"] == "passed")
+            and all(type(item.get(key)) in (int, float) and math.isfinite(item[key]) and item[key] >= 0
+                    for key in ("verified_total_duration_s", "verified_distance_m")))
+
+
+def partial_traffic_route_ids(scenario, gate):
+    receipts = [r.get("final_route_traffic_gate") or {} for r in scenario.get("routes", [])]
+    missing = [r for r in receipts if r.get("status") == "unavailable" and r.get("passes") is None
+               and (r.get("error") or r.get("evidence_issues"))]
+    measured = [r for r in receipts if measured_route_gate(r)]
+    failed_count = "all_routes_failed_route_count" if gate.get("evaluation_scope") == "optimized_remainder" else "failed_route_count"
+    if (not missing or scenario.get("traffic_feasible") is not False
+            or gate.get("status") not in {"unavailable", "failed"}
+            or len(missing) != gate.get("unavailable_route_count") or len(measured) != gate.get("checked_route_count")
+            or len(missing) + len(measured) != len(receipts)
+            or sum(r["status"] == "failed" for r in measured) != gate.get(failed_count, 0)):
+        return None
+    return [str(r.get("route_id") or "") for r in missing]
+
+
 def calibrate_scheduled_current_plan_traffic(
     current_plan_scenario: dict[str, Any] | None,
     gate: dict[str, Any] | None,
@@ -3789,10 +3819,16 @@ def calibrate_scheduled_current_plan_traffic(
     }
     if provider not in {"amap", "kakao_navi", "google_routes"}:
         return {**evidence, "status": "not_applicable", "reason": "unsupported_final_route_traffic_provider"}
-    if evidence["gate_status"] not in {"passed", "failed"}:
-        return {**evidence, "status": "unavailable", "reason": "current_plan_traffic_gate_unavailable"}
     if evidence["api_calls"] <= 0:
         return {**evidence, "status": "unavailable", "reason": "no_fresh_api_calls"}
+    if gate.get("unavailable_route_count"):
+        missing = partial_traffic_route_ids(current_plan_scenario or {}, gate)
+        if missing and gate.get("checked_route_count", 0) > 0:
+            return {**evidence, "status": "partial", "unavailable_route_ids": missing,
+                    "measured_route_count": gate["checked_route_count"], "solver_adjustment": "none"}
+        return {**evidence, "status": "unavailable", "reason": "incomplete_current_plan_traffic_measurement"}
+    if evidence["gate_status"] not in {"passed", "failed"}:
+        return {**evidence, "status": "unavailable", "reason": "current_plan_traffic_gate_unavailable"}
 
     routes = list(dict(current_plan_scenario or {}).get("routes") or [])
     max_verified_total_s = 0.0
@@ -7729,7 +7765,7 @@ def run_backend_planner_with_prepared_data(
                 current_plan_gate,
             )
             refresh_status = str(scheduled_run_traffic_refresh.get("status") or "").strip().lower()
-            if refresh_status == "ready":
+            if refresh_status in {"ready", "partial"}:
                 traffic_profile_name = f"{str(scheduled_run_traffic_refresh.get('provider') or '').upper()} Current (Scheduled)"
                 traffic_profile_context = (
                     "Fresh current-plan direct-provider validation for this scheduled run"

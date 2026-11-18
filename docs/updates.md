@@ -5,6 +5,19 @@ updates. It is not a code changelog. Record changes here only when users or
 operators should know that behavior, available tools, service providers,
 runtime architecture, or recommended rerun guidance changed.
 
+## 2026-11-18
+
+### Measurement Completeness
+
+- Fleet, road distance and route cost use the same WGS84 points for OSRM.
+  Original provider coordinates are retained for native traffic measurements.
+- Route cost keeps missing stops in sequence. Unknown legs are not zero-cost
+  shortcuts; incomplete routes show measured subtotals, not whole-route totals.
+- Temporary geocoding failures expire. Existing untyped failures are retried
+  on access; successful cached locations and historical results are unchanged.
+- Scheduled audits bind traffic evidence to the submitted market. A supported
+  market without evidence cannot pass; a verified subset remains explicitly partial.
+
 ## 2026-11-02
 
 ### Fleet Live Refinement

@@ -60,6 +60,8 @@ def test_actual_submission_binds_pair_and_scopes_idempotency(schools):
         related_pair_records(pm,lambda jid: altered if jid==am["job_id"] else pm)
     with pytest.raises(sqlite3.IntegrityError):
         store.upsert_job(altered)
+    with pytest.raises(ValueError,match="same school"):
+        store.insert_job_pair([altered,pm])
 
 
 def test_files_lists_exports_and_revocation(schools):
@@ -111,3 +113,32 @@ def test_side_history_and_mixed_folder(schools):
         ids.append(c.post("/api/workbooks/submit",headers=headers("shared",school),json=payload).json()["job"]["job_id"])
     folder="/api/history-groups/route_audit"
     assert c.post(folder,headers=headers("shared"),json={"name":"mixed","item_ids":ids}).status_code==409
+
+
+def test_scoped_local_identity_never_uses_fallback(schools,monkeypatch):
+    c,*_=schools
+    monkeypatch.setattr(api.backend_service,"AUTH_PROVIDER","local")
+    monkeypatch.setattr(api.backend_service,"DEV_USER_EMAIL","admin@example.test")
+    assert c.get("/api/jobs",headers={"Authorization":"Bearer qa-only","Cf-Access-Authenticated-User-Email":"north@example.test"}).status_code==401
+
+
+def test_runtime_guard_rejects_shared_or_preexisting_state(tmp_path,monkeypatch):
+    import school_scope
+    root=tmp_path/"isolated"
+    root.mkdir()
+    monkeypatch.setenv("BRP_SCHOOL_SCOPES","1")
+    monkeypatch.setenv("BRP_SCHOOL_DATA_ROOT",str(root))
+    for key in ("BRP_RUNTIME_DB_PATH","BRP_SCHOOL_DIRECTORY_DB","BRP_BACKEND_JOBS_DIR","BRP_SIDE_TOOLS_DIR"):
+        monkeypatch.setenv(key,str(root/key))
+    monkeypatch.setenv("BRP_RUNTIME_DB_PATH",str(tmp_path/"outside.db"))
+    with pytest.raises(RuntimeError,match="inside"):
+        school_scope.check_runtime()
+    db=root/"existing.db";db.touch()
+    monkeypatch.setenv("BRP_RUNTIME_DB_PATH",str(db))
+    with pytest.raises(RuntimeError,match="unmarked"):
+        school_scope.check_runtime()
+    monkeypatch.setenv("BRP_RUNTIME_DB_PATH",str(root/"new.db"))
+    school_scope.check_runtime()
+    monkeypatch.delenv("BRP_SCHOOL_SCOPES")
+    with pytest.raises(RuntimeError,match="requires"):
+        school_scope.check_runtime()

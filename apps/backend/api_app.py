@@ -89,7 +89,10 @@ async def scope_request(request: Request):
         yield
         return
     require_authorized_request(request.headers.get("Authorization"))
-    if not backend_service.SERVICE_TOKEN or not (request.headers.get("X-BRP-User-Email","").strip() or request.headers.get("Cf-Access-Authenticated-User-Email","").strip()):
+    identity = request.headers.get("X-BRP-User-Email","").strip()
+    if backend_service.AUTH_PROVIDER != "local" and not identity:
+        identity = request.headers.get("Cf-Access-Authenticated-User-Email","").strip()
+    if not backend_service.SERVICE_TOKEN or not identity:
         raise BackendHttpError(401,{"error":"Verified identity required"})
     store = _school_store(request)
     ctx = current_user_context(request)

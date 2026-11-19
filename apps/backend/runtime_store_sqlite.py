@@ -731,6 +731,8 @@ class SqliteRuntimeStore:
     def insert_job_pair(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(records) != 2 or len({r["job_id"] for r in records}) != 2:
             raise ValueError("Exactly two distinct jobs are required.")
+        if school_scope.record_school(records[0]) != school_scope.record_school(records[1]):
+            raise ValueError("Paired jobs must belong to the same school")
         self.initialize()
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -740,7 +742,8 @@ class SqliteRuntimeStore:
                 if not all(existing):
                     raise ValueError("The paired schedule was changed or deleted. Submit a new schedule.")
                 saved = [json_loads(row["record_json"], {}) for row in existing]
-                if any(old["metadata"].get("pair_request_hash") != new["metadata"].get("pair_request_hash")
+                if any(school_scope.record_school(old) != school_scope.record_school(new)
+                       or old["metadata"].get("pair_request_hash") != new["metadata"].get("pair_request_hash")
                        for old, new in zip(saved, records)):
                     raise ValueError("Submission identity was already used for different settings.")
                 return saved
@@ -1133,6 +1136,10 @@ class SqliteRuntimeStore:
             if not row:
                 conn.rollback()
                 return False
+            source_school = school_scope.item_school(conn,"route_audit",normalized_source)
+            if (source_school != school_scope.item_school(conn,"route_audit",normalized_target)
+                    or source_school != school_scope.group_school(conn,row["group_id"])):
+                raise ValueError("Derived job and parent folder must belong to the same school")
             conn.execute(
                 """
                 INSERT INTO history_group_items(

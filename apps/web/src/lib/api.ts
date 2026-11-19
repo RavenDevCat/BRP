@@ -5,6 +5,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api";
 export type ApiUser = {
     email: string;
     is_admin: boolean;
+    school_directory_enabled?: boolean;
     auth_mode: string;
     auth?: AuthConfig;
 };
@@ -1170,6 +1171,24 @@ export function getHealth() {
 export function getCurrentUser() {
     return apiFetch<ApiUser>("/me");
 }
+
+export type SchoolRole = "school_admin" | "operator" | "viewer";
+export type SchoolMembership = { school_id: string; email: string; role: SchoolRole };
+export type DirectoryUser = { email: string; system_admin: boolean; owned_tasks: number;
+    folder_roles: { name: string; scope: string; role: string }[] };
+export type SchoolDirectory = { shared_records:number; schools: {id:string;name:string}[]; members: SchoolMembership[];
+    users: DirectoryUser[]; changes: {seq:number;school_id:string;actor:string;subject:string;action:string;
+        previous:SchoolRole|null;current:SchoolRole|null;at:string}[] };
+const schoolDirectoryPath="/admin/school-directory";
+export const getSchoolDirectory=()=>apiFetch<SchoolDirectory>(schoolDirectoryPath);
+export const getUserAuditAccess=(email:string,page:number)=>apiFetch<{total:number;items:{
+    id:string;title:string;own:boolean;shared:boolean;admin:boolean;folders:string[]}[]}>(
+    schoolDirectoryPath+"/audit-access?"+new URLSearchParams({email,page:String(page)}));
+export const createSchool=(name:string,manager:string)=>apiFetch<{id:string;name:string}>(schoolDirectoryPath+"/schools",{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,manager})});
+export const changeSchoolMember=(id:string,email:string,role:SchoolRole|null,previous:SchoolRole|null)=>
+    apiFetch<{saved:boolean}>(schoolDirectoryPath+"/schools/"+encodeURIComponent(id)+"/membership",{
+        method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({email,role,previous})});
 
 export function getAuthConfig() {
     return apiFetch<AuthConfig>("/auth/config");

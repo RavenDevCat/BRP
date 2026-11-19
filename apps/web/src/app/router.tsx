@@ -87,6 +87,13 @@ const adminRoute = createRoute({
   component: lazyRoutePage(() => <AdminStatusPage />),
 });
 
+const UsersPage = lazy(() => import("@/features/admin/users-page").then(m => ({default:m.UsersPage})));
+const usersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/admin/users",
+  component: lazyRoutePage(() => <UsersPage />),
+});
+
 const jobDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/$jobId",
@@ -106,6 +113,7 @@ const routeTree = rootRoute.addChildren([
   fleetPlannerRoute,
   routeInsertAdvisorRoute,
   adminRoute,
+  usersRoute,
   jobsRoute,
   jobDetailRoute,
   operationsReviewRoute,

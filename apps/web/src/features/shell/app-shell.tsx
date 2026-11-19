@@ -13,6 +13,7 @@ import {
     Ruler,
     ShieldCheck,
     UploadCloud,
+    UsersRound,
 } from "lucide-react";
 import {
     getAuthConfig,
@@ -153,7 +154,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                     {isAdmin ? (
                         <NavGroup
                             title={t("Admin")}
-                            items={adminNavItems}
+                            items={userQuery.data?.school_directory_enabled
+                                ? [...adminNavItems, {to:"/admin/users",labelKey:"Users & access",icon:UsersRound}]
+                                : adminNavItems}
                             pathname={pathname}
                         />
                     ) : null}

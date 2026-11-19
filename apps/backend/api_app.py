@@ -25,7 +25,7 @@ try:
         MeasurementReviewRequest,
         payload_to_dict,
     )
-    from . import backend_service
+    from . import backend_service, school_directory
     from .operations_review import build_operations_review
     from .measurement_reviews import build_review_request, historical_risk_summary
     from .full_measurement_review import build_full_review_request, build_full_review_workbook
@@ -41,6 +41,7 @@ except ImportError:  # pragma: no cover - supports running from apps/backend dir
         payload_to_dict,
     )
     import backend_service  # type: ignore
+    import school_directory
     from operations_review import build_operations_review  # type: ignore
     from measurement_reviews import build_review_request, historical_risk_summary
     from full_measurement_review import build_full_review_request, build_full_review_workbook
@@ -70,6 +71,11 @@ class UserContext:
 async def lifespan(_app: FastAPI):
     # The scheduler is idempotent in backend_service. Keep uvicorn workers at 1
     # until the job queue and file-backed stores are explicitly multi-worker safe.
+    path = school_directory.configured_path()
+    if path:
+        if path.resolve() == backend_service.RUNTIME_DB_PATH.resolve():
+            raise RuntimeError("School directory requires its own database")
+        school_directory.Directory(path).initialize()
     backend_service._start_job_scheduler()
     yield
 
@@ -534,10 +540,68 @@ def current_user(context: UserContext = Depends(current_user_context)) -> JSONRe
         {
             "email": context.email,
             "is_admin": context.is_admin,
+            "school_directory_enabled": school_directory.configured_path() is not None,
             "auth_mode": backend_service.AUTH_PROVIDER,
             "auth": backend_service._auth_config_payload(),
         },
     )
+
+
+def _school_store(request: Request, _auth: None = Depends(require_authorized_request)):
+    path = school_directory.configured_path()
+    if not path:
+        raise BackendHttpError(404, {"error":"School directory is disabled"})
+    if backend_service.AUTH_PROVIDER != "local" and not (
+        backend_service.SERVICE_TOKEN and (request.headers.get("X-BRP-User-Email","").strip()
+        or request.headers.get("Cf-Access-Authenticated-User-Email","").strip())
+    ):
+        raise BackendHttpError(401, {"error":"Verified identity required"})
+    return school_directory.Directory(path)
+
+
+def _directory_response(payload, status=200):
+    return JSONResponse(payload, status_code=status, headers={"Cache-Control":"private, no-store"})
+
+
+@app.exception_handler(school_directory.DirectoryError)
+def directory_error(_request: Request, exc: school_directory.DirectoryError):
+    return _directory_response({"error":str(exc)}, exc.status)
+
+
+@_api_route("GET", "/me/school-workspaces")
+def my_school_memberships(store=Depends(_school_store), context: UserContext=Depends(current_user_context)):
+    return _directory_response({"schools":store.mine(context.email)})
+
+
+@_api_route("GET", "/admin/school-directory")
+def admin_school_directory(store=Depends(_school_store), context: UserContext=Depends(require_admin_context)):
+    return _directory_response({**store.snapshot(), **school_directory.legacy_directory(
+        backend_service.RUNTIME_DB_PATH,backend_service.ADMIN_EMAILS)})
+
+
+@_api_route("POST", "/admin/school-directory/schools")
+def create_school(payload: FlexiblePayload, store=Depends(_school_store), context: UserContext=Depends(require_admin_context)):
+    body=_payload_dict(payload)
+    return _directory_response(store.create(body.get("name"),body.get("manager"),context.email),201)
+
+
+@_api_route("GET", "/admin/school-directory/audit-access")
+def admin_audit_access(email: str, page: int=0, store=Depends(_school_store), context: UserContext=Depends(require_admin_context)):
+    subject=school_directory.email(email)
+    if page<0:raise BackendHttpError(422,{"error":"Invalid page"})
+    admin=backend_service._is_admin_email(subject)
+    rows=backend_service._list_route_audit_jobs(user_email=subject,include_all=admin)
+    return _directory_response(school_directory.audit_access(backend_service.RUNTIME_DB_PATH,rows,subject,admin,page))
+
+
+@_api_route("PUT", "/admin/school-directory/schools/{school_id}/membership")
+def set_school_membership(school_id: str, payload: FlexiblePayload, store=Depends(_school_store),
+                          context: UserContext=Depends(require_admin_context)):
+    body=_payload_dict(payload)
+    if not {"email","role","previous"}<=body.keys():
+        raise BackendHttpError(422,{"error":"Email, role and previous role are required"})
+    store.change(school_id,body["email"],body["role"],body["previous"],context.email)
+    return _directory_response({"saved":True})
 
 
 @_api_route(

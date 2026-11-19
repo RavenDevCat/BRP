@@ -6,6 +6,7 @@ import hashlib
 from io import BytesIO
 import json
 import math
+import school_scope
 from zoneinfo import ZoneInfo
 
 VERSION = 1
@@ -90,8 +91,11 @@ def create_pair(service, payload, prepared, metadata, owner, morning_at, *, morn
         raise ValueError("Paired return schedules are available for China only.")
     reversed_prepared = reverse_payload(prepared)
     source_version = fingerprint(prepared["current_plan"])
-    pair_id = fingerprint([owner.strip().lower(), service.JOB_QUEUE_SCOPE, submission_id,
-                           payload.get("scheduled_date")])[:24]
+    identity = [owner.strip().lower(), service.JOB_QUEUE_SCOPE, submission_id, payload.get("scheduled_date")]
+    school = school_scope.submission()
+    if school:
+        identity.append(school)
+    pair_id = fingerprint(identity)[:24]
     request_values = [source_version, metadata["analysis_config"], morning_at,
                       afternoon_at, metadata.get("job_name")]
     if morning_config is not None:

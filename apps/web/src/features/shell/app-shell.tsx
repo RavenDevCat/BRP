@@ -18,6 +18,7 @@ import {
 import {
     getAuthConfig,
     getCurrentUser,
+    getSchoolChoices, selectSubmissionSchool,
     getGoogleGeocodeUsage,
     getHealth,
     type GoogleGeocodeUsage,
@@ -228,6 +229,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                         </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                        {userQuery.data?.school_scopes_enabled && <SubmissionSchool key={userQuery.data.email} email={userQuery.data.email}/>}
                         {googleUsage?.enabled ? (
                             <GoogleUsagePill
                                 usage={googleUsage}
@@ -482,6 +484,20 @@ function NavItem({
             {t(item.labelKey)}
         </Link>
     );
+}
+
+function SubmissionSchool({email}:{email:string}){
+    const t=useT(), q=useQuery({queryKey:["school-choices",email],queryFn:getSchoolChoices});
+    const schools=q.data?.schools??[];
+    const [choice,setChoice]=useState("");
+    const id=schools.length===1?schools[0].id:schools.some(s=>s.id===choice)?choice:"";
+    useEffect(()=>{selectSubmissionSchool(id);return ()=>selectSubmissionSchool("")},[id]);
+    return <label className="grid min-w-0 text-xs">{t("School workspace")}
+        <select aria-label={t("School workspace")} value={id} disabled={!schools.length}
+            className="h-8 max-w-36 rounded border border-border bg-surface px-1" onChange={e=>{selectSubmissionSchool(e.target.value);setChoice(e.target.value)}}>
+            {!id&&<option value="">{t(q.isPending?"Loading…":schools.length?"Select school":"No school membership")}</option>}
+            {schools.map(s=><option key={s.id} value={s.id} disabled={s.role==="viewer"}>{s.name}</option>)}
+        </select></label>;
 }
 
 function LanguageSwitcher() {

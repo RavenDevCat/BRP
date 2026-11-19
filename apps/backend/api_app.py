@@ -15,6 +15,10 @@ from urllib.parse import quote
 
 from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
+from starlette.concurrency import run_in_threadpool
+import school_scope
+
+school_scope.check_runtime()
 
 try:
     from .api_models import (
@@ -80,6 +84,28 @@ async def lifespan(_app: FastAPI):
     yield
 
 
+async def scope_request(request: Request):
+    if not school_scope.enabled() or request.url.path in {"/ready","/health","/api/ready","/api/health"}:
+        yield
+        return
+    require_authorized_request(request.headers.get("Authorization"))
+    if not backend_service.SERVICE_TOKEN or not (request.headers.get("X-BRP-User-Email","").strip() or request.headers.get("Cf-Access-Authenticated-User-Email","").strip()):
+        raise BackendHttpError(401,{"error":"Verified identity required"})
+    store = _school_store(request)
+    ctx = current_user_context(request)
+    rows = await run_in_threadpool(store.available, ctx.email, ctx.is_admin)
+    access = school_scope.Access({r["id"]:r["role"] for r in rows}, request.headers.get("X-BRP-School","").strip(), ctx.is_admin)
+    token = school_scope.current.set(access)
+    try:
+        group = request.path_params.get("group_id")
+        if group:
+            member = request.path_params.get("member_email") if request.method=="PUT" else None
+            await run_in_threadpool(_school_folder_gate, group, request.method!="GET", member)
+        yield
+    finally:
+        school_scope.current.reset(token)
+
+
 app = FastAPI(
     title="BRP Backend API",
     version="0.1.0",
@@ -87,13 +113,20 @@ app = FastAPI(
     redoc_url="/api/redoc",
     openapi_url="/api/openapi.json",
     lifespan=lifespan,
+    dependencies=[Depends(scope_request)],
 )
+
+
+@app.exception_handler(school_scope.Denied)
+def school_denied(_request, exc):
+    return JSONResponse({"error":str(exc)}, status_code=exc.status, headers={"Cache-Control":"private, no-store"})
 
 
 def _json_response(status_code: int, payload: dict[str, Any] | list[Any]) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
         content=backend_service._json_safe(payload),
+        headers={"Cache-Control":"private, no-store"} if school_scope.enabled() else None,
     )
 
 
@@ -229,6 +262,7 @@ def _require_record_mutation_access(
     *,
     shared_admin_only: bool = False,
 ) -> dict[str, Any]:
+    school_scope.writable(school_scope.record_school(record))
     if context.is_admin:
         return record
     is_owner = backend_service._normalize_email(
@@ -396,6 +430,21 @@ def _history_item_ids_for_scope(scope: str, context: UserContext) -> set[str]:
     }
 
 
+def _school_folder_gate(group, write=False, target=None):
+    if not group or school_scope.current.get() is None:
+        return
+    with closing(backend_service._runtime_sqlite_store().connect()) as conn:
+        school = school_scope.group_school(conn,group)
+    if not school_scope.visible(school):
+        raise BackendHttpError(404,{"error":"History group not found."})
+    if write:
+        school_scope.writable(school)
+    if target and school:
+        directory = school_directory.Directory(school_directory.configured_path())
+        if school not in {r["id"] for r in directory.mine(target)}:
+            raise school_scope.Denied(403,"Folder access is restricted to school members")
+
+
 def _history_group_name(value: Any) -> str:
     name = str(value or "").strip()
     if not name:
@@ -541,6 +590,7 @@ def current_user(context: UserContext = Depends(current_user_context)) -> JSONRe
             "email": context.email,
             "is_admin": context.is_admin,
             "school_directory_enabled": school_directory.configured_path() is not None,
+            "school_scopes_enabled": school_scope.enabled(),
             "auth_mode": backend_service.AUTH_PROVIDER,
             "auth": backend_service._auth_config_payload(),
         },
@@ -570,7 +620,7 @@ def directory_error(_request: Request, exc: school_directory.DirectoryError):
 
 @_api_route("GET", "/me/school-workspaces")
 def my_school_memberships(store=Depends(_school_store), context: UserContext=Depends(current_user_context)):
-    return _directory_response({"schools":store.mine(context.email)})
+    return _directory_response({"schools":store.available(context.email, school_scope.enabled() and context.is_admin)})
 
 
 @_api_route("GET", "/admin/school-directory")
@@ -590,7 +640,14 @@ def admin_audit_access(email: str, page: int=0, store=Depends(_school_store), co
     subject=school_directory.email(email)
     if page<0:raise BackendHttpError(422,{"error":"Invalid page"})
     admin=backend_service._is_admin_email(subject)
-    rows=backend_service._list_route_audit_jobs(user_email=subject,include_all=admin)
+    token = None
+    if school_scope.enabled():
+        token = school_scope.current.set(school_scope.Access({r["id"]:r["role"] for r in store.available(subject,admin)}, "", admin))
+    try:
+        rows=backend_service._list_route_audit_jobs(user_email=subject,include_all=admin)
+    finally:
+        if token is not None:
+            school_scope.current.reset(token)
     return _directory_response(school_directory.audit_access(backend_service.RUNTIME_DB_PATH,rows,subject,admin,page))
 
 
@@ -698,6 +755,16 @@ def list_history_groups(
     )
 
 
+@_api_route("GET", "/history-groups/{scope}/{group_id}", dependencies=[Depends(require_authorized_request)])
+def history_group_detail(scope: str, group_id: str, context: UserContext=Depends(current_user_context)):
+    visible = _history_item_ids_for_scope(scope,context)
+    groups = backend_service._runtime_sqlite_store().list_history_groups(scope,context.email,include_all=context.is_admin)
+    for group in groups:
+        if group["group_id"] == group_id:
+            return _json_response(200,{"group":{**group,"item_ids":[i for i in group["item_ids"] if i in visible]}})
+    raise BackendHttpError(404,{"error":"History group not found."})
+
+
 @_api_route(
     "POST",
     "/history-groups/{scope}",
@@ -785,6 +852,7 @@ def move_history_group_items(
             },
         )
     group_id = str(body.get("group_id") or "").strip() or None
+    _school_folder_gate(group_id,True)
     try:
         group = backend_service._runtime_sqlite_store().move_history_group_items(
             scope,
@@ -878,6 +946,7 @@ def transfer_history_group_owner(
 ) -> JSONResponse:
     if scope not in HISTORY_GROUP_SCOPES:
         raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
+    _school_folder_gate(group_id,True,_history_group_member(_payload_dict(payload).get("owner_email")))
     try:
         group = backend_service._runtime_sqlite_store().transfer_history_group_owner(
             scope,
@@ -910,6 +979,7 @@ def set_history_group_preference(
     body = _payload_dict(payload)
     group_id = str(body.get("group_id") or "").strip() or None
     account_email = _history_group_member(body.get("account_email") or context.email)
+    _school_folder_gate(group_id,True,account_email)
     try:
         preference = backend_service._runtime_sqlite_store().set_history_group_preference(
             scope,
@@ -1849,6 +1919,7 @@ def create_direct_school_job(
     payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
+    school_scope.submission()
     try:
         created = backend_service._handle_direct_school_submit(_payload_dict(payload), user_email=context.email)
     except ValueError as exc:
@@ -3669,6 +3740,7 @@ def route_insert_advisor_proposals(
     payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
+    target_school = school_scope.submission()
     payload_dict = _payload_dict(payload)
     if str(payload_dict.get("file_base64") or "").strip():
         preview = backend_service._workbook_preview_response(payload_dict)
@@ -3702,6 +3774,8 @@ def route_insert_advisor_proposals(
                 {"error": "Upload a workbook before requesting insert proposals."},
             )
         job_record = _job_for_context(audit_job_id, context)
+        if target_school and target_school != school_scope.record_school(job_record):
+            raise school_scope.Denied(409,"Source job belongs to a different school")
         response = _build_route_insert_proposals(job_record, payload_dict)
         response["summary"]["requested_by"] = context.email
 
@@ -3761,6 +3835,7 @@ def workbook_submit(
     payload: FlexiblePayload | None = Body(default=None),
     context: UserContext = Depends(current_user_context),
 ) -> JSONResponse:
+    school_scope.submission()
     try:
         response = backend_service._handle_workbook_submit(
             _payload_dict(payload), user_email=context.email
@@ -3827,6 +3902,8 @@ def create_job(
     config_payload = payload_dict.get("config") or {}
     prepared_payload = payload_dict.get("prepared_payload") or {}
     metadata = payload_dict.get("metadata") or {}
+    if school_scope.enabled() and set(metadata).intersection({"pair_id","paired_job_ids","period","measurement_kind","return_dependency_status","pair_request_hash"}):
+        raise BackendHttpError(422,{"error":"Paired job metadata is managed by the scheduler"})
     summary = backend_service.JOB_STORE.create_job(
         config_payload,
         prepared_payload,

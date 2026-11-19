@@ -107,6 +107,12 @@ class Directory:
             return [dict(r) for r in db.execute("""SELECT s.id,s.name,m.role FROM memberships m
                 JOIN schools s ON s.id=m.school_id WHERE email=? ORDER BY s.name""",(email(member),))]
 
+    def available(self, member, admin=False):
+        if not admin:
+            return self.mine(member)
+        with self.transaction() as db:
+            return [dict(r) for r in db.execute("SELECT id,name,'school_admin' AS role FROM schools ORDER BY name")]
+
     def snapshot(self):
         with self.transaction() as db:
             return {"schools":[dict(r) for r in db.execute("SELECT id,name FROM schools ORDER BY name")],

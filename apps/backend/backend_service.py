@@ -7,6 +7,7 @@ import io
 import json
 import math
 import os
+import school_scope
 import sys
 import tempfile
 import threading
@@ -430,6 +431,8 @@ def _save_runtime_job(record: dict[str, Any]) -> None:
     try:
         store.upsert_job(record)
     except Exception:
+        if school_scope.enabled():
+            raise
         traceback.print_exc()
 
 
@@ -447,6 +450,8 @@ def _save_runtime_side_tool(tool_key: str, record: dict[str, Any]) -> None:
     try:
         store.upsert_side_tool_run(tool_key, record)
     except Exception:
+        if school_scope.enabled():
+            raise
         traceback.print_exc()
 
 
@@ -2860,6 +2865,8 @@ def _direct_school_compatible_records(
         return [record]
     records: list[dict[str, Any]] = []
     for entry in JOB_STORE.list_jobs(user_email=user_email, include_all=include_all):
+        if school_scope.record_school(entry) != school_scope.record_school(record):
+            continue
         if _job_kind(entry) != DIRECT_SCHOOL_JOB_KIND:
             continue
         if str(dict(entry.get("metadata") or {}).get("analysis_signature") or "") != signature:
@@ -3753,6 +3760,7 @@ class JobStore:
         normalized_owner_email = _normalize_email(owner_email)
         initial_status = str(status or "queued").strip().lower() or "queued"
         metadata_payload = deepcopy(metadata or {})
+        school_scope.stamp(metadata_payload)
         metadata_payload["job_queue_scope"] = JOB_QUEUE_SCOPE
         record = {
             "job_id": job_id,
@@ -4088,6 +4096,7 @@ class SideToolHistoryStore:
             "route_insert_result": deepcopy(payload.get("route_insert_result") or {}),
             "summary": deepcopy(payload.get("summary") or {}),
         }
+        school_scope.stamp(record["summary"])
         summary = self._summary_for_record(record)
         with self.lock:
             _save_runtime_side_tool(self.tool_key, record)

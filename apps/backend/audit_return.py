@@ -29,6 +29,7 @@ def related_pair_records(record, get_job):
         if (other_meta.get("pair_id") != meta["pair_id"]
                 or other_meta.get("paired_job_ids") != ids
                 or other_meta.get("job_queue_scope") != meta.get("job_queue_scope")
+                or other_meta.get("school_id") != meta.get("school_id")
                 or str(other.get("owner_email") or "").lower() != str(record.get("owner_email") or "").lower()):
             raise ValueError("Paired history identity mismatch.")
         records[job_id] = other

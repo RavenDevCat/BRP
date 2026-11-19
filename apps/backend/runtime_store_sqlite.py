@@ -7,6 +7,7 @@ import json
 import math
 import logging
 import os
+import school_scope
 from pathlib import Path
 import sqlite3
 import threading
@@ -314,6 +315,16 @@ class SqliteRuntimeStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_history_group_preferences_group
                     ON history_group_preferences(group_id);
+                CREATE TABLE IF NOT EXISTS school_folders(
+                    group_id TEXT PRIMARY KEY REFERENCES history_groups(group_id) ON DELETE CASCADE,
+                    school_id TEXT NOT NULL
+                );
+                CREATE TRIGGER IF NOT EXISTS school_job_immutable BEFORE UPDATE OF metadata_json ON jobs
+                WHEN json_extract(OLD.metadata_json,'$.school_id') IS NOT json_extract(NEW.metadata_json,'$.school_id')
+                BEGIN SELECT RAISE(ABORT,'Cannot reassign job school'); END;
+                CREATE TRIGGER IF NOT EXISTS school_side_immutable BEFORE UPDATE OF summary_json ON side_tool_runs
+                WHEN json_extract(OLD.summary_json,'$.school_id') IS NOT json_extract(NEW.summary_json,'$.school_id')
+                BEGIN SELECT RAISE(ABORT,'Cannot reassign history school'); END;
                 """
                 )
                 conn.execute("BEGIN IMMEDIATE")
@@ -984,6 +995,8 @@ class SqliteRuntimeStore:
         self.initialize()
         with self.connect() as conn:
             conn.execute("BEGIN")
+            if school_scope.current.get() and not school_scope.visible(school_scope.item_school(conn,"route_audit",job_id)):
+                return None
             return self._tx_job(conn, job_id)
 
 
@@ -1017,7 +1030,8 @@ class SqliteRuntimeStore:
         sql += " ORDER BY COALESCE(created_at, started_at, finished_at, '') DESC, job_id DESC"
         with self.connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._job_summary_from_row(row) for row in rows]
+        summaries = [self._job_summary_from_row(row) for row in rows]
+        return [r for r in summaries if school_scope.visible(school_scope.record_school(r))]
 
     def get_job_result_summaries(self, job_ids: list[str]) -> dict[str, dict[str, Any]]:
         """Project list-only fields without loading route geometry into Python."""
@@ -1440,7 +1454,7 @@ class SqliteRuntimeStore:
         if not row:
             return None
         payload = json_loads(row["record_json"], {})
-        return payload if isinstance(payload, dict) else None
+        return payload if isinstance(payload, dict) and school_scope.visible(school_scope.record_school(payload)) else None
 
     def list_side_tool_runs(self, tool_key: str, user_email: str = "", include_all: bool = False) -> list[dict[str, Any]]:
         self.initialize()
@@ -1474,7 +1488,8 @@ class SqliteRuntimeStore:
         sql += " ORDER BY COALESCE(created_at, '') DESC, run_id DESC"
         with self.connect() as conn:
             rows = conn.execute(sql, params).fetchall()
-        return [self._side_tool_summary_from_row(row) for row in rows]
+        summaries = [self._side_tool_summary_from_row(row) for row in rows]
+        return [r for r in summaries if school_scope.visible(school_scope.record_school(r))]
 
     def delete_side_tool_run(self, tool_key: str, run_id: str) -> bool:
         self.initialize()
@@ -1530,6 +1545,9 @@ class SqliteRuntimeStore:
                     """,
                     (normalized_user, scope, normalized_user),
                 ).fetchall()
+            if school_scope.current.get():
+                schools = dict(conn.execute("SELECT group_id,school_id FROM school_folders"))
+                groups = [g for g in groups if school_scope.visible(schools.get(g["group_id"]))]
             group_ids = [str(group["group_id"]) for group in groups]
             if not group_ids:
                 return []
@@ -1654,6 +1672,8 @@ class SqliteRuntimeStore:
         include_all: bool = False,
     ) -> str | None:
         normalized_user = normalize_email(user_email)
+        if school_scope.current.get() and not school_scope.visible(school_scope.group_school(conn,group_id)):
+            return None
         row = conn.execute(
             """
             SELECT history_groups.owner_email, history_group_members.role
@@ -1711,6 +1731,8 @@ class SqliteRuntimeStore:
             """,
             (scope, owner_email),
         ).fetchone()
+        if row and school_scope.group_school(conn,row["group_id"]) != school_scope.item_school(conn,scope,item_id):
+            return None
         return str(row["group_id"]) if row else None
 
     @staticmethod
@@ -1751,7 +1773,7 @@ class SqliteRuntimeStore:
             """,
             (normalized_owner, scope, normalized_owner, normalized_owner),
         ).fetchone()
-        if not preference:
+        if not preference or school_scope.group_school(conn,preference["group_id"]) != school_scope.item_school(conn,scope,item_id):
             return
         now = utc_now_iso()
         conn.execute(
@@ -2044,6 +2066,9 @@ class SqliteRuntimeStore:
                 (scope, normalized_owner, normalized_name),
             ).fetchone()
             group_id = str(row["group_id"]) if row else uuid4().hex
+            school = school_scope.group_target(conn,scope,normalized_ids)
+            if row and school_scope.group_school(conn,group_id) != school:
+                raise school_scope.Denied(409,"Folder belongs to a different workspace; choose another name")
             if not row:
                 conn.execute(
                     """
@@ -2060,6 +2085,8 @@ class SqliteRuntimeStore:
                         now,
                     ),
                 )
+            if not row and school:
+                conn.execute("INSERT INTO school_folders VALUES(?,?)",(group_id,school))
             conn.execute(
                 """
                 INSERT INTO history_group_members(
@@ -2351,7 +2378,10 @@ class SqliteRuntimeStore:
         with self.connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             target_owner = ""
+            school = school_scope.group_target(conn,scope,normalized_ids)
             if target_group_id:
+                if school_scope.group_school(conn,target_group_id) != school:
+                    raise school_scope.Denied(409,"Folder and items must belong to the same school")
                 target = conn.execute(
                     """
                     SELECT owner_email FROM history_groups

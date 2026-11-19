@@ -6,6 +6,7 @@ export type ApiUser = {
     email: string;
     is_admin: boolean;
     school_directory_enabled?: boolean;
+    school_scopes_enabled?: boolean;
     auth_mode: string;
     auth?: AuthConfig;
 };
@@ -1139,11 +1140,16 @@ type FleetPlannerHistoryResponse = {
     jobs: FleetPlannerHistorySummary[];
 };
 
+let submissionSchool="";
+export function selectSubmissionSchool(id:string){submissionSchool=id;}
+export const getSchoolChoices=()=>apiFetch<{schools:{id:string;name:string;role:SchoolRole}[]}>("/me/school-workspaces");
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`, {
         ...init,
         headers: {
             Accept: "application/json",
+            ...(submissionSchool && init?.method && init.method!=="GET" ? {"X-BRP-School":submissionSchool}:{}),
             ...(init?.headers ?? {}),
         },
     });

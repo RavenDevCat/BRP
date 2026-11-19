@@ -489,6 +489,34 @@ def _history_group_item_ids(value: Any) -> list[str]:
     return item_ids
 
 
+def _folder_selection(scope, value, context):
+    selected = _history_group_item_ids(value)
+    paired = school_scope.enabled() and scope in {"route_audit","distance_direct_school"}
+    entries = {r["job_id"]:r for r in _history_entries_for_scope(scope,context)} if paired else {}
+    visible = entries.keys() if paired else _history_item_ids_for_scope(scope,context)
+    unavailable = sorted(set(selected) - visible)
+    if unavailable:
+        raise BackendHttpError(400,{"error":"Some selected history items are no longer available.","item_ids":unavailable})
+    if paired:
+        from audit_return import related_pair_records
+        expanded = set(selected)
+        for key in tuple(selected):
+            entry = entries[key]
+            if not (entry.get("metadata") or {}).get("pair_id"):
+                continue
+            try:
+                pair = related_pair_records(entry,entries.get)
+            except ValueError as exc:
+                raise BackendHttpError(409,{"error":"Paired history identity mismatch."}) from exc
+            if len(pair)!=2:
+                raise BackendHttpError(409,{"error":"Both parts of the paired schedule must be available."})
+            for member in pair:
+                if member["job_id"] not in expanded:
+                    expanded.add(member["job_id"])
+                    selected.append(member["job_id"])
+    return selected
+
+
 def _history_group_member(value: Any) -> str:
     email = backend_service._normalize_email(value)
     if not email or "@" not in email or len(email) > 254:
@@ -780,16 +808,7 @@ def assign_history_group(
 ) -> JSONResponse:
     body = _payload_dict(payload)
     name = _history_group_name(body.get("name"))
-    item_ids = _history_group_item_ids(body.get("item_ids"))
-    unavailable = sorted(set(item_ids) - _history_item_ids_for_scope(scope, context))
-    if unavailable:
-        raise BackendHttpError(
-            400,
-            {
-                "error": "Some selected history items are no longer available.",
-                "item_ids": unavailable,
-            },
-        )
+    item_ids = _folder_selection(scope,body.get("item_ids"),context)
     try:
         group = backend_service._runtime_sqlite_store().assign_history_group(
             scope, context.email, name, item_ids, include_all=context.is_admin
@@ -844,16 +863,7 @@ def move_history_group_items(
     if scope not in HISTORY_GROUP_SCOPES:
         raise BackendHttpError(404, {"error": f"Unknown history scope: {scope}"})
     body = _payload_dict(payload)
-    item_ids = _history_group_item_ids(body.get("item_ids"))
-    unavailable = sorted(set(item_ids) - _history_item_ids_for_scope(scope, context))
-    if unavailable:
-        raise BackendHttpError(
-            400,
-            {
-                "error": "Some selected history items are no longer available.",
-                "item_ids": unavailable,
-            },
-        )
+    item_ids = _folder_selection(scope,body.get("item_ids"),context)
     group_id = str(body.get("group_id") or "").strip() or None
     _school_folder_gate(group_id,True)
     try:

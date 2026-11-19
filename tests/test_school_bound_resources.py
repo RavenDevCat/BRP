@@ -73,8 +73,9 @@ def test_files_lists_exports_and_revocation(schools):
         {"route_id":"R1","status":"resolved","riders":2,"total_duration_s":3599,"stops":[]}]})
     store.upsert_job(record)
     folders="/api/history-groups/route_audit"
-    resp=c.post(folders,headers=headers("north"),json={"name":"Ops","item_ids":[am,pm]})
+    resp=c.post(folders,headers=headers("north"),json={"name":"Ops","item_ids":[am]})
     assert resp.status_code==200,resp.text
+    assert set(resp.json()["group"]["item_ids"])=={am,pm}
     group=folders+"/"+resp.json()["group"]["group_id"]
     assert c.put(group+"/members/view@example.test",headers=headers("north"),json={"role":"viewer"}).status_code==200
     assert c.put(group+"/members/south@example.test",headers=headers("north"),json={"role":"viewer"}).status_code==403
@@ -92,6 +93,8 @@ def test_files_lists_exports_and_revocation(schools):
     db.change(a,"view@example.test",None,"viewer","admin@example.test")
     assert c.get(export,headers=headers("view")).status_code==404
     assert c.get(group,headers=headers("view")).status_code==404
+    moved=c.post(folders+"/items",headers=headers("north"),json={"group_id":None,"item_ids":[pm]})
+    assert moved.status_code==200 and not c.get(group,headers=headers("north")).json()["group"]["item_ids"]
     assert c.get(export,headers={"Authorization":"Bearer qa-only"}).status_code==401
 
 

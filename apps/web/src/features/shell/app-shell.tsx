@@ -467,10 +467,11 @@ function NavItem({
     const Icon = item.icon;
     const active =
         pathname === item.to ||
-        (item.to !== "/" && pathname.startsWith(item.to));
+        (item.to !== "/" && item.to !== "/admin" && pathname.startsWith(item.to + "/"));
     return (
         <Link
             to={item.to}
+            aria-current={active ? "page" : undefined}
             className={cn(
                 "flex h-10 items-center gap-3 rounded-md px-3 text-sm font-medium text-muted-foreground transition",
                 active && "bg-muted text-foreground",

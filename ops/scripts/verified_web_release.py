@@ -16,12 +16,15 @@ class Scripts(HTMLParser):
         super().__init__()
         self.modules = []
         self.dependencies = []
+        self.icons = []
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
         if tag == "script" and a.get("type") == "module" and a.get("src"):
             self.modules.append(a["src"])
         if tag == "link" and a.get("rel") in {"modulepreload","stylesheet"}:
             self.dependencies.append(a.get("href",""))
+        if tag == "link" and "icon" in a.get("rel","").lower().split():
+            self.icons.append(a.get("href",""))
 
 
 def verified_entry(root, version):
@@ -35,6 +38,12 @@ def verified_entry(root, version):
     for href in page.dependencies:
         if not re.fullmatch(r"/assets/[\w.-]+",href) or not (root/href.lstrip("/")).is_file():
             raise ValueError("Active page references an unavailable dependency")
+    for href in page.icons:
+        if not re.fullmatch(r"/(?:assets/)?[\w-]+\.(?:svg|png|ico)", href):
+            raise ValueError("Unexpected application icon path")
+        icon = root / href.lstrip("/")
+        if not icon.is_file() or (os.name == "posix" and not (icon.stat().st_mode & 0o004)):
+            raise ValueError("Application icon is missing or not publicly readable")
     entry = root/page.modules[0].lstrip("/")
     if not re.search(rb"(?<![0-9a-f])"+version.encode()+rb"(?![0-9a-f])",entry.read_bytes()):
         raise ValueError("Active JavaScript entry is not the requested version")

@@ -65,6 +65,22 @@ const mobileNavItems = [
 const productNameKey = "BRP: Bus Route Planner";
 const appVersion = String(import.meta.env.VITE_APP_VERSION || "dev").trim();
 
+function BrandMark({ className }: { className: string }) {
+    return (
+        <svg className={className} viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+            <rect width="64" height="64" rx="14" fill="#0f7c86" />
+            <g fill="none" stroke="white" strokeWidth="4">
+                <path d="M20 16h24c4.4 0 8 3.6 8 8v18c0 3.3-2.7 6-6 6H18c-3.3 0-6-2.7-6-6V24c0-4.4 3.6-8 8-8Z" strokeLinejoin="round" />
+                <path d="M19 25h26 M20 33h9m6 0h9 M21 48v4m22-4v4" strokeLinecap="round" />
+            </g>
+            <g fill="white">
+                <circle cx="22" cy="41" r="3" />
+                <circle cx="42" cy="41" r="3" />
+            </g>
+        </svg>
+    );
+}
+
 export function AppShell({ children }: { children: ReactNode }) {
     const t = useT();
     const pathname = useRouterState({
@@ -113,12 +129,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="min-h-screen bg-background">
             <aside className="fixed inset-y-0 left-0 hidden w-64 border-r border-border bg-surface lg:flex lg:flex-col">
                 <div className="flex h-16 items-center gap-3 border-b border-border px-5">
-                    <img
-                        className="h-9 w-9 rounded-md"
-                        src="/bus-front.svg"
-                        alt=""
-                        aria-hidden="true"
-                    />
+                    <BrandMark className="h-9 w-9 shrink-0 rounded-md" />
                     <div>
                         <div className="text-sm font-semibold">
                             {t(productNameKey)}
@@ -207,12 +218,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 <header className="sticky top-0 z-10 flex min-h-16 items-center justify-between gap-3 border-b border-border bg-surface/95 px-4 backdrop-blur lg:px-6">
                     <div className="min-w-0">
                         <div className="flex items-center gap-2 lg:hidden">
-                            <img
-                                className="h-6 w-6 rounded"
-                                src="/bus-front.svg"
-                                alt=""
-                                aria-hidden="true"
-                            />
+                            <BrandMark className="h-6 w-6 shrink-0 rounded" />
                             <span className="text-sm font-semibold">
                                 {t(productNameKey)}
                             </span>

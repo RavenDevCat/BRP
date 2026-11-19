@@ -111,6 +111,22 @@ def bundle(p,v):
     return p
 
 
+def test_release_rejects_missing_or_owner_only_icon(tmp_path):
+    stage=bundle(tmp_path/"stage","2222222")
+    html=stage/"index.html"
+    html.write_text('<link rel="icon" href="/bus-front.svg">'+html.read_text())
+    with pytest.raises(ValueError,match="icon"):
+        release.verified_entry(stage,"2222222")
+    icon=stage/"bus-front.svg"
+    icon.write_text('<svg xmlns="http://www.w3.org/2000/svg"/>')
+    if sys.platform!="win32":
+        icon.chmod(0o600)
+        with pytest.raises(ValueError,match="publicly readable"):
+            release.verified_entry(stage,"2222222")
+    icon.chmod(0o644)
+    assert release.verified_entry(stage,"2222222")
+
+
 def test_wrong_entry_restore_and_retention(tmp_path):
     web=tmp_path/"web";web.mkdir()
     dist=bundle(web/"dist","1111111")

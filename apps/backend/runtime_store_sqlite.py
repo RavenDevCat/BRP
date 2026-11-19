@@ -1021,7 +1021,7 @@ class SqliteRuntimeStore:
                     LEFT JOIN history_group_members
                         ON history_group_members.group_id = history_groups.group_id
                         AND history_group_members.member_email = ?
-                    WHERE history_group_items.scope = 'route_audit'
+                    WHERE history_group_items.scope = """ + ("CASE WHEN json_extract(jobs.metadata_json,'$.job_kind')='direct_school_analysis' THEN 'distance_direct_school' ELSE 'route_audit' END" if school_scope.enabled() else "'route_audit'") + """
                         AND history_group_items.item_id = jobs.job_id
                         AND (
                             history_groups.owner_email = ?

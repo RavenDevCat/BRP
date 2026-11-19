@@ -17,6 +17,7 @@ from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 import school_scope
+from history_adoption import HistoryAdmin
 
 school_scope.check_runtime()
 
@@ -644,6 +645,43 @@ def _directory_response(payload, status=200):
     return JSONResponse(payload, status_code=status, headers={"Cache-Control":"private, no-store"})
 
 
+def _history_admin():
+    if not school_scope.enabled():
+        raise BackendHttpError(404,{"error":"History administration is disabled"})
+    return HistoryAdmin(backend_service._runtime_sqlite_store(),school_directory.configured_path(),backend_service.ADMIN_EMAILS)
+
+
+@_api_route("GET","/admin/history-adoption")
+def adoption_inventory(context: UserContext=Depends(require_admin_context)):
+    return _directory_response(_history_admin().inventory())
+
+
+@_api_route("POST","/admin/history-adoption/preview")
+def adoption_preview(payload: FlexiblePayload, context: UserContext=Depends(require_admin_context)):
+    body=_payload_dict(payload)
+    return _directory_response(_history_admin().preview(context.email,body.get("school"),body.get("selection")))
+
+
+@_api_route("POST","/admin/history-adoption/confirm")
+def adoption_confirm(payload: FlexiblePayload, context: UserContext=Depends(require_admin_context)):
+    body=_payload_dict(payload)
+    if set(body)!={"token","confirmed"} or body["confirmed"] is not True:
+        raise BackendHttpError(422,{"error":"Explicit confirmation of a preview is required"})
+    return _directory_response(_history_admin().confirm(context.email,body["token"]))
+
+
+@_api_route("POST","/admin/history-adoption/rename")
+def adoption_rename(payload: FlexiblePayload, context: UserContext=Depends(require_admin_context)):
+    body=_payload_dict(payload)
+    if not isinstance(body.get("previous"),str):raise BackendHttpError(422,{"error":"Original task name required"})
+    return _directory_response(_history_admin().rename(context.email,body.get("ref"),body.get("name"),body["previous"]))
+
+
+@_api_route("GET","/admin/history-adoption/events")
+def adoption_events(before: int=0, context: UserContext=Depends(require_admin_context)):
+    return _directory_response(_history_admin().events(before))
+
+
 @app.exception_handler(school_directory.DirectoryError)
 def directory_error(_request: Request, exc: school_directory.DirectoryError):
     return _directory_response({"error":str(exc)}, exc.status)
@@ -727,6 +765,9 @@ def rename_history_item(
         if scope == "distance_direct_school" and backend_service._job_kind(record) != backend_service.DIRECT_SCHOOL_JOB_KIND:
             raise BackendHttpError(404, {"error": "Direct-to-School Analysis job not found."})
         _require_record_mutation_access(record, context)
+        if school_scope.enabled() and context.is_admin:
+            _history_admin().rename(context.email,"job:"+normalized_item_id,name)
+            return _directory_response({"item_id":normalized_item_id,"name":name,"renamed":True})
         metadata = dict(record.get("metadata") or {})
         metadata["job_name"] = name
         updated = backend_service.JOB_STORE.update_job(
@@ -747,6 +788,9 @@ def rename_history_item(
             record = _route_insert_history_for_context(normalized_item_id, context)
             store = backend_service.ROUTE_INSERT_ADVISOR_HISTORY_STORE
             _require_record_mutation_access(record, context)
+        if school_scope.enabled() and context.is_admin:
+            _history_admin().rename(context.email,"run:"+store.tool_key+":"+normalized_item_id,name)
+            return _directory_response({"item_id":normalized_item_id,"name":name,"renamed":True})
         updated = store.rename(normalized_item_id, name)
 
     if not updated:

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, ChevronLeft, ChevronRight, Plus, RefreshCw, Search, UserMinus, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { HistoryAdministration, HistoryChanges } from "./history-admin-panel";
 import { useT } from "@/lib/i18n/context";
 import { changeSchoolMember, createSchool, getCurrentUser, getSchoolDirectory, getUserAuditAccess,
     type DirectoryUser, type SchoolDirectory, type SchoolRole } from "@/lib/api";
@@ -19,10 +20,10 @@ export function UsersPage(){
     const t=useT(), me=useQuery({queryKey:["me"],queryFn:getCurrentUser});
     if(me.isPending)return <p>{t("Loading…")}</p>;
     if(!me.data?.is_admin || !me.data.school_directory_enabled)return <p>{t("Access unavailable")}</p>;
-    return <DirectoryConsole key={me.data.email} actor={me.data.email}/>;
+    return <DirectoryConsole key={me.data.email} actor={me.data.email} scoped={!!me.data.school_scopes_enabled}/>;
 }
 
-function DirectoryConsole({actor}:{actor:string}){
+function DirectoryConsole({actor,scoped}:{actor:string;scoped:boolean}){
     const t=useT(), client=useQueryClient(), key=["school-directory",actor];
     const query=useQuery({queryKey:key,queryFn:getSchoolDirectory,staleTime:0});
     const [tab,setTab]=useState("Users"),[newSchool,setNewSchool]=useState(false);
@@ -57,7 +58,7 @@ function DirectoryConsole({actor}:{actor:string}){
             <Button type="submit" disabled={busy}>{t("Create")}</Button>
         </form>}
         <nav aria-label={t("Users & access")} className="flex flex-wrap gap-1 border-b border-border">
-            {["Users","School workspaces","Change log"].map(k=><button type="button" key={k} aria-pressed={tab===k}
+            {["Users","School workspaces",...(scoped?["History administration"]:[]),"Change log"].map(k=><button type="button" key={k} aria-pressed={tab===k}
                 className={"border-b-2 px-3 py-2 text-sm "+(tab===k?"border-primary font-semibold text-primary":"border-transparent text-muted-foreground")}
                 onClick={()=>setTab(k)}>{t(k)}</button>)}
         </nav>
@@ -90,9 +91,11 @@ function DirectoryConsole({actor}:{actor:string}){
                 <select className={field} value={active.id} onChange={e=>setSchool(e.target.value)}>{data.schools.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
                 <SchoolMembers key={active.id} data={data} id={active.id} busy={busy} run={task=>mutation.mutate(task)}/></>:
                 <p className="text-sm text-muted-foreground">{t("No school workspaces")}</p>}
-            <p className="text-xs text-muted-foreground">{t("School memberships do not change existing task access.")}</p>
+            <p className="text-xs text-muted-foreground">{t(scoped?"Unassigned history requires an administrator's confirmed assignment.":"School memberships do not change existing task access.")}</p>
         </section>}
+        {scoped&&tab==="History administration"&&<HistoryAdministration actor={actor} schools={data.schools}/>}
         {tab==="Change log"&&<section className="space-y-1">
+            {scoped&&<><HistoryChanges actor={actor} schools={data.schools}/><h3 className="pt-5 text-sm font-semibold">{t("School memberships")}</h3></>}
             {!data.changes.length&&<p className="text-sm text-muted-foreground">{t("No changes recorded")}</p>}
             {data.changes.map(c=><div key={c.seq} className="grid gap-1 border-b border-border py-2 text-sm sm:grid-cols-3">
                 <span>{schools.get(c.school_id)}<br/><small>{new Date(c.at).toLocaleString()}</small></span>

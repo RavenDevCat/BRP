@@ -1186,6 +1186,20 @@ export type SchoolDirectory = { shared_records:number; schools: {id:string;name:
     users: DirectoryUser[]; changes: {seq:number;school_id:string;actor:string;subject:string;action:string;
         previous:SchoolRole|null;current:SchoolRole|null;at:string}[] };
 const schoolDirectoryPath="/admin/school-directory";
+export type AdoptionObject={ref:string;kind:string;title:string;owner:string;school:string|null;scope:string;status:string;paired?:boolean};
+export type AdoptionPreview={school:string;school_name:string;token:string;expires:number;open_legacy:boolean;
+    objects:(AdoptionObject & {reason:string;shared:boolean})[];
+    users:{email:string;gained:string[];lost:string[];legacy_lost:string[]}[]};
+export type AdminHistoryEvent={seq:number;at:string;actor:string;action:string;ref:string;owner:string;
+    before_value:string|null;after_value:string;batch:string};
+const historyAdminPath="/admin/history-adoption";
+const adminHistoryPost=<T>(op:string,body:unknown)=>apiFetch<T>(historyAdminPath+"/"+op,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+export const getAdoptionInventory=()=>apiFetch<{items:AdoptionObject[]}>(historyAdminPath);
+export const previewAdoption=(school:string,selection:string[])=>adminHistoryPost<AdoptionPreview>("preview",{school,selection});
+export const confirmAdoption=(token:string)=>adminHistoryPost<{batch:string;count:number}>("confirm",{token,confirmed:true});
+export const renameAdminTask=(ref:string,previous:string,name:string)=>adminHistoryPost<{count:number}>("rename",{ref,previous,name});
+export const adminHistoryEvents=(before:number)=>apiFetch<{items:AdminHistoryEvent[]}>(historyAdminPath+"/events?before="+before);
 export const getSchoolDirectory=()=>apiFetch<SchoolDirectory>(schoolDirectoryPath);
 export const getUserAuditAccess=(email:string,page:number)=>apiFetch<{total:number;items:{
     id:string;title:string;own:boolean;shared:boolean;admin:boolean;folders:string[]}[]}>(

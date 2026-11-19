@@ -1193,8 +1193,9 @@ export type AdoptionPreview={school:string;school_name:string;token:string;expir
 export type AdminHistoryEvent={seq:number;at:string;actor:string;action:string;ref:string;owner:string;
     before_value:string|null;after_value:string;batch:string};
 const historyAdminPath="/admin/history-adoption";
-const adminHistoryPost=<T>(op:string,body:unknown)=>apiFetch<T>(historyAdminPath+"/"+op,{
-    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+function adminHistoryPost<T>(op:string,body:unknown){
+    return apiFetch<T>(historyAdminPath+"/"+op,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+}
 export const getAdoptionInventory=()=>apiFetch<{items:AdoptionObject[]}>(historyAdminPath);
 export const previewAdoption=(school:string,selection:string[])=>adminHistoryPost<AdoptionPreview>("preview",{school,selection});
 export const confirmAdoption=(token:string)=>adminHistoryPost<{batch:string;count:number}>("confirm",{token,confirmed:true});

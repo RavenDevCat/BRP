@@ -35,11 +35,13 @@ function DirectoryConsole({actor}:{actor:string}){
     for(const m of data.members)if(!users.has(m.email))users.set(m.email,{email:m.email,system_admin:false,owned_tasks:0,folder_roles:[]});
     const filtered=[...users.values()].filter(u=>u.email.toLowerCase().includes(search.trim().toLowerCase())).sort((a,b)=>a.email.localeCompare(b.email));
     const user=filtered.find(u=>u.email===selectedEmail)??filtered[0];
-    const active=data.schools.find(s=>s.id===school)??data.schools[0];
+    const active=school?data.schools.find(s=>s.id===school):data.schools[0];
     const schools=new Map(data.schools.map(s=>[s.id,s.name]));
     const busy=mutation.isPending;
     const create=(e:FormEvent)=>{e.preventDefault();mutation.mutate(async()=>{
-        const x=await createSchool(name,manager);setSchool(x.id);setName("");setManager("");setNewSchool(false);setTab("School workspaces");
+        const x=await createSchool(name,manager);
+        await client.invalidateQueries({queryKey:key});
+        setSchool(x.id);setName("");setManager("");setNewSchool(false);setTab("School workspaces");
     })};
     return <main className="mx-auto max-w-6xl space-y-4 rounded border border-border bg-surface p-4 sm:p-6">
         <header className="flex flex-wrap items-center justify-between gap-3">
@@ -83,7 +85,7 @@ function DirectoryConsole({actor}:{actor:string}){
                         <span className={chip}>{t(f.role.charAt(0).toUpperCase()+f.role.slice(1))}</span></div>)}
                 </section><UserAuditAccess key={user.email} email={user.email}/></section>}
         </div>}
-        {tab==="School workspaces"&&<section className="space-y-3">
+        {tab==="School workspaces"&&!newSchool&&<section className="space-y-3">
             {active?<><label className="flex flex-wrap items-center gap-2 text-sm"><Building2 size={16}/>{t("School workspace")}
                 <select className={field} value={active.id} onChange={e=>setSchool(e.target.value)}>{data.schools.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
                 <SchoolMembers key={active.id} data={data} id={active.id} busy={busy} run={task=>mutation.mutate(task)}/></>:

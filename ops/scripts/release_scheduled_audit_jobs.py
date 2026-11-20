@@ -15,7 +15,7 @@ import backend_service  # noqa: E402
 
 def main() -> int:
     released = backend_service.JOB_STORE.release_due_scheduled_jobs()
-    backend_service._schedule_queued_jobs()
+    # The resident backend owns worker processes and their reapers.
     if released:
         print("released scheduled jobs:", ", ".join(str(job.get("job_id")) for job in released))
     else:

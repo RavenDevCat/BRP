@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -12,6 +14,15 @@ import threading
 import time
 import traceback
 from typing import Any, Protocol
+from uuid import uuid4
+
+try:
+    import fcntl
+except ImportError:  # Windows development hosts
+    fcntl = None
+
+_slot_lock = threading.Lock()
+_log = logging.getLogger(__name__)
 
 
 def utc_now_iso() -> str:
@@ -34,8 +45,12 @@ def pid_is_alive(pid: int | None) -> bool:
     try:
         os.kill(pid, 0)
         return True
-    except OSError:
+    except PermissionError:
+        return True
+    except ProcessLookupError:
         return False
+    except OSError:
+        return os.name == "posix"
 
 
 def safe_int(value: object, default: int = 0) -> int:
@@ -149,11 +164,29 @@ class JobConcurrencyGate:
     def enabled(self) -> bool:
         return self.limit > 0
 
+    @contextmanager
+    def _locked(self):
+        # The stable parent inode coordinates both backends across slot reuse.
+        with _slot_lock:
+            if fcntl is None:
+                yield
+                return
+            fd = os.open(self.slot_dir, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                yield
+            finally:
+                os.close(fd)
+
     def acquire(self, job_id: str) -> Path | None:
         if not self.enabled:
             return None
         self.slot_dir.mkdir(parents=True, exist_ok=True)
-        self.cleanup_stale_slots()
+        with self._locked():
+            self._cleanup_locked()
+            return self._acquire_locked(job_id)
+
+    def _acquire_locked(self, job_id: str) -> Path | None:
         for slot_number in range(1, self.limit + 1):
             slot_path = self.slot_dir / f"slot-{slot_number}"
             try:
@@ -173,46 +206,64 @@ class JobConcurrencyGate:
     def attach_worker(self, slot_path: Path | None, worker_pid: int) -> None:
         if not slot_path:
             return
-        if not slot_path.exists():
-            return
-        metadata = self._read_metadata(slot_path)
-        metadata["worker_pid"] = int(worker_pid)
-        metadata["attached_at"] = utc_now_iso()
-        try:
+        with self._locked():
+            if not slot_path.exists():
+                return
+            metadata = self._read_metadata(slot_path)
+            metadata["worker_pid"] = int(worker_pid)
+            metadata["attached_at"] = utc_now_iso()
             self._write_metadata(slot_path, metadata)
-        except FileNotFoundError:
-            return
 
     def release(
         self, slot_path: str | Path | None, *, job_id: str | None = None
     ) -> None:
-        if not slot_path:
+        if not slot_path or not self.slot_dir.is_dir():
+            return
+        slot = Path(slot_path)
+        if slot.parent.resolve() != self.slot_dir.resolve() or not self._is_slot(slot):
+            return
+        with self._locked():
+            if self._is_slot(slot) and (job_id is None or self._read_metadata(slot).get("job_id") == job_id):
+                self._retire_locked(slot)
+
+    @staticmethod
+    def _is_slot(slot: Path) -> bool:
+        return (not slot.is_symlink() and slot.is_dir() and slot.name.startswith("slot-")
+                and slot.name[5:].isdigit())
+
+    def _retire_locked(self, slot: Path) -> None:
+        # Rename first: even legacy foreign-owned contents cannot strand capacity.
+        retired = slot.with_name(f".retired-{slot.name}-{uuid4().hex}")
+        try:
+            slot.rename(retired)
+        except FileNotFoundError:
+            return
+        except OSError:
+            _log.exception("Cannot release queue slot %s", slot)
             return
         try:
-            resolved_slot = Path(slot_path).resolve()
-            resolved_root = self.slot_dir.resolve()
-            resolved_slot.relative_to(resolved_root)
-            if resolved_slot.name.startswith("slot-"):
-                if job_id is not None:
-                    slot_job_id = str(
-                        self._read_metadata(resolved_slot).get("job_id", "")
-                    ).strip()
-                    if slot_job_id != str(job_id).strip():
-                        return
-                shutil.rmtree(resolved_slot, ignore_errors=True)
-        except Exception:
-            return
+            shutil.rmtree(retired)
+        except OSError:
+            _log.warning("Queue slot freed; retained inaccessible contents at %s", retired, exc_info=True)
 
     def cleanup_stale_slots(self) -> None:
         if not self.slot_dir.exists():
             return
+        with self._locked():
+            self._cleanup_locked()
+
+    def _cleanup_locked(self) -> None:
         for slot_path in self.slot_dir.glob("slot-*"):
-            if not slot_path.is_dir():
+            if not self._is_slot(slot_path):
                 continue
-            metadata = self._read_metadata(slot_path)
+            try:
+                metadata = self._read_metadata(slot_path)
+            except (OSError, ValueError):
+                _log.exception("Cannot verify queue slot %s; retaining it", slot_path)
+                continue
             worker_pid = safe_int(metadata.get("worker_pid"))
             if worker_pid and not pid_is_alive(worker_pid):
-                self.release(slot_path)
+                self._retire_locked(slot_path)
                 continue
             slot_age = seconds_since_iso(metadata.get("acquired_at"))
             if slot_age is None:
@@ -224,8 +275,9 @@ class JobConcurrencyGate:
                 not worker_pid
                 and slot_age is not None
                 and slot_age > self.slot_attach_stale_seconds
+                and not pid_is_alive(safe_int(metadata.get("launcher_pid")))
             ):
-                self.release(slot_path)
+                self._retire_locked(slot_path)
 
     def _metadata_path(self, slot_path: Path) -> Path:
         return slot_path / "metadata.json"
@@ -235,17 +287,22 @@ class JobConcurrencyGate:
             payload = json.loads(
                 self._metadata_path(slot_path).read_text(encoding="utf-8")
             )
-            return payload if isinstance(payload, dict) else {}
-        except Exception:
+            if not isinstance(payload, dict) or not payload.get("job_id"):
+                raise ValueError("Invalid slot metadata")
+            return payload
+        except FileNotFoundError:
             return {}
 
     def _write_metadata(self, slot_path: Path, metadata: dict[str, Any]) -> None:
-        self._metadata_path(slot_path).write_text(
+        path = self._metadata_path(slot_path)
+        pending = path.with_suffix(".tmp")
+        pending.write_text(
             json.dumps(
                 json_safe(metadata), ensure_ascii=False, indent=2, allow_nan=False
             ),
             encoding="utf-8",
         )
+        pending.replace(path)
 
 
 class JobQueueManager:

@@ -4,7 +4,6 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-import shutil
 import sys
 import time
 import traceback
@@ -56,24 +55,6 @@ def _runtime_store() -> SqliteRuntimeStore:
     store = SqliteRuntimeStore(_runtime_db_path())
     store.initialize()
     return store
-
-
-def _release_concurrency_slot() -> None:
-    slot_path = os.environ.get("BRP_JOB_CONCURRENCY_SLOT", "").strip()
-    if not slot_path:
-        return
-    try:
-        resolved_slot = Path(slot_path).resolve()
-        root_path = os.environ.get("BRP_JOB_CONCURRENCY_ROOT", "").strip()
-        if root_path:
-            resolved_slot.relative_to(Path(root_path).resolve())
-        if not resolved_slot.name.startswith("slot-"):
-            return
-        if not (resolved_slot / "metadata.json").exists():
-            return
-        shutil.rmtree(resolved_slot, ignore_errors=True)
-    except Exception:
-        return
 
 
 def _scenario_route_count(scenario: dict[str, Any]) -> int:
@@ -360,7 +341,6 @@ def main() -> int:
     if not record:
         raise SystemExit(f"Deep verification not found: {verification_id}")
     if str(record.get("status") or "").strip().lower() != "running":
-        _release_concurrency_slot()
         return 0
     parent_job = store.get_job(str(record.get("parent_job_id") or ""))
     if not parent_job or str(parent_job.get("status") or "").lower() != "succeeded":
@@ -370,7 +350,6 @@ def main() -> int:
         record["worker_pid"] = None
         record["job_slot_path"] = None
         store.upsert_deep_verification(record)
-        _release_concurrency_slot()
         return 1
 
     target = _safe_int(
@@ -378,7 +357,6 @@ def main() -> int:
     )
     if target < 0:
         _finish_slice(store, record, elapsed_seconds=0.0)
-        _release_concurrency_slot()
         return 0
     target_states = {
         str(key): dict(value or {})
@@ -389,7 +367,6 @@ def main() -> int:
     solver_seconds, remaining_provider_calls = _remaining_slice_budgets(record, target)
     if solver_seconds <= 0 or remaining_provider_calls <= 0:
         _finish_slice(store, record, elapsed_seconds=0.0)
-        _release_concurrency_slot()
         return 0
     os.environ["BRP_SOLVER_TIME_LIMIT_SECONDS"] = str(solver_seconds)
     os.environ["BRP_SOLVER_TOTAL_WALL_CLOCK_SECONDS"] = str(solver_seconds)
@@ -518,8 +495,6 @@ def main() -> int:
         else:
             _finish_slice(store, record, elapsed_seconds=elapsed_seconds)
         return 1
-    finally:
-        _release_concurrency_slot()
 
 
 if __name__ == "__main__":

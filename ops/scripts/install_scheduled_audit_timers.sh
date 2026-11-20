@@ -13,6 +13,18 @@ fi
 AM_ON_CALENDAR="${BRP_SCHEDULED_AUDIT_AM_ON_CALENDAR:-Mon..Fri 06:00:00 Asia/Shanghai}"
 PM_ON_CALENDAR="${BRP_SCHEDULED_AUDIT_PM_ON_CALENDAR:-Mon..Fri 15:40:00 Asia/Shanghai}"
 SYSTEMD_DIR="${BRP_SCHEDULED_AUDIT_SYSTEMD_DIR:-/etc/systemd/system}"
+BACKEND_UNIT="${BRP_SCHEDULED_AUDIT_BACKEND_UNIT:-brp-prod-backend.service}"
+RUN_USER="$(systemctl show "$BACKEND_UNIT" -p User --value)"
+if [[ ! "$RUN_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]] || [[ "$(id -u "$RUN_USER")" == 0 ]]; then
+  echo "A non-root backend service account is required for $BACKEND_UNIT" >&2
+  exit 1
+fi
+RUN_GROUP="$(systemctl show "$BACKEND_UNIT" -p Group --value)"
+RUN_GROUP="${RUN_GROUP:-$(id -gn "$RUN_USER")}"
+if [[ ! "$RUN_GROUP" =~ ^[a-zA-Z_][a-zA-Z0-9_-]*$ ]]; then
+  echo "Invalid backend service group" >&2
+  exit 1
+fi
 
 write_service() {
   local name="$1"
@@ -24,9 +36,10 @@ Description=BRP scheduled audit queue release ($description)
 
 [Service]
 Type=oneshot
+User=$RUN_USER
+Group=$RUN_GROUP
 WorkingDirectory=$ROOT_DIR
 ExecStart=$ROOT_DIR/ops/scripts/run_scheduled_audit_release.sh
-KillMode=process
 EOF
 }
 
@@ -41,6 +54,8 @@ Description=BRP scheduled audit queue release timer ($name)
 [Timer]
 OnCalendar=$calendar
 Persistent=false
+AccuracySec=5s
+RandomizedDelaySec=0
 Unit=$name.service
 
 [Install]

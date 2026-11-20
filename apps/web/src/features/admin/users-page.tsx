@@ -89,7 +89,7 @@ function DirectoryConsole({actor,scoped}:{actor:string;scoped:boolean}){
         {tab==="School workspaces"&&!newSchool&&<section className="space-y-3">
             {active?<><label className="flex flex-wrap items-center gap-2 text-sm"><Building2 size={16}/>{t("School workspace")}
                 <select className={field} value={active.id} onChange={e=>setSchool(e.target.value)}>{data.schools.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-                <SchoolMembers key={active.id} data={data} id={active.id} busy={busy} run={task=>mutation.mutate(task)}/></>:
+                <SchoolMembers key={active.id} data={data} knownEmails={[...users.keys()]} id={active.id} busy={busy} run={task=>mutation.mutate(task)}/></>:
                 <p className="text-sm text-muted-foreground">{t("No school workspaces")}</p>}
             <p className="text-xs text-muted-foreground">{t(scoped?"Unassigned history requires an administrator's confirmed assignment.":"School memberships do not change existing task access.")}</p>
         </section>}
@@ -118,16 +118,30 @@ function UserAuditAccess({email}:{email:string}){
             ...(r.shared?[t("Shared with all")]:[]),...r.folders].map((s,i)=><span key={i} className={chip}>{s}</span>)}</div>)}</section>;
 }
 
-function SchoolMembers({data,id,busy,run}:{data:SchoolDirectory;id:string;busy:boolean;run:(task:()=>Promise<unknown>)=>void}){
-    const t=useT(),[email,setEmail]=useState(""),[role,setRole]=useState<SchoolRole>("viewer");
+function SchoolMembers({data,id,knownEmails,busy,run}:{data:SchoolDirectory;id:string;knownEmails:string[];busy:boolean;run:(task:()=>Promise<unknown>)=>void}){
+    const t=useT(),[choice,setChoice]=useState(""),[typed,setTyped]=useState(""),[role,setRole]=useState<SchoolRole>("viewer");
     const members=data.members.filter(m=>m.school_id===id);
+    const normalize=(value:string)=>value.trim().toLowerCase();
+    const current=new Set(members.map(m=>normalize(m.email)));
+    const candidates=[...new Set(knownEmails.map(normalize))].filter(e=>e&&!current.has(e)).sort();
+    const manual=choice==="manual" || candidates.length===0;
+    const selected=manual?"manual":candidates.includes(choice)?choice:"";
+    const email=manual?normalize(typed):selected;
     return <><form className="flex flex-wrap items-end gap-2" onSubmit={e=>{e.preventDefault();run(async()=>{
-        await changeSchoolMember(id,email,role,null);setEmail("");
+        if(!email||current.has(email))return;
+        await changeSchoolMember(id,email,role,null);setChoice("");setTyped("");
     })}}>
-        <label className="grid gap-1 text-xs">{t("Member email")}<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} className={field}/></label>
+        <label className="grid min-w-0 max-w-full gap-1 text-xs">{t("Existing user")}<select
+            className={field+" w-64"} value={selected} disabled={busy} onChange={e=>setChoice(e.target.value)}>
+            {candidates.length>0&&<option value="" disabled>{t("Select a user")}</option>}
+            {candidates.map(e=><option value={e} key={e}>{e}</option>)}
+            <option value="manual">{t("Enter another email")}</option>
+        </select></label>
+        {manual&&<label className="grid gap-1 text-xs">{t("Member email")}<input type="email" required
+            disabled={busy} value={typed} onChange={e=>setTyped(e.target.value)} className={field}/></label>}
         <label className="grid gap-1 text-xs">{t("Role")}<select className={field} value={role} onChange={e=>setRole(e.target.value as SchoolRole)}>
             {roles.map(r=><option key={r} value={r}>{t(labels[r])}</option>)}</select></label>
-        <Button type="submit" disabled={busy} icon={<Plus size={15}/>}>{t("Add member")}</Button>
+        <Button type="submit" disabled={busy||!email||current.has(email)} icon={<Plus size={15}/>}>{t("Add member")}</Button>
     </form>
     <ul>{members.map(m=><li key={m.email} className="flex flex-wrap items-center gap-2 border-b border-border py-2">
         <span className="min-w-32 flex-1 break-all text-sm">{m.email}</span>

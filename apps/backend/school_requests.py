@@ -1,4 +1,4 @@
-"""Staging opt-in: personal submissions are tied to an application, never to a guessed school."""
+"""Opt-in school requests: personal submissions belong to an explicit application."""
 from contextlib import closing
 import json
 import os
@@ -13,8 +13,8 @@ def enabled():
 
 
 def setup(history):
-    if os.getenv("BRP_JOB_QUEUE_SCOPE") != "staging":
-        raise RuntimeError("School request pilot is staging only")
+    if not enabled() or os.getenv("BRP_JOB_QUEUE_SCOPE") not in {"staging", "prod"}:
+        raise RuntimeError("School requests require explicit opt-in and a known queue scope")
     history.initialize()
     with closing(history.store.connect()) as db, db:
         db.executescript("""
@@ -42,7 +42,7 @@ PRIVATE_TABLES={"jobs":"application_jobs","side_tool_runs":"application_tool_run
 
 
 def read_views(db):
-    # Connection-local projections let the existing staging scheduler use one queue.
+    # Connection-local projections let each environment use its existing scheduler.
     # An older deployment reads main.jobs only, so private records do not exist for it.
     if enabled() and db.execute("SELECT 1 FROM main.sqlite_master WHERE name='application_checkpoints'").fetchone():
         for public,private in PRIVATE_TABLES.items():

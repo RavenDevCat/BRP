@@ -1,4 +1,4 @@
-"""Explicitly authorized live staging check. Uses the existing shared database and HTTP listener only."""
+"""Explicit live checks on existing listeners. The full worker test is staging-only."""
 from base64 import b64encode
 from datetime import datetime, timedelta
 from io import BytesIO
@@ -17,11 +17,16 @@ from openpyxl import Workbook
 from school_directory import Directory
 
 
-assert sys.argv[1:]==['--live-staging'], "This writes synthetic data; require --live-staging"
-assert os.environ.get('BRP_JOB_QUEUE_SCOPE')=='staging' and os.environ['BRP_BACKEND_PORT']=='8001'
+mode=sys.argv[1:]
+scope=os.environ.get('BRP_JOB_QUEUE_SCOPE')
+port=int(os.environ['BRP_BACKEND_PORT'])
+if not ((scope,port) in {('staging',8001),('prod',8000)}
+        and (mode==['--release-smoke'] or (mode==['--live-staging'] and scope=='staging'))
+        and os.environ.get('BRP_SCHOOL_SCOPES')==os.environ.get('BRP_SCHOOL_REQUESTS')=='1'):
+    raise SystemExit("Select an enabled release for --release-smoke, or staging for --live-staging")
 dbpath=Path(os.environ['BRP_RUNTIME_DB_PATH']); directory=Directory(os.environ['BRP_SCHOOL_DIRECTORY_DB'])
 assert dbpath==Path('/opt/brp/shared/runtime/brp_runtime.sqlite') and dbpath.is_file()
-prefix='stage-app-'+uuid4().hex[:10]
+prefix='release-app-'+uuid4().hex[:12]
 user,north,south,dual=[prefix+'-'+n+'@example.invalid' for n in ('new','north','south','dual')]
 people=(user,north,south,dual)
 schools=[]; checks=[]
@@ -29,9 +34,8 @@ def good(label):
     checks.append(label);print('PASS:',label,flush=True)
 
 
-def http(method,path,actor,data=None,workspace=None,expect=(200,),port=8001):
-    # Tokens stay server-side; only the existing staging listener accepts writes.
-    assert actor in people and (port==8001 or method=='GET')
+def http(method,path,actor,data=None,workspace=None,expect=(200,)):
+    assert actor in people
     headers={'Authorization':'Bearer '+os.environ['BRP_BACKEND_SERVICE_TOKEN'],'X-BRP-User-Email':actor,'Content-Type':'application/json'}
     if workspace:headers['X-BRP-School']=workspace
     req=Request(f'http://127.0.0.1:{port}/api'+path,headers=headers,method=method,
@@ -145,6 +149,36 @@ def run():
     good('cross-school direct links still denied after approval')
 
 
+def release_smoke():
+    # No workbook, background jobs, schedules or billable routing requests.
+    for label,manager in [('A',north),('B',south)]:
+        schools.append(directory.create(prefix+' '+label,manager,manager)['id'])
+    a,b=schools
+    request='/me/school-requests'
+    assert http('GET','/me/school-workspaces',user)['requests_enabled']
+    ra,rb=[http('POST',request,user,{'school':s,'role':'operator'},expect=(201,))['id'] for s in schools]
+    f1,f2=[submit_fleet(user,'request:'+r)['job']['run_id'] for r in (ra,rb)]
+    path='/fleet-planner/history/'
+    for fid in (f1,f2):
+        http('GET',path+fid,user)
+        for other in (north,south):
+            http('GET',path+fid,other,expect=(403,404))
+            assert fid not in str(http('GET',path.rstrip('/'),other))
+    good('pending applicant can calculate and reopen results; other accounts cannot list or open them')
+    decision={'status':'approved','role':'operator'}
+    http('POST',request+'/'+ra+'/decision',south,decision,expect=(403,))
+    http('POST',request+'/'+ra+'/decision',north,decision)
+    assert http('POST',request+'/'+ra+'/decision',north,decision)['unchanged']
+    http('GET',path+f1,south,expect=(403,404))
+    http('GET',path+f1,user)
+    with sqlite3.connect(dbpath) as db:
+        assert db.execute("select json_extract(summary_json,'$.school_id') from side_tool_runs where run_id=?",(f1,)).fetchone()==(a,)
+        assert not db.execute('select 1 from side_tool_runs where run_id=?',(f2,)).fetchone()
+        assert db.execute('select status from school_requests where id=?',(rb,)).fetchone()==('pending',)
+        assert db.execute('select 1 from application_tool_runs where run_id=?',(f2,)).fetchone()
+    good('only authorized school can approve; approval adopts only that request; repeat is idempotent')
+
+
 def cleanup():
     # All predicates are confined to this unique run; retain immutable approval receipts.
     marks=','.join('?' for _ in people)
@@ -170,5 +204,5 @@ def cleanup():
     good('temporary schools, memberships, jobs and applications cleaned')
 
 if __name__=='__main__':
-    try:run()
+    try:(run if mode==['--live-staging'] else release_smoke)()
     finally:cleanup()

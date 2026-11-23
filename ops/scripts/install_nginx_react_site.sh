@@ -106,9 +106,16 @@ esac
 
 SITE_CONF="/etc/nginx/sites-available/${SITE_NAME}.conf"
 cat > "$SITE_CONF" <<EOF
+map "\$status:\$uri" \$brp_asset_cache_${FRONTEND_PORT} {
+    default "";
+    ~^(200|206|304):/assets/ "public, max-age=31536000, immutable";
+    ~^[0-9]+:/assets/ "no-store";
+}
+
 server {
     listen 127.0.0.1:${FRONTEND_PORT};
     server_name ${SERVER_NAMES};
+    add_header Cache-Control \$brp_asset_cache_${FRONTEND_PORT} always;
 
     root ${DIST_DIR};
     index index.html;
@@ -131,8 +138,6 @@ ${ACCESS_GUARD}
     location /assets/ {
         try_files \$uri =404;
         access_log off;
-        expires 1y;
-        add_header Cache-Control "public, max-age=31536000, immutable" always;
     }
 
     location / {

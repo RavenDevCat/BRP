@@ -19,6 +19,16 @@ function resolveAppVersion() {
 
 export default defineConfig({
   plugins: [react()],
+  build: {
+    rollupOptions: {
+      output: {
+        // New content-addressed URLs supersede previously cached asset errors.
+        entryFileNames: "assets/[name]-[hash:12].js",
+        chunkFileNames: "assets/[name]-[hash:12].js",
+        assetFileNames: "assets/[name]-[hash:12][extname]",
+      },
+    },
+  },
   define: {
     "import.meta.env.VITE_APP_VERSION": JSON.stringify(resolveAppVersion()),
   },

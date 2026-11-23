@@ -480,6 +480,7 @@ export function DirectSchoolAnalysisPage() {
                     </div>
                   ) : null}
                   {createMutation.error ? <InlineError message={(createMutation.error as Error).message} /> : null}
+                  <SubmissionDestination/>
                   <Button
                     type="button"
                     className="w-full"
@@ -1742,3 +1743,4 @@ async function fileToBase64(file: File) {
   }
   return btoa(binary);
 }
+import { SubmissionDestination } from "@/features/shell/submission-destination";

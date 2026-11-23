@@ -692,7 +692,8 @@ class SqliteRuntimeStore:
         with (self.connect() if _connection is None else nullcontext(_connection)) as conn:
             if (record.get("metadata") or {}).get("school_request_id"):
                 school_requests.guard_save(conn,"job:"+job_id,summary["owner_email"],record["metadata"])
-                record["shared_with_all"] = False
+                if not record["metadata"].get("school_id"):
+                    record["shared_with_all"] = False
                 summary = job_summary(record)
             job_table=school_requests.storage(conn,"jobs","job:"+job_id)
             conn.execute(
@@ -1434,7 +1435,8 @@ class SqliteRuntimeStore:
         with self.connect() as conn:
             if (stored_record.get("summary") or {}).get("school_request_id"):
                 school_requests.guard_save(conn,"run:"+normalized_tool_key+":"+run_id,summary["owner_email"],stored_record["summary"])
-                stored_record["shared_with_all"] = False
+                if not stored_record["summary"].get("school_id"):
+                    stored_record["shared_with_all"] = False
                 summary = side_tool_summary(normalized_tool_key,stored_record)
             tool_table=school_requests.storage(conn,"side_tool_runs","run:"+normalized_tool_key+":"+run_id)
             conn.execute(

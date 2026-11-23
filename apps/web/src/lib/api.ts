@@ -1141,7 +1141,14 @@ type FleetPlannerHistoryResponse = {
 };
 
 let submissionSchool="";
-export function selectSubmissionSchool(id:string){submissionSchool=id;}
+let submissionLabel="";
+const destinationListeners=new Set<()=>void>();
+export function selectSubmissionSchool(id:string,label=""){
+    submissionSchool=id;
+    if(submissionLabel!==label){submissionLabel=label;destinationListeners.forEach(notify=>notify());}
+}
+export const getSubmissionLabel=()=>submissionLabel;
+export function subscribeSubmissionLabel(fn:()=>void){destinationListeners.add(fn);return ()=>{destinationListeners.delete(fn);};}
 export const getSchoolChoices=()=>apiFetch<{schools:{id:string;name:string;role:SchoolRole}[];requests_enabled?:boolean}>("/me/school-workspaces");
 export type ApplicationRole = Exclude<SchoolRole,"school_admin">;
 export type SchoolApplication = {id:string;school:string;name:string;email:string;requested:ApplicationRole;granted:ApplicationRole|null;

@@ -496,10 +496,11 @@ function SubmissionSchool({email}:{email:string}){
     const pending=q.data?.requests_enabled ? (rq.data?.applications??[]).filter(a=>a.email===email && a.status==="pending") : [];
     const choices=[...schools,...pending.map(a=>({id:"request:"+a.id,name:a.name+" · "+t("Private (pending)"),role:"operator"}))];
     const id=choices.length===1?choices[0].id:choices.some(s=>s.id===choice)?choice:"";
-    useEffect(()=>{selectSubmissionSchool(id);return ()=>selectSubmissionSchool("")},[id]);
+    const label=choices.find(s=>s.id===id)?.name??"";
+    useEffect(()=>{selectSubmissionSchool(id,label);return ()=>selectSubmissionSchool("")},[id,label]);
     return <div className="flex min-w-0 items-end gap-1"><label className="grid min-w-0 text-xs">{t("School workspace")}
         <select aria-label={t("School workspace")} value={id} disabled={!choices.length}
-            className="h-8 max-w-36 rounded border border-border bg-surface px-1" onChange={e=>{selectSubmissionSchool(e.target.value);setChoice(e.target.value)}}>
+            className="h-8 max-w-36 rounded border border-border bg-surface px-1" onChange={e=>{selectSubmissionSchool(e.target.value,e.target.selectedOptions[0]?.text??"");setChoice(e.target.value)}}>
             {!id&&<option value="">{t(q.isPending?"Loading…":choices.length?"Select school":"No school membership")}</option>}
             {choices.map(s=><option key={s.id} value={s.id} disabled={s.role==="viewer"}>{s.name}</option>)}
         </select></label>{q.data?.requests_enabled&&<ApplicationMenu email={email} memberships={schools.map(s=>s.id)} data={rq.data} loadError={rq.error} />}</div>;

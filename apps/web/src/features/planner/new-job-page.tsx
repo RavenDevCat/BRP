@@ -796,6 +796,7 @@ export function NewJobPage() {
                 >
                   {t("Run audit")}
                 </Button>
+                <SubmissionDestination/>
               </div>
             </CardContent>
           </Card>
@@ -1288,3 +1289,4 @@ async function fileToBase64(file: File): Promise<string> {
   }
   return btoa(binary);
 }
+import { SubmissionDestination } from "@/features/shell/submission-destination";

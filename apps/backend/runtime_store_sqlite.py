@@ -8,6 +8,7 @@ import math
 import logging
 import os
 import school_scope
+import school_requests
 from pathlib import Path
 import sqlite3
 import threading
@@ -152,6 +153,8 @@ class SqliteRuntimeStore:
         conn.execute("PRAGMA foreign_keys = ON")
         conn.execute("PRAGMA busy_timeout = 5000")
         conn.execute("PRAGMA journal_mode = WAL")
+        if self._initialized:
+            school_requests.read_views(conn)
         return conn
 
     def initialize(self) -> None:
@@ -687,9 +690,14 @@ class SqliteRuntimeStore:
         if _connection is None:
             self.initialize()
         with (self.connect() if _connection is None else nullcontext(_connection)) as conn:
+            if (record.get("metadata") or {}).get("school_request_id"):
+                school_requests.guard_save(conn,"job:"+job_id,summary["owner_email"],record["metadata"])
+                record["shared_with_all"] = False
+                summary = job_summary(record)
+            job_table=school_requests.storage(conn,"jobs","job:"+job_id)
             conn.execute(
-                """
-                INSERT INTO jobs(
+                f"""
+                INSERT INTO {job_table}(
                     job_id, owner_email, shared_with_all, status, created_at,
                     started_at, finished_at, metadata_json,
                     prepared_payload_summary_json, error, record_json, updated_at
@@ -723,10 +731,10 @@ class SqliteRuntimeStore:
                 ),
             )
             if summary["status"] != "running":
-                conn.execute("DELETE FROM job_checkpoint_parts WHERE job_id=?", (job_id,))
-            self._apply_history_group_preference(
-                conn, "route_audit", job_id, summary["owner_email"]
-            )
+                parts=school_requests.storage(conn,"job_checkpoint_parts","job:"+job_id)
+                conn.execute(f"DELETE FROM {parts} WHERE job_id=?", (job_id,))
+            if not (record.get("metadata") or {}).get("school_request_id"):
+                self._apply_history_group_preference(conn, "route_audit", job_id, summary["owner_email"])
 
     def insert_job_pair(self, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if len(records) != 2 or len({r["job_id"] for r in records}) != 2:
@@ -796,9 +804,10 @@ class SqliteRuntimeStore:
                 record["error"] = None
                 record["traceback"] = None
                 summary = job_summary(record)
+                job_table=school_requests.storage(conn,"jobs","job:"+normalized_job_id)
                 cursor = conn.execute(
-                    """
-                    UPDATE jobs SET
+                    f"""
+                    UPDATE {job_table} SET
                         status = ?,
                         started_at = ?,
                         finished_at = ?,
@@ -877,9 +886,10 @@ class SqliteRuntimeStore:
             conn.execute("BEGIN IMMEDIATE")
             if not token or not conn.execute("SELECT 1 FROM jobs WHERE job_id=? AND status='running' AND json_extract(record_json,'$.worker_token')=?", (job_id,token)).fetchone():
                 return False
+            parts_table=school_requests.storage(conn,"job_checkpoint_parts","job:"+job_id)
             if reset:
-                conn.execute("DELETE FROM job_checkpoint_parts WHERE job_id=?", (job_id,))
-            conn.executemany("""INSERT INTO job_checkpoint_parts VALUES(?,?,?,?) ON CONFLICT(job_id,kind,slot)
+                conn.execute(f"DELETE FROM {parts_table} WHERE job_id=?", (job_id,))
+            conn.executemany(f"""INSERT INTO {parts_table} VALUES(?,?,?,?) ON CONFLICT(job_id,kind,slot)
                              DO UPDATE SET body=excluded.body""", encoded)
             return True
 
@@ -932,7 +942,7 @@ class SqliteRuntimeStore:
                 return None
             record.update(changes)
             self.upsert_job(record, _connection=conn)
-            if automatic_review:
+            if automatic_review and not school_scope.private_scope(school_scope.record_school(record)):
                 meta = record.get("metadata") or {}
                 scope = (record.get("job_queue_scope") or meta.get("job_queue_scope") or "default").strip().lower()
                 conn.execute("INSERT INTO automatic_review_outbox(parent_id,queue_scope) VALUES(?,?) ON CONFLICT DO NOTHING",
@@ -1107,7 +1117,10 @@ class SqliteRuntimeStore:
             conn.execute("BEGIN IMMEDIATE")
             deleted = []
             for job_id in dict.fromkeys(job_ids):
-                cursor = conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+                job_table=school_requests.storage(conn,"jobs","job:"+job_id)
+                if job_table=="main.application_jobs":
+                    conn.execute("DELETE FROM main.application_checkpoints WHERE job_id=?",(job_id,))
+                cursor = conn.execute(f"DELETE FROM {job_table} WHERE job_id = ?", (job_id,))
                 if cursor.rowcount:
                     self._delete_history_group_items(conn, ("route_audit",), job_id)
                     deleted.append(job_id)
@@ -1419,9 +1432,14 @@ class SqliteRuntimeStore:
         stored_record["tool_key"] = normalized_tool_key
         self.initialize()
         with self.connect() as conn:
+            if (stored_record.get("summary") or {}).get("school_request_id"):
+                school_requests.guard_save(conn,"run:"+normalized_tool_key+":"+run_id,summary["owner_email"],stored_record["summary"])
+                stored_record["shared_with_all"] = False
+                summary = side_tool_summary(normalized_tool_key,stored_record)
+            tool_table=school_requests.storage(conn,"side_tool_runs","run:"+normalized_tool_key+":"+run_id)
             conn.execute(
-                """
-                INSERT INTO side_tool_runs(
+                f"""
+                INSERT INTO {tool_table}(
                     tool_key, run_id, owner_email, shared_with_all, title,
                     created_at, summary_json, record_json, updated_at
                 ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1446,7 +1464,7 @@ class SqliteRuntimeStore:
                     utc_now_iso(),
                 ),
             )
-            for scope in SIDE_TOOL_HISTORY_SCOPES.get(normalized_tool_key, ()):
+            for scope in (() if stored_record.get("summary",{}).get("school_request_id") else SIDE_TOOL_HISTORY_SCOPES.get(normalized_tool_key, ())):
                 self._apply_history_group_preference(
                     conn, scope, run_id, summary["owner_email"]
                 )
@@ -1501,8 +1519,10 @@ class SqliteRuntimeStore:
     def delete_side_tool_run(self, tool_key: str, run_id: str) -> bool:
         self.initialize()
         with self.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            table=school_requests.storage(conn,"side_tool_runs","run:"+tool_key+":"+run_id)
             cursor = conn.execute(
-                "DELETE FROM side_tool_runs WHERE tool_key = ? AND run_id = ?",
+                f"DELETE FROM {table} WHERE tool_key = ? AND run_id = ?",
                 (tool_key, run_id),
             )
             if cursor.rowcount:

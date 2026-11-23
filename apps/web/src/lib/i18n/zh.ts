@@ -1,6 +1,17 @@
 import type { Translations } from "./types";
 
 const zh: Translations = {
+    "School requests": "入校申请",
+    "Apply to school": "申请加入学校",
+    "Private (pending)": "待审批 · 仅自己可见",
+    "Awaiting approval": "待我审批",
+    "Approve": "批准",
+    "Reject": "拒绝",
+    "Withdraw": "撤回",
+    "pending": "待审批",
+    "approved": "已批准",
+    "rejected": "已拒绝",
+    "withdrawn": "已撤回",
     "Users & access": "用户与权限",
     "School workspaces": "学校工作区",
     "School workspace": "学校工作区",

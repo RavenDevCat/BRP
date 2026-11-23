@@ -17,6 +17,7 @@ from fastapi import Body, Depends, FastAPI, Header, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 import school_scope
+import school_requests
 from history_adoption import HistoryAdmin
 
 school_scope.check_runtime()
@@ -81,6 +82,8 @@ async def lifespan(_app: FastAPI):
         if path.resolve() == backend_service.RUNTIME_DB_PATH.resolve():
             raise RuntimeError("School directory requires its own database")
         school_directory.Directory(path).initialize()
+    if school_requests.enabled():
+        school_requests.setup(_history_admin())
     backend_service._start_job_scheduler()
     yield
 
@@ -98,7 +101,8 @@ async def scope_request(request: Request):
     store = _school_store(request)
     ctx = current_user_context(request)
     rows = await run_in_threadpool(store.available, ctx.email, ctx.is_admin)
-    access = school_scope.Access({r["id"]:r["role"] for r in rows}, request.headers.get("X-BRP-School","").strip(), ctx.is_admin)
+    personal = await run_in_threadpool(school_requests.mine, backend_service._runtime_sqlite_store(), ctx.email) if school_requests.enabled() else {}
+    access = school_scope.Access({r["id"]:r["role"] for r in rows}, request.headers.get("X-BRP-School","").strip(), ctx.is_admin, personal)
     token = school_scope.current.set(access)
     try:
         group = request.path_params.get("group_id")
@@ -689,7 +693,30 @@ def directory_error(_request: Request, exc: school_directory.DirectoryError):
 
 @_api_route("GET", "/me/school-workspaces")
 def my_school_memberships(store=Depends(_school_store), context: UserContext=Depends(current_user_context)):
-    return _directory_response({"schools":store.available(context.email, school_scope.enabled() and context.is_admin)})
+    return _directory_response({"schools":store.available(context.email, school_scope.enabled() and context.is_admin),
+                                "requests_enabled":school_requests.enabled()})
+
+
+def _request_workflow():
+    if not school_requests.enabled():raise BackendHttpError(404,{"error":"School requests are not enabled"})
+    return _history_admin()
+
+
+@_api_route("GET","/me/school-requests")
+def school_request_page(context: UserContext=Depends(current_user_context)):
+    return _directory_response(school_requests.page(_request_workflow(),context.email,context.is_admin))
+
+
+@_api_route("POST","/me/school-requests")
+def new_school_request(payload: FlexiblePayload,context: UserContext=Depends(current_user_context)):
+    body=_payload_dict(payload)
+    return _directory_response(school_requests.apply(_request_workflow(),context.email,body.get("school"),body.get("role")),201)
+
+
+@_api_route("POST","/me/school-requests/{rid}/decision")
+def decide_school_request(rid: str,payload: FlexiblePayload,context: UserContext=Depends(current_user_context)):
+    body=_payload_dict(payload)
+    return _directory_response(school_requests.decide(_request_workflow(),context.email,context.is_admin,rid,body.get("status"),body.get("role")))
 
 
 @_api_route("GET", "/admin/school-directory")

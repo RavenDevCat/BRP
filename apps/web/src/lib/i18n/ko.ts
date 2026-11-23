@@ -1,6 +1,17 @@
 import type { Translations } from "./types";
 
 const ko: Translations = {
+    "School requests": "학교 가입 신청",
+    "Apply to school": "학교 가입 신청",
+    "Private (pending)": "승인 대기 · 나만 보기",
+    "Awaiting approval": "승인할 신청",
+    "Approve": "승인",
+    "Reject": "거절",
+    "Withdraw": "철회",
+    "pending": "승인 대기",
+    "approved": "승인됨",
+    "rejected": "거절됨",
+    "withdrawn": "철회됨",
     "Users & access": "사용자 및 권한",
     "School workspaces": "학교 작업 공간",
     "School workspace": "학교 작업 공간",

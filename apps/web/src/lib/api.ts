@@ -1142,7 +1142,18 @@ type FleetPlannerHistoryResponse = {
 
 let submissionSchool="";
 export function selectSubmissionSchool(id:string){submissionSchool=id;}
-export const getSchoolChoices=()=>apiFetch<{schools:{id:string;name:string;role:SchoolRole}[]}>("/me/school-workspaces");
+export const getSchoolChoices=()=>apiFetch<{schools:{id:string;name:string;role:SchoolRole}[];requests_enabled?:boolean}>("/me/school-workspaces");
+export type ApplicationRole = Exclude<SchoolRole,"school_admin">;
+export type SchoolApplication = {id:string;school:string;name:string;email:string;requested:ApplicationRole;granted:ApplicationRole|null;
+    status:"pending"|"approved"|"rejected"|"withdrawn"};
+const requestsPath="/me/school-requests";
+export const getSchoolRequests=()=>apiFetch<{schools:{id:string;name:string}[];applications:SchoolApplication[]}>(requestsPath);
+function schoolRequestPost(path:string,body:object){
+    return apiFetch(path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+}
+export const applyForSchool=(school:string,role:ApplicationRole)=>schoolRequestPost(requestsPath,{school,role});
+export const decideSchoolRequest=(id:string,status:"approved"|"rejected"|"withdrawn",role?:ApplicationRole)=>
+    schoolRequestPost(requestsPath+"/"+encodeURIComponent(id)+"/decision",{status,role});
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`, {

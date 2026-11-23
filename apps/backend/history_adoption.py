@@ -49,7 +49,8 @@ class Catalog:
             coalesce(json_extract(metadata_json,'$.job_name'),json_extract(metadata_json,'$.name'),json_extract(metadata_json,'$.workbook_name')),
             json_extract(metadata_json,'$.job_kind'),json_extract(metadata_json,'$.pair_id'),
             json_extract(metadata_json,'$.period'),json_extract(metadata_json,'$.paired_job_ids'),
-            json_extract(metadata_json,'$.job_queue_scope'),json_extract(metadata_json,'$.deep_verification_parent_job_id') FROM jobs"""):
+            json_extract(metadata_json,'$.job_queue_scope'),json_extract(metadata_json,'$.deep_verification_parent_job_id') FROM jobs
+            WHERE json_extract(metadata_json,'$.school_request_id') IS NULL OR json_extract(metadata_json,'$.school_id') IS NOT NULL"""):
             scope = "distance_direct_school" if kind=="direct_school_analysis" else "route_audit"
             row=object_row("job",jid,title,owner,school,scope,status)
             ref=self._add(row,shared)
@@ -59,7 +60,8 @@ class Catalog:
             if pair: pair_meta[ref]=(pair,period,ids,queue,owner)
             if parent: parents[ref]="job:"+parent
         for tool,rid,owner,shared,title,school in db.execute("""SELECT tool_key,run_id,owner_email,shared_with_all,
-                title,json_extract(summary_json,'$.school_id') FROM side_tool_runs"""):
+                title,json_extract(summary_json,'$.school_id') FROM side_tool_runs
+                WHERE json_extract(summary_json,'$.school_request_id') IS NULL OR json_extract(summary_json,'$.school_id') IS NOT NULL"""):
             ref=self._add(object_row("run",tool+":"+rid,title,owner,school,tool),shared)
             for scope,tools in HISTORY_SCOPE_TOOL_KEYS.items():
                 if tool in tools: keys[scope,rid].add(ref)
@@ -238,13 +240,13 @@ class HistoryAdmin:
                 else:
                     db.execute("INSERT INTO history_school_grants VALUES(?,?,?)",(r["ref"],school,batch))
                     if kind=="job":
-                        changed=db.execute("""UPDATE jobs SET metadata_json=json_set(metadata_json,'$.school_id',?),
+                        changed=db.execute("""UPDATE main.jobs SET metadata_json=json_set(metadata_json,'$.school_id',?),
                             record_json=json_set(record_json,'$.metadata.school_id',?) WHERE job_id=?
                             AND coalesce(json_type(record_json,'$.metadata'),'object')='object'
                             AND json_extract(record_json,'$.metadata.school_id') IS NULL""",(school,school,key))
                     else:
                         tool,rid=key.split(":",1)
-                        changed=db.execute("""UPDATE side_tool_runs SET summary_json=json_set(summary_json,'$.school_id',?),
+                        changed=db.execute("""UPDATE main.side_tool_runs SET summary_json=json_set(summary_json,'$.school_id',?),
                             record_json=json_set(record_json,'$.summary.school_id',?) WHERE tool_key=? AND run_id=?
                             AND coalesce(json_type(record_json,'$.summary'),'object')='object'
                             AND json_extract(record_json,'$.summary.school_id') IS NULL""",(school,school,tool,rid))
@@ -273,11 +275,11 @@ class HistoryAdmin:
                 if row["status"]=="running":reject("Cannot rename a running task")
                 if row["title"]==name:continue
                 if kind=="job":
-                    db.execute("""UPDATE jobs SET metadata_json=json_set(metadata_json,'$.job_name',?),
+                    db.execute("""UPDATE main.jobs SET metadata_json=json_set(metadata_json,'$.job_name',?),
                         record_json=json_set(record_json,'$.metadata.job_name',?) WHERE job_id=?""",(name,name,rid))
                 else:
                     tool,item=rid.split(":",1)
-                    db.execute("UPDATE side_tool_runs SET title=?,record_json=json_set(record_json,'$.title',?) WHERE tool_key=? AND run_id=?",(name,name,tool,item))
+                    db.execute("UPDATE main.side_tool_runs SET title=?,record_json=json_set(record_json,'$.title',?) WHERE tool_key=? AND run_id=?",(name,name,tool,item))
                 self.event(db,actor,"rename",row,row["title"],name,batch);count+=1
             return dict(batch=batch,count=count,name=name)
 

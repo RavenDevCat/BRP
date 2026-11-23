@@ -1,6 +1,6 @@
 """Request-local school boundary, in addition to the existing resource ACLs."""
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
@@ -35,6 +35,7 @@ class Access:
     roles: dict
     selected: str
     admin: bool
+    private: dict = field(default_factory=dict)
 
 
 class Denied(Exception):
@@ -44,15 +45,26 @@ class Denied(Exception):
 
 
 current = ContextVar("brp_school_access", default=None)
+PRIVATE = "request:"
+
+
+def private_scope(value):
+    return isinstance(value, str) and value.startswith(PRIVATE)
 
 
 def visible(school):
     access = current.get()
+    if access is not None and private_scope(school):
+        return school in access.private
     return access is None or access.admin or school in access.roles
 
 
 def writable(school):
     access = current.get()
+    if access is not None and private_scope(school):
+        if access.private.get(school) != "pending":
+            raise Denied(403, "Pending application required")
+        return
     if access is not None and not access.admin and access.roles.get(school) not in {"school_admin","operator"}:
         raise Denied(403,"School write access required")
 
@@ -62,8 +74,11 @@ def submission():
     if access is None:
         return None
     school = access.selected
-    if not school and len(access.roles) == 1:
+    if not school and "pending" not in access.private.values() and len(access.roles) == 1:
         school = next(iter(access.roles))
+    if private_scope(school):
+        writable(school)
+        return school
     if not access.roles:
         raise Denied(403,"No school workspace available")
     if not school:
@@ -75,13 +90,17 @@ def submission():
 
 
 def record_school(record):
-    return ((record.get("metadata") if "job_id" in record else record.get("summary")) or {}).get("school_id")
+    data = (record.get("metadata") if "job_id" in record else record.get("summary")) or {}
+    return data.get("school_id") or (PRIVATE + data["school_request_id"] if data.get("school_request_id") else None)
 
 
 def stamp(values):
     values.pop("school_id", None)
+    values.pop("school_request_id", None)
     school = submission()
-    if school:
+    if private_scope(school):
+        values["school_request_id"] = school[len(PRIVATE):]
+    elif school:
         values["school_id"] = school
 
 
@@ -92,10 +111,10 @@ def group_school(conn, group):
 
 def item_school(conn, scope, item):
     if scope in {"route_audit","distance_direct_school"}:
-        row = conn.execute("SELECT json_extract(metadata_json,'$.school_id') FROM jobs WHERE job_id=?", (item,)).fetchone()
+        row = conn.execute("SELECT coalesce(json_extract(metadata_json,'$.school_id'),'request:'||json_extract(metadata_json,'$.school_request_id')) FROM jobs WHERE job_id=?", (item,)).fetchone()
     else:
         keys = {"distance_reference":("reference_distance","distance_checker"), "distance_route_cost":("route_cost","distance_checker")}.get(scope,(scope,scope))
-        row = conn.execute("SELECT json_extract(summary_json,'$.school_id') FROM side_tool_runs WHERE run_id=? AND tool_key IN (?,?)",(item,*keys)).fetchone()
+        row = conn.execute("SELECT coalesce(json_extract(summary_json,'$.school_id'),'request:'||json_extract(summary_json,'$.school_request_id')) FROM side_tool_runs WHERE run_id=? AND tool_key IN (?,?)",(item,*keys)).fetchone()
     return row[0] if row else None
 
 
@@ -104,5 +123,7 @@ def group_target(conn, scope, items):
     if len(schools) != 1:
         raise Denied(409,"A folder cannot span school workspaces")
     school = schools.pop()
+    if private_scope(school):
+        raise Denied(409,"Private tasks cannot be placed in shared folders")
     writable(school)
     return school

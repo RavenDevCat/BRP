@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
+import { ApplicationMenu } from "./school-applications";
 import {
     Bus,
     ChevronDown,
@@ -19,6 +20,7 @@ import {
     getAuthConfig,
     getCurrentUser,
     getSchoolChoices, selectSubmissionSchool,
+    getSchoolRequests,
     getGoogleGeocodeUsage,
     getHealth,
     type GoogleGeocodeUsage,
@@ -487,17 +489,20 @@ function NavItem({
 }
 
 function SubmissionSchool({email}:{email:string}){
-    const t=useT(), q=useQuery({queryKey:["school-choices",email],queryFn:getSchoolChoices});
+    const t=useT(), q=useQuery({queryKey:["school-choices",email],queryFn:getSchoolChoices,refetchInterval:query=>query.state.data?.requests_enabled?30000:false});
     const schools=q.data?.schools??[];
     const [choice,setChoice]=useState("");
-    const id=schools.length===1?schools[0].id:schools.some(s=>s.id===choice)?choice:"";
+    const rq=useQuery({queryKey:["school-requests",email],queryFn:getSchoolRequests,enabled:!!q.data?.requests_enabled,refetchInterval:30000});
+    const pending=q.data?.requests_enabled ? (rq.data?.applications??[]).filter(a=>a.email===email && a.status==="pending") : [];
+    const choices=[...schools,...pending.map(a=>({id:"request:"+a.id,name:a.name+" · "+t("Private (pending)"),role:"operator"}))];
+    const id=choices.length===1?choices[0].id:choices.some(s=>s.id===choice)?choice:"";
     useEffect(()=>{selectSubmissionSchool(id);return ()=>selectSubmissionSchool("")},[id]);
-    return <label className="grid min-w-0 text-xs">{t("School workspace")}
-        <select aria-label={t("School workspace")} value={id} disabled={!schools.length}
+    return <div className="flex min-w-0 items-end gap-1"><label className="grid min-w-0 text-xs">{t("School workspace")}
+        <select aria-label={t("School workspace")} value={id} disabled={!choices.length}
             className="h-8 max-w-36 rounded border border-border bg-surface px-1" onChange={e=>{selectSubmissionSchool(e.target.value);setChoice(e.target.value)}}>
-            {!id&&<option value="">{t(q.isPending?"Loading…":schools.length?"Select school":"No school membership")}</option>}
-            {schools.map(s=><option key={s.id} value={s.id} disabled={s.role==="viewer"}>{s.name}</option>)}
-        </select></label>;
+            {!id&&<option value="">{t(q.isPending?"Loading…":choices.length?"Select school":"No school membership")}</option>}
+            {choices.map(s=><option key={s.id} value={s.id} disabled={s.role==="viewer"}>{s.name}</option>)}
+        </select></label>{q.data?.requests_enabled&&<ApplicationMenu email={email} memberships={schools.map(s=>s.id)} data={rq.data} loadError={rq.error} />}</div>;
 }
 
 function LanguageSwitcher() {

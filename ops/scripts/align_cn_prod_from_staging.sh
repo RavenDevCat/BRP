@@ -22,7 +22,7 @@ git fetch origin main
 [[ $(git rev-parse FETCH_HEAD) == "$target" ]]
 git merge-base --is-ancestor "$old" "$target"
 # Build and verify the staging bundle before any production code or service change.
-previous=$(python3 "$tool" activate "$web" --source "$stage/apps/web/dist" --version "$version")
+previous=$(python3 "$tool" activate "$web" --source "$stage/apps/web/dist" --version "$version" --reader www-data)
 wait_ok() {
     local url=$1
     for ((i=1;i<=attempts;i++)); do
@@ -50,7 +50,7 @@ test "$(git rev-parse HEAD)" = "$target"
 sudo systemctl restart "$service"
 wait_ok "$health"
 wait_ok "$ready"
-python3 "$tool" verify "$web" --source "$stage/apps/web/dist" --version "$version"
+python3 "$tool" verify "$web" --source "$stage/apps/web/dist" --version "$version" --reader www-data
 touch "$web/dist/.accepted"
 trap - ERR INT TERM
 if [[ ${BRP_WEB_PRUNE_RELEASES:-0} == 1 ]]; then

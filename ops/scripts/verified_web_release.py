@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 from uuid import uuid4
 
@@ -71,7 +72,16 @@ def switch(web, target):
         link.unlink(missing_ok=True)
 
 
-def activate(web, source, version):
+def check_serving(root, manifest, reader=None):
+    if os.name == "posix" and not root.stat().st_mode & 0o001:
+        raise ValueError("Static release directory cannot be traversed by the web server")
+    if reader:
+        # Read each served file as the actual worker, including lazy chunks and icons.
+        subprocess.run(["sudo", "-n", "-u", reader, "--", "/usr/bin/head", "-q", "-c", "1", "--",
+                        *(str(root / path) for path in manifest)], stdout=subprocess.DEVNULL, check=True)
+
+
+def activate(web, source, version, reader=None):
     root = web/".brp-releases"
     root.mkdir(exist_ok=True)
     expected = fingerprint(source,version)
@@ -81,12 +91,16 @@ def activate(web, source, version):
         with tempfile.TemporaryDirectory(dir=root) as stage:
             tmp = Path(stage)/"bundle"
             shutil.copytree(source,tmp)
+            if os.name == "posix":
+                # copytree inherits mktemp's 0700; only the installed static root needs traversal.
+                tmp.chmod(tmp.stat().st_mode | 0o011)
             if fingerprint(tmp,version)!=expected:
                 raise ValueError("Staged artifact changed during activation")
             (tmp/".brp-release.json").write_text(json.dumps(expected))
             tmp.rename(target)
     if fingerprint(target,version)!=expected:
         raise ValueError("Existing release failed manifest verification")
+    check_serving(target, expected, reader)
     dist = web/"dist"
     previous = dist.resolve(strict=True)
     if not dist.is_symlink():
@@ -121,19 +135,22 @@ def main():
     cli.add_argument("web",type=Path)
     cli.add_argument("--source",type=Path)
     cli.add_argument("--version")
+    cli.add_argument("--reader", help="Check every static asset as this web server user")
     cli.add_argument("--keep",type=int,default=3)
     cli.add_argument("--apply",action="store_true")
     a=cli.parse_args()
     if a.action=="activate":
-        print(activate(a.web,a.source,a.version))
+        print(activate(a.web,a.source,a.version,a.reader))
     elif a.action=="restore":
         target=a.source.resolve(strict=True)
         if target.parent!=(a.web/".brp-releases").resolve():
             raise ValueError("Rollback is restricted to this application's release directory")
         switch(a.web,target)
     elif a.action=="verify":
-        if fingerprint(a.web/"dist",a.version)!=fingerprint(a.source,a.version):
+        manifest=fingerprint(a.web/"dist",a.version)
+        if manifest!=fingerprint(a.source,a.version):
             raise ValueError("Production artifact differs from staging")
+        check_serving(a.web/"dist", manifest, a.reader)
     else:
         prune(a.web,a.keep,a.apply)
 if __name__=="__main__":

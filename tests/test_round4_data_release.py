@@ -127,6 +127,32 @@ def test_release_rejects_missing_or_owner_only_icon(tmp_path):
     assert release.verified_entry(stage,"2222222")
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="POSIX traversal permissions")
+def test_private_build_and_reader_gate(tmp_path, monkeypatch):
+    web=tmp_path/"web"
+    old=bundle(web/"dist","1111111")
+    source=bundle(tmp_path/"source","2222222")
+    source.chmod(0o700)
+    def denied(cmd, **kwargs):
+        assert cmd[:5]==["sudo","-n","-u","www-data","--"]
+        assert any(str(path).endswith("/index.html") for path in cmd)
+        raise subprocess.CalledProcessError(1,cmd)
+    with monkeypatch.context() as patch:
+        patch.setattr(release.subprocess,"run",denied)
+        with pytest.raises(subprocess.CalledProcessError):
+            release.activate(web,source,"2222222","www-data")
+    assert not old.is_symlink() and release.verified_entry(old,"1111111")
+    previous=release.activate(web,source,"2222222")
+    assert source.stat().st_mode & 0o777 == 0o700
+    assert old.resolve().stat().st_mode & 0o777 == 0o711
+    target=old.resolve()
+    release.switch(web,previous)
+    target.chmod(0o700)
+    with pytest.raises(ValueError,match="traversed"):
+        release.activate(web,source,"2222222")
+    assert old.resolve()==previous
+
+
 def test_wrong_entry_restore_and_retention(tmp_path):
     web=tmp_path/"web";web.mkdir()
     dist=bundle(web/"dist","1111111")

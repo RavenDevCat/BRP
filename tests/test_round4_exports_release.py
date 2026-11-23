@@ -84,7 +84,7 @@ def test_real_align_script_rolls_back_on_readiness_failure(tmp_path,bad_ready):
     for name in ["verified_web_release.py","align_cn_prod_from_staging.sh"]:
         shutil.copy2(ROOT/"ops/scripts"/name,tools/name)
     fake=tmp_path/"bin";fake.mkdir()
-    for name,body in [("sudo",'echo "$*" >> "$RESTARTS"'),("curl",'''case "${*: -1}" in */ready) echo '{"status":"ready"}'; exit "$BAD_READY";; *) exit 0;; esac''')]:
+    for name,body in [("sudo",'if [[ $1 == -n && $2 == -u && $3 == www-data && $4 == -- ]]; then shift 4; exec "$@"; fi\necho "$*" >> "$RESTARTS"'),("curl",'''case "${*: -1}" in */ready) echo '{"status":"ready"}'; exit "$BAD_READY";; *) exit 0;; esac''')]:
         cmd=fake/name;cmd.write_text("#!/usr/bin/env bash\n"+body+"\n");cmd.chmod(0o755)
     log=tmp_path/"restarts"
     env={**os.environ,"PATH":str(fake)+":"+os.environ["PATH"],"PROD_ROOT":str(prod),"STAGING_ROOT":str(stage),
